@@ -1,3 +1,14 @@
+use gg_engine::prelude::*;
+
+struct Sandbox;
+
+impl Application for Sandbox {
+    fn new() -> Self {
+        info!("Sandbox initialized");
+        Sandbox
+    }
+}
+
 fn main() {
-    println!("GGSandbox v{}", gg_engine::engine_version());
+    run::<Sandbox>();
 }

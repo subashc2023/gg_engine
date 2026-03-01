@@ -1,3 +1,14 @@
+use gg_engine::prelude::*;
+
+struct GGEditor;
+
+impl Application for GGEditor {
+    fn new() -> Self {
+        info!("GGEditor initialized");
+        GGEditor
+    }
+}
+
 fn main() {
-    println!("GGEditor v{}", gg_engine::engine_version());
+    run::<GGEditor>();
 }
