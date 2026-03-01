@@ -3,7 +3,7 @@ use gg_engine::prelude::*;
 struct GGEditor;
 
 impl Application for GGEditor {
-    fn new() -> Self {
+    fn new(_layers: &mut LayerStack) -> Self {
         info!("GGEditor initialized");
         GGEditor
     }

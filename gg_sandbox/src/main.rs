@@ -3,7 +3,7 @@ use gg_engine::prelude::*;
 struct Sandbox;
 
 impl Application for Sandbox {
-    fn new() -> Self {
+    fn new(_layers: &mut LayerStack) -> Self {
         info!("Sandbox initialized");
         Sandbox
     }

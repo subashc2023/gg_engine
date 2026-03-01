@@ -7,6 +7,7 @@ use winit::keyboard::PhysicalKey;
 use winit::window::{Window, WindowAttributes};
 
 use crate::events::{Event, KeyCode, KeyEvent, MouseButton, MouseEvent, WindowEvent};
+use crate::layer::LayerStack;
 
 // ---------------------------------------------------------------------------
 // WindowConfig
@@ -33,7 +34,7 @@ impl Default for WindowConfig {
 // ---------------------------------------------------------------------------
 
 pub trait Application {
-    fn new() -> Self
+    fn new(layers: &mut LayerStack) -> Self
     where
         Self: Sized;
 
@@ -54,6 +55,7 @@ pub trait Application {
 
 struct EngineRunner<T: Application> {
     app: T,
+    layers: LayerStack,
     window: Option<Arc<Window>>,
     window_config: WindowConfig,
 }
@@ -89,7 +91,9 @@ impl<T: Application> ApplicationHandler for EngineRunner<T> {
         event: winit::event::WindowEvent,
     ) {
         if let Some(engine_event) = map_window_event(&event) {
-            self.app.on_event(&engine_event);
+            if !self.layers.dispatch_event(&engine_event) {
+                self.app.on_event(&engine_event);
+            }
 
             if matches!(engine_event, Event::Window(WindowEvent::Close)) {
                 event_loop.exit();
@@ -98,6 +102,7 @@ impl<T: Application> ApplicationHandler for EngineRunner<T> {
     }
 
     fn about_to_wait(&mut self, _event_loop: &ActiveEventLoop) {
+        self.layers.update_all();
         self.app.on_update();
         if let Some(window) = &self.window {
             window.request_redraw();
@@ -113,7 +118,8 @@ pub fn run<T: Application>() {
     crate::log_init();
     log::info!(target: "gg_engine", "Engine v{}", crate::engine_version());
 
-    let app = T::new();
+    let mut layers = LayerStack::new();
+    let app = T::new(&mut layers);
     let window_config = app.window_config();
 
     let event_loop = EventLoop::new().expect("failed to create event loop");
@@ -121,6 +127,7 @@ pub fn run<T: Application>() {
 
     let mut runner = EngineRunner {
         app,
+        layers,
         window: None,
         window_config,
     };
