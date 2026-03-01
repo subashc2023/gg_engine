@@ -8,6 +8,7 @@ use winit::window::{Window, WindowAttributes};
 
 use crate::events::{Event, KeyCode, KeyEvent, MouseButton, MouseEvent, WindowEvent};
 use crate::layer::LayerStack;
+use crate::renderer::VulkanContext;
 
 // ---------------------------------------------------------------------------
 // WindowConfig
@@ -56,8 +57,10 @@ pub trait Application {
 struct EngineRunner<T: Application> {
     app: T,
     layers: LayerStack,
-    window: Option<Arc<Window>>,
     window_config: WindowConfig,
+    // Vulkan context must be dropped before window (surface references native handle).
+    vulkan_context: Option<VulkanContext>,
+    window: Option<Arc<Window>>,
 }
 
 impl<T: Application> ApplicationHandler for EngineRunner<T> {
@@ -75,7 +78,21 @@ impl<T: Application> ApplicationHandler for EngineRunner<T> {
             Ok(window) => {
                 log::info!(target: "gg_engine", "Window created: \"{}\" ({}x{})",
                     self.window_config.title, self.window_config.width, self.window_config.height);
-                self.window = Some(Arc::new(window));
+                let window = Arc::new(window);
+
+                // Initialize Vulkan immediately after window creation.
+                match VulkanContext::new(&window) {
+                    Ok(ctx) => {
+                        self.vulkan_context = Some(ctx);
+                    }
+                    Err(e) => {
+                        log::error!(target: "gg_engine", "Vulkan initialization failed: {e}");
+                        event_loop.exit();
+                        return;
+                    }
+                }
+
+                self.window = Some(window);
             }
             Err(e) => {
                 log::error!(target: "gg_engine", "Failed to create window: {e}");
@@ -128,8 +145,9 @@ pub fn run<T: Application>() {
     let mut runner = EngineRunner {
         app,
         layers,
-        window: None,
         window_config,
+        vulkan_context: None,
+        window: None,
     };
 
     event_loop.run_app(&mut runner).expect("event loop error");

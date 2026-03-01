@@ -2,6 +2,7 @@ mod application;
 pub mod events;
 mod layer;
 mod logging;
+pub mod renderer;
 
 pub use application::{run, Application, WindowConfig};
 pub use layer::{Layer, LayerStack};

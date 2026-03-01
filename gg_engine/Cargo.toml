@@ -7,3 +7,6 @@ license = "MIT"
 [dependencies]
 log = { version = "0.4", features = ["release_max_level_info"] }
 winit = "0.30"
+ash = "0.38"
+ash-window = "0.13"
+raw-window-handle = "0.6"
