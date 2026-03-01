@@ -1,0 +1,40 @@
+# Auto detect text files and normalize line endings
+* text=auto
+
+# Rust
+*.rs text diff=rust
+*.toml text
+*.lock text -diff
+
+# Shell
+*.sh text eol=lf
+
+# Windows
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+# Binary assets (future-proofing for a game engine)
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.bmp binary
+*.ico binary
+*.wav binary
+*.mp3 binary
+*.ogg binary
+*.flac binary
+*.ttf binary
+*.otf binary
+*.woff binary
+*.woff2 binary
+*.obj binary
+*.fbx binary
+*.gltf text
+*.glb binary
+*.spv binary
+*.wgsl text
+
+# Archives
+*.zip binary
+*.tar.gz binary

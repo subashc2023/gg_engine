@@ -1,0 +1,21 @@
+[workspace]
+members = [
+    "gg_engine",
+    "gg_editor",
+    "gg_sandbox",
+]
+resolver = "2"
+
+# Debug profile — full debug info, no optimizations (equivalent to /MTd /MDd)
+[profile.dev]
+opt-level = 0
+debug = true
+overflow-checks = true
+
+# Release profile — optimized, no debug info (equivalent to /MT /MD)
+[profile.release]
+opt-level = 3
+debug = false
+lto = true
+codegen-units = 1
+strip = true
