@@ -6,3 +6,4 @@ license = "MIT"
 
 [dependencies]
 log = { version = "0.4", features = ["release_max_level_info"] }
+winit = "0.30"
