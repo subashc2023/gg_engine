@@ -1,6 +1,6 @@
 use ash::vk;
 
-use super::VulkanContext;
+use super::{IndexBuffer, Shader, VertexBuffer, VulkanContext};
 
 // ---------------------------------------------------------------------------
 // Vertex layout
@@ -26,12 +26,11 @@ const INDICES: [u32; 3] = [0, 1, 2];
 // ---------------------------------------------------------------------------
 
 pub(crate) struct TriangleRenderer {
+    _shader: Shader,
     pipeline_layout: vk::PipelineLayout,
     pipeline: vk::Pipeline,
-    vertex_buffer: vk::Buffer,
-    vertex_buffer_memory: vk::DeviceMemory,
-    index_buffer: vk::Buffer,
-    index_buffer_memory: vk::DeviceMemory,
+    vertex_buffer: VertexBuffer,
+    index_buffer: IndexBuffer,
     device: ash::Device,
 }
 
@@ -39,23 +38,24 @@ impl TriangleRenderer {
     pub fn new(vk_ctx: &VulkanContext, render_pass: vk::RenderPass) -> Self {
         let device = vk_ctx.device();
 
-        // -- Shader modules --------------------------------------------------
-        let vert_spv = include_bytes!("shaders/triangle_vert.spv");
-        let frag_spv = include_bytes!("shaders/triangle_frag.spv");
-
-        let vert_module = create_shader_module(device, vert_spv);
-        let frag_module = create_shader_module(device, frag_spv);
+        // -- Shader ----------------------------------------------------------
+        let shader = Shader::new(
+            device,
+            "triangle",
+            include_bytes!("shaders/triangle_vert.spv"),
+            include_bytes!("shaders/triangle_frag.spv"),
+        );
 
         let entry_point = c"main";
 
         let vert_stage = vk::PipelineShaderStageCreateInfo::default()
             .stage(vk::ShaderStageFlags::VERTEX)
-            .module(vert_module)
+            .module(shader.vert_module())
             .name(entry_point);
 
         let frag_stage = vk::PipelineShaderStageCreateInfo::default()
             .stage(vk::ShaderStageFlags::FRAGMENT)
-            .module(frag_module)
+            .module(shader.frag_module())
             .name(entry_point);
 
         let shader_stages = [vert_stage, frag_stage];
@@ -136,57 +136,26 @@ impl TriangleRenderer {
         }
         .expect("Failed to create graphics pipeline")[0];
 
-        // Shader modules are baked into the pipeline — no longer needed.
-        unsafe {
-            device.destroy_shader_module(vert_module, None);
-            device.destroy_shader_module(frag_module, None);
-        }
-
         // -- Vertex buffer ---------------------------------------------------
-        let vb_size = (std::mem::size_of::<Vertex>() * VERTICES.len()) as vk::DeviceSize;
-        let (vertex_buffer, vertex_buffer_memory) =
-            create_buffer(vk_ctx, vb_size, vk::BufferUsageFlags::VERTEX_BUFFER);
-
-        unsafe {
-            let ptr = device
-                .map_memory(
-                    vertex_buffer_memory,
-                    0,
-                    vb_size,
-                    vk::MemoryMapFlags::empty(),
-                )
-                .expect("Failed to map vertex buffer memory") as *mut Vertex;
-            ptr.copy_from_nonoverlapping(VERTICES.as_ptr(), VERTICES.len());
-            device.unmap_memory(vertex_buffer_memory);
-        }
+        let vertex_data: &[u8] = unsafe {
+            std::slice::from_raw_parts(
+                VERTICES.as_ptr() as *const u8,
+                std::mem::size_of_val(&VERTICES),
+            )
+        };
+        let vertex_buffer = VertexBuffer::new(vk_ctx, vertex_data);
 
         // -- Index buffer ----------------------------------------------------
-        let ib_size = (std::mem::size_of::<u32>() * INDICES.len()) as vk::DeviceSize;
-        let (index_buffer, index_buffer_memory) =
-            create_buffer(vk_ctx, ib_size, vk::BufferUsageFlags::INDEX_BUFFER);
-
-        unsafe {
-            let ptr = device
-                .map_memory(
-                    index_buffer_memory,
-                    0,
-                    ib_size,
-                    vk::MemoryMapFlags::empty(),
-                )
-                .expect("Failed to map index buffer memory") as *mut u32;
-            ptr.copy_from_nonoverlapping(INDICES.as_ptr(), INDICES.len());
-            device.unmap_memory(index_buffer_memory);
-        }
+        let index_buffer = IndexBuffer::new(vk_ctx, &INDICES);
 
         log::info!(target: "gg_engine", "Triangle renderer initialized");
 
         Self {
+            _shader: shader,
             pipeline_layout,
             pipeline,
             vertex_buffer,
-            vertex_buffer_memory,
             index_buffer,
-            index_buffer_memory,
             device: device.clone(),
         }
     }
@@ -216,9 +185,9 @@ impl TriangleRenderer {
             device.cmd_set_scissor(cmd_buf, 0, &[scissor]);
 
             device.cmd_bind_pipeline(cmd_buf, vk::PipelineBindPoint::GRAPHICS, self.pipeline);
-            device.cmd_bind_vertex_buffers(cmd_buf, 0, &[self.vertex_buffer], &[0]);
-            device.cmd_bind_index_buffer(cmd_buf, self.index_buffer, 0, vk::IndexType::UINT32);
-            device.cmd_draw_indexed(cmd_buf, INDICES.len() as u32, 1, 0, 0, 0);
+            self.vertex_buffer.bind(device, cmd_buf);
+            self.index_buffer.bind(device, cmd_buf);
+            device.cmd_draw_indexed(cmd_buf, self.index_buffer.count(), 1, 0, 0, 0);
         }
     }
 }
@@ -229,84 +198,6 @@ impl Drop for TriangleRenderer {
             self.device.destroy_pipeline(self.pipeline, None);
             self.device
                 .destroy_pipeline_layout(self.pipeline_layout, None);
-            self.device.free_memory(self.index_buffer_memory, None);
-            self.device.destroy_buffer(self.index_buffer, None);
-            self.device.free_memory(self.vertex_buffer_memory, None);
-            self.device.destroy_buffer(self.vertex_buffer, None);
         }
     }
-}
-
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-fn create_shader_module(device: &ash::Device, spv_bytes: &[u8]) -> vk::ShaderModule {
-    // SPIR-V is a stream of u32 words. ash requires &[u32].
-    let spv_u32: Vec<u32> = spv_bytes
-        .chunks_exact(4)
-        .map(|c| u32::from_le_bytes([c[0], c[1], c[2], c[3]]))
-        .collect();
-
-    let info = vk::ShaderModuleCreateInfo::default().code(&spv_u32);
-    unsafe { device.create_shader_module(&info, None) }.expect("Failed to create shader module")
-}
-
-fn create_buffer(
-    vk_ctx: &VulkanContext,
-    size: vk::DeviceSize,
-    usage: vk::BufferUsageFlags,
-) -> (vk::Buffer, vk::DeviceMemory) {
-    let device = vk_ctx.device();
-
-    let buffer_info = vk::BufferCreateInfo::default()
-        .size(size)
-        .usage(usage)
-        .sharing_mode(vk::SharingMode::EXCLUSIVE);
-
-    let buffer =
-        unsafe { device.create_buffer(&buffer_info, None) }.expect("Failed to create buffer");
-
-    let mem_req = unsafe { device.get_buffer_memory_requirements(buffer) };
-    let mem_type_index = find_memory_type(
-        vk_ctx,
-        mem_req.memory_type_bits,
-        vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
-    );
-
-    let alloc_info = vk::MemoryAllocateInfo::default()
-        .allocation_size(mem_req.size)
-        .memory_type_index(mem_type_index);
-
-    let memory =
-        unsafe { device.allocate_memory(&alloc_info, None) }.expect("Failed to allocate memory");
-
-    unsafe { device.bind_buffer_memory(buffer, memory, 0) }
-        .expect("Failed to bind buffer memory");
-
-    (buffer, memory)
-}
-
-fn find_memory_type(
-    vk_ctx: &VulkanContext,
-    type_filter: u32,
-    properties: vk::MemoryPropertyFlags,
-) -> u32 {
-    let mem_props = unsafe {
-        vk_ctx
-            .instance()
-            .get_physical_device_memory_properties(vk_ctx.physical_device())
-    };
-
-    for i in 0..mem_props.memory_type_count {
-        let type_matches = (type_filter & (1 << i)) != 0;
-        let props_match = mem_props.memory_types[i as usize]
-            .property_flags
-            .contains(properties);
-        if type_matches && props_match {
-            return i;
-        }
-    }
-
-    panic!("Failed to find suitable memory type");
 }

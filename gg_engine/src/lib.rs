@@ -7,7 +7,7 @@ pub mod renderer;
 
 pub use application::{run, Application, WindowConfig};
 pub use egui;
-pub use renderer::PresentMode;
+pub use renderer::{PresentMode, RendererBackend};
 pub use input::Input;
 pub use layer::{Layer, LayerStack};
 pub use glam;
@@ -23,7 +23,7 @@ pub mod prelude {
     pub use crate::events::{Event, KeyCode, KeyEvent, MouseButton, MouseEvent, WindowEvent};
     pub use crate::input::Input;
     pub use crate::layer::{Layer, LayerStack};
-    pub use crate::renderer::PresentMode;
+    pub use crate::renderer::{PresentMode, RendererBackend};
     pub use crate::{run, Application, WindowConfig};
     pub use glam::{Mat3, Mat4, Quat, Vec2, Vec3, Vec4};
     pub use log::{debug, error, info, trace, warn};
