@@ -1,7 +1,7 @@
 use ash::khr;
 use ash::vk;
 
-use super::VulkanContext;
+use super::{PresentMode, VulkanContext};
 
 // ---------------------------------------------------------------------------
 // Error type
@@ -68,12 +68,18 @@ pub struct Swapchain {
     // Per-swapchain-image sync (indexed by image_index).
     // Needed because the presentation engine holds onto render_finished until re-acquire.
     render_finished_semaphores: Vec<vk::Semaphore>,
+    present_mode: vk::PresentModeKHR,
     current_frame: usize,
     device: ash::Device,
 }
 
 impl Swapchain {
-    pub fn new(vk_ctx: &VulkanContext, width: u32, height: u32) -> Result<Self, SwapchainError> {
+    pub fn new(
+        vk_ctx: &VulkanContext,
+        width: u32,
+        height: u32,
+        desired_present_mode: PresentMode,
+    ) -> Result<Self, SwapchainError> {
         let device = vk_ctx.device().clone();
         let swapchain_loader =
             khr::swapchain::Device::new(vk_ctx.instance(), vk_ctx.device());
@@ -124,6 +130,14 @@ impl Swapchain {
             image_count = capabilities.max_image_count;
         }
 
+        // Resolve present mode
+        let available_modes = query_present_modes(
+            vk_ctx.surface_loader(),
+            vk_ctx.physical_device(),
+            vk_ctx.surface(),
+        );
+        let present_mode = resolve_present_mode(desired_present_mode, &available_modes);
+
         // Create swapchain
         let swapchain_info = vk::SwapchainCreateInfoKHR::default()
             .surface(vk_ctx.surface())
@@ -136,7 +150,7 @@ impl Swapchain {
             .image_sharing_mode(vk::SharingMode::EXCLUSIVE)
             .pre_transform(capabilities.current_transform)
             .composite_alpha(vk::CompositeAlphaFlagsKHR::OPAQUE)
-            .present_mode(vk::PresentModeKHR::FIFO)
+            .present_mode(present_mode)
             .clipped(true);
 
         let swapchain = unsafe { swapchain_loader.create_swapchain(&swapchain_info, None) }
@@ -168,8 +182,8 @@ impl Swapchain {
 
         log::info!(
             target: "gg_engine",
-            "Swapchain created: {}x{}, {} images, format {:?}",
-            extent.width, extent.height, images.len(), format.format
+            "Swapchain created: {}x{}, {} images, format {:?}, present mode {:?}",
+            extent.width, extent.height, images.len(), format.format, present_mode
         );
 
         // Create render pass
@@ -283,13 +297,22 @@ impl Swapchain {
             image_available_semaphores,
             render_finished_semaphores,
             in_flight_fences,
+            present_mode,
             current_frame: 0,
             device,
         })
     }
 
-    /// Recreate swapchain after window resize.
-    pub fn recreate(&mut self, vk_ctx: &VulkanContext, width: u32, height: u32) {
+    /// Recreate swapchain after window resize or present mode change.
+    ///
+    /// If `new_present_mode` is `Some`, the present mode is re-resolved.
+    pub fn recreate(
+        &mut self,
+        vk_ctx: &VulkanContext,
+        width: u32,
+        height: u32,
+        new_present_mode: Option<PresentMode>,
+    ) {
         unsafe {
             let _ = self.device.device_wait_idle();
         }
@@ -301,7 +324,24 @@ impl Swapchain {
         for &view in &self.image_views {
             unsafe { self.device.destroy_image_view(view, None) };
         }
+
+        // Destroy old per-swapchain-image render_finished semaphores
+        // (image count may change after recreation).
+        for &sem in &self.render_finished_semaphores {
+            unsafe { self.device.destroy_semaphore(sem, None) };
+        }
+
         let old_swapchain = self.swapchain;
+
+        // Re-resolve present mode if requested.
+        if let Some(desired) = new_present_mode {
+            let available = query_present_modes(
+                vk_ctx.surface_loader(),
+                vk_ctx.physical_device(),
+                vk_ctx.surface(),
+            );
+            self.present_mode = resolve_present_mode(desired, &available);
+        }
 
         // Query capabilities again
         let capabilities = unsafe {
@@ -341,7 +381,7 @@ impl Swapchain {
             .image_sharing_mode(vk::SharingMode::EXCLUSIVE)
             .pre_transform(capabilities.current_transform)
             .composite_alpha(vk::CompositeAlphaFlagsKHR::OPAQUE)
-            .present_mode(vk::PresentModeKHR::FIFO)
+            .present_mode(self.present_mode)
             .clipped(true)
             .old_swapchain(old_swapchain);
 
@@ -392,13 +432,24 @@ impl Swapchain {
             })
             .collect();
 
+        // Create new render_finished semaphores matching new image count.
+        let semaphore_info = vk::SemaphoreCreateInfo::default();
+        self.render_finished_semaphores = images
+            .iter()
+            .map(|_| {
+                unsafe { self.device.create_semaphore(&semaphore_info, None) }
+                    .expect("Failed to create render_finished semaphore during resize")
+            })
+            .collect();
+
         self._images = images;
         self.extent = extent;
+        self.current_frame = 0;
 
         log::info!(
             target: "gg_engine",
-            "Swapchain recreated: {}x{}",
-            extent.width, extent.height
+            "Swapchain recreated: {}x{}, present mode {:?}",
+            extent.width, extent.height, self.present_mode
         );
     }
 
@@ -454,8 +505,55 @@ impl Swapchain {
         self.in_flight_fences[self.current_frame]
     }
 
+    pub fn present_mode(&self) -> vk::PresentModeKHR {
+        self.present_mode
+    }
+
     pub fn advance_frame(&mut self) {
         self.current_frame = (self.current_frame + 1) % MAX_FRAMES_IN_FLIGHT;
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Present mode helpers
+// ---------------------------------------------------------------------------
+
+fn query_present_modes(
+    surface_loader: &khr::surface::Instance,
+    physical_device: vk::PhysicalDevice,
+    surface: vk::SurfaceKHR,
+) -> Vec<vk::PresentModeKHR> {
+    unsafe {
+        surface_loader
+            .get_physical_device_surface_present_modes(physical_device, surface)
+    }
+    .unwrap_or_else(|_| vec![vk::PresentModeKHR::FIFO])
+}
+
+fn resolve_present_mode(
+    desired: PresentMode,
+    available: &[vk::PresentModeKHR],
+) -> vk::PresentModeKHR {
+    match desired {
+        PresentMode::Fifo => vk::PresentModeKHR::FIFO,
+        PresentMode::Mailbox => {
+            if available.contains(&vk::PresentModeKHR::MAILBOX) {
+                vk::PresentModeKHR::MAILBOX
+            } else if available.contains(&vk::PresentModeKHR::IMMEDIATE) {
+                vk::PresentModeKHR::IMMEDIATE
+            } else {
+                vk::PresentModeKHR::FIFO
+            }
+        }
+        PresentMode::Immediate => {
+            if available.contains(&vk::PresentModeKHR::IMMEDIATE) {
+                vk::PresentModeKHR::IMMEDIATE
+            } else if available.contains(&vk::PresentModeKHR::MAILBOX) {
+                vk::PresentModeKHR::MAILBOX
+            } else {
+                vk::PresentModeKHR::FIFO
+            }
+        }
     }
 }
 

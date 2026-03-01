@@ -10,7 +10,7 @@ use winit::window::{Window, WindowAttributes};
 use crate::events::{Event, KeyCode, KeyEvent, MouseButton, MouseEvent, WindowEvent};
 use crate::input::Input;
 use crate::layer::LayerStack;
-use crate::renderer::{Swapchain, VulkanContext};
+use crate::renderer::{PresentMode, Swapchain, TriangleRenderer, VulkanContext};
 
 // ---------------------------------------------------------------------------
 // WindowConfig
@@ -53,22 +53,36 @@ pub trait Application {
 
     /// Build immediate-mode UI each frame. Called inside `egui::Context::run`.
     fn on_egui(&mut self, _ctx: &egui::Context) {}
+
+    /// Desired present mode. Polled each frame; changes trigger swapchain recreation.
+    fn present_mode(&self) -> PresentMode {
+        PresentMode::Fifo
+    }
 }
 
 // ---------------------------------------------------------------------------
 // EngineRunner (internal winit bridge)
 // ---------------------------------------------------------------------------
 
+enum FrameResult {
+    Ok,
+    RecreateSwapchain,
+}
+
 struct EngineRunner<T: Application> {
     app: T,
     layers: LayerStack,
     input: Input,
     window_config: WindowConfig,
+    current_present_mode: PresentMode,
 
     // egui state — dropped before Vulkan resources.
     egui_ctx: egui::Context,
     egui_winit_state: Option<egui_winit::State>,
     egui_renderer: Option<egui_ash_renderer::Renderer>,
+
+    // Triangle renderer — dropped before swapchain/device.
+    triangle_renderer: Option<TriangleRenderer>,
 
     // Swapchain — dropped before VulkanContext.
     swapchain: Option<Swapchain>,
@@ -76,6 +90,17 @@ struct EngineRunner<T: Application> {
     // Vulkan context must be dropped before window (surface references native handle).
     vulkan_context: Option<VulkanContext>,
     window: Option<Arc<Window>>,
+}
+
+impl<T: Application> Drop for EngineRunner<T> {
+    fn drop(&mut self) {
+        // Wait for all GPU work to finish before Rust drops the Vulkan resources.
+        if let Some(vk_ctx) = &self.vulkan_context {
+            unsafe {
+                let _ = vk_ctx.device().device_wait_idle();
+            }
+        }
+    }
 }
 
 impl<T: Application> ApplicationHandler for EngineRunner<T> {
@@ -104,6 +129,7 @@ impl<T: Application> ApplicationHandler for EngineRunner<T> {
                             &ctx,
                             self.window_config.width,
                             self.window_config.height,
+                            self.current_present_mode,
                         ) {
                             Ok(sc) => {
                                 // Initialize egui-winit state.
@@ -136,6 +162,8 @@ impl<T: Application> ApplicationHandler for EngineRunner<T> {
                                     },
                                 ) {
                                     Ok(renderer) => {
+                                        self.triangle_renderer =
+                                            Some(TriangleRenderer::new(&ctx, sc.render_pass()));
                                         self.egui_winit_state = Some(egui_winit_state);
                                         self.egui_renderer = Some(renderer);
                                         self.swapchain = Some(sc);
@@ -218,7 +246,7 @@ impl<T: Application> ApplicationHandler for EngineRunner<T> {
                 if let (Some(vk_ctx), Some(sc)) =
                     (&self.vulkan_context, &mut self.swapchain)
                 {
-                    sc.recreate(vk_ctx, size.width, size.height);
+                    sc.recreate(vk_ctx, size.width, size.height, None);
                 }
             }
         }
@@ -292,9 +320,10 @@ impl<T: Application> ApplicationHandler for EngineRunner<T> {
             }
 
             // Render frame.
-            render_frame(
+            let frame_result = render_frame(
                 vk_ctx,
                 swapchain,
+                self.triangle_renderer.as_ref(),
                 egui_renderer,
                 &primitives,
                 full_output.pixels_per_point,
@@ -308,6 +337,20 @@ impl<T: Application> ApplicationHandler for EngineRunner<T> {
                 egui_renderer
                     .free_textures(&full_output.textures_delta.free)
                     .expect("Failed to free egui textures");
+            }
+
+            // Check for present mode change.
+            let desired = self.app.present_mode();
+            let mode_changed = desired != self.current_present_mode;
+
+            // Recreate swapchain if needed (out-of-date / suboptimal / present mode change).
+            if matches!(frame_result, FrameResult::RecreateSwapchain) || mode_changed {
+                let size = window.inner_size();
+                if size.width > 0 && size.height > 0 {
+                    let mode_arg = if mode_changed { Some(desired) } else { None };
+                    swapchain.recreate(vk_ctx, size.width, size.height, mode_arg);
+                    self.current_present_mode = desired;
+                }
             }
         }
 
@@ -324,33 +367,45 @@ impl<T: Application> ApplicationHandler for EngineRunner<T> {
 fn render_frame(
     vk_ctx: &VulkanContext,
     swapchain: &mut Swapchain,
+    triangle_renderer: Option<&TriangleRenderer>,
     egui_renderer: &mut egui_ash_renderer::Renderer,
     primitives: &[egui::ClippedPrimitive],
     pixels_per_point: f32,
-) {
+) -> FrameResult {
     let device = vk_ctx.device();
     let extent = swapchain.extent();
 
-    // Wait for previous frame.
+    // Wait for this frame-slot's fence (still signaled from the previous use).
     unsafe {
         device
             .wait_for_fences(&[swapchain.in_flight_fence()], true, u64::MAX)
             .expect("Failed to wait for fence");
-        device
-            .reset_fences(&[swapchain.in_flight_fence()])
-            .expect("Failed to reset fence");
     }
 
-    // Acquire next image.
-    let (image_index, _suboptimal) = unsafe {
+    // Acquire next image — do NOT reset the fence yet.
+    // If acquire fails with OUT_OF_DATE, the fence stays signaled so the
+    // next frame's wait_for_fences won't deadlock.
+    let acquire_result = unsafe {
         swapchain.swapchain_loader().acquire_next_image(
             swapchain.swapchain(),
             u64::MAX,
             swapchain.image_available_semaphore(),
             vk::Fence::null(),
         )
+    };
+
+    let (image_index, acquire_suboptimal) = match acquire_result {
+        Ok((idx, suboptimal)) => (idx, suboptimal),
+        Err(vk::Result::ERROR_OUT_OF_DATE_KHR) => return FrameResult::RecreateSwapchain,
+        Err(e) => panic!("Failed to acquire swapchain image: {e}"),
+    };
+
+    // Acquire succeeded — now it's safe to reset the fence.
+    unsafe {
+        device
+            .reset_fences(&[swapchain.in_flight_fence()])
+            .expect("Failed to reset fence");
     }
-    .expect("Failed to acquire swapchain image");
 
     let cmd_buf = swapchain.command_buffer(swapchain.current_frame());
 
@@ -379,6 +434,11 @@ fn render_frame(
             .clear_values(&clear_values);
 
         device.cmd_begin_render_pass(cmd_buf, &render_pass_info, vk::SubpassContents::INLINE);
+    }
+
+    // Draw triangle (under egui).
+    if let Some(tri) = triangle_renderer {
+        tri.cmd_draw(device, cmd_buf, extent);
     }
 
     // Draw egui.
@@ -424,11 +484,17 @@ fn render_frame(
         .swapchains(&swapchains)
         .image_indices(&image_indices);
 
-    unsafe {
-        // Swapchain may be suboptimal after present — that's fine, we handle resize via events.
-        let _ = swapchain
+    let present_result = unsafe {
+        swapchain
             .swapchain_loader()
-            .queue_present(vk_ctx.graphics_queue(), &present_info);
+            .queue_present(vk_ctx.graphics_queue(), &present_info)
+    };
+
+    match present_result {
+        Ok(false) if !acquire_suboptimal => FrameResult::Ok,
+        Ok(_) => FrameResult::RecreateSwapchain,
+        Err(vk::Result::ERROR_OUT_OF_DATE_KHR) => FrameResult::RecreateSwapchain,
+        Err(e) => panic!("Failed to present: {e}"),
     }
 }
 
@@ -443,6 +509,7 @@ pub fn run<T: Application>() {
     let mut layers = LayerStack::new();
     let app = T::new(&mut layers);
     let window_config = app.window_config();
+    let current_present_mode = app.present_mode();
 
     let event_loop = EventLoop::new().expect("failed to create event loop");
     event_loop.set_control_flow(ControlFlow::Poll);
@@ -452,9 +519,11 @@ pub fn run<T: Application>() {
         layers,
         input: Input::new(),
         window_config,
+        current_present_mode,
         egui_ctx: egui::Context::default(),
         egui_winit_state: None,
         egui_renderer: None,
+        triangle_renderer: None,
         swapchain: None,
         vulkan_context: None,
         window: None,
