@@ -15,7 +15,7 @@ impl Application for Sandbox {
         }
     }
 
-    fn on_event(&mut self, event: &Event) {
+    fn on_event(&mut self, event: &Event, _input: &Input) {
         trace!("{event}");
     }
 }

@@ -1,4 +1,5 @@
 use crate::events::Event;
+use crate::input::Input;
 
 // ---------------------------------------------------------------------------
 // Layer trait
@@ -17,11 +18,13 @@ pub trait Layer {
     fn on_detach(&mut self) {}
 
     /// Called every frame. Layers are updated bottom-to-top.
-    fn on_update(&mut self) {}
+    /// `input` provides pollable keyboard/mouse state.
+    fn on_update(&mut self, _input: &Input) {}
 
     /// Called for each event. Layers receive events top-to-bottom.
     /// Return `true` if the event was handled and should not propagate further.
-    fn on_event(&mut self, _event: &Event) -> bool {
+    /// `input` provides pollable keyboard/mouse state.
+    fn on_event(&mut self, _event: &Event, _input: &Input) -> bool {
         false
     }
 }
@@ -65,17 +68,17 @@ impl LayerStack {
     }
 
     /// Update all layers forward (bottom-to-top).
-    pub fn update_all(&mut self) {
+    pub fn update_all(&mut self, input: &Input) {
         for layer in self.layers.iter_mut() {
-            layer.on_update();
+            layer.on_update(input);
         }
     }
 
     /// Dispatch an event through the stack in reverse order (top-to-bottom).
     /// Returns `true` if any layer handled the event.
-    pub fn dispatch_event(&mut self, event: &Event) -> bool {
+    pub fn dispatch_event(&mut self, event: &Event, input: &Input) -> bool {
         for layer in self.layers.iter_mut().rev() {
-            if layer.on_event(event) {
+            if layer.on_event(event, input) {
                 return true;
             }
         }
@@ -106,6 +109,7 @@ impl Drop for LayerStack {
 mod tests {
     use super::*;
     use crate::events::{MouseButton, MouseEvent};
+    use crate::input::Input;
     use std::cell::RefCell;
     use std::rc::Rc;
 
@@ -135,10 +139,10 @@ mod tests {
         fn on_detach(&mut self) {
             self.log.borrow_mut().push(format!("{} detach", self.label));
         }
-        fn on_update(&mut self) {
+        fn on_update(&mut self, _input: &Input) {
             self.log.borrow_mut().push(format!("{} update", self.label));
         }
-        fn on_event(&mut self, _event: &Event) -> bool {
+        fn on_event(&mut self, _event: &Event, _input: &Input) -> bool {
             self.log
                 .borrow_mut()
                 .push(format!("{} event", self.label));
@@ -164,7 +168,7 @@ mod tests {
         fn name(&self) -> &str {
             &self.label
         }
-        fn on_event(&mut self, _event: &Event) -> bool {
+        fn on_event(&mut self, _event: &Event, _input: &Input) -> bool {
             self.log
                 .borrow_mut()
                 .push(format!("{} handled", self.label));
@@ -201,7 +205,8 @@ mod tests {
         stack.push_overlay(Box::new(TestLayer::new("X", &log)));
         log.borrow_mut().clear();
 
-        stack.update_all();
+        let input = Input::new();
+        stack.update_all(&input);
         assert_eq!(&*log.borrow(), &["A update", "B update", "X update"]);
     }
 
@@ -214,7 +219,8 @@ mod tests {
         stack.push_overlay(Box::new(TestLayer::new("X", &log)));
         log.borrow_mut().clear();
 
-        let handled = stack.dispatch_event(&dummy_event());
+        let input = Input::new();
+        let handled = stack.dispatch_event(&dummy_event(), &input);
         assert!(!handled);
         assert_eq!(&*log.borrow(), &["X event", "B event", "A event"]);
     }
@@ -227,7 +233,8 @@ mod tests {
         stack.push_overlay(Box::new(HandlingLayer::new("X", &log)));
         log.borrow_mut().clear();
 
-        let handled = stack.dispatch_event(&dummy_event());
+        let input = Input::new();
+        let handled = stack.dispatch_event(&dummy_event(), &input);
         assert!(handled);
         // A should never receive the event
         assert_eq!(&*log.borrow(), &["X handled"]);
@@ -242,7 +249,8 @@ mod tests {
         log.borrow_mut().clear();
 
         // Update order should be: A (layer) then X (overlay)
-        stack.update_all();
+        let input = Input::new();
+        stack.update_all(&input);
         assert_eq!(&*log.borrow(), &["A update", "X update"]);
     }
 
@@ -262,7 +270,8 @@ mod tests {
     #[test]
     fn empty_stack_operations() {
         let mut stack = LayerStack::new();
-        assert!(!stack.dispatch_event(&dummy_event()));
-        stack.update_all(); // should not panic
+        let input = Input::new();
+        assert!(!stack.dispatch_event(&dummy_event(), &input));
+        stack.update_all(&input); // should not panic
     }
 }

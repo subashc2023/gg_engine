@@ -40,6 +40,7 @@ impl fmt::Display for KeyCode {
 pub enum KeyEvent {
     Pressed { key_code: KeyCode, repeat: bool },
     Released { key_code: KeyCode },
+    Typed(char),
 }
 
 impl fmt::Display for KeyEvent {
@@ -50,6 +51,9 @@ impl fmt::Display for KeyEvent {
             }
             KeyEvent::Released { key_code } => {
                 write!(f, "KeyReleased({key_code})")
+            }
+            KeyEvent::Typed(c) => {
+                write!(f, "KeyTyped({c})")
             }
         }
     }

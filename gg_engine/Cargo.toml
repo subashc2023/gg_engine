@@ -10,3 +10,7 @@ winit = "0.30"
 ash = "0.38"
 ash-window = "0.13"
 raw-window-handle = "0.6"
+egui = "0.33"
+egui-winit = { version = "0.33", default-features = false }
+egui-ash-renderer = "0.11"
+glam = "0.29"

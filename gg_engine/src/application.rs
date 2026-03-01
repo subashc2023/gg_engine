@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use ash::vk;
 use winit::application::ApplicationHandler;
 use winit::event::{ElementState, MouseScrollDelta};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
@@ -7,8 +8,9 @@ use winit::keyboard::PhysicalKey;
 use winit::window::{Window, WindowAttributes};
 
 use crate::events::{Event, KeyCode, KeyEvent, MouseButton, MouseEvent, WindowEvent};
+use crate::input::Input;
 use crate::layer::LayerStack;
-use crate::renderer::VulkanContext;
+use crate::renderer::{Swapchain, VulkanContext};
 
 // ---------------------------------------------------------------------------
 // WindowConfig
@@ -43,11 +45,14 @@ pub trait Application {
         WindowConfig::default()
     }
 
-    fn on_event(&mut self, event: &Event) {
+    fn on_event(&mut self, event: &Event, _input: &Input) {
         log::trace!("{event}");
     }
 
-    fn on_update(&mut self) {}
+    fn on_update(&mut self, _input: &Input) {}
+
+    /// Build immediate-mode UI each frame. Called inside `egui::Context::run`.
+    fn on_egui(&mut self, _ctx: &egui::Context) {}
 }
 
 // ---------------------------------------------------------------------------
@@ -57,7 +62,17 @@ pub trait Application {
 struct EngineRunner<T: Application> {
     app: T,
     layers: LayerStack,
+    input: Input,
     window_config: WindowConfig,
+
+    // egui state — dropped before Vulkan resources.
+    egui_ctx: egui::Context,
+    egui_winit_state: Option<egui_winit::State>,
+    egui_renderer: Option<egui_ash_renderer::Renderer>,
+
+    // Swapchain — dropped before VulkanContext.
+    swapchain: Option<Swapchain>,
+
     // Vulkan context must be dropped before window (surface references native handle).
     vulkan_context: Option<VulkanContext>,
     window: Option<Arc<Window>>,
@@ -69,7 +84,8 @@ impl<T: Application> ApplicationHandler for EngineRunner<T> {
             return;
         }
 
-        let size = winit::dpi::LogicalSize::new(self.window_config.width, self.window_config.height);
+        let size =
+            winit::dpi::LogicalSize::new(self.window_config.width, self.window_config.height);
         let attrs = WindowAttributes::default()
             .with_title(&self.window_config.title)
             .with_inner_size(size);
@@ -83,7 +99,62 @@ impl<T: Application> ApplicationHandler for EngineRunner<T> {
                 // Initialize Vulkan immediately after window creation.
                 match VulkanContext::new(&window) {
                     Ok(ctx) => {
-                        self.vulkan_context = Some(ctx);
+                        // Create swapchain.
+                        match Swapchain::new(
+                            &ctx,
+                            self.window_config.width,
+                            self.window_config.height,
+                        ) {
+                            Ok(sc) => {
+                                // Initialize egui-winit state.
+                                let egui_winit_state = egui_winit::State::new(
+                                    self.egui_ctx.clone(),
+                                    egui::ViewportId::ROOT,
+                                    &window,
+                                    None,
+                                    None,
+                                    None,
+                                );
+
+                                // Initialize egui Vulkan renderer.
+                                let is_srgb = matches!(
+                                    sc.format().format,
+                                    vk::Format::B8G8R8A8_SRGB
+                                        | vk::Format::R8G8B8A8_SRGB
+                                        | vk::Format::A8B8G8R8_SRGB_PACK32
+                                );
+
+                                match egui_ash_renderer::Renderer::with_default_allocator(
+                                    ctx.instance(),
+                                    ctx.physical_device(),
+                                    ctx.device().clone(),
+                                    sc.render_pass(),
+                                    egui_ash_renderer::Options {
+                                        in_flight_frames: 2,
+                                        srgb_framebuffer: is_srgb,
+                                        ..Default::default()
+                                    },
+                                ) {
+                                    Ok(renderer) => {
+                                        self.egui_winit_state = Some(egui_winit_state);
+                                        self.egui_renderer = Some(renderer);
+                                        self.swapchain = Some(sc);
+                                        self.vulkan_context = Some(ctx);
+                                        log::info!(target: "gg_engine", "Egui initialized");
+                                    }
+                                    Err(e) => {
+                                        log::error!(target: "gg_engine", "Egui renderer init failed: {e}");
+                                        // Still store vulkan context and swapchain so they drop cleanly.
+                                        self.swapchain = Some(sc);
+                                        self.vulkan_context = Some(ctx);
+                                    }
+                                }
+                            }
+                            Err(e) => {
+                                log::error!(target: "gg_engine", "Swapchain creation failed: {e}");
+                                self.vulkan_context = Some(ctx);
+                            }
+                        }
                     }
                     Err(e) => {
                         log::error!(target: "gg_engine", "Vulkan initialization failed: {e}");
@@ -107,9 +178,55 @@ impl<T: Application> ApplicationHandler for EngineRunner<T> {
         _window_id: winit::window::WindowId,
         event: winit::event::WindowEvent,
     ) {
+        // Forward raw winit event to egui-winit first.
+        if let (Some(state), Some(window)) = (&mut self.egui_winit_state, &self.window) {
+            let response = state.on_window_event(window, &event);
+            if response.consumed {
+                return;
+            }
+        }
+
+        // Update input polling state from raw winit event.
+        // This happens before engine event mapping so that key presses
+        // producing Typed events are still tracked by the polling system.
+        match &event {
+            winit::event::WindowEvent::KeyboardInput { event: key_event, .. } => {
+                if let PhysicalKey::Code(code) = key_event.physical_key {
+                    let key_code = map_key_code(code);
+                    match key_event.state {
+                        ElementState::Pressed => self.input.press_key(key_code),
+                        ElementState::Released => self.input.release_key(key_code),
+                    }
+                }
+            }
+            winit::event::WindowEvent::CursorMoved { position, .. } => {
+                self.input.set_mouse_position(position.x, position.y);
+            }
+            winit::event::WindowEvent::MouseInput { state, button, .. } => {
+                let btn = map_mouse_button(*button);
+                match state {
+                    ElementState::Pressed => self.input.press_mouse_button(btn),
+                    ElementState::Released => self.input.release_mouse_button(btn),
+                }
+            }
+            _ => {}
+        }
+
+        // Handle resize for swapchain recreation.
+        if let winit::event::WindowEvent::Resized(size) = &event {
+            if size.width > 0 && size.height > 0 {
+                if let (Some(vk_ctx), Some(sc)) =
+                    (&self.vulkan_context, &mut self.swapchain)
+                {
+                    sc.recreate(vk_ctx, size.width, size.height);
+                }
+            }
+        }
+
+        // Map to engine event and dispatch through layer stack.
         if let Some(engine_event) = map_window_event(&event) {
-            if !self.layers.dispatch_event(&engine_event) {
-                self.app.on_event(&engine_event);
+            if !self.layers.dispatch_event(&engine_event, &self.input) {
+                self.app.on_event(&engine_event, &self.input);
             }
 
             if matches!(engine_event, Event::Window(WindowEvent::Close)) {
@@ -119,11 +236,199 @@ impl<T: Application> ApplicationHandler for EngineRunner<T> {
     }
 
     fn about_to_wait(&mut self, _event_loop: &ActiveEventLoop) {
-        self.layers.update_all();
-        self.app.on_update();
+        self.layers.update_all(&self.input);
+        self.app.on_update(&self.input);
+
+        // Render egui frame — requires all graphics resources.
+        'render: {
+            let Some(window) = self.window.as_ref() else {
+                break 'render;
+            };
+            let Some(vk_ctx) = self.vulkan_context.as_ref() else {
+                break 'render;
+            };
+            let Some(swapchain) = self.swapchain.as_mut() else {
+                break 'render;
+            };
+            let Some(egui_state) = self.egui_winit_state.as_mut() else {
+                break 'render;
+            };
+            let Some(egui_renderer) = self.egui_renderer.as_mut() else {
+                break 'render;
+            };
+
+            // Skip rendering when minimized.
+            let extent = swapchain.extent();
+            if extent.width == 0 || extent.height == 0 {
+                break 'render;
+            }
+
+            // Gather input and run egui.
+            let raw_input = egui_state.take_egui_input(window);
+
+            // Split borrows so the application can build egui UI.
+            let egui_ctx = &self.egui_ctx;
+            let app = &mut self.app;
+            let full_output = egui_ctx.run(raw_input, |ctx| {
+                app.on_egui(ctx);
+            });
+
+            // Handle platform output (cursor, clipboard, etc).
+            egui_state.handle_platform_output(window, full_output.platform_output);
+
+            // Tessellate.
+            let primitives = egui_ctx
+                .tessellate(full_output.shapes, full_output.pixels_per_point);
+
+            // Upload textures.
+            if !full_output.textures_delta.set.is_empty() {
+                egui_renderer
+                    .set_textures(
+                        vk_ctx.graphics_queue(),
+                        swapchain.command_pool(),
+                        &full_output.textures_delta.set,
+                    )
+                    .expect("Failed to set egui textures");
+            }
+
+            // Render frame.
+            render_frame(
+                vk_ctx,
+                swapchain,
+                egui_renderer,
+                &primitives,
+                full_output.pixels_per_point,
+            );
+
+            // Advance to the next frame's sync primitives.
+            swapchain.advance_frame();
+
+            // Free textures that are no longer needed.
+            if !full_output.textures_delta.free.is_empty() {
+                egui_renderer
+                    .free_textures(&full_output.textures_delta.free)
+                    .expect("Failed to free egui textures");
+            }
+        }
+
         if let Some(window) = &self.window {
             window.request_redraw();
         }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Frame rendering
+// ---------------------------------------------------------------------------
+
+fn render_frame(
+    vk_ctx: &VulkanContext,
+    swapchain: &mut Swapchain,
+    egui_renderer: &mut egui_ash_renderer::Renderer,
+    primitives: &[egui::ClippedPrimitive],
+    pixels_per_point: f32,
+) {
+    let device = vk_ctx.device();
+    let extent = swapchain.extent();
+
+    // Wait for previous frame.
+    unsafe {
+        device
+            .wait_for_fences(&[swapchain.in_flight_fence()], true, u64::MAX)
+            .expect("Failed to wait for fence");
+        device
+            .reset_fences(&[swapchain.in_flight_fence()])
+            .expect("Failed to reset fence");
+    }
+
+    // Acquire next image.
+    let (image_index, _suboptimal) = unsafe {
+        swapchain.swapchain_loader().acquire_next_image(
+            swapchain.swapchain(),
+            u64::MAX,
+            swapchain.image_available_semaphore(),
+            vk::Fence::null(),
+        )
+    }
+    .expect("Failed to acquire swapchain image");
+
+    let cmd_buf = swapchain.command_buffer(swapchain.current_frame());
+
+    // Record command buffer.
+    unsafe {
+        device
+            .reset_command_buffer(cmd_buf, vk::CommandBufferResetFlags::empty())
+            .expect("Failed to reset command buffer");
+        device
+            .begin_command_buffer(cmd_buf, &vk::CommandBufferBeginInfo::default())
+            .expect("Failed to begin command buffer");
+
+        let clear_values = [vk::ClearValue {
+            color: vk::ClearColorValue {
+                float32: [0.01, 0.01, 0.01, 1.0],
+            },
+        }];
+
+        let render_pass_info = vk::RenderPassBeginInfo::default()
+            .render_pass(swapchain.render_pass())
+            .framebuffer(swapchain.framebuffer(image_index as usize))
+            .render_area(vk::Rect2D {
+                offset: vk::Offset2D { x: 0, y: 0 },
+                extent,
+            })
+            .clear_values(&clear_values);
+
+        device.cmd_begin_render_pass(cmd_buf, &render_pass_info, vk::SubpassContents::INLINE);
+    }
+
+    // Draw egui.
+    egui_renderer
+        .cmd_draw(cmd_buf, extent, pixels_per_point, primitives)
+        .expect("Failed to draw egui");
+
+    // End render pass and command buffer.
+    unsafe {
+        device.cmd_end_render_pass(cmd_buf);
+        device
+            .end_command_buffer(cmd_buf)
+            .expect("Failed to end command buffer");
+    }
+
+    // Submit.
+    let wait_semaphores = [swapchain.image_available_semaphore()];
+    let signal_semaphores = [swapchain.render_finished_semaphore(image_index)];
+    let wait_stages = [vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT];
+    let command_buffers = [cmd_buf];
+
+    let submit_info = vk::SubmitInfo::default()
+        .wait_semaphores(&wait_semaphores)
+        .wait_dst_stage_mask(&wait_stages)
+        .command_buffers(&command_buffers)
+        .signal_semaphores(&signal_semaphores);
+
+    unsafe {
+        device
+            .queue_submit(
+                vk_ctx.graphics_queue(),
+                &[submit_info],
+                swapchain.in_flight_fence(),
+            )
+            .expect("Failed to submit draw command buffer");
+    }
+
+    // Present.
+    let swapchains = [swapchain.swapchain()];
+    let image_indices = [image_index];
+    let present_info = vk::PresentInfoKHR::default()
+        .wait_semaphores(&signal_semaphores)
+        .swapchains(&swapchains)
+        .image_indices(&image_indices);
+
+    unsafe {
+        // Swapchain may be suboptimal after present — that's fine, we handle resize via events.
+        let _ = swapchain
+            .swapchain_loader()
+            .queue_present(vk_ctx.graphics_queue(), &present_info);
     }
 }
 
@@ -145,7 +450,12 @@ pub fn run<T: Application>() {
     let mut runner = EngineRunner {
         app,
         layers,
+        input: Input::new(),
         window_config,
+        egui_ctx: egui::Context::default(),
+        egui_winit_state: None,
+        egui_renderer: None,
+        swapchain: None,
         vulkan_context: None,
         window: None,
     };
@@ -169,6 +479,17 @@ fn map_window_event(event: &winit::event::WindowEvent) -> Option<Event> {
         })),
 
         winit::event::WindowEvent::KeyboardInput { event, .. } => {
+            // Emit a Typed event for character input on press (not repeat).
+            if event.state == ElementState::Pressed && !event.repeat {
+                if let Some(text) = &event.text {
+                    for c in text.chars() {
+                        if !c.is_control() {
+                            return Some(Event::Key(KeyEvent::Typed(c)));
+                        }
+                    }
+                }
+            }
+
             let PhysicalKey::Code(code) = event.physical_key else {
                 return None;
             };

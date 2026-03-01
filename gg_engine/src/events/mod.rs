@@ -89,6 +89,12 @@ mod tests {
     }
 
     #[test]
+    fn display_key_typed() {
+        let event = Event::Key(KeyEvent::Typed('a'));
+        assert_eq!(event.to_string(), "KeyTyped(a)");
+    }
+
+    #[test]
     fn event_is_copy() {
         let event = Event::Window(WindowEvent::Close);
         let copy = event;
