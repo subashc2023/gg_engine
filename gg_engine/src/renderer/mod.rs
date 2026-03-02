@@ -2,8 +2,10 @@ mod buffer;
 mod shader;
 mod swapchain;
 mod triangle;
+mod vertex_array;
 mod vulkan_context;
 
+pub use buffer::{BufferElement, BufferLayout, ShaderDataType};
 pub(crate) use buffer::{IndexBuffer, VertexBuffer};
 pub(crate) use shader::Shader;
 pub use swapchain::{Swapchain, SwapchainError};

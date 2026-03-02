@@ -3,12 +3,191 @@ use ash::vk;
 use super::VulkanContext;
 
 // ---------------------------------------------------------------------------
+// ShaderDataType
+// ---------------------------------------------------------------------------
+
+/// Cross-API shader data type descriptor.
+///
+/// Used by [`BufferElement`] to describe the type of each vertex attribute.
+/// Naming follows HLSL convention (Float3 rather than Vec3).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ShaderDataType {
+    Float,
+    Float2,
+    Float3,
+    Float4,
+    Int,
+    Int2,
+    Int3,
+    Int4,
+    Mat3,
+    Mat4,
+    Bool,
+}
+
+impl ShaderDataType {
+    /// Size in bytes of this type.
+    pub fn size(self) -> u32 {
+        match self {
+            Self::Float => 4,
+            Self::Float2 => 4 * 2,
+            Self::Float3 => 4 * 3,
+            Self::Float4 => 4 * 4,
+            Self::Int => 4,
+            Self::Int2 => 4 * 2,
+            Self::Int3 => 4 * 3,
+            Self::Int4 => 4 * 4,
+            Self::Mat3 => 4 * 3 * 3,
+            Self::Mat4 => 4 * 4 * 4,
+            Self::Bool => 4,
+        }
+    }
+
+    /// Number of scalar components (e.g. Float3 → 3).
+    pub fn component_count(self) -> u32 {
+        match self {
+            Self::Float | Self::Int | Self::Bool => 1,
+            Self::Float2 | Self::Int2 => 2,
+            Self::Float3 | Self::Int3 => 3,
+            Self::Float4 | Self::Int4 => 4,
+            Self::Mat3 => 3 * 3,
+            Self::Mat4 => 4 * 4,
+        }
+    }
+
+    /// Convert to the corresponding Vulkan vertex attribute format.
+    pub fn to_vk_format(self) -> vk::Format {
+        match self {
+            Self::Float => vk::Format::R32_SFLOAT,
+            Self::Float2 => vk::Format::R32G32_SFLOAT,
+            Self::Float3 => vk::Format::R32G32B32_SFLOAT,
+            Self::Float4 => vk::Format::R32G32B32A32_SFLOAT,
+            Self::Int => vk::Format::R32_SINT,
+            Self::Int2 => vk::Format::R32G32_SINT,
+            Self::Int3 => vk::Format::R32G32B32_SINT,
+            Self::Int4 => vk::Format::R32G32B32A32_SINT,
+            Self::Bool => vk::Format::R32_SINT,
+            Self::Mat3 | Self::Mat4 => {
+                unimplemented!("Mat vertex attributes require multiple locations")
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// BufferElement
+// ---------------------------------------------------------------------------
+
+/// A single element (attribute) inside a [`BufferLayout`].
+#[derive(Debug, Clone)]
+pub struct BufferElement {
+    pub name: String,
+    pub data_type: ShaderDataType,
+    pub size: u32,
+    pub offset: u32,
+    pub normalized: bool,
+}
+
+impl BufferElement {
+    pub fn new(data_type: ShaderDataType, name: &str) -> Self {
+        Self {
+            name: name.to_owned(),
+            data_type,
+            size: data_type.size(),
+            offset: 0,
+            normalized: false,
+        }
+    }
+
+    pub fn normalized(mut self, normalized: bool) -> Self {
+        self.normalized = normalized;
+        self
+    }
+}
+
+// ---------------------------------------------------------------------------
+// BufferLayout
+// ---------------------------------------------------------------------------
+
+/// Describes the layout of interleaved vertex data inside a vertex buffer.
+///
+/// # Example
+/// ```ignore
+/// let layout = BufferLayout::new(&[
+///     BufferElement::new(ShaderDataType::Float3, "a_position"),
+///     BufferElement::new(ShaderDataType::Float4, "a_color"),
+/// ]);
+/// ```
+///
+/// Offsets and stride are computed automatically.
+#[derive(Debug, Clone)]
+pub struct BufferLayout {
+    elements: Vec<BufferElement>,
+    stride: u32,
+}
+
+impl BufferLayout {
+    pub fn new(elements: &[BufferElement]) -> Self {
+        let mut layout = Self {
+            elements: elements.to_vec(),
+            stride: 0,
+        };
+        layout.calculate_offsets_and_stride();
+        layout
+    }
+
+    pub fn stride(&self) -> u32 {
+        self.stride
+    }
+
+    pub fn elements(&self) -> &[BufferElement] {
+        &self.elements
+    }
+
+    /// Generate a Vulkan vertex input binding description for this layout.
+    pub fn vk_binding_description(&self, binding: u32) -> vk::VertexInputBindingDescription {
+        vk::VertexInputBindingDescription {
+            binding,
+            stride: self.stride,
+            input_rate: vk::VertexInputRate::VERTEX,
+        }
+    }
+
+    /// Generate Vulkan vertex input attribute descriptions for this layout.
+    pub fn vk_attribute_descriptions(
+        &self,
+        binding: u32,
+    ) -> Vec<vk::VertexInputAttributeDescription> {
+        self.elements
+            .iter()
+            .enumerate()
+            .map(|(location, elem)| vk::VertexInputAttributeDescription {
+                location: location as u32,
+                binding,
+                format: elem.data_type.to_vk_format(),
+                offset: elem.offset,
+            })
+            .collect()
+    }
+
+    fn calculate_offsets_and_stride(&mut self) {
+        let mut offset = 0u32;
+        for elem in &mut self.elements {
+            elem.offset = offset;
+            offset += elem.size;
+        }
+        self.stride = offset;
+    }
+}
+
+// ---------------------------------------------------------------------------
 // VertexBuffer
 // ---------------------------------------------------------------------------
 
 pub(crate) struct VertexBuffer {
     buffer: vk::Buffer,
     memory: vk::DeviceMemory,
+    layout: Option<BufferLayout>,
     device: ash::Device,
 }
 
@@ -31,8 +210,21 @@ impl VertexBuffer {
         Self {
             buffer,
             memory,
+            layout: None,
             device: device.clone(),
         }
+    }
+
+    pub fn set_layout(&mut self, layout: BufferLayout) {
+        self.layout = Some(layout);
+    }
+
+    pub fn layout(&self) -> Option<&BufferLayout> {
+        self.layout.as_ref()
+    }
+
+    pub(crate) fn handle(&self) -> vk::Buffer {
+        self.buffer
     }
 
     pub fn bind(&self, device: &ash::Device, cmd_buf: vk::CommandBuffer) {
