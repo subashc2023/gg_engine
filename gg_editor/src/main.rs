@@ -1,6 +1,6 @@
 use gg_engine::egui;
-use gg_engine::prelude::*;
 use gg_engine::glam::EulerRot;
+use gg_engine::prelude::*;
 use transform_gizmo_egui::math::{DQuat, DVec3, Transform as GizmoTransform};
 use transform_gizmo_egui::{EnumSet, Gizmo, GizmoConfig, GizmoExt, GizmoMode, GizmoOrientation};
 
@@ -77,21 +77,23 @@ fn gizmo_modes_for(op: GizmoOperation) -> EnumSet<GizmoMode> {
                 | GizmoMode::TranslateXZ
                 | GizmoMode::TranslateYZ
         }
-        GizmoOperation::Rotate => {
-            GizmoMode::RotateX | GizmoMode::RotateY | GizmoMode::RotateZ
-        }
+        GizmoOperation::Rotate => GizmoMode::RotateX | GizmoMode::RotateY | GizmoMode::RotateZ,
         GizmoOperation::Scale => {
-            GizmoMode::ScaleX
-                | GizmoMode::ScaleY
-                | GizmoMode::ScaleZ
-                | GizmoMode::ScaleUniform
+            GizmoMode::ScaleX | GizmoMode::ScaleY | GizmoMode::ScaleZ | GizmoMode::ScaleUniform
         }
     }
 }
 
-/// Convert a glam Mat4 (f32) to a column-major f64 array for the gizmo library.
+/// Convert a glam Mat4 (f32) to a row-major f64 array for the gizmo library.
+///
+/// GizmoConfig stores matrices as `mint::RowMatrix4<f64>`.  The `From<[[f64;4];4]>`
+/// impl for RowMatrix4 treats the outer arrays as **rows**, so we must supply
+/// rows, not columns.  `transpose().to_cols_array_2d()` gives us exactly that
+/// (columns of M^T = rows of M).
 fn mat4_to_f64(m: &Mat4) -> [[f64; 4]; 4] {
-    m.to_cols_array_2d().map(|col| col.map(|v| v as f64))
+    m.transpose()
+        .to_cols_array_2d()
+        .map(|row| row.map(|v| v as f64))
 }
 
 // ---------------------------------------------------------------------------
@@ -110,6 +112,8 @@ struct GGEditor {
     selection_context: Option<Entity>,
     gizmo: Gizmo,
     gizmo_operation: GizmoOperation,
+    editor_camera: EditorCamera,
+    hovered_entity: i32,
 }
 
 impl Application for GGEditor {
@@ -195,6 +199,8 @@ impl Application for GGEditor {
             selection_context: None,
             gizmo: Gizmo::default(),
             gizmo_operation: GizmoOperation::Translate,
+            editor_camera: EditorCamera::new(45.0_f32.to_radians(), 0.1, 1000.0),
+            hovered_entity: -1,
         }
     }
 
@@ -210,6 +216,11 @@ impl Application for GGEditor {
         let fb = renderer.create_framebuffer(FramebufferSpec {
             width: 800,
             height: 600,
+            attachments: vec![
+                FramebufferTextureFormat::RGBA8.into(),
+                FramebufferTextureFormat::RedInteger.into(),
+                FramebufferTextureFormat::Depth.into(),
+            ],
         });
         self.scene_fb = Some(fb);
     }
@@ -243,13 +254,15 @@ impl Application for GGEditor {
     }
 
     fn on_event(&mut self, event: &Event, input: &Input) {
+        self.editor_camera.on_event(event);
+
         if let Event::Key(KeyEvent::Pressed {
             key_code,
             repeat: false,
         }) = event
         {
-            let ctrl = input.is_key_pressed(KeyCode::LeftCtrl)
-                || input.is_key_pressed(KeyCode::RightCtrl);
+            let ctrl =
+                input.is_key_pressed(KeyCode::LeftCtrl) || input.is_key_pressed(KeyCode::RightCtrl);
             let shift = input.is_key_pressed(KeyCode::LeftShift)
                 || input.is_key_pressed(KeyCode::RightShift);
 
@@ -285,14 +298,26 @@ impl Application for GGEditor {
         let (w, h) = self.viewport_size;
         if w > 0 && h > 0 {
             self.scene.on_viewport_resize(w, h);
+            self.editor_camera.set_viewport_size(w as f32, h as f32);
         }
+
+        // Update editor camera (orbit/pan/zoom via Alt+mouse).
+        self.editor_camera.on_update(dt, input);
 
         // Run native scripts (e.g. CameraController on Camera A).
         self.scene.on_update_scripts(dt, input);
+
+        // Read latest pixel readback result.
+        self.hovered_entity = self
+            .scene_fb
+            .as_ref()
+            .map(|fb| fb.hovered_entity())
+            .unwrap_or(-1);
     }
 
     fn on_render(&mut self, renderer: &mut Renderer) {
-        self.scene.on_update(renderer);
+        self.scene
+            .on_update_editor(&self.editor_camera.view_projection(), renderer);
     }
 
     fn on_egui(&mut self, ctx: &egui::Context) {
@@ -338,6 +363,9 @@ impl Application for GGEditor {
             frame_time_ms: self.frame_time_ms,
             gizmo: &mut self.gizmo,
             gizmo_operation: self.gizmo_operation,
+            editor_camera: &self.editor_camera,
+            scene_fb: &mut self.scene_fb,
+            hovered_entity: self.hovered_entity,
         };
 
         let mut dock_style = egui_dock::Style::from_egui(ctx.style().as_ref());
@@ -432,6 +460,9 @@ struct EditorTabViewer<'a> {
     frame_time_ms: f32,
     gizmo: &'a mut Gizmo,
     gizmo_operation: GizmoOperation,
+    editor_camera: &'a EditorCamera,
+    scene_fb: &'a mut Option<Framebuffer>,
+    hovered_entity: i32,
 }
 
 impl EditorTabViewer<'_> {
@@ -512,7 +543,10 @@ impl egui_dock::TabViewer for EditorTabViewer<'_> {
             Tab::Viewport => {
                 let available = ui.available_size();
                 if available.x > 0.0 && available.y > 0.0 {
-                    *self.viewport_size = (available.x as u32, available.y as u32);
+                    // Scale by DPI so the framebuffer renders at physical
+                    // pixel resolution (crisp on high-DPI displays).
+                    let ppp = ui.ctx().pixels_per_point();
+                    *self.viewport_size = ((available.x * ppp) as u32, (available.y * ppp) as u32);
                 }
 
                 *self.viewport_hovered = ui.ui_contains_pointer();
@@ -520,140 +554,154 @@ impl egui_dock::TabViewer for EditorTabViewer<'_> {
                 let clicked = ui.input(|i| i.pointer.any_pressed());
                 if clicked && *self.viewport_hovered {
                     *self.viewport_focused = true;
+
+                    // Mouse picking — select entity on left click.
+                    let left_click =
+                        ui.input(|i| i.pointer.button_pressed(egui::PointerButton::Primary));
+                    let alt_held = ui.input(|i| i.modifiers.alt);
+                    if left_click && !self.gizmo.is_focused() && !alt_held {
+                        if self.hovered_entity >= 0 {
+                            *self.selection_context = self
+                                .scene
+                                .find_entity_by_id(self.hovered_entity as u32)
+                                .filter(|e| self.scene.is_alive(*e));
+                        } else {
+                            *self.selection_context = None;
+                        }
+                    }
                 }
 
-                if let Some(tex_id) = self.fb_tex_id {
+                let viewport_rect = if let Some(tex_id) = self.fb_tex_id {
                     let size = egui::vec2(available.x, available.y);
-                    ui.image(egui::load::SizedTexture::new(tex_id, size));
+                    let response = ui.image(egui::load::SizedTexture::new(tex_id, size));
+                    Some(response.rect)
+                } else {
+                    None
+                };
+
+                // -- Mouse picking: schedule pixel readback --
+                if *self.viewport_hovered {
+                    if let Some(viewport_rect) = viewport_rect {
+                        if let Some(pos) = ui.ctx().input(|i| i.pointer.latest_pos()) {
+                            let ppp = ui.ctx().pixels_per_point();
+                            let mx = ((pos.x - viewport_rect.min.x) * ppp) as i32;
+                            let my = ((pos.y - viewport_rect.min.y) * ppp) as i32;
+
+                            if mx >= 0
+                                && my >= 0
+                                && mx < self.viewport_size.0 as i32
+                                && my < self.viewport_size.1 as i32
+                            {
+                                if let Some(fb) = self.scene_fb.as_mut() {
+                                    fb.schedule_pixel_readback(1, mx, my);
+                                }
+                            }
+                        }
+                    }
                 }
 
                 // -- Gizmos --
-                if let Some(entity) = *self.selection_context {
-                    if self.scene.is_alive(entity)
-                        && self.gizmo_operation != GizmoOperation::None
-                    {
-                        if let Some(cam_entity) = self.scene.get_primary_camera_entity() {
-                            // Read camera data into locals (drops hecs borrows).
-                            let camera_matrices = {
-                                let cam = self.scene.get_component::<CameraComponent>(cam_entity);
-                                let cam_t =
-                                    self.scene.get_component::<TransformComponent>(cam_entity);
-                                if let (Some(cam), Some(cam_t)) = (cam, cam_t) {
-                                    let view = cam_t.get_transform().inverse();
-                                    // Undo Vulkan Y-flip for the gizmo library.
-                                    let mut proj = *cam.camera.projection();
-                                    proj.y_axis.y *= -1.0;
-                                    Some((view, proj))
-                                } else {
-                                    None
-                                }
+                if let Some(viewport_rect) = viewport_rect {
+                    if let Some(entity) = *self.selection_context {
+                        if self.scene.is_alive(entity)
+                            && self.gizmo_operation != GizmoOperation::None
+                        {
+                            // Use the editor camera for gizmo view/projection.
+                            let camera_view = *self.editor_camera.view_matrix();
+                            // Undo Vulkan Y-flip for the gizmo library.
+                            let mut camera_projection = *self.editor_camera.projection();
+                            camera_projection.y_axis.y *= -1.0;
+
+                            // Read entity transform.
+                            let entity_transform = {
+                                let tc = self.scene.get_component::<TransformComponent>(entity);
+                                tc.map(|tc| {
+                                    let original_rotation = tc.rotation;
+                                    let quat = Quat::from_euler(
+                                        EulerRot::XYZ,
+                                        tc.rotation.x,
+                                        tc.rotation.y,
+                                        tc.rotation.z,
+                                    );
+                                    (tc.translation, quat, tc.scale, original_rotation)
+                                })
                             };
 
-                            if let Some((camera_view, camera_projection)) = camera_matrices {
-                                // Read entity transform.
-                                let entity_transform = {
-                                    let tc =
-                                        self.scene.get_component::<TransformComponent>(entity);
-                                    tc.map(|tc| {
-                                        let original_rotation = tc.rotation;
-                                        let quat = Quat::from_euler(
-                                            EulerRot::XYZ,
-                                            tc.rotation.x,
-                                            tc.rotation.y,
-                                            tc.rotation.z,
-                                        );
-                                        (tc.translation, quat, tc.scale, original_rotation)
-                                    })
-                                };
+                            if let Some((translation, quat, scale, original_rotation)) =
+                                entity_transform
+                            {
+                                // Snapping: Ctrl held enables snap.
+                                let snapping = ui.input(|i| i.modifiers.ctrl);
 
-                                if let Some((translation, quat, scale, original_rotation)) =
-                                    entity_transform
+                                // Configure the gizmo.
+                                self.gizmo.update_config(GizmoConfig {
+                                    view_matrix: mat4_to_f64(&camera_view).into(),
+                                    projection_matrix: mat4_to_f64(&camera_projection).into(),
+                                    viewport: viewport_rect,
+                                    modes: gizmo_modes_for(self.gizmo_operation),
+                                    orientation: GizmoOrientation::Local,
+                                    snapping,
+                                    snap_angle: std::f32::consts::FRAC_PI_4, // 45 degrees
+                                    snap_distance: 0.5_f32,
+                                    snap_scale: 0.5_f32,
+                                    ..Default::default()
+                                });
+
+                                // Build gizmo Transform from entity data.
+                                let gizmo_transform =
+                                    GizmoTransform::from_scale_rotation_translation(
+                                        DVec3::new(scale.x as f64, scale.y as f64, scale.z as f64),
+                                        DQuat::from_xyzw(
+                                            quat.x as f64,
+                                            quat.y as f64,
+                                            quat.z as f64,
+                                            quat.w as f64,
+                                        ),
+                                        DVec3::new(
+                                            translation.x as f64,
+                                            translation.y as f64,
+                                            translation.z as f64,
+                                        ),
+                                    );
+
+                                // Interact (renders gizmo + returns new transforms).
+                                if let Some((_result, new_transforms)) =
+                                    self.gizmo.interact(ui, &[gizmo_transform])
                                 {
-                                    // Snapping: Ctrl held enables snap.
-                                    let snapping =
-                                        ui.input(|i| i.modifiers.ctrl);
-
-                                    // Configure the gizmo.
-                                    self.gizmo.update_config(GizmoConfig {
-                                        view_matrix: mat4_to_f64(&camera_view).into(),
-                                        projection_matrix: mat4_to_f64(&camera_projection).into(),
-                                        viewport: ui.clip_rect(),
-                                        modes: gizmo_modes_for(self.gizmo_operation),
-                                        orientation: GizmoOrientation::Local,
-                                        snapping,
-                                        snap_angle: std::f32::consts::FRAC_PI_4, // 45 degrees
-                                        snap_distance: 0.5_f32,
-                                        snap_scale: 0.5_f32,
-                                        ..Default::default()
-                                    });
-
-                                    // Build gizmo Transform from entity data.
-                                    let gizmo_transform =
-                                        GizmoTransform::from_scale_rotation_translation(
-                                            DVec3::new(
-                                                scale.x as f64,
-                                                scale.y as f64,
-                                                scale.z as f64,
-                                            ),
-                                            DQuat::from_xyzw(
-                                                quat.x as f64,
-                                                quat.y as f64,
-                                                quat.z as f64,
-                                                quat.w as f64,
-                                            ),
-                                            DVec3::new(
-                                                translation.x as f64,
-                                                translation.y as f64,
-                                                translation.z as f64,
-                                            ),
+                                    if let Some(new_t) = new_transforms.first() {
+                                        // Read back translation & scale from mint types.
+                                        let new_translation = Vec3::new(
+                                            new_t.translation.x as f32,
+                                            new_t.translation.y as f32,
+                                            new_t.translation.z as f32,
+                                        );
+                                        let new_scale = Vec3::new(
+                                            new_t.scale.x as f32,
+                                            new_t.scale.y as f32,
+                                            new_t.scale.z as f32,
                                         );
 
-                                    // Interact (renders gizmo + returns new transforms).
-                                    if let Some((_result, new_transforms)) =
-                                        self.gizmo.interact(ui, &[gizmo_transform])
-                                    {
-                                        if let Some(new_t) = new_transforms.first() {
-                                            // Read back translation & scale from mint types.
-                                            let new_translation = Vec3::new(
-                                                new_t.translation.x as f32,
-                                                new_t.translation.y as f32,
-                                                new_t.translation.z as f32,
-                                            );
-                                            let new_scale = Vec3::new(
-                                                new_t.scale.x as f32,
-                                                new_t.scale.y as f32,
-                                                new_t.scale.z as f32,
-                                            );
+                                        // Rotation: use delta approach to avoid
+                                        // gimbal lock snapping.
+                                        let new_quat = Quat::from_xyzw(
+                                            new_t.rotation.v.x as f32,
+                                            new_t.rotation.v.y as f32,
+                                            new_t.rotation.v.z as f32,
+                                            new_t.rotation.s as f32,
+                                        );
+                                        let (nx, ny, nz) = new_quat.to_euler(EulerRot::XYZ);
+                                        let (ox, oy, oz) = quat.to_euler(EulerRot::XYZ);
+                                        let delta_rotation = Vec3::new(nx - ox, ny - oy, nz - oz);
+                                        let new_rotation = original_rotation + delta_rotation;
 
-                                            // Rotation: use delta approach to avoid
-                                            // gimbal lock snapping.
-                                            let new_quat = Quat::from_xyzw(
-                                                new_t.rotation.v.x as f32,
-                                                new_t.rotation.v.y as f32,
-                                                new_t.rotation.v.z as f32,
-                                                new_t.rotation.s as f32,
-                                            );
-                                            let (nx, ny, nz) = new_quat
-                                                .to_euler(EulerRot::XYZ);
-                                            let (ox, oy, oz) =
-                                                quat.to_euler(EulerRot::XYZ);
-                                            let delta_rotation = Vec3::new(
-                                                nx - ox,
-                                                ny - oy,
-                                                nz - oz,
-                                            );
-                                            let new_rotation =
-                                                original_rotation + delta_rotation;
-
-                                            // Write back to component.
-                                            if let Some(mut tc) = self
-                                                .scene
-                                                .get_component_mut::<TransformComponent>(entity)
-                                            {
-                                                tc.translation = new_translation;
-                                                tc.rotation = new_rotation;
-                                                tc.scale = new_scale;
-                                            }
+                                        // Write back to component.
+                                        if let Some(mut tc) = self
+                                            .scene
+                                            .get_component_mut::<TransformComponent>(entity)
+                                        {
+                                            tc.translation = new_translation;
+                                            tc.rotation = new_rotation;
+                                            tc.scale = new_scale;
                                         }
                                     }
                                 }
@@ -697,6 +745,23 @@ impl egui_dock::TabViewer for EditorTabViewer<'_> {
 
                 ui.add_space(8.0);
                 ui.checkbox(self.vsync, "VSync");
+
+                ui.add_space(8.0);
+                ui.heading("Mouse Picking");
+                ui.separator();
+                let hovered_name = if self.hovered_entity >= 0 {
+                    self.scene
+                        .find_entity_by_id(self.hovered_entity as u32)
+                        .and_then(|e| {
+                            self.scene
+                                .get_component::<TagComponent>(e)
+                                .map(|tag| tag.tag.clone())
+                        })
+                        .unwrap_or_else(|| format!("Entity({})", self.hovered_entity))
+                } else {
+                    "None".to_string()
+                };
+                ui.label(format!("Hovered Entity: {}", hovered_name));
             }
         }
     }
@@ -735,114 +800,126 @@ fn draw_vec3_control(
     let mut changed = false;
 
     ui.push_id(label, |ui| {
-        ui.columns(2, |columns| {
-            columns[0].set_width(column_width);
-            columns[0].label(label);
+        // Compute sizes based on current line height.
+        let line_height =
+            ui.text_style_height(&egui::TextStyle::Body) + 2.0 * ui.spacing().button_padding.y;
+        let button_size = egui::vec2(line_height + 3.0, line_height);
 
-            let col = &mut columns[1];
+        ui.horizontal(|ui| {
+            // Fixed-width label — takes exactly column_width, left-aligned.
+            let (_, label_resp) =
+                ui.allocate_exact_size(egui::vec2(column_width, line_height), egui::Sense::hover());
+            ui.painter().text(
+                label_resp.rect.left_center(),
+                egui::Align2::LEFT_CENTER,
+                label,
+                egui::TextStyle::Body.resolve(ui.style()),
+                ui.visuals().text_color(),
+            );
 
-            // Compute sizes based on current line height.
-            let line_height = col.text_style_height(&egui::TextStyle::Body)
-                + 2.0 * col.spacing().button_padding.y;
-            let button_size = egui::vec2(line_height + 3.0, line_height);
+            ui.spacing_mut().item_spacing.x = 0.0;
 
-            col.spacing_mut().item_spacing.x = 0.0;
+            let bold_family = egui::FontFamily::Name(BOLD_FONT.into());
 
-            col.horizontal(|ui| {
-                let bold_family = egui::FontFamily::Name(BOLD_FONT.into());
+            // Compute a fixed width for each DragValue so all 3 groups fit.
+            let spacing = 4.0 * 2.0; // two 4px gaps between XYZ groups
+            let available = ui.available_width() - spacing - 3.0 * button_size.x;
+            let drag_width = (available / 3.0).max(20.0);
 
-                // --- X (red) ---
-                let x_color = egui::Color32::from_rgba_unmultiplied(204, 26, 38, 255);
-                if ui
-                    .add(
-                        egui::Button::new(
-                            egui::RichText::new("X")
-                                .color(egui::Color32::WHITE)
-                                .font(egui::FontId::new(14.0, bold_family.clone())),
-                        )
-                        .fill(x_color)
-                        .min_size(button_size)
-                        .corner_radius(egui::CornerRadius::same(2)),
+            // --- X (red) ---
+            let x_color = egui::Color32::from_rgba_unmultiplied(204, 26, 38, 255);
+            if ui
+                .add(
+                    egui::Button::new(
+                        egui::RichText::new("X")
+                            .color(egui::Color32::WHITE)
+                            .font(egui::FontId::new(14.0, bold_family.clone())),
                     )
-                    .clicked()
-                {
-                    values.x = reset_value;
-                    changed = true;
-                }
+                    .fill(x_color)
+                    .min_size(button_size)
+                    .corner_radius(egui::CornerRadius::same(2)),
+                )
+                .clicked()
+            {
+                values.x = reset_value;
+                changed = true;
+            }
 
-                // Drag value for X.
-                let drag_x = ui.add(
-                    egui::DragValue::new(&mut values.x)
-                        .speed(0.1)
-                        .custom_formatter(|n, _| format!("{n:.2}"))
-                        .update_while_editing(false),
-                );
-                if drag_x.changed() {
-                    changed = true;
-                }
+            // Drag value for X.
+            let drag_x = ui.add_sized(
+                [drag_width, button_size.y],
+                egui::DragValue::new(&mut values.x)
+                    .speed(0.1)
+                    .custom_formatter(|n, _| format!("{n:.2}"))
+                    .update_while_editing(false),
+            );
+            if drag_x.changed() {
+                changed = true;
+            }
 
-                ui.add_space(4.0);
+            ui.add_space(4.0);
 
-                // --- Y (green) ---
-                let y_color = egui::Color32::from_rgba_unmultiplied(47, 153, 47, 255);
-                if ui
-                    .add(
-                        egui::Button::new(
-                            egui::RichText::new("Y")
-                                .color(egui::Color32::WHITE)
-                                .font(egui::FontId::new(14.0, bold_family.clone())),
-                        )
-                        .fill(y_color)
-                        .min_size(button_size)
-                        .corner_radius(egui::CornerRadius::same(2)),
+            // --- Y (green) ---
+            let y_color = egui::Color32::from_rgba_unmultiplied(47, 153, 47, 255);
+            if ui
+                .add(
+                    egui::Button::new(
+                        egui::RichText::new("Y")
+                            .color(egui::Color32::WHITE)
+                            .font(egui::FontId::new(14.0, bold_family.clone())),
                     )
-                    .clicked()
-                {
-                    values.y = reset_value;
-                    changed = true;
-                }
+                    .fill(y_color)
+                    .min_size(button_size)
+                    .corner_radius(egui::CornerRadius::same(2)),
+                )
+                .clicked()
+            {
+                values.y = reset_value;
+                changed = true;
+            }
 
-                let drag_y = ui.add(
-                    egui::DragValue::new(&mut values.y)
-                        .speed(0.1)
-                        .custom_formatter(|n, _| format!("{n:.2}"))
-                        .update_while_editing(false),
-                );
-                if drag_y.changed() {
-                    changed = true;
-                }
+            let drag_y = ui.add_sized(
+                [drag_width, button_size.y],
+                egui::DragValue::new(&mut values.y)
+                    .speed(0.1)
+                    .custom_formatter(|n, _| format!("{n:.2}"))
+                    .update_while_editing(false),
+            );
+            if drag_y.changed() {
+                changed = true;
+            }
 
-                ui.add_space(4.0);
+            ui.add_space(4.0);
 
-                // --- Z (blue) ---
-                let z_color = egui::Color32::from_rgba_unmultiplied(20, 64, 204, 255);
-                if ui
-                    .add(
-                        egui::Button::new(
-                            egui::RichText::new("Z")
-                                .color(egui::Color32::WHITE)
-                                .font(egui::FontId::new(14.0, bold_family)),
-                        )
-                        .fill(z_color)
-                        .min_size(button_size)
-                        .corner_radius(egui::CornerRadius::same(2)),
+            // --- Z (blue) ---
+            let z_color = egui::Color32::from_rgba_unmultiplied(20, 64, 204, 255);
+            if ui
+                .add(
+                    egui::Button::new(
+                        egui::RichText::new("Z")
+                            .color(egui::Color32::WHITE)
+                            .font(egui::FontId::new(14.0, bold_family)),
                     )
-                    .clicked()
-                {
-                    values.z = reset_value;
-                    changed = true;
-                }
+                    .fill(z_color)
+                    .min_size(button_size)
+                    .corner_radius(egui::CornerRadius::same(2)),
+                )
+                .clicked()
+            {
+                values.z = reset_value;
+                changed = true;
+            }
 
-                let drag_z = ui.add(
-                    egui::DragValue::new(&mut values.z)
-                        .speed(0.1)
-                        .custom_formatter(|n, _| format!("{n:.2}"))
-                        .update_while_editing(false),
-                );
-                if drag_z.changed() {
-                    changed = true;
-                }
-            });
+            let drag_z = ui.add_sized(
+                [drag_width, button_size.y],
+                egui::DragValue::new(&mut values.z)
+                    .speed(0.1)
+                    .custom_formatter(|n, _| format!("{n:.2}"))
+                    .update_while_editing(false),
+            );
+            if drag_z.changed() {
+                changed = true;
+            }
         });
     });
 
@@ -854,259 +931,284 @@ fn draw_vec3_control(
 // ---------------------------------------------------------------------------
 
 fn draw_components(ui: &mut egui::Ui, scene: &mut Scene, entity: Entity) {
-    // -- Tag Component (editable entity name) --
+    let bold_family = egui::FontFamily::Name(BOLD_FONT.into());
+
+    // -- Tag Component + Add Component button (inline) --
     if scene.has_component::<TagComponent>(entity) {
         let mut tag = scene
             .get_component::<TagComponent>(entity)
             .map(|t| t.tag.clone())
             .unwrap_or_default();
-        if ui.text_edit_singleline(&mut tag).changed() {
-            if let Some(mut tc) = scene.get_component_mut::<TagComponent>(entity) {
-                tc.tag = tag;
+
+        ui.horizontal(|ui| {
+            if ui.text_edit_singleline(&mut tag).changed() {
+                if let Some(mut tc) = scene.get_component_mut::<TagComponent>(entity) {
+                    tc.tag = tag;
+                }
             }
-        }
+
+            let add_btn = ui.add(
+                egui::Button::new(
+                    egui::RichText::new("Add")
+                        .color(egui::Color32::WHITE)
+                        .font(egui::FontId::new(12.0, bold_family.clone())),
+                )
+                .fill(egui::Color32::from_rgb(0x00, 0x7A, 0xCC))
+                .corner_radius(egui::CornerRadius::same(2)),
+            );
+
+            egui::Popup::from_toggle_button_response(&add_btn).show(|ui| {
+                if !scene.has_component::<CameraComponent>(entity) && ui.button("Camera").clicked()
+                {
+                    scene.add_component(entity, CameraComponent::default());
+                }
+                if !scene.has_component::<SpriteRendererComponent>(entity)
+                    && ui.button("Sprite Renderer").clicked()
+                {
+                    scene.add_component(entity, SpriteRendererComponent::default());
+                }
+            });
+        });
         ui.separator();
     }
-
-    let bold_family = egui::FontFamily::Name(BOLD_FONT.into());
 
     // -- Transform Component (not removable) --
     if scene.has_component::<TransformComponent>(entity) {
         egui::CollapsingHeader::new(
-            egui::RichText::new("Transform")
-                .font(egui::FontId::new(14.0, bold_family.clone())),
+            egui::RichText::new("Transform").font(egui::FontId::new(14.0, bold_family.clone())),
         )
-            .id_salt(("transform", entity.id()))
-            .default_open(true)
-            .show(ui, |ui| {
-                let (mut translation, mut rotation_deg, mut scale) = {
-                    let tc = scene.get_component::<TransformComponent>(entity).unwrap();
-                    (
-                        tc.translation,
-                        Vec3::new(
-                            tc.rotation.x.to_degrees(),
-                            tc.rotation.y.to_degrees(),
-                            tc.rotation.z.to_degrees(),
-                        ),
-                        tc.scale,
-                    )
-                };
+        .id_salt(("transform", entity.id()))
+        .default_open(true)
+        .show(ui, |ui| {
+            let (mut translation, mut rotation_deg, mut scale) = {
+                let tc = scene.get_component::<TransformComponent>(entity).unwrap();
+                (
+                    tc.translation,
+                    Vec3::new(
+                        tc.rotation.x.to_degrees(),
+                        tc.rotation.y.to_degrees(),
+                        tc.rotation.z.to_degrees(),
+                    ),
+                    tc.scale,
+                )
+            };
 
-                let mut changed = false;
-                changed |= draw_vec3_control(ui, "Translation", &mut translation, 0.0, 100.0);
-                changed |= draw_vec3_control(ui, "Rotation", &mut rotation_deg, 0.0, 100.0);
-                changed |= draw_vec3_control(ui, "Scale", &mut scale, 1.0, 100.0);
+            let mut changed = false;
+            changed |= draw_vec3_control(ui, "Translate", &mut translation, 0.0, 70.0);
+            changed |= draw_vec3_control(ui, "Rotate", &mut rotation_deg, 0.0, 70.0);
+            changed |= draw_vec3_control(ui, "Scale", &mut scale, 1.0, 70.0);
 
-                if changed {
-                    if let Some(mut tc) = scene.get_component_mut::<TransformComponent>(entity) {
-                        tc.translation = translation;
-                        tc.rotation = Vec3::new(
-                            rotation_deg.x.to_radians(),
-                            rotation_deg.y.to_radians(),
-                            rotation_deg.z.to_radians(),
-                        );
-                        tc.scale = scale;
-                    }
+            if changed {
+                if let Some(mut tc) = scene.get_component_mut::<TransformComponent>(entity) {
+                    tc.translation = translation;
+                    tc.rotation = Vec3::new(
+                        rotation_deg.x.to_radians(),
+                        rotation_deg.y.to_radians(),
+                        rotation_deg.z.to_radians(),
+                    );
+                    tc.scale = scale;
                 }
-            });
+            }
+        });
     }
 
     // -- Camera Component (removable) --
     let mut remove_camera = false;
     if scene.has_component::<CameraComponent>(entity) {
         let cr = egui::CollapsingHeader::new(
-            egui::RichText::new("Camera")
-                .font(egui::FontId::new(14.0, bold_family.clone())),
+            egui::RichText::new("Camera").font(egui::FontId::new(14.0, bold_family.clone())),
         )
-            .id_salt(("camera", entity.id()))
-            .default_open(true)
-            .show(ui, |ui| {
-                // Read all camera state up front.
-                let (
-                    mut primary,
-                    mut fixed_aspect,
-                    mut proj_type,
-                    mut ortho_size,
-                    mut ortho_near,
-                    mut ortho_far,
-                    mut persp_fov_deg,
-                    mut persp_near,
-                    mut persp_far,
-                ) = {
-                    let cam = scene.get_component::<CameraComponent>(entity).unwrap();
-                    (
-                        cam.primary,
-                        cam.fixed_aspect_ratio,
-                        cam.camera.projection_type(),
-                        cam.camera.orthographic_size(),
-                        cam.camera.orthographic_near(),
-                        cam.camera.orthographic_far(),
-                        cam.camera.perspective_vertical_fov().to_degrees(),
-                        cam.camera.perspective_near(),
-                        cam.camera.perspective_far(),
-                    )
-                };
+        .id_salt(("camera", entity.id()))
+        .default_open(true)
+        .show(ui, |ui| {
+            // Read all camera state up front.
+            let (
+                mut primary,
+                mut fixed_aspect,
+                mut proj_type,
+                mut ortho_size,
+                mut ortho_near,
+                mut ortho_far,
+                mut persp_fov_deg,
+                mut persp_near,
+                mut persp_far,
+            ) = {
+                let cam = scene.get_component::<CameraComponent>(entity).unwrap();
+                (
+                    cam.primary,
+                    cam.fixed_aspect_ratio,
+                    cam.camera.projection_type(),
+                    cam.camera.orthographic_size(),
+                    cam.camera.orthographic_near(),
+                    cam.camera.orthographic_far(),
+                    cam.camera.perspective_vertical_fov().to_degrees(),
+                    cam.camera.perspective_near(),
+                    cam.camera.perspective_far(),
+                )
+            };
 
-                let mut changed = false;
+            let mut changed = false;
 
-                // Primary camera toggle — uses set_primary_camera to ensure
-                // only one camera is primary at a time.
-                if ui.checkbox(&mut primary, "Primary").changed() {
-                    if primary {
-                        scene.set_primary_camera(entity);
-                    } else if let Some(mut cam) = scene.get_component_mut::<CameraComponent>(entity)
-                    {
-                        cam.primary = false;
-                    }
+            // Primary camera toggle — uses set_primary_camera to ensure
+            // only one camera is primary at a time.
+            if ui.checkbox(&mut primary, "Primary").changed() {
+                if primary {
+                    scene.set_primary_camera(entity);
+                } else if let Some(mut cam) = scene.get_component_mut::<CameraComponent>(entity) {
+                    cam.primary = false;
                 }
+            }
 
-                // Projection type combo box.
-                let proj_type_strings = ["Perspective", "Orthographic"];
-                let current_label = proj_type_strings[proj_type as usize];
-                egui::ComboBox::from_label("Projection")
-                    .selected_text(current_label)
-                    .show_ui(ui, |ui| {
+            // Projection type combo box.
+            let proj_type_strings = ["Perspective", "Orthographic"];
+            let current_label = proj_type_strings[proj_type as usize];
+            egui::ComboBox::from_label("Projection")
+                .selected_text(current_label)
+                .show_ui(ui, |ui| {
+                    if ui
+                        .selectable_value(
+                            &mut proj_type,
+                            ProjectionType::Perspective,
+                            proj_type_strings[0],
+                        )
+                        .changed()
+                    {
+                        changed = true;
+                    }
+                    if ui
+                        .selectable_value(
+                            &mut proj_type,
+                            ProjectionType::Orthographic,
+                            proj_type_strings[1],
+                        )
+                        .changed()
+                    {
+                        changed = true;
+                    }
+                });
+
+            // Projection-type-specific controls.
+            match proj_type {
+                ProjectionType::Perspective => {
+                    ui.horizontal(|ui| {
+                        ui.label("Vertical FOV");
                         if ui
-                            .selectable_value(
-                                &mut proj_type,
-                                ProjectionType::Perspective,
-                                proj_type_strings[0],
-                            )
-                            .changed()
-                        {
-                            changed = true;
-                        }
-                        if ui
-                            .selectable_value(
-                                &mut proj_type,
-                                ProjectionType::Orthographic,
-                                proj_type_strings[1],
+                            .add(
+                                egui::DragValue::new(&mut persp_fov_deg)
+                                    .speed(0.1)
+                                    .range(1.0..=179.0)
+                                    .suffix("°"),
                             )
                             .changed()
                         {
                             changed = true;
                         }
                     });
-
-                // Projection-type-specific controls.
-                match proj_type {
-                    ProjectionType::Perspective => {
-                        ui.horizontal(|ui| {
-                            ui.label("Vertical FOV");
-                            if ui
-                                .add(
-                                    egui::DragValue::new(&mut persp_fov_deg)
-                                        .speed(0.1)
-                                        .range(1.0..=179.0)
-                                        .suffix("°"),
-                                )
-                                .changed()
-                            {
-                                changed = true;
-                            }
-                        });
-                        ui.horizontal(|ui| {
-                            ui.label("Near");
-                            if ui
-                                .add(
-                                    egui::DragValue::new(&mut persp_near)
-                                        .speed(0.01)
-                                        .range(0.001..=f32::MAX),
-                                )
-                                .changed()
-                            {
-                                changed = true;
-                            }
-                        });
-                        ui.horizontal(|ui| {
-                            ui.label("Far");
-                            if ui
-                                .add(egui::DragValue::new(&mut persp_far).speed(1.0))
-                                .changed()
-                            {
-                                changed = true;
-                            }
-                        });
-                    }
-                    ProjectionType::Orthographic => {
-                        ui.horizontal(|ui| {
-                            ui.label("Size");
-                            if ui
-                                .add(
-                                    egui::DragValue::new(&mut ortho_size)
-                                        .speed(0.1)
-                                        .range(0.1..=1000.0),
-                                )
-                                .changed()
-                            {
-                                changed = true;
-                            }
-                        });
-                        ui.horizontal(|ui| {
-                            ui.label("Near");
-                            if ui
-                                .add(egui::DragValue::new(&mut ortho_near).speed(0.1))
-                                .changed()
-                            {
-                                changed = true;
-                            }
-                        });
-                        ui.horizontal(|ui| {
-                            ui.label("Far");
-                            if ui
-                                .add(egui::DragValue::new(&mut ortho_far).speed(0.1))
-                                .changed()
-                            {
-                                changed = true;
-                            }
-                        });
-                    }
-                }
-
-                // Fixed aspect ratio (applies to both projection types).
-                changed |= ui
-                    .checkbox(&mut fixed_aspect, "Fixed Aspect Ratio")
-                    .changed();
-
-                // Write back all changes.
-                if changed {
-                    if let Some(mut cam) = scene.get_component_mut::<CameraComponent>(entity) {
-                        cam.fixed_aspect_ratio = fixed_aspect;
-
-                        if cam.camera.projection_type() != proj_type {
-                            cam.camera.set_projection_type(proj_type);
-                        }
-
-                        // Perspective parameters.
-                        let new_fov_rad = persp_fov_deg.to_radians();
-                        if (cam.camera.perspective_vertical_fov() - new_fov_rad).abs()
-                            > f32::EPSILON
+                    ui.horizontal(|ui| {
+                        ui.label("Near");
+                        if ui
+                            .add(
+                                egui::DragValue::new(&mut persp_near)
+                                    .speed(0.01)
+                                    .range(0.001..=f32::MAX),
+                            )
+                            .changed()
                         {
-                            cam.camera.set_perspective_vertical_fov(new_fov_rad);
+                            changed = true;
                         }
-                        if (cam.camera.perspective_near() - persp_near).abs() > f32::EPSILON {
-                            cam.camera.set_perspective_near(persp_near);
+                    });
+                    ui.horizontal(|ui| {
+                        ui.label("Far");
+                        if ui
+                            .add(egui::DragValue::new(&mut persp_far).speed(1.0))
+                            .changed()
+                        {
+                            changed = true;
                         }
-                        if (cam.camera.perspective_far() - persp_far).abs() > f32::EPSILON {
-                            cam.camera.set_perspective_far(persp_far);
+                    });
+                }
+                ProjectionType::Orthographic => {
+                    ui.horizontal(|ui| {
+                        ui.label("Size");
+                        if ui
+                            .add(
+                                egui::DragValue::new(&mut ortho_size)
+                                    .speed(0.1)
+                                    .range(0.1..=1000.0),
+                            )
+                            .changed()
+                        {
+                            changed = true;
                         }
+                    });
+                    ui.horizontal(|ui| {
+                        ui.label("Near");
+                        if ui
+                            .add(egui::DragValue::new(&mut ortho_near).speed(0.1))
+                            .changed()
+                        {
+                            changed = true;
+                        }
+                    });
+                    ui.horizontal(|ui| {
+                        ui.label("Far");
+                        if ui
+                            .add(egui::DragValue::new(&mut ortho_far).speed(0.1))
+                            .changed()
+                        {
+                            changed = true;
+                        }
+                    });
+                }
+            }
 
-                        // Orthographic parameters.
-                        if (cam.camera.orthographic_size() - ortho_size).abs() > f32::EPSILON {
-                            cam.camera.set_orthographic_size(ortho_size);
-                        }
-                        if (cam.camera.orthographic_near() - ortho_near).abs() > f32::EPSILON {
-                            cam.camera.set_orthographic_near(ortho_near);
-                        }
-                        if (cam.camera.orthographic_far() - ortho_far).abs() > f32::EPSILON {
-                            cam.camera.set_orthographic_far(ortho_far);
-                        }
+            // Fixed aspect ratio (applies to both projection types).
+            changed |= ui
+                .checkbox(&mut fixed_aspect, "Fixed Aspect Ratio")
+                .changed();
+
+            // Write back all changes.
+            if changed {
+                if let Some(mut cam) = scene.get_component_mut::<CameraComponent>(entity) {
+                    cam.fixed_aspect_ratio = fixed_aspect;
+
+                    if cam.camera.projection_type() != proj_type {
+                        cam.camera.set_projection_type(proj_type);
+                    }
+
+                    // Perspective parameters.
+                    let new_fov_rad = persp_fov_deg.to_radians();
+                    if (cam.camera.perspective_vertical_fov() - new_fov_rad).abs() > f32::EPSILON {
+                        cam.camera.set_perspective_vertical_fov(new_fov_rad);
+                    }
+                    if (cam.camera.perspective_near() - persp_near).abs() > f32::EPSILON {
+                        cam.camera.set_perspective_near(persp_near);
+                    }
+                    if (cam.camera.perspective_far() - persp_far).abs() > f32::EPSILON {
+                        cam.camera.set_perspective_far(persp_far);
+                    }
+
+                    // Orthographic parameters.
+                    if (cam.camera.orthographic_size() - ortho_size).abs() > f32::EPSILON {
+                        cam.camera.set_orthographic_size(ortho_size);
+                    }
+                    if (cam.camera.orthographic_near() - ortho_near).abs() > f32::EPSILON {
+                        cam.camera.set_orthographic_near(ortho_near);
+                    }
+                    if (cam.camera.orthographic_far() - ortho_far).abs() > f32::EPSILON {
+                        cam.camera.set_orthographic_far(ortho_far);
                     }
                 }
-            });
+            }
+        });
 
-        // Settings button (right-aligned on the header line).
-        draw_component_settings_button(ui, &cr.header_response, || remove_camera = true);
+        // Right-click header to remove.
+        cr.header_response.context_menu(|ui| {
+            if ui.button("Remove Component").clicked() {
+                remove_camera = true;
+                ui.close();
+            }
+        });
     }
     if remove_camera {
         scene.remove_component::<CameraComponent>(entity);
@@ -1119,138 +1221,63 @@ fn draw_components(ui: &mut egui::Ui, scene: &mut Scene, entity: Entity) {
             egui::RichText::new("Sprite Renderer")
                 .font(egui::FontId::new(14.0, bold_family.clone())),
         )
-            .id_salt(("sprite_renderer", entity.id()))
-            .default_open(true)
-            .show(ui, |ui| {
-                let mut color_arr = {
-                    let sprite = scene
-                        .get_component::<SpriteRendererComponent>(entity)
-                        .unwrap();
-                    [
-                        sprite.color.x,
-                        sprite.color.y,
-                        sprite.color.z,
-                        sprite.color.w,
-                    ]
-                };
+        .id_salt(("sprite_renderer", entity.id()))
+        .default_open(true)
+        .show(ui, |ui| {
+            let mut color_arr = {
+                let sprite = scene
+                    .get_component::<SpriteRendererComponent>(entity)
+                    .unwrap();
+                [
+                    sprite.color.x,
+                    sprite.color.y,
+                    sprite.color.z,
+                    sprite.color.w,
+                ]
+            };
 
-                let mut egui_color = egui::Color32::from_rgba_unmultiplied(
-                    (color_arr[0] * 255.0) as u8,
-                    (color_arr[1] * 255.0) as u8,
-                    (color_arr[2] * 255.0) as u8,
-                    (color_arr[3] * 255.0) as u8,
-                );
+            let mut egui_color = egui::Color32::from_rgba_unmultiplied(
+                (color_arr[0] * 255.0) as u8,
+                (color_arr[1] * 255.0) as u8,
+                (color_arr[2] * 255.0) as u8,
+                (color_arr[3] * 255.0) as u8,
+            );
 
-                ui.horizontal(|ui| {
-                    ui.label("Color");
-                    if egui::color_picker::color_edit_button_srgba(
-                        ui,
-                        &mut egui_color,
-                        egui::color_picker::Alpha::OnlyBlend,
-                    )
-                    .changed()
+            ui.horizontal(|ui| {
+                ui.label("Color");
+                if egui::color_picker::color_edit_button_srgba(
+                    ui,
+                    &mut egui_color,
+                    egui::color_picker::Alpha::OnlyBlend,
+                )
+                .changed()
+                {
+                    let [r, g, b, a] = egui_color.to_srgba_unmultiplied();
+                    color_arr = [
+                        r as f32 / 255.0,
+                        g as f32 / 255.0,
+                        b as f32 / 255.0,
+                        a as f32 / 255.0,
+                    ];
+                    if let Some(mut sprite) =
+                        scene.get_component_mut::<SpriteRendererComponent>(entity)
                     {
-                        let [r, g, b, a] = egui_color.to_srgba_unmultiplied();
-                        color_arr = [
-                            r as f32 / 255.0,
-                            g as f32 / 255.0,
-                            b as f32 / 255.0,
-                            a as f32 / 255.0,
-                        ];
-                        if let Some(mut sprite) =
-                            scene.get_component_mut::<SpriteRendererComponent>(entity)
-                        {
-                            sprite.color = Vec4::from(color_arr);
-                        }
+                        sprite.color = Vec4::from(color_arr);
                     }
-                });
+                }
             });
+        });
 
-        // Settings button (right-aligned on the header line).
-        draw_component_settings_button(ui, &cr.header_response, || remove_sprite = true);
+        // Right-click header to remove.
+        cr.header_response.context_menu(|ui| {
+            if ui.button("Remove Component").clicked() {
+                remove_sprite = true;
+                ui.close();
+            }
+        });
     }
     if remove_sprite {
         scene.remove_component::<SpriteRendererComponent>(entity);
-    }
-
-    // -- Add Component button (full-width, blue accent) --
-    ui.add_space(8.0);
-    let popup_id = ui.make_persistent_id("add_component_popup");
-    let add_btn = ui.add_sized(
-        [ui.available_width(), 0.0],
-        egui::Button::new(
-            egui::RichText::new("Add Component")
-                .color(egui::Color32::WHITE)
-                .font(egui::FontId::new(14.0, bold_family)),
-        )
-        .fill(egui::Color32::from_rgb(0x00, 0x7A, 0xCC)),
-    );
-    if add_btn.clicked() {
-        egui::Popup::toggle_id(ui.ctx(), popup_id);
-    }
-    if egui::Popup::is_id_open(ui.ctx(), popup_id) {
-        let area_response = egui::Area::new(popup_id)
-            .order(egui::Order::Foreground)
-            .default_pos(add_btn.rect.left_bottom())
-            .show(ui.ctx(), |ui| {
-                egui::Frame::popup(ui.style()).show(ui, |ui| {
-                    if !scene.has_component::<CameraComponent>(entity)
-                        && ui.button("Camera").clicked()
-                    {
-                        scene.add_component(entity, CameraComponent::default());
-                        egui::Popup::close_id(ui.ctx(), popup_id);
-                    }
-                    if !scene.has_component::<SpriteRendererComponent>(entity)
-                        && ui.button("Sprite Renderer").clicked()
-                    {
-                        scene.add_component(entity, SpriteRendererComponent::default());
-                        egui::Popup::close_id(ui.ctx(), popup_id);
-                    }
-                });
-            });
-        if area_response.response.clicked_elsewhere() {
-            egui::Popup::close_id(ui.ctx(), popup_id);
-        }
-    }
-}
-
-/// Draw a small "+" button right-aligned on a component header line.
-/// Clicking it opens a popup with "Remove Component".
-fn draw_component_settings_button(
-    ui: &mut egui::Ui,
-    header_response: &egui::Response,
-    mut on_remove: impl FnMut(),
-) {
-    let header_rect = header_response.rect;
-    let btn_size = egui::vec2(20.0, 20.0);
-    let btn_rect = egui::Rect::from_min_size(
-        egui::pos2(
-            ui.max_rect().right() - btn_size.x - 4.0,
-            header_rect.min.y + (header_rect.height() - btn_size.y) / 2.0,
-        ),
-        btn_size,
-    );
-    let settings_btn = ui.put(btn_rect, egui::Button::new("+"));
-
-    let popup_id = header_response.id.with("component_settings");
-    if settings_btn.clicked() {
-        egui::Popup::toggle_id(ui.ctx(), popup_id);
-    }
-    if egui::Popup::is_id_open(ui.ctx(), popup_id) {
-        let area_response = egui::Area::new(popup_id)
-            .order(egui::Order::Foreground)
-            .default_pos(settings_btn.rect.left_bottom())
-            .show(ui.ctx(), |ui| {
-                egui::Frame::popup(ui.style()).show(ui, |ui| {
-                    if ui.button("Remove Component").clicked() {
-                        on_remove();
-                        egui::Popup::close_id(ui.ctx(), popup_id);
-                    }
-                });
-            });
-        if area_response.response.clicked_elsewhere() {
-            egui::Popup::close_id(ui.ctx(), popup_id);
-        }
     }
 }
 

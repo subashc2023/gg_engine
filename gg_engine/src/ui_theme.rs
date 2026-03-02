@@ -69,11 +69,23 @@ fn configure_fonts(ctx: &egui::Context) {
 fn configure_style(ctx: &egui::Context) {
     let mut style = Style {
         text_styles: [
-            (TextStyle::Heading, FontId::new(18.0, FontFamily::Proportional)),
+            (
+                TextStyle::Heading,
+                FontId::new(18.0, FontFamily::Proportional),
+            ),
             (TextStyle::Body, FontId::new(14.0, FontFamily::Proportional)),
-            (TextStyle::Button, FontId::new(14.0, FontFamily::Proportional)),
-            (TextStyle::Small, FontId::new(12.0, FontFamily::Proportional)),
-            (TextStyle::Monospace, FontId::new(14.0, FontFamily::Monospace)),
+            (
+                TextStyle::Button,
+                FontId::new(14.0, FontFamily::Proportional),
+            ),
+            (
+                TextStyle::Small,
+                FontId::new(12.0, FontFamily::Proportional),
+            ),
+            (
+                TextStyle::Monospace,
+                FontId::new(14.0, FontFamily::Monospace),
+            ),
         ]
         .into(),
         ..Style::default()
@@ -87,16 +99,16 @@ fn configure_style(ctx: &egui::Context) {
     let mut visuals = Visuals::dark();
 
     // Core backgrounds.
-    visuals.panel_fill = hex_color(0x1E1E1E);           // editor.background
-    visuals.window_fill = hex_color(0x252526);           // sideBar.background
-    visuals.extreme_bg_color = hex_color(0x121212);      // text edits, tab bar bg
+    visuals.panel_fill = hex_color(0x1E1E1E); // editor.background
+    visuals.window_fill = hex_color(0x252526); // sideBar.background
+    visuals.extreme_bg_color = hex_color(0x121212); // text edits, tab bar bg
     visuals.faint_bg_color = hex_color(0x252526);
 
     // Code background.
     visuals.code_bg_color = hex_color(0x1E1E1E);
 
     // Selection.
-    visuals.selection.bg_fill = hex_color(0x264F78);     // editor.selectionBackground
+    visuals.selection.bg_fill = hex_color(0x264F78); // editor.selectionBackground
     visuals.selection.stroke = Stroke::new(1.0, hex_color(0x007ACC));
 
     // Hyperlinks.

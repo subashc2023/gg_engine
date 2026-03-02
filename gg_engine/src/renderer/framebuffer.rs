@@ -3,6 +3,50 @@ use ash::vk;
 use super::buffer::find_memory_type;
 
 // ---------------------------------------------------------------------------
+// Attachment format types
+// ---------------------------------------------------------------------------
+
+/// Logical attachment format for framebuffer specification.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FramebufferTextureFormat {
+    /// Standard RGBA color — maps to swapchain color format (B8G8R8A8_SRGB).
+    RGBA8,
+    /// Signed 32-bit integer — for entity ID / picking buffer.
+    RedInteger,
+    /// Depth-only — maps to engine depth format (D32_SFLOAT).
+    Depth,
+}
+
+/// Per-attachment specification.
+#[derive(Debug, Clone, Copy)]
+pub struct FramebufferTextureSpec {
+    pub format: FramebufferTextureFormat,
+}
+
+impl From<FramebufferTextureFormat> for FramebufferTextureSpec {
+    fn from(format: FramebufferTextureFormat) -> Self {
+        Self { format }
+    }
+}
+
+fn is_depth_format(format: FramebufferTextureFormat) -> bool {
+    matches!(format, FramebufferTextureFormat::Depth)
+}
+
+/// Map a logical format to a Vulkan format.
+fn resolve_vk_format(
+    format: FramebufferTextureFormat,
+    color_format: vk::Format,
+    depth_format: vk::Format,
+) -> vk::Format {
+    match format {
+        FramebufferTextureFormat::RGBA8 => color_format,
+        FramebufferTextureFormat::RedInteger => vk::Format::R32_SINT,
+        FramebufferTextureFormat::Depth => depth_format,
+    }
+}
+
+// ---------------------------------------------------------------------------
 // FramebufferSpec
 // ---------------------------------------------------------------------------
 
@@ -14,26 +58,45 @@ const MAX_FRAMEBUFFER_SIZE: u32 = 8192;
 pub struct FramebufferSpec {
     pub width: u32,
     pub height: u32,
+    pub attachments: Vec<FramebufferTextureSpec>,
+}
+
+// ---------------------------------------------------------------------------
+// Internal attachment structs
+// ---------------------------------------------------------------------------
+
+struct ColorAttachment {
+    image: vk::Image,
+    memory: vk::DeviceMemory,
+    view: vk::ImageView,
+    format: FramebufferTextureFormat,
+}
+
+struct DepthAttachment {
+    image: vk::Image,
+    memory: vk::DeviceMemory,
+    view: vk::ImageView,
 }
 
 // ---------------------------------------------------------------------------
 // Framebuffer
 // ---------------------------------------------------------------------------
 
-/// Offscreen framebuffer with color and depth attachments, suitable for
-/// rendering a scene to a texture that can then be displayed in egui.
+/// Offscreen framebuffer with configurable color and depth attachments,
+/// suitable for rendering a scene to a texture that can then be displayed
+/// in egui.
 pub struct Framebuffer {
-    // Color attachment.
-    color_image: vk::Image,
-    color_memory: vk::DeviceMemory,
-    color_view: vk::ImageView,
+    // Color attachments (one per color spec in order).
+    color_attachments: Vec<ColorAttachment>,
+    color_attachment_specs: Vec<FramebufferTextureSpec>,
+
+    // Optional depth attachment (at most one).
+    depth_attachment: Option<DepthAttachment>,
+    depth_attachment_spec: Option<FramebufferTextureSpec>,
+
+    // Sampler + descriptor for egui display (always points to color_attachments[0]).
     sampler: vk::Sampler,
     descriptor_set: vk::DescriptorSet,
-
-    // Depth attachment.
-    depth_image: vk::Image,
-    depth_memory: vk::DeviceMemory,
-    depth_view: vk::ImageView,
 
     // Render pass and framebuffer.
     render_pass: vk::RenderPass,
@@ -46,6 +109,17 @@ pub struct Framebuffer {
     spec: FramebufferSpec,
     color_format: vk::Format,
     depth_format: vk::Format,
+
+    // Pixel readback (per-frame-in-flight staging buffer, persistently mapped).
+    readback_buffer: vk::Buffer,
+    readback_memory: vk::DeviceMemory,
+    readback_mapping: *mut i32, // persistent map, 2 × i32 (one per frame slot)
+
+    // Pending readback request for current frame.
+    pending_readback: Option<(usize, i32, i32)>, // (attachment_index, x, y)
+
+    // Last successfully read pixel value.
+    last_readback: i32,
 
     // Vulkan handles needed for resize/cleanup.
     instance: ash::Instance,
@@ -76,37 +150,87 @@ impl Framebuffer {
             MAX_FRAMEBUFFER_SIZE,
         );
 
-        let render_pass = create_offscreen_render_pass(device, color_format, depth_format);
+        // Split specs into color vs depth buckets.
+        let mut color_specs = Vec::new();
+        let mut depth_spec: Option<FramebufferTextureSpec> = None;
+        for &att in &spec.attachments {
+            if is_depth_format(att.format) {
+                debug_assert!(
+                    depth_spec.is_none(),
+                    "Framebuffer spec contains more than one depth attachment"
+                );
+                depth_spec = Some(att);
+            } else {
+                color_specs.push(att);
+            }
+        }
+
+        let render_pass = create_offscreen_render_pass(
+            device,
+            &color_specs,
+            depth_spec.as_ref(),
+            color_format,
+            depth_format,
+        );
 
         let sampler = create_sampler(device);
 
-        let (color_image, color_memory, color_view) =
-            create_color_resources(instance, physical_device, device, &spec, color_format);
+        let color_attachments: Vec<ColorAttachment> = color_specs
+            .iter()
+            .map(|cs| {
+                let vk_fmt = resolve_vk_format(cs.format, color_format, depth_format);
+                let (image, memory, view) =
+                    create_color_resources(instance, physical_device, device, &spec, vk_fmt);
+                ColorAttachment {
+                    image,
+                    memory,
+                    view,
+                    format: cs.format,
+                }
+            })
+            .collect();
 
-        let (depth_image, depth_memory, depth_view) =
-            create_depth_resources(instance, physical_device, device, &spec, depth_format);
+        let depth_attachment = depth_spec.map(|ds| {
+            let vk_fmt = resolve_vk_format(ds.format, color_format, depth_format);
+            let (image, memory, view) =
+                create_depth_resources(instance, physical_device, device, &spec, vk_fmt);
+            DepthAttachment {
+                image,
+                memory,
+                view,
+            }
+        });
 
-        let framebuffer = create_vk_framebuffer(device, render_pass, color_view, depth_view, &spec);
+        let color_views: Vec<vk::ImageView> = color_attachments.iter().map(|a| a.view).collect();
+        let depth_view = depth_attachment.as_ref().map(|a| a.view);
+        let framebuffer =
+            create_vk_framebuffer(device, render_pass, &color_views, depth_view, &spec);
 
         let descriptor_set =
             allocate_descriptor_set(device, descriptor_pool, descriptor_set_layout);
-        write_descriptor_set(device, descriptor_set, color_view, sampler);
+        write_descriptor_set(device, descriptor_set, color_attachments[0].view, sampler);
+
+        let (readback_buffer, readback_memory, readback_mapping) =
+            create_readback_staging_buffer(instance, physical_device, device);
 
         Self {
-            color_image,
-            color_memory,
-            color_view,
+            color_attachments,
+            color_attachment_specs: color_specs,
+            depth_attachment,
+            depth_attachment_spec: depth_spec,
             sampler,
             descriptor_set,
-            depth_image,
-            depth_memory,
-            depth_view,
             render_pass,
             framebuffer,
             egui_texture_id: None,
             spec,
             color_format,
             depth_format,
+            readback_buffer,
+            readback_memory,
+            readback_mapping,
+            pending_readback: None,
+            last_readback: -1,
             instance: instance.clone(),
             physical_device,
             device: device.clone(),
@@ -133,55 +257,98 @@ impl Framebuffer {
             return;
         }
 
-        self.spec = FramebufferSpec { width, height };
+        self.spec = FramebufferSpec {
+            width,
+            height,
+            attachments: Vec::new(), // attachments list not needed after initial parse
+        };
 
-        // Destroy old framebuffer and attachment resources (keep render pass, sampler, descriptor set).
+        // Destroy old framebuffer, attachment resources, and readback buffer
+        // (keep render pass, sampler, descriptor set).
         unsafe {
             self.device.destroy_framebuffer(self.framebuffer, None);
-            self.device.destroy_image_view(self.color_view, None);
-            self.device.destroy_image(self.color_image, None);
-            self.device.free_memory(self.color_memory, None);
-            self.device.destroy_image_view(self.depth_view, None);
-            self.device.destroy_image(self.depth_image, None);
-            self.device.free_memory(self.depth_memory, None);
+
+            for ca in &self.color_attachments {
+                self.device.destroy_image_view(ca.view, None);
+                self.device.destroy_image(ca.image, None);
+                self.device.free_memory(ca.memory, None);
+            }
+
+            if let Some(da) = &self.depth_attachment {
+                self.device.destroy_image_view(da.view, None);
+                self.device.destroy_image(da.image, None);
+                self.device.free_memory(da.memory, None);
+            }
+
+            self.device.unmap_memory(self.readback_memory);
+            self.device.destroy_buffer(self.readback_buffer, None);
+            self.device.free_memory(self.readback_memory, None);
         }
 
-        // Recreate at new size.
-        let (color_image, color_memory, color_view) = create_color_resources(
-            &self.instance,
-            self.physical_device,
-            &self.device,
-            &self.spec,
-            self.color_format,
-        );
-        self.color_image = color_image;
-        self.color_memory = color_memory;
-        self.color_view = color_view;
+        // Recreate color attachments at new size.
+        self.color_attachments = self
+            .color_attachment_specs
+            .iter()
+            .map(|cs| {
+                let vk_fmt = resolve_vk_format(cs.format, self.color_format, self.depth_format);
+                let (image, memory, view) = create_color_resources(
+                    &self.instance,
+                    self.physical_device,
+                    &self.device,
+                    &self.spec,
+                    vk_fmt,
+                );
+                ColorAttachment {
+                    image,
+                    memory,
+                    view,
+                    format: cs.format,
+                }
+            })
+            .collect();
 
-        let (depth_image, depth_memory, depth_view) = create_depth_resources(
-            &self.instance,
-            self.physical_device,
-            &self.device,
-            &self.spec,
-            self.depth_format,
-        );
-        self.depth_image = depth_image;
-        self.depth_memory = depth_memory;
-        self.depth_view = depth_view;
+        // Recreate depth attachment at new size if present.
+        self.depth_attachment = self.depth_attachment_spec.map(|ds| {
+            let vk_fmt = resolve_vk_format(ds.format, self.color_format, self.depth_format);
+            let (image, memory, view) = create_depth_resources(
+                &self.instance,
+                self.physical_device,
+                &self.device,
+                &self.spec,
+                vk_fmt,
+            );
+            DepthAttachment {
+                image,
+                memory,
+                view,
+            }
+        });
 
+        let color_views: Vec<vk::ImageView> =
+            self.color_attachments.iter().map(|a| a.view).collect();
+        let depth_view = self.depth_attachment.as_ref().map(|a| a.view);
         self.framebuffer = create_vk_framebuffer(
             &self.device,
             self.render_pass,
-            self.color_view,
-            self.depth_view,
+            &color_views,
+            depth_view,
             &self.spec,
         );
+
+        // Recreate readback staging buffer.
+        let (rb_buf, rb_mem, rb_map) =
+            create_readback_staging_buffer(&self.instance, self.physical_device, &self.device);
+        self.readback_buffer = rb_buf;
+        self.readback_memory = rb_mem;
+        self.readback_mapping = rb_map;
+        self.pending_readback = None;
+        self.last_readback = -1;
 
         // Update the existing descriptor set in-place with the new image view.
         write_descriptor_set(
             &self.device,
             self.descriptor_set,
-            self.color_view,
+            self.color_attachments[0].view,
             self.sampler,
         );
     }
@@ -204,6 +371,11 @@ impl Framebuffer {
         self.egui_texture_id
     }
 
+    /// Number of color attachments in this framebuffer.
+    pub fn color_attachment_count(&self) -> usize {
+        self.color_attachments.len()
+    }
+
     pub(crate) fn render_pass(&self) -> vk::RenderPass {
         self.render_pass
     }
@@ -216,8 +388,80 @@ impl Framebuffer {
         self.descriptor_set
     }
 
+    /// Returns the first color attachment image (used for pipeline barriers).
     pub(crate) fn color_image(&self) -> vk::Image {
-        self.color_image
+        self.color_attachments[0].image
+    }
+
+    /// Build the correct clear value array for this framebuffer's attachments.
+    /// Color attachments use the supplied clear color; RedInteger clears to -1;
+    /// depth clears to 1.0/0.
+    pub(crate) fn clear_values(&self, clear_color: [f32; 4]) -> Vec<vk::ClearValue> {
+        let mut values = Vec::with_capacity(self.color_attachments.len() + 1);
+
+        for ca in &self.color_attachments {
+            match ca.format {
+                FramebufferTextureFormat::RedInteger => {
+                    values.push(vk::ClearValue {
+                        color: vk::ClearColorValue {
+                            int32: [-1, 0, 0, 0],
+                        },
+                    });
+                }
+                _ => {
+                    values.push(vk::ClearValue {
+                        color: vk::ClearColorValue {
+                            float32: clear_color,
+                        },
+                    });
+                }
+            }
+        }
+
+        if self.depth_attachment.is_some() {
+            values.push(vk::ClearValue {
+                depth_stencil: vk::ClearDepthStencilValue {
+                    depth: 1.0,
+                    stencil: 0,
+                },
+            });
+        }
+
+        values
+    }
+
+    /// Request a pixel readback from the given color attachment at (x, y).
+    /// Coordinates are in framebuffer pixel space.
+    pub fn schedule_pixel_readback(&mut self, attachment_index: usize, x: i32, y: i32) {
+        self.pending_readback = Some((attachment_index, x, y));
+    }
+
+    /// Read the staging buffer for the given frame slot (data from 2 frames ago).
+    /// Called after waiting on the frame's fence.
+    pub(crate) fn read_pixel_result(&mut self, current_frame: usize) {
+        unsafe {
+            self.last_readback = *self.readback_mapping.add(current_frame);
+        }
+    }
+
+    /// Get the last readback value (-1 = no entity / background).
+    pub fn hovered_entity(&self) -> i32 {
+        self.last_readback
+    }
+
+    /// Get the image handle for a specific color attachment.
+    pub(crate) fn color_attachment_image(&self, index: usize) -> vk::Image {
+        self.color_attachments[index].image
+    }
+
+    /// Take the pending readback request (resets it to None).
+    pub(crate) fn take_pending_readback(&mut self) -> Option<(usize, i32, i32)> {
+        self.pending_readback.take()
+    }
+
+    /// Get the readback staging buffer handle.
+    pub(crate) fn readback_buffer(&self) -> vk::Buffer {
+        self.readback_buffer
     }
 
     pub(crate) fn set_egui_texture_id(&mut self, id: egui::TextureId) {
@@ -230,12 +474,23 @@ impl Drop for Framebuffer {
         unsafe {
             self.device.destroy_framebuffer(self.framebuffer, None);
             self.device.destroy_sampler(self.sampler, None);
-            self.device.destroy_image_view(self.color_view, None);
-            self.device.destroy_image(self.color_image, None);
-            self.device.free_memory(self.color_memory, None);
-            self.device.destroy_image_view(self.depth_view, None);
-            self.device.destroy_image(self.depth_image, None);
-            self.device.free_memory(self.depth_memory, None);
+
+            for ca in &self.color_attachments {
+                self.device.destroy_image_view(ca.view, None);
+                self.device.destroy_image(ca.image, None);
+                self.device.free_memory(ca.memory, None);
+            }
+
+            if let Some(da) = &self.depth_attachment {
+                self.device.destroy_image_view(da.view, None);
+                self.device.destroy_image(da.image, None);
+                self.device.free_memory(da.memory, None);
+            }
+
+            self.device.unmap_memory(self.readback_memory);
+            self.device.destroy_buffer(self.readback_buffer, None);
+            self.device.free_memory(self.readback_memory, None);
+
             self.device.destroy_render_pass(self.render_pass, None);
             // Descriptor set is freed when the pool is destroyed.
         }
@@ -248,43 +503,61 @@ impl Drop for Framebuffer {
 
 fn create_offscreen_render_pass(
     device: &ash::Device,
+    color_specs: &[FramebufferTextureSpec],
+    depth_spec: Option<&FramebufferTextureSpec>,
     color_format: vk::Format,
     depth_format: vk::Format,
 ) -> vk::RenderPass {
-    let color_attachment = vk::AttachmentDescription::default()
-        .format(color_format)
-        .samples(vk::SampleCountFlags::TYPE_1)
-        .load_op(vk::AttachmentLoadOp::CLEAR)
-        .store_op(vk::AttachmentStoreOp::STORE)
-        .stencil_load_op(vk::AttachmentLoadOp::DONT_CARE)
-        .stencil_store_op(vk::AttachmentStoreOp::DONT_CARE)
-        .initial_layout(vk::ImageLayout::UNDEFINED)
-        .final_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL);
+    let mut attachment_descriptions = Vec::new();
+    let mut color_attachment_refs = Vec::new();
 
-    let depth_attachment = vk::AttachmentDescription::default()
-        .format(depth_format)
-        .samples(vk::SampleCountFlags::TYPE_1)
-        .load_op(vk::AttachmentLoadOp::CLEAR)
-        .store_op(vk::AttachmentStoreOp::DONT_CARE)
-        .stencil_load_op(vk::AttachmentLoadOp::DONT_CARE)
-        .stencil_store_op(vk::AttachmentStoreOp::DONT_CARE)
-        .initial_layout(vk::ImageLayout::UNDEFINED)
-        .final_layout(vk::ImageLayout::DEPTH_STENCIL_ATTACHMENT_OPTIMAL);
+    // Color attachments get sequential indices starting at 0.
+    for (i, cs) in color_specs.iter().enumerate() {
+        let vk_fmt = resolve_vk_format(cs.format, color_format, depth_format);
+        let desc = vk::AttachmentDescription::default()
+            .format(vk_fmt)
+            .samples(vk::SampleCountFlags::TYPE_1)
+            .load_op(vk::AttachmentLoadOp::CLEAR)
+            .store_op(vk::AttachmentStoreOp::STORE)
+            .stencil_load_op(vk::AttachmentLoadOp::DONT_CARE)
+            .stencil_store_op(vk::AttachmentStoreOp::DONT_CARE)
+            .initial_layout(vk::ImageLayout::UNDEFINED)
+            .final_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL);
+        attachment_descriptions.push(desc);
 
-    let color_attachment_ref = vk::AttachmentReference {
-        attachment: 0,
-        layout: vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL,
-    };
+        color_attachment_refs.push(vk::AttachmentReference {
+            attachment: i as u32,
+            layout: vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL,
+        });
+    }
 
-    let depth_attachment_ref = vk::AttachmentReference {
-        attachment: 1,
-        layout: vk::ImageLayout::DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
-    };
+    // Depth attachment appended last.
+    let depth_attachment_ref = depth_spec.map(|ds| {
+        let vk_fmt = resolve_vk_format(ds.format, color_format, depth_format);
+        let desc = vk::AttachmentDescription::default()
+            .format(vk_fmt)
+            .samples(vk::SampleCountFlags::TYPE_1)
+            .load_op(vk::AttachmentLoadOp::CLEAR)
+            .store_op(vk::AttachmentStoreOp::DONT_CARE)
+            .stencil_load_op(vk::AttachmentLoadOp::DONT_CARE)
+            .stencil_store_op(vk::AttachmentStoreOp::DONT_CARE)
+            .initial_layout(vk::ImageLayout::UNDEFINED)
+            .final_layout(vk::ImageLayout::DEPTH_STENCIL_ATTACHMENT_OPTIMAL);
+        attachment_descriptions.push(desc);
 
-    let subpass = vk::SubpassDescription::default()
+        vk::AttachmentReference {
+            attachment: color_specs.len() as u32,
+            layout: vk::ImageLayout::DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
+        }
+    });
+
+    let mut subpass = vk::SubpassDescription::default()
         .pipeline_bind_point(vk::PipelineBindPoint::GRAPHICS)
-        .color_attachments(std::slice::from_ref(&color_attachment_ref))
-        .depth_stencil_attachment(&depth_attachment_ref);
+        .color_attachments(&color_attachment_refs);
+
+    if let Some(ref depth_ref) = depth_attachment_ref {
+        subpass = subpass.depth_stencil_attachment(depth_ref);
+    }
 
     // Single dependency matching the swapchain render pass structure
     // (1 dependency: EXTERNAL→0) for pipeline compatibility.
@@ -308,9 +581,8 @@ fn create_offscreen_render_pass(
                 | vk::AccessFlags::DEPTH_STENCIL_ATTACHMENT_WRITE,
         );
 
-    let attachments = [color_attachment, depth_attachment];
     let render_pass_info = vk::RenderPassCreateInfo::default()
-        .attachments(&attachments)
+        .attachments(&attachment_descriptions)
         .subpasses(std::slice::from_ref(&subpass))
         .dependencies(std::slice::from_ref(&dependency));
 
@@ -323,7 +595,7 @@ fn create_color_resources(
     physical_device: vk::PhysicalDevice,
     device: &ash::Device,
     spec: &FramebufferSpec,
-    color_format: vk::Format,
+    vk_format: vk::Format,
 ) -> (vk::Image, vk::DeviceMemory, vk::ImageView) {
     let image_info = vk::ImageCreateInfo::default()
         .image_type(vk::ImageType::TYPE_2D)
@@ -334,10 +606,14 @@ fn create_color_resources(
         })
         .mip_levels(1)
         .array_layers(1)
-        .format(color_format)
+        .format(vk_format)
         .tiling(vk::ImageTiling::OPTIMAL)
         .initial_layout(vk::ImageLayout::UNDEFINED)
-        .usage(vk::ImageUsageFlags::COLOR_ATTACHMENT | vk::ImageUsageFlags::SAMPLED)
+        .usage(
+            vk::ImageUsageFlags::COLOR_ATTACHMENT
+                | vk::ImageUsageFlags::SAMPLED
+                | vk::ImageUsageFlags::TRANSFER_SRC,
+        )
         .sharing_mode(vk::SharingMode::EXCLUSIVE)
         .samples(vk::SampleCountFlags::TYPE_1);
 
@@ -364,7 +640,7 @@ fn create_color_resources(
     let view_info = vk::ImageViewCreateInfo::default()
         .image(image)
         .view_type(vk::ImageViewType::TYPE_2D)
-        .format(color_format)
+        .format(vk_format)
         .subresource_range(vk::ImageSubresourceRange {
             aspect_mask: vk::ImageAspectFlags::COLOR,
             base_mip_level: 0,
@@ -384,7 +660,7 @@ fn create_depth_resources(
     physical_device: vk::PhysicalDevice,
     device: &ash::Device,
     spec: &FramebufferSpec,
-    depth_format: vk::Format,
+    vk_format: vk::Format,
 ) -> (vk::Image, vk::DeviceMemory, vk::ImageView) {
     let image_info = vk::ImageCreateInfo::default()
         .image_type(vk::ImageType::TYPE_2D)
@@ -395,7 +671,7 @@ fn create_depth_resources(
         })
         .mip_levels(1)
         .array_layers(1)
-        .format(depth_format)
+        .format(vk_format)
         .tiling(vk::ImageTiling::OPTIMAL)
         .initial_layout(vk::ImageLayout::UNDEFINED)
         .usage(vk::ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT)
@@ -425,7 +701,7 @@ fn create_depth_resources(
     let view_info = vk::ImageViewCreateInfo::default()
         .image(image)
         .view_type(vk::ImageViewType::TYPE_2D)
-        .format(depth_format)
+        .format(vk_format)
         .subresource_range(vk::ImageSubresourceRange {
             aspect_mask: vk::ImageAspectFlags::DEPTH,
             base_mip_level: 0,
@@ -462,11 +738,15 @@ fn create_sampler(device: &ash::Device) -> vk::Sampler {
 fn create_vk_framebuffer(
     device: &ash::Device,
     render_pass: vk::RenderPass,
-    color_view: vk::ImageView,
-    depth_view: vk::ImageView,
+    color_views: &[vk::ImageView],
+    depth_view: Option<vk::ImageView>,
     spec: &FramebufferSpec,
 ) -> vk::Framebuffer {
-    let attachments = [color_view, depth_view];
+    let mut attachments: Vec<vk::ImageView> = color_views.to_vec();
+    if let Some(dv) = depth_view {
+        attachments.push(dv);
+    }
+
     let fb_info = vk::FramebufferCreateInfo::default()
         .render_pass(render_pass)
         .attachments(&attachments)
@@ -490,6 +770,52 @@ fn allocate_descriptor_set(
 
     unsafe { device.allocate_descriptor_sets(&alloc_info) }
         .expect("Failed to allocate FB descriptor set")[0]
+}
+
+/// Create a small HOST_VISIBLE staging buffer for pixel readback (2 × i32,
+/// one per frame-in-flight slot). Returns (buffer, memory, persistent_map).
+fn create_readback_staging_buffer(
+    instance: &ash::Instance,
+    physical_device: vk::PhysicalDevice,
+    device: &ash::Device,
+) -> (vk::Buffer, vk::DeviceMemory, *mut i32) {
+    let size = (2 * std::mem::size_of::<i32>()) as u64;
+
+    let buf_info = vk::BufferCreateInfo::default()
+        .size(size)
+        .usage(vk::BufferUsageFlags::TRANSFER_DST)
+        .sharing_mode(vk::SharingMode::EXCLUSIVE);
+
+    let buffer =
+        unsafe { device.create_buffer(&buf_info, None) }.expect("Failed to create readback buffer");
+
+    let mem_req = unsafe { device.get_buffer_memory_requirements(buffer) };
+    let mem_type = find_memory_type(
+        instance,
+        physical_device,
+        mem_req.memory_type_bits,
+        vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
+    );
+
+    let alloc_info = vk::MemoryAllocateInfo::default()
+        .allocation_size(mem_req.size)
+        .memory_type_index(mem_type);
+
+    let memory = unsafe { device.allocate_memory(&alloc_info, None) }
+        .expect("Failed to allocate readback memory");
+    unsafe { device.bind_buffer_memory(buffer, memory, 0) }
+        .expect("Failed to bind readback buffer memory");
+
+    let mapping = unsafe { device.map_memory(memory, 0, size, vk::MemoryMapFlags::empty()) }
+        .expect("Failed to map readback buffer") as *mut i32;
+
+    // Initialize both slots to -1.
+    unsafe {
+        *mapping = -1;
+        *mapping.add(1) = -1;
+    }
+
+    (buffer, memory, mapping)
 }
 
 fn write_descriptor_set(

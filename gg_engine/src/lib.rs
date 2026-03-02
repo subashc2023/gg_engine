@@ -32,10 +32,10 @@ pub use particle_system::{ParticleProps, ParticleSystem};
 pub use platform_utils::FileDialogs;
 pub use renderer::shaders;
 pub use renderer::{
-    as_bytes, BufferElement, BufferLayout, Framebuffer, FramebufferSpec, IndexBuffer,
-    OrthographicCamera, Pipeline, PresentMode, ProjectionType, Renderer, Renderer2DStats,
-    RendererBackend, SceneCamera, Shader, ShaderDataType, ShaderLibrary, SubTexture2D, Texture2D,
-    VertexArray, VertexBuffer,
+    as_bytes, BufferElement, BufferLayout, EditorCamera, Framebuffer, FramebufferSpec,
+    FramebufferTextureFormat, FramebufferTextureSpec, IndexBuffer, OrthographicCamera, Pipeline,
+    PresentMode, ProjectionType, Renderer, Renderer2DStats, RendererBackend, SceneCamera, Shader,
+    ShaderDataType, ShaderLibrary, SubTexture2D, Texture2D, VertexArray, VertexBuffer,
 };
 pub use scene::{
     CameraComponent, Entity, NativeScript, NativeScriptComponent, Scene, SceneSerializer,
@@ -59,10 +59,11 @@ pub mod prelude {
         begin_session, drain_profile_results, end_session, ProfileResult, ProfileTimer,
     };
     pub use crate::renderer::{
-        as_bytes, BufferElement, BufferLayout, Framebuffer, FramebufferSpec, IndexBuffer,
-        OrthographicCamera, Pipeline, PresentMode, ProjectionType, Renderer, Renderer2DStats,
-        RendererBackend, SceneCamera, Shader, ShaderDataType, ShaderLibrary, SubTexture2D,
-        Texture2D, VertexArray, VertexBuffer,
+        as_bytes, BufferElement, BufferLayout, EditorCamera, Framebuffer, FramebufferSpec,
+        FramebufferTextureFormat, FramebufferTextureSpec, IndexBuffer, OrthographicCamera,
+        Pipeline, PresentMode, ProjectionType, Renderer, Renderer2DStats, RendererBackend,
+        SceneCamera, Shader, ShaderDataType, ShaderLibrary, SubTexture2D, Texture2D, VertexArray,
+        VertexBuffer,
     };
     pub use crate::scene::{
         CameraComponent, Entity, NativeScript, NativeScriptComponent, Scene, SceneSerializer,

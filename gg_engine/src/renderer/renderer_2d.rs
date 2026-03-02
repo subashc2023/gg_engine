@@ -37,6 +37,7 @@ pub(super) struct BatchQuadVertex {
     pub color: [f32; 4],
     pub tex_coord: [f32; 2],
     pub tex_index: f32,
+    pub entity_id: i32,
 }
 
 /// The canonical buffer layout for batch quad vertices.
@@ -46,6 +47,7 @@ fn batch_vertex_layout() -> BufferLayout {
         BufferElement::new(ShaderDataType::Float4, "a_color"),
         BufferElement::new(ShaderDataType::Float2, "a_tex_coord"),
         BufferElement::new(ShaderDataType::Float, "a_tex_index"),
+        BufferElement::new(ShaderDataType::Int, "a_entity_id"),
     ])
 }
 
@@ -100,6 +102,8 @@ impl BatchState {
 pub(super) struct Renderer2DData {
     _batch_shader: Arc<Shader>,
     batch_pipeline: Arc<Pipeline>,
+    offscreen_pipeline: Option<Arc<Pipeline>>,
+    use_offscreen: bool,
     vertex_buffers: [DynamicVertexBuffer; FRAMES_IN_FLIGHT],
     index_buffer: IndexBuffer,
     bindless_pool: vk::DescriptorPool,
@@ -192,6 +196,7 @@ impl Renderer2DData {
             vertex_buffers[0].layout(),
             render_pass,
             &[bindless_ds_layout],
+            1,
         ));
 
         // -- Bindless descriptor pool (UPDATE_AFTER_BIND) --
@@ -218,6 +223,8 @@ impl Renderer2DData {
         Self {
             _batch_shader: batch_shader,
             batch_pipeline,
+            offscreen_pipeline: None,
+            use_offscreen: false,
             vertex_buffers,
             index_buffer,
             bindless_pool,
@@ -314,8 +321,15 @@ impl Renderer2DData {
 
         // 2. Record Vulkan commands.
         let index_count = (batch.quad_count * 6) as u32;
-        let pipeline = self.batch_pipeline.pipeline();
-        let layout = self.batch_pipeline.layout();
+        let active_pipeline = if self.use_offscreen {
+            self.offscreen_pipeline
+                .as_ref()
+                .unwrap_or(&self.batch_pipeline)
+        } else {
+            &self.batch_pipeline
+        };
+        let pipeline = active_pipeline.pipeline();
+        let layout = active_pipeline.layout();
 
         unsafe {
             self.device
@@ -375,6 +389,31 @@ impl Renderer2DData {
     /// Get the accumulated statistics for this frame.
     pub(super) fn stats(&self) -> Renderer2DStats {
         self.batch.borrow().stats
+    }
+
+    /// Create an offscreen batch pipeline compatible with a multi-attachment
+    /// render pass (e.g. framebuffer with 2 color attachments for picking).
+    pub(super) fn create_offscreen_pipeline(
+        &mut self,
+        device: &ash::Device,
+        render_pass: vk::RenderPass,
+        color_attachment_count: u32,
+    ) {
+        self.offscreen_pipeline = Some(Arc::new(pipeline::create_batch_pipeline(
+            device,
+            // Re-use the same shader — the existing batch_shader is stored as _batch_shader.
+            // We need to access it, but it's behind an Arc so we can share.
+            &self._batch_shader,
+            self.vertex_buffers[0].layout(),
+            render_pass,
+            &[self.bindless_ds_layout],
+            color_attachment_count,
+        )));
+    }
+
+    /// Tell the batch renderer to use the offscreen pipeline (or switch back).
+    pub(super) fn set_use_offscreen(&mut self, use_it: bool) {
+        self.use_offscreen = use_it;
     }
 }
 

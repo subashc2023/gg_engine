@@ -165,6 +165,18 @@ impl Scene {
         entities
     }
 
+    /// Find an entity by its raw integer ID (e.g. from pixel readback).
+    ///
+    /// Returns `None` if no living entity has the given ID.
+    pub fn find_entity_by_id(&self, id: u32) -> Option<Entity> {
+        for handle in self.world.query::<hecs::Entity>().iter() {
+            if handle.id() == id {
+                return Some(Entity::new(handle));
+            }
+        }
+        None
+    }
+
     /// Number of living entities in the scene.
     pub fn entity_count(&self) -> u32 {
         self.world.len()
@@ -291,7 +303,11 @@ impl Scene {
     ///
     /// If no entity has a [`CameraComponent`] with `primary = true`, nothing
     /// is rendered.
-    pub fn on_update(&self, renderer: &mut Renderer) {
+    ///
+    /// Use this for **runtime** rendering where the scene's own ECS camera
+    /// drives the view. For editor rendering with an external camera, use
+    /// [`on_update_editor`](Self::on_update_editor).
+    pub fn on_update_runtime(&self, renderer: &mut Renderer) {
         // Find the primary camera entity.
         let mut main_camera_vp: Option<glam::Mat4> = None;
         for (transform, camera) in self
@@ -311,13 +327,46 @@ impl Scene {
             renderer.set_view_projection(vp);
 
             // Draw all sprite entities.
-            for (transform, sprite) in self
+            for (entity, transform, sprite) in self
                 .world
-                .query::<(&TransformComponent, &SpriteRendererComponent)>()
+                .query::<(
+                    hecs::Entity,
+                    &TransformComponent,
+                    &SpriteRendererComponent,
+                )>()
                 .iter()
             {
-                renderer.draw_quad_transform(&transform.get_transform(), sprite.color);
+                renderer.draw_sprite(
+                    &transform.get_transform(),
+                    sprite,
+                    entity.id() as i32,
+                );
             }
+        }
+    }
+
+    /// Render all sprite entities using an externally provided view-projection
+    /// matrix (e.g. from an [`EditorCamera`](crate::renderer::EditorCamera)).
+    ///
+    /// Unlike [`on_update_runtime`](Self::on_update_runtime), this does **not**
+    /// look for a primary camera entity — it always renders.
+    pub fn on_update_editor(&self, editor_camera_vp: &glam::Mat4, renderer: &mut Renderer) {
+        renderer.set_view_projection(*editor_camera_vp);
+
+        for (entity, transform, sprite) in self
+            .world
+            .query::<(
+                hecs::Entity,
+                &TransformComponent,
+                &SpriteRendererComponent,
+            )>()
+            .iter()
+        {
+            renderer.draw_sprite(
+                &transform.get_transform(),
+                sprite,
+                entity.id() as i32,
+            );
         }
     }
 }

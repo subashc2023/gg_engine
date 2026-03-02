@@ -18,6 +18,7 @@ use super::vertex_array::VertexArray;
 use super::VulkanContext;
 
 use crate::profiling::ProfileTimer;
+use crate::scene::SpriteRendererComponent;
 
 // ---------------------------------------------------------------------------
 // Unit quad positions and tex coords (used for CPU pre-transformation)
@@ -249,6 +250,25 @@ impl Renderer {
         self.render_pass = render_pass;
     }
 
+    /// Create an offscreen batch pipeline compatible with the given render pass
+    /// (e.g. a framebuffer with multiple color attachments for picking).
+    pub fn create_offscreen_batch_pipeline(
+        &mut self,
+        render_pass: vk::RenderPass,
+        color_attachment_count: u32,
+    ) {
+        if let Some(data) = &mut self.renderer_2d {
+            data.create_offscreen_pipeline(&self.device, render_pass, color_attachment_count);
+        }
+    }
+
+    /// Tell the batch renderer to use the offscreen pipeline (or switch back).
+    pub(crate) fn use_offscreen_pipeline(&mut self, use_offscreen: bool) {
+        if let Some(data) = &mut self.renderer_2d {
+            data.set_use_offscreen(use_offscreen);
+        }
+    }
+
     // -- Built-in 2D renderer -------------------------------------------------
 
     /// Initialize built-in 2D rendering resources (batch pipeline,
@@ -282,8 +302,16 @@ impl Renderer {
         color: Vec4,
         tex_index: f32,
         tiling_factor: f32,
+        entity_id: i32,
     ) {
-        self.push_quad_to_batch_uv(transform, color, tex_index, &QUAD_TEX_COORDS, tiling_factor);
+        self.push_quad_to_batch_uv(
+            transform,
+            color,
+            tex_index,
+            &QUAD_TEX_COORDS,
+            tiling_factor,
+            entity_id,
+        );
     }
 
     fn push_quad_to_batch_uv(
@@ -293,6 +321,7 @@ impl Renderer {
         tex_index: f32,
         tex_coords: &[[f32; 2]; 4],
         tiling_factor: f32,
+        entity_id: i32,
     ) {
         let data = self
             .renderer_2d
@@ -305,6 +334,7 @@ impl Renderer {
             color: [color.x, color.y, color.z, color.w],
             tex_coord: [0.0; 2],
             tex_index,
+            entity_id,
         }; 4];
 
         for (i, v) in vertices.iter_mut().enumerate() {
@@ -352,24 +382,28 @@ impl Renderer {
                 color: col,
                 tex_coord: [0.0, 0.0],
                 tex_index: 0.0,
+                entity_id: -1,
             },
             BatchQuadVertex {
                 position: [px + cx + cy, py + cy - cx, pz],
                 color: col,
                 tex_coord: [1.0, 0.0],
                 tex_index: 0.0,
+                entity_id: -1,
             },
             BatchQuadVertex {
                 position: [px + cx - cy, py + cy + cx, pz],
                 color: col,
                 tex_coord: [1.0, 1.0],
                 tex_index: 0.0,
+                entity_id: -1,
             },
             BatchQuadVertex {
                 position: [px - cx - cy, py - cy + cx, pz],
                 color: col,
                 tex_coord: [0.0, 1.0],
                 tex_index: 0.0,
+                entity_id: -1,
             },
         ];
 
@@ -395,8 +429,10 @@ impl Renderer {
     // -- Transform-based quads (raw Mat4) ------------------------------------
 
     /// Draw a flat-colored quad with a pre-built transform matrix.
-    pub fn draw_quad_transform(&self, transform: &Mat4, color: Vec4) {
-        self.push_quad_to_batch(transform, color, 0.0, 1.0);
+    /// `entity_id` is written to the entity ID attachment for mouse picking
+    /// (`-1` means no entity).
+    pub fn draw_quad_transform(&self, transform: &Mat4, color: Vec4, entity_id: i32) {
+        self.push_quad_to_batch(transform, color, 0.0, 1.0, entity_id);
     }
 
     /// Draw a textured quad with a pre-built transform matrix.
@@ -412,7 +448,20 @@ impl Renderer {
             tint_color,
             texture.bindless_index() as f32,
             tiling_factor,
+            -1,
         );
+    }
+
+    /// Draw a sprite (entity with a [`SpriteRendererComponent`]) using a
+    /// pre-built transform matrix. Writes the entity ID to the picking
+    /// attachment so it can be read back for mouse picking.
+    pub fn draw_sprite(
+        &self,
+        transform: &Mat4,
+        sprite: &SpriteRendererComponent,
+        entity_id: i32,
+    ) {
+        self.push_quad_to_batch(transform, sprite.color, 0.0, 1.0, entity_id);
     }
 
     // -- Axis-aligned quads (no rotation) ------------------------------------
@@ -426,7 +475,7 @@ impl Renderer {
             *position,
         );
         // tex_index 0 = white texture
-        self.push_quad_to_batch(&transform, color, 0.0, 1.0);
+        self.push_quad_to_batch(&transform, color, 0.0, 1.0, -1);
     }
 
     /// Draw a flat-colored quad at a 2D position (z = 0).
@@ -458,6 +507,7 @@ impl Renderer {
             tint_color,
             texture.bindless_index() as f32,
             tiling_factor,
+            -1,
         );
     }
 
@@ -489,7 +539,7 @@ impl Renderer {
             Quat::from_rotation_z(rotation),
             *position,
         );
-        self.push_quad_to_batch(&transform, color, 0.0, 1.0);
+        self.push_quad_to_batch(&transform, color, 0.0, 1.0, -1);
     }
 
     /// Draw a rotated flat-colored quad at a 2D position (z = 0).
@@ -524,6 +574,7 @@ impl Renderer {
             tint_color,
             texture.bindless_index() as f32,
             tiling_factor,
+            -1,
         );
     }
 
@@ -575,6 +626,7 @@ impl Renderer {
             sub_texture.bindless_index() as f32,
             sub_texture.tex_coords(),
             1.0,
+            -1,
         );
     }
 
@@ -615,6 +667,7 @@ impl Renderer {
             sub_texture.bindless_index() as f32,
             sub_texture.tex_coords(),
             1.0,
+            -1,
         );
     }
 

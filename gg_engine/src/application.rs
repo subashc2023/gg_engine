@@ -252,6 +252,19 @@ impl<T: Application> ApplicationHandler for EngineRunner<T> {
                                             self.app.on_attach(renderer);
                                         }
 
+                                        // If the app has a multi-attachment framebuffer, create
+                                        // an offscreen batch pipeline compatible with its render pass.
+                                        if let Some(fb) = self.app.scene_framebuffer() {
+                                            if fb.color_attachment_count() > 1 {
+                                                if let Some(renderer) = &mut self.renderer {
+                                                    renderer.create_offscreen_batch_pipeline(
+                                                        fb.render_pass(),
+                                                        fb.color_attachment_count() as u32,
+                                                    );
+                                                }
+                                            }
+                                        }
+
                                         // Startup is complete — close the startup profile
                                         // and begin the runtime profile.
                                         crate::profiling::end_session();
@@ -476,13 +489,28 @@ impl<T: Application> ApplicationHandler for EngineRunner<T> {
             // Extract offscreen framebuffer info (all Copy values) so
             // the immutable borrow on self.app drops before render_frame
             // takes &mut self.app.
-            let scene_fb_info = self.app.scene_framebuffer().map(|fb| SceneFbInfo {
-                render_pass: fb.render_pass(),
-                vk_framebuffer: fb.vk_framebuffer(),
-                width: fb.width(),
-                height: fb.height(),
-                color_image: fb.color_image(),
-            });
+            // Uses scene_framebuffer_mut() because take_pending_readback is &mut.
+            let (scene_fb_info, scene_clear_values) =
+                if let Some(fb) = self.app.scene_framebuffer_mut() {
+                    let pending = fb.take_pending_readback();
+                    let readback_image = pending
+                        .as_ref()
+                        .map(|(idx, _, _)| fb.color_attachment_image(*idx));
+                    let clear_vals = fb.clear_values(renderer.clear_color());
+                    let info = SceneFbInfo {
+                        render_pass: fb.render_pass(),
+                        vk_framebuffer: fb.vk_framebuffer(),
+                        width: fb.width(),
+                        height: fb.height(),
+                        color_image: fb.color_image(),
+                        pending_readback: pending,
+                        readback_image,
+                        readback_buffer: fb.readback_buffer(),
+                    };
+                    (Some(info), clear_vals)
+                } else {
+                    (None, Vec::new())
+                };
 
             // Render frame.
             let frame_result = render_frame(
@@ -495,6 +523,7 @@ impl<T: Application> ApplicationHandler for EngineRunner<T> {
                 &primitives,
                 full_output.pixels_per_point,
                 scene_fb_info,
+                &scene_clear_values,
             );
 
             // Advance to the next frame's sync primitives.
@@ -541,6 +570,10 @@ struct SceneFbInfo {
     width: u32,
     height: u32,
     color_image: vk::Image,
+    // Pixel readback.
+    pending_readback: Option<(usize, i32, i32)>,
+    readback_image: Option<vk::Image>,
+    readback_buffer: vk::Buffer,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -554,6 +587,7 @@ fn render_frame<T: Application>(
     primitives: &[egui::ClippedPrimitive],
     pixels_per_point: f32,
     scene_fb: Option<SceneFbInfo>,
+    scene_clear_values: &[vk::ClearValue],
 ) -> FrameResult {
     let _total = ProfileTimer::new("render_frame");
     let device = vk_ctx.device();
@@ -597,6 +631,14 @@ fn render_frame<T: Application>(
             .expect("Failed to reset fence");
     }
 
+    // Read pixel result from the staging buffer for this frame slot
+    // (data written 2 frames ago, now safe to read after fence wait).
+    if scene_fb.is_some() {
+        if let Some(fb) = app.scene_framebuffer_mut() {
+            fb.read_pixel_result(swapchain.current_frame());
+        }
+    }
+
     let cmd_buf = swapchain.command_buffer(swapchain.current_frame());
 
     let _record = ProfileTimer::new("render_frame::record_commands");
@@ -619,20 +661,6 @@ fn render_frame<T: Application>(
         };
 
         // 1. Offscreen render pass (scene draws).
-        let scene_clear = [
-            vk::ClearValue {
-                color: vk::ClearColorValue {
-                    float32: renderer.clear_color(),
-                },
-            },
-            vk::ClearValue {
-                depth_stencil: vk::ClearDepthStencilValue {
-                    depth: 1.0,
-                    stencil: 0,
-                },
-            },
-        ];
-
         let offscreen_rp_info = vk::RenderPassBeginInfo::default()
             .render_pass(fb.render_pass)
             .framebuffer(fb.vk_framebuffer)
@@ -640,7 +668,10 @@ fn render_frame<T: Application>(
                 offset: vk::Offset2D { x: 0, y: 0 },
                 extent: fb_extent,
             })
-            .clear_values(&scene_clear);
+            .clear_values(scene_clear_values);
+
+        // Switch to offscreen batch pipeline (multi-attachment compatible).
+        renderer.use_offscreen_pipeline(true);
 
         unsafe {
             device.cmd_begin_render_pass(cmd_buf, &offscreen_rp_info, vk::SubpassContents::INLINE);
@@ -656,6 +687,9 @@ fn render_frame<T: Application>(
         );
         app.on_render(renderer);
         renderer.end_scene();
+
+        // Switch back to normal pipeline for subsequent passes.
+        renderer.use_offscreen_pipeline(false);
 
         unsafe {
             device.cmd_end_render_pass(cmd_buf);
@@ -690,6 +724,93 @@ fn render_frame<T: Application>(
                 &[],
                 &[barrier],
             );
+
+            // Pixel readback: copy 1×1 region from the target attachment
+            // to the staging buffer for CPU readback next frame.
+            if let (Some((_, x, y)), Some(readback_image)) =
+                (fb.pending_readback, fb.readback_image)
+            {
+                // Barrier: SHADER_READ_ONLY → TRANSFER_SRC.
+                let pre_barrier = vk::ImageMemoryBarrier::default()
+                    .old_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
+                    .new_layout(vk::ImageLayout::TRANSFER_SRC_OPTIMAL)
+                    .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+                    .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+                    .image(readback_image)
+                    .subresource_range(vk::ImageSubresourceRange {
+                        aspect_mask: vk::ImageAspectFlags::COLOR,
+                        base_mip_level: 0,
+                        level_count: 1,
+                        base_array_layer: 0,
+                        layer_count: 1,
+                    })
+                    .src_access_mask(vk::AccessFlags::SHADER_READ)
+                    .dst_access_mask(vk::AccessFlags::TRANSFER_READ);
+
+                device.cmd_pipeline_barrier(
+                    cmd_buf,
+                    vk::PipelineStageFlags::FRAGMENT_SHADER,
+                    vk::PipelineStageFlags::TRANSFER,
+                    vk::DependencyFlags::empty(),
+                    &[],
+                    &[],
+                    &[pre_barrier],
+                );
+
+                // Copy 1×1 pixel.
+                let region = vk::BufferImageCopy {
+                    buffer_offset: (swapchain.current_frame() * std::mem::size_of::<i32>()) as u64,
+                    buffer_row_length: 0,
+                    buffer_image_height: 0,
+                    image_subresource: vk::ImageSubresourceLayers {
+                        aspect_mask: vk::ImageAspectFlags::COLOR,
+                        mip_level: 0,
+                        base_array_layer: 0,
+                        layer_count: 1,
+                    },
+                    image_offset: vk::Offset3D { x, y, z: 0 },
+                    image_extent: vk::Extent3D {
+                        width: 1,
+                        height: 1,
+                        depth: 1,
+                    },
+                };
+
+                device.cmd_copy_image_to_buffer(
+                    cmd_buf,
+                    readback_image,
+                    vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
+                    fb.readback_buffer,
+                    &[region],
+                );
+
+                // Barrier: TRANSFER_SRC → SHADER_READ_ONLY.
+                let post_barrier = vk::ImageMemoryBarrier::default()
+                    .old_layout(vk::ImageLayout::TRANSFER_SRC_OPTIMAL)
+                    .new_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
+                    .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+                    .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+                    .image(readback_image)
+                    .subresource_range(vk::ImageSubresourceRange {
+                        aspect_mask: vk::ImageAspectFlags::COLOR,
+                        base_mip_level: 0,
+                        level_count: 1,
+                        base_array_layer: 0,
+                        layer_count: 1,
+                    })
+                    .src_access_mask(vk::AccessFlags::TRANSFER_READ)
+                    .dst_access_mask(vk::AccessFlags::SHADER_READ);
+
+                device.cmd_pipeline_barrier(
+                    cmd_buf,
+                    vk::PipelineStageFlags::TRANSFER,
+                    vk::PipelineStageFlags::FRAGMENT_SHADER,
+                    vk::DependencyFlags::empty(),
+                    &[],
+                    &[],
+                    &[post_barrier],
+                );
+            }
         }
 
         // 2. Swapchain render pass (egui only, dark background).

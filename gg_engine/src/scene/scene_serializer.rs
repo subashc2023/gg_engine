@@ -27,10 +27,7 @@ struct EntityData {
     id: u64, // TODO: UUID
     #[serde(rename = "TagComponent", skip_serializing_if = "Option::is_none")]
     tag: Option<TagData>,
-    #[serde(
-        rename = "TransformComponent",
-        skip_serializing_if = "Option::is_none"
-    )]
+    #[serde(rename = "TransformComponent", skip_serializing_if = "Option::is_none")]
     transform: Option<TransformData>,
     #[serde(rename = "CameraComponent", skip_serializing_if = "Option::is_none")]
     camera: Option<CameraData>,
@@ -128,35 +125,38 @@ impl SceneSerializer {
                     tag: tag.tag.clone(),
                 });
 
-            let transform_data = scene
-                .get_component::<TransformComponent>(entity)
-                .map(|tc| TransformData {
-                    translation: tc.translation.into(),
-                    rotation: tc.rotation.into(),
-                    scale: tc.scale.into(),
-                });
+            let transform_data =
+                scene
+                    .get_component::<TransformComponent>(entity)
+                    .map(|tc| TransformData {
+                        translation: tc.translation.into(),
+                        rotation: tc.rotation.into(),
+                        scale: tc.scale.into(),
+                    });
 
-            let camera_data = scene
-                .get_component::<CameraComponent>(entity)
-                .map(|cam| CameraData {
-                    camera: SceneCameraData {
-                        projection_type: cam.camera.projection_type() as u32,
-                        perspective_fov: cam.camera.perspective_vertical_fov(),
-                        perspective_near: cam.camera.perspective_near(),
-                        perspective_far: cam.camera.perspective_far(),
-                        orthographic_size: cam.camera.orthographic_size(),
-                        orthographic_near: cam.camera.orthographic_near(),
-                        orthographic_far: cam.camera.orthographic_far(),
-                    },
-                    primary: cam.primary,
-                    fixed_aspect_ratio: cam.fixed_aspect_ratio,
-                });
+            let camera_data =
+                scene
+                    .get_component::<CameraComponent>(entity)
+                    .map(|cam| CameraData {
+                        camera: SceneCameraData {
+                            projection_type: cam.camera.projection_type() as u32,
+                            perspective_fov: cam.camera.perspective_vertical_fov(),
+                            perspective_near: cam.camera.perspective_near(),
+                            perspective_far: cam.camera.perspective_far(),
+                            orthographic_size: cam.camera.orthographic_size(),
+                            orthographic_near: cam.camera.orthographic_near(),
+                            orthographic_far: cam.camera.orthographic_far(),
+                        },
+                        primary: cam.primary,
+                        fixed_aspect_ratio: cam.fixed_aspect_ratio,
+                    });
 
-            let sprite_data = scene
-                .get_component::<SpriteRendererComponent>(entity)
-                .map(|sprite| SpriteData {
-                    color: sprite.color.into(),
-                });
+            let sprite_data =
+                scene
+                    .get_component::<SpriteRendererComponent>(entity)
+                    .map(|sprite| SpriteData {
+                        color: sprite.color.into(),
+                    });
 
             entities_data.push(EntityData {
                 id: entity.id() as u64, // TODO: UUID

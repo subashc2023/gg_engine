@@ -199,6 +199,7 @@ pub(crate) fn create_batch_pipeline(
     vertex_layout: &BufferLayout,
     render_pass: vk::RenderPass,
     descriptor_set_layouts: &[vk::DescriptorSetLayout],
+    color_attachment_count: u32,
 ) -> Pipeline {
     let _timer = ProfileTimer::new("Pipeline::create_batch");
     let entry_point = c"main";
@@ -251,17 +252,28 @@ pub(crate) fn create_batch_pipeline(
         .depth_bounds_test_enable(false)
         .stencil_test_enable(false);
 
-    let color_blend_attachment = vk::PipelineColorBlendAttachmentState::default()
-        .color_write_mask(vk::ColorComponentFlags::RGBA)
-        .blend_enable(true)
-        .src_color_blend_factor(vk::BlendFactor::SRC_ALPHA)
-        .dst_color_blend_factor(vk::BlendFactor::ONE_MINUS_SRC_ALPHA)
-        .color_blend_op(vk::BlendOp::ADD)
-        .src_alpha_blend_factor(vk::BlendFactor::ONE)
-        .dst_alpha_blend_factor(vk::BlendFactor::ZERO)
-        .alpha_blend_op(vk::BlendOp::ADD);
+    // Attachment 0: standard alpha blending (RGBA).
+    // Attachments 1+: blend disabled, R write mask only (integer formats).
+    let mut blend_attachments = Vec::with_capacity(color_attachment_count as usize);
+    blend_attachments.push(
+        vk::PipelineColorBlendAttachmentState::default()
+            .color_write_mask(vk::ColorComponentFlags::RGBA)
+            .blend_enable(true)
+            .src_color_blend_factor(vk::BlendFactor::SRC_ALPHA)
+            .dst_color_blend_factor(vk::BlendFactor::ONE_MINUS_SRC_ALPHA)
+            .color_blend_op(vk::BlendOp::ADD)
+            .src_alpha_blend_factor(vk::BlendFactor::ONE)
+            .dst_alpha_blend_factor(vk::BlendFactor::ZERO)
+            .alpha_blend_op(vk::BlendOp::ADD),
+    );
+    for _ in 1..color_attachment_count {
+        blend_attachments.push(
+            vk::PipelineColorBlendAttachmentState::default()
+                .color_write_mask(vk::ColorComponentFlags::R)
+                .blend_enable(false),
+        );
+    }
 
-    let blend_attachments = [color_blend_attachment];
     let color_blending =
         vk::PipelineColorBlendStateCreateInfo::default().attachments(&blend_attachments);
 
