@@ -1,6 +1,7 @@
 mod components;
 mod entity;
 pub mod native_script;
+mod scene_serializer;
 
 pub use components::{
     CameraComponent, NativeScriptComponent, SpriteRendererComponent, TagComponent,
@@ -8,6 +9,7 @@ pub use components::{
 };
 pub use entity::Entity;
 pub use native_script::NativeScript;
+pub use scene_serializer::SceneSerializer;
 
 use crate::input::Input;
 use crate::renderer::Renderer;

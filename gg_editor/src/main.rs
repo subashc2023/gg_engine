@@ -195,7 +195,25 @@ impl Application for GGEditor {
         !(self.viewport_focused && self.viewport_hovered)
     }
 
-    fn on_event(&mut self, _event: &Event, _input: &Input) {}
+    fn on_event(&mut self, event: &Event, input: &Input) {
+        if let Event::Key(KeyEvent::Pressed {
+            key_code,
+            repeat: false,
+        }) = event
+        {
+            let ctrl = input.is_key_pressed(KeyCode::LeftCtrl)
+                || input.is_key_pressed(KeyCode::RightCtrl);
+            let shift = input.is_key_pressed(KeyCode::LeftShift)
+                || input.is_key_pressed(KeyCode::RightShift);
+
+            match key_code {
+                KeyCode::N if ctrl => self.new_scene(),
+                KeyCode::O if ctrl => self.open_scene(),
+                KeyCode::S if ctrl && shift => self.save_scene_as(),
+                _ => {}
+            }
+        }
+    }
 
     fn on_update(&mut self, dt: Timestep, input: &Input) {
         // Exponential moving average for stable frame time display.
@@ -216,6 +234,35 @@ impl Application for GGEditor {
     }
 
     fn on_egui(&mut self, ctx: &egui::Context) {
+        // -- Menu bar --
+        egui::TopBottomPanel::top("menu_bar").show(ctx, |ui| {
+            egui::MenuBar::new().ui(ui, |ui| {
+                ui.menu_button("File", |ui| {
+                    if ui
+                        .add(egui::Button::new("New").shortcut_text("Ctrl+N"))
+                        .clicked()
+                    {
+                        self.new_scene();
+                        ui.close();
+                    }
+                    if ui
+                        .add(egui::Button::new("Open...").shortcut_text("Ctrl+O"))
+                        .clicked()
+                    {
+                        self.open_scene();
+                        ui.close();
+                    }
+                    if ui
+                        .add(egui::Button::new("Save As...").shortcut_text("Ctrl+Shift+S"))
+                        .clicked()
+                    {
+                        self.save_scene_as();
+                        ui.close();
+                    }
+                });
+            });
+        });
+
         let fb_tex_id = self.scene_fb.as_ref().and_then(|fb| fb.egui_texture_id());
 
         let mut viewer = EditorTabViewer {
@@ -265,6 +312,44 @@ impl Application for GGEditor {
         egui_dock::DockArea::new(&mut self.dock_state)
             .style(dock_style)
             .show(ctx, &mut viewer);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// File commands (New / Open / Save As)
+// ---------------------------------------------------------------------------
+
+impl GGEditor {
+    fn new_scene(&mut self) {
+        self.scene = Scene::new();
+        self.selection_context = None;
+
+        // Ensure cameras get the correct viewport on the next frame.
+        let (w, h) = self.viewport_size;
+        if w > 0 && h > 0 {
+            self.scene.on_viewport_resize(w, h);
+        }
+    }
+
+    fn open_scene(&mut self) {
+        if let Some(path) = FileDialogs::open_file("GGScene files", &["ggscene"]) {
+            let mut new_scene = Scene::new();
+            if SceneSerializer::deserialize(&mut new_scene, &path) {
+                self.scene = new_scene;
+                self.selection_context = None;
+
+                let (w, h) = self.viewport_size;
+                if w > 0 && h > 0 {
+                    self.scene.on_viewport_resize(w, h);
+                }
+            }
+        }
+    }
+
+    fn save_scene_as(&self) {
+        if let Some(path) = FileDialogs::save_file("GGScene files", &["ggscene"]) {
+            SceneSerializer::serialize(&self.scene, &path);
+        }
     }
 }
 

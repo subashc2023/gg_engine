@@ -5,6 +5,7 @@ mod layer;
 mod logging;
 mod orthographic_camera_controller;
 pub mod particle_system;
+mod platform_utils;
 pub mod profiling;
 pub mod renderer;
 pub mod scene;
@@ -28,6 +29,7 @@ pub use log;
 pub use logging::init as log_init;
 pub use orthographic_camera_controller::OrthographicCameraController;
 pub use particle_system::{ParticleProps, ParticleSystem};
+pub use platform_utils::FileDialogs;
 pub use renderer::shaders;
 pub use renderer::{
     as_bytes, BufferElement, BufferLayout, Framebuffer, FramebufferSpec, IndexBuffer,
@@ -36,8 +38,8 @@ pub use renderer::{
     VertexArray, VertexBuffer,
 };
 pub use scene::{
-    CameraComponent, Entity, NativeScript, NativeScriptComponent, Scene, SpriteRendererComponent,
-    TagComponent, TransformComponent,
+    CameraComponent, Entity, NativeScript, NativeScriptComponent, Scene, SceneSerializer,
+    SpriteRendererComponent, TagComponent, TransformComponent,
 };
 pub use timestep::Timestep;
 
@@ -52,6 +54,7 @@ pub mod prelude {
     pub use crate::layer::{Layer, LayerStack};
     pub use crate::orthographic_camera_controller::OrthographicCameraController;
     pub use crate::particle_system::{ParticleProps, ParticleSystem};
+    pub use crate::platform_utils::FileDialogs;
     pub use crate::profiling::{
         begin_session, drain_profile_results, end_session, ProfileResult, ProfileTimer,
     };
@@ -62,7 +65,7 @@ pub mod prelude {
         Texture2D, VertexArray, VertexBuffer,
     };
     pub use crate::scene::{
-        CameraComponent, Entity, NativeScript, NativeScriptComponent, Scene,
+        CameraComponent, Entity, NativeScript, NativeScriptComponent, Scene, SceneSerializer,
         SpriteRendererComponent, TagComponent, TransformComponent,
     };
     pub use crate::timestep::Timestep;
