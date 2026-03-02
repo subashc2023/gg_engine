@@ -1,10 +1,17 @@
 mod components;
 mod entity;
+pub mod native_script;
 
-pub use components::{CameraComponent, SpriteRendererComponent, TagComponent, TransformComponent};
+pub use components::{
+    CameraComponent, NativeScriptComponent, SpriteRendererComponent, TagComponent,
+    TransformComponent,
+};
 pub use entity::Entity;
+pub use native_script::NativeScript;
 
+use crate::input::Input;
 use crate::renderer::Renderer;
+use crate::timestep::Timestep;
 
 /// A scene is a container for entities and their components.
 ///
@@ -107,7 +114,7 @@ impl Scene {
     ///
     /// Use this for multi-component iteration:
     /// ```ignore
-    /// for (id, (transform, sprite)) in scene.world().query::<(&TransformComponent, &SpriteComponent)>().iter() {
+    /// for (transform, sprite) in scene.world().query::<(&TransformComponent, &SpriteRendererComponent)>().iter() {
     ///     // ...
     /// }
     /// ```
@@ -163,6 +170,59 @@ impl Scene {
     // -----------------------------------------------------------------
     // Per-frame update / render
     // -----------------------------------------------------------------
+
+    /// Run all [`NativeScriptComponent`] scripts for this frame.
+    ///
+    /// Scripts are lazily instantiated on their first update. The update order
+    /// follows hecs iteration order (not guaranteed to be stable across
+    /// entity additions/removals).
+    ///
+    /// Call this from [`Application::on_update`] each frame, **before** rendering.
+    pub fn on_update_scripts(&mut self, dt: Timestep, input: &Input) {
+        // Collect entity handles that have a NativeScriptComponent.
+        // We snapshot first because we need &mut self inside the loop.
+        let script_entities: Vec<(hecs::Entity, bool)> = self
+            .world
+            .query::<(hecs::Entity, &NativeScriptComponent)>()
+            .iter()
+            .map(|(e, nsc)| (e, nsc.instance.is_some()))
+            .collect();
+
+        for (handle, had_instance) in script_entities {
+            let entity = Entity::new(handle);
+
+            // Lazy instantiation.
+            if !had_instance {
+                if let Ok(mut nsc) = self.world.get::<&mut NativeScriptComponent>(handle) {
+                    nsc.instance = Some((nsc.instantiate_fn)());
+                }
+            }
+
+            // Take the instance out to release the hecs borrow, allowing
+            // script methods to access &mut self (Scene) freely.
+            let (mut instance, needs_create) = {
+                let Ok(mut nsc) = self.world.get::<&mut NativeScriptComponent>(handle) else {
+                    continue;
+                };
+                let Some(inst) = nsc.instance.take() else {
+                    continue;
+                };
+                let needs_create = !nsc.created;
+                nsc.created = true;
+                (inst, needs_create)
+            };
+
+            if needs_create {
+                instance.on_create(entity, self);
+            }
+            instance.on_update(entity, self, dt, input);
+
+            // Put the instance back.
+            if let Ok(mut nsc) = self.world.get::<&mut NativeScriptComponent>(handle) {
+                nsc.instance = Some(instance);
+            }
+        }
+    }
 
     /// Find the primary camera, set the view-projection matrix on the
     /// renderer, and draw all entities with sprites.

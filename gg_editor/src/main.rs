@@ -2,6 +2,50 @@ use gg_engine::egui;
 use gg_engine::prelude::*;
 
 // ---------------------------------------------------------------------------
+// CameraController native script — WASD movement demo
+// ---------------------------------------------------------------------------
+
+struct CameraController {
+    speed: f32,
+}
+
+impl Default for CameraController {
+    fn default() -> Self {
+        Self { speed: 5.0 }
+    }
+}
+
+impl NativeScript for CameraController {
+    fn on_create(&mut self, entity: Entity, scene: &mut Scene) {
+        // Give each camera a random-ish starting X offset derived from its entity ID,
+        // proving that each script instance is independent.
+        if let Some(mut transform) = scene.get_component_mut::<TransformComponent>(entity) {
+            let offset = ((entity.id() * 7 + 3) % 10) as f32 - 5.0;
+            transform.transform.w_axis.x = offset;
+            info!("CameraController created (entity {}, x offset {offset})", entity.id());
+        }
+    }
+
+    fn on_update(&mut self, entity: Entity, scene: &mut Scene, dt: Timestep, input: &Input) {
+        if let Some(mut transform) = scene.get_component_mut::<TransformComponent>(entity) {
+            let speed = self.speed * dt.seconds();
+            if input.is_key_pressed(KeyCode::A) {
+                transform.transform.w_axis.x -= speed;
+            }
+            if input.is_key_pressed(KeyCode::D) {
+                transform.transform.w_axis.x += speed;
+            }
+            if input.is_key_pressed(KeyCode::W) {
+                transform.transform.w_axis.y += speed;
+            }
+            if input.is_key_pressed(KeyCode::S) {
+                transform.transform.w_axis.y -= speed;
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Tab identifiers
 // ---------------------------------------------------------------------------
 
@@ -57,13 +101,15 @@ impl Application for GGEditor {
         // Camera A — primary, default orthographic (size 10).
         let camera_entity = scene.create_entity_with_tag("Camera A");
         scene.add_component(camera_entity, CameraComponent::default());
+        scene.add_component(camera_entity, NativeScriptComponent::bind::<CameraController>());
 
-        // Camera B — clip space camera (secondary).
+        // Camera B — clip space camera (secondary), also with a CameraController.
         let second_camera_entity = scene.create_entity_with_tag("Clip Space Camera");
         scene.add_component(
             second_camera_entity,
             CameraComponent::new(SceneCamera::default(), false),
         );
+        scene.add_component(second_camera_entity, NativeScriptComponent::bind::<CameraController>());
 
         GGEditor {
             dock_state,
@@ -130,7 +176,7 @@ impl Application for GGEditor {
 
     fn on_event(&mut self, _event: &Event, _input: &Input) {}
 
-    fn on_update(&mut self, dt: Timestep, _input: &Input) {
+    fn on_update(&mut self, dt: Timestep, input: &Input) {
         // Exponential moving average for stable frame time display.
         self.frame_time_ms = self.frame_time_ms * 0.95 + dt.millis() * 0.05;
 
@@ -138,6 +184,19 @@ impl Application for GGEditor {
         let (w, h) = self.viewport_size;
         if w > 0 && h > 0 {
             self.scene.on_viewport_resize(w, h);
+        }
+
+        // Run native scripts (e.g. CameraController on Camera A).
+        self.scene.on_update_scripts(dt, input);
+
+        // Sync camera transform back from ECS so the UI sliders reflect script changes.
+        if let Some(transform) = self.scene.get_component::<TransformComponent>(self.camera_entity)
+        {
+            self.camera_transform = [
+                transform.transform.w_axis.x,
+                transform.transform.w_axis.y,
+                transform.transform.w_axis.z,
+            ];
         }
     }
 

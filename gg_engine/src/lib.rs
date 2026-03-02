@@ -21,7 +21,7 @@ pub use application::{run, Application, WindowConfig};
 pub use egui;
 pub use glam;
 pub use hecs;
-pub use scene::{CameraComponent, Entity, Scene, SpriteRendererComponent, TagComponent, TransformComponent};
+pub use scene::{CameraComponent, Entity, NativeScript, NativeScriptComponent, Scene, SpriteRendererComponent, TagComponent, TransformComponent};
 pub use input::Input;
 pub use layer::{Layer, LayerStack};
 pub use log;
@@ -48,7 +48,7 @@ pub mod prelude {
     pub use crate::layer::{Layer, LayerStack};
     pub use crate::orthographic_camera_controller::OrthographicCameraController;
     pub use crate::particle_system::{ParticleProps, ParticleSystem};
-    pub use crate::scene::{CameraComponent, Entity, Scene, SpriteRendererComponent, TagComponent, TransformComponent};
+    pub use crate::scene::{CameraComponent, Entity, NativeScript, NativeScriptComponent, Scene, SpriteRendererComponent, TagComponent, TransformComponent};
     pub use crate::profiling::{
         begin_session, drain_profile_results, end_session, ProfileResult, ProfileTimer,
     };

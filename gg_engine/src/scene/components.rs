@@ -1,6 +1,7 @@
 use glam::{Mat4, Vec3, Vec4};
 
 use crate::renderer::SceneCamera;
+use crate::scene::native_script::NativeScript;
 
 /// Human-readable name for an entity. Every entity created via
 /// [`Scene::create_entity`](super::Scene::create_entity) receives a
@@ -112,5 +113,33 @@ impl SpriteRendererComponent {
 impl Default for SpriteRendererComponent {
     fn default() -> Self {
         Self { color: Vec4::ONE }
+    }
+}
+
+/// Attaches a [`NativeScript`] to an entity for per-frame behavior.
+///
+/// Use [`bind::<T>()`](NativeScriptComponent::bind) to create an instance.
+/// The script is lazily instantiated on the first [`Scene::on_update_scripts`](super::Scene::on_update_scripts)
+/// call, and receives lifecycle callbacks (`on_create`, `on_update`, `on_destroy`).
+pub struct NativeScriptComponent {
+    pub(crate) instance: Option<Box<dyn NativeScript>>,
+    pub(crate) instantiate_fn: fn() -> Box<dyn NativeScript>,
+    pub(crate) created: bool,
+}
+
+impl NativeScriptComponent {
+    /// Create a `NativeScriptComponent` bound to a concrete script type.
+    ///
+    /// `T` must implement [`NativeScript`] and [`Default`]. The script is
+    /// not instantiated immediately — it will be created lazily by the scene.
+    pub fn bind<T: NativeScript + Default>() -> Self {
+        fn instantiate<T: NativeScript + Default>() -> Box<dyn NativeScript> {
+            Box::new(T::default())
+        }
+        Self {
+            instance: None,
+            instantiate_fn: instantiate::<T>,
+            created: false,
+        }
     }
 }
