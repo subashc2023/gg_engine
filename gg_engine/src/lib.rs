@@ -3,6 +3,7 @@ pub mod events;
 mod input;
 mod layer;
 mod logging;
+mod orthographic_camera_controller;
 pub mod renderer;
 mod timestep;
 
@@ -20,6 +21,7 @@ pub use input::Input;
 pub use layer::{Layer, LayerStack};
 pub use log;
 pub use logging::init as log_init;
+pub use orthographic_camera_controller::OrthographicCameraController;
 pub use renderer::shaders;
 pub use renderer::{
     as_bytes, BufferElement, BufferLayout, IndexBuffer, OrthographicCamera, Pipeline, PresentMode,
@@ -43,6 +45,7 @@ pub mod prelude {
         VertexArray, VertexBuffer,
     };
     pub use crate::timestep::Timestep;
+    pub use crate::orthographic_camera_controller::OrthographicCameraController;
     pub use crate::{run, Application, Ref, Scope, WindowConfig};
     pub use glam::{Mat3, Mat4, Quat, Vec2, Vec3, Vec4};
     pub use log::{debug, error, info, trace, warn};

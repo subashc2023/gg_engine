@@ -91,6 +91,7 @@ impl VulkanContext {
             .map_err(|_| VulkanInitError::NoDisplayHandle)?;
         let raw_display = display_handle.as_raw();
 
+        #[allow(unused_mut)] // mut only used in debug builds (validation layer ext)
         let mut required_extensions = ash_window::enumerate_required_extensions(raw_display)
             .map_err(VulkanInitError::SurfaceExtensions)?
             .to_vec();

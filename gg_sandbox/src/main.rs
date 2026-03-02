@@ -89,11 +89,7 @@ struct Sandbox {
     frame_time_ms: f32,
 
     // Camera
-    camera: OrthographicCamera,
-    camera_position: Vec3,
-    camera_rotation: f32,
-    camera_move_speed: f32,
-    camera_rotation_speed: f32,
+    camera_controller: OrthographicCameraController,
 
     // Material
     square_color: [f32; 4],
@@ -118,16 +114,12 @@ impl Application for Sandbox {
         info!("Sandbox initialized");
 
         let aspect = 1280.0_f32 / 720.0;
-        let camera = OrthographicCamera::new(-aspect, aspect, -1.0, 1.0);
+        let camera_controller = OrthographicCameraController::new(aspect, true);
 
         Sandbox {
             vsync: false,
             frame_time_ms: 0.0,
-            camera,
-            camera_position: Vec3::ZERO,
-            camera_rotation: 0.0,
-            camera_move_speed: 5.0,
-            camera_rotation_speed: 180.0,
+            camera_controller,
             square_color: [0.2, 0.3, 0.8, 1.0],
             shader_library: ShaderLibrary::new(),
             triangle_pipeline: None,
@@ -259,52 +251,16 @@ impl Application for Sandbox {
     }
 
     fn camera(&self) -> Option<&OrthographicCamera> {
-        Some(&self.camera)
+        Some(self.camera_controller.camera())
     }
 
     fn on_event(&mut self, event: &Event, _input: &Input) {
-        if let Event::Window(WindowEvent::Resize { width, height }) = event {
-            if *width > 0 && *height > 0 {
-                let aspect = *width as f32 / *height as f32;
-                self.camera.set_projection(-aspect, aspect, -1.0, 1.0);
-            }
-        }
+        self.camera_controller.on_event(event);
     }
 
     fn on_update(&mut self, dt: Timestep, input: &Input) {
         self.frame_time_ms = dt.millis();
-
-        // Camera movement via input polling (speeds are per-second).
-        let mut camera_changed = false;
-
-        if input.is_key_pressed(KeyCode::Left) {
-            self.camera_position.x -= self.camera_move_speed * dt;
-            camera_changed = true;
-        } else if input.is_key_pressed(KeyCode::Right) {
-            self.camera_position.x += self.camera_move_speed * dt;
-            camera_changed = true;
-        }
-
-        if input.is_key_pressed(KeyCode::Up) {
-            self.camera_position.y += self.camera_move_speed * dt;
-            camera_changed = true;
-        } else if input.is_key_pressed(KeyCode::Down) {
-            self.camera_position.y -= self.camera_move_speed * dt;
-            camera_changed = true;
-        }
-
-        if input.is_key_pressed(KeyCode::A) {
-            self.camera_rotation += (self.camera_rotation_speed * dt).to_radians();
-            camera_changed = true;
-        } else if input.is_key_pressed(KeyCode::D) {
-            self.camera_rotation -= (self.camera_rotation_speed * dt).to_radians();
-            camera_changed = true;
-        }
-
-        if camera_changed {
-            self.camera.set_position(self.camera_position);
-            self.camera.set_rotation(self.camera_rotation);
-        }
+        self.camera_controller.on_update(dt, input);
     }
 
     fn on_render(&self, renderer: &Renderer) {
@@ -352,34 +308,44 @@ impl Application for Sandbox {
             ui.separator();
             ui.strong("Camera");
 
-            let mut changed = false;
+            let mut pos = self.camera_controller.position();
+            let mut pos_changed = false;
             ui.horizontal(|ui| {
                 ui.label("X");
-                changed |= ui
-                    .add(gg_engine::egui::DragValue::new(&mut self.camera_position.x).speed(0.05))
+                pos_changed |= ui
+                    .add(gg_engine::egui::DragValue::new(&mut pos.x).speed(0.05))
                     .changed();
                 ui.label("Y");
-                changed |= ui
-                    .add(gg_engine::egui::DragValue::new(&mut self.camera_position.y).speed(0.05))
+                pos_changed |= ui
+                    .add(gg_engine::egui::DragValue::new(&mut pos.y).speed(0.05))
                     .changed();
             });
+            if pos_changed {
+                self.camera_controller.set_position(pos);
+            }
 
-            let mut rotation_deg = self.camera_rotation.to_degrees();
+            let mut rotation_deg = self.camera_controller.rotation().to_degrees();
             ui.horizontal(|ui| {
                 ui.label("Rotation");
                 if ui
                     .add(gg_engine::egui::DragValue::new(&mut rotation_deg).speed(0.5))
                     .changed()
                 {
-                    self.camera_rotation = rotation_deg.to_radians();
-                    changed = true;
+                    self.camera_controller
+                        .set_rotation(rotation_deg.to_radians());
                 }
             });
 
-            if changed {
-                self.camera.set_position(self.camera_position);
-                self.camera.set_rotation(self.camera_rotation);
-            }
+            let mut zoom = self.camera_controller.zoom_level();
+            ui.horizontal(|ui| {
+                ui.label("Zoom");
+                if ui
+                    .add(gg_engine::egui::DragValue::new(&mut zoom).speed(0.05).range(0.25..=10.0))
+                    .changed()
+                {
+                    self.camera_controller.set_zoom_level(zoom);
+                }
+            });
 
             ui.separator();
             ui.strong("Material");
@@ -400,8 +366,9 @@ impl Application for Sandbox {
 
             ui.separator();
             ui.strong("Controls");
-            ui.label("Arrow keys: Move camera");
-            ui.label("A/D: Rotate camera");
+            ui.label("WASD: Move camera");
+            ui.label("Q/E: Rotate camera");
+            ui.label("Scroll: Zoom");
         });
     }
 }

@@ -99,6 +99,7 @@ struct EngineRunner<T: Application> {
     current_present_mode: PresentMode,
     default_camera: OrthographicCamera,
     last_frame_time: Instant,
+    minimized: bool,
 
     // egui state — dropped before Vulkan resources.
     egui_ctx: egui::Context,
@@ -276,7 +277,10 @@ impl<T: Application> ApplicationHandler for EngineRunner<T> {
 
         // Handle resize for swapchain recreation and camera projection update.
         if let winit::event::WindowEvent::Resized(size) = &event {
-            if size.width > 0 && size.height > 0 {
+            if size.width == 0 || size.height == 0 {
+                self.minimized = true;
+            } else {
+                self.minimized = false;
                 if let (Some(vk_ctx), Some(sc)) = (&self.vulkan_context, &mut self.swapchain) {
                     sc.recreate(vk_ctx, size.width, size.height, None);
                     if let Some(renderer) = &mut self.renderer {
@@ -307,8 +311,10 @@ impl<T: Application> ApplicationHandler for EngineRunner<T> {
         let dt = Timestep::from_seconds(now.duration_since(self.last_frame_time).as_secs_f32());
         self.last_frame_time = now;
 
-        self.layers.update_all(dt, &self.input);
-        self.app.on_update(dt, &self.input);
+        if !self.minimized {
+            self.layers.update_all(dt, &self.input);
+            self.app.on_update(dt, &self.input);
+        }
 
         // Render egui frame — requires all graphics resources.
         'render: {
@@ -587,6 +593,7 @@ pub fn run<T: Application>() {
         current_present_mode,
         default_camera,
         last_frame_time: Instant::now(),
+        minimized: false,
         egui_ctx: egui::Context::default(),
         egui_winit_state: None,
         egui_renderer: None,
