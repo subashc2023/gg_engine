@@ -1,5 +1,6 @@
 mod buffer;
 mod draw_context;
+mod framebuffer;
 mod orthographic_camera;
 mod pipeline;
 mod render_command;
@@ -20,6 +21,7 @@ pub use buffer::{
     as_bytes, BufferElement, BufferLayout, IndexBuffer, ShaderDataType, VertexBuffer,
 };
 pub(crate) use draw_context::DrawContext;
+pub use framebuffer::{Framebuffer, FramebufferSpec};
 pub use orthographic_camera::OrthographicCamera;
 pub use pipeline::Pipeline;
 pub use renderer::Renderer;

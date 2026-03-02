@@ -6,6 +6,7 @@ use glam::{Mat4, Quat, Vec2, Vec3, Vec4};
 
 use super::buffer::{IndexBuffer, VertexBuffer};
 use super::draw_context::DrawContext;
+use super::framebuffer::{Framebuffer, FramebufferSpec};
 use super::orthographic_camera::OrthographicCamera;
 use super::pipeline::{self, Pipeline};
 use super::render_command::RenderCommand;
@@ -58,6 +59,10 @@ pub struct Renderer {
     descriptor_pool: vk::DescriptorPool,
     texture_descriptor_set_layout: vk::DescriptorSetLayout,
 
+    // Format info for framebuffer creation.
+    color_format: vk::Format,
+    depth_format: vk::Format,
+
     // Built-in 2D renderer resources.
     renderer_2d: Option<Renderer2DData>,
 
@@ -70,6 +75,8 @@ impl Renderer {
         vk_ctx: &VulkanContext,
         render_pass: vk::RenderPass,
         command_pool: vk::CommandPool,
+        color_format: vk::Format,
+        depth_format: vk::Format,
     ) -> Self {
         let device = vk_ctx.device();
         let api = RendererAPI::Vulkan(VulkanRendererAPI::new(device));
@@ -109,6 +116,8 @@ impl Renderer {
             command_pool,
             descriptor_pool,
             texture_descriptor_set_layout,
+            color_format,
+            depth_format,
             renderer_2d: None,
             last_stats_2d: Renderer2DStats::default(),
         }
@@ -220,6 +229,25 @@ impl Renderer {
     /// The descriptor set layout used for texture pipelines.
     pub fn texture_descriptor_set_layout(&self) -> vk::DescriptorSetLayout {
         self.texture_descriptor_set_layout
+    }
+
+    /// Create an offscreen framebuffer for rendering to a texture.
+    pub fn create_framebuffer(&self, spec: FramebufferSpec) -> Framebuffer {
+        Framebuffer::new(
+            &self.instance,
+            self.physical_device,
+            &self.device,
+            self.descriptor_pool,
+            self.texture_descriptor_set_layout,
+            self.color_format,
+            self.depth_format,
+            spec,
+        )
+    }
+
+    /// Resize an offscreen framebuffer. No-op if the size hasn't changed.
+    pub fn resize_framebuffer(&self, fb: &mut Framebuffer, width: u32, height: u32) {
+        fb.resize(width, height);
     }
 
     /// Update the stored render pass handle (e.g. after swapchain recreation).

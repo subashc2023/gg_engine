@@ -27,9 +27,9 @@ pub use orthographic_camera_controller::OrthographicCameraController;
 pub use particle_system::{ParticleProps, ParticleSystem};
 pub use renderer::shaders;
 pub use renderer::{
-    as_bytes, BufferElement, BufferLayout, IndexBuffer, OrthographicCamera, Pipeline, PresentMode,
-    Renderer, Renderer2DStats, RendererBackend, Shader, ShaderDataType, ShaderLibrary,
-    SubTexture2D, Texture2D, VertexArray, VertexBuffer,
+    as_bytes, BufferElement, BufferLayout, Framebuffer, FramebufferSpec, IndexBuffer,
+    OrthographicCamera, Pipeline, PresentMode, Renderer, Renderer2DStats, RendererBackend, Shader,
+    ShaderDataType, ShaderLibrary, SubTexture2D, Texture2D, VertexArray, VertexBuffer,
 };
 pub use timestep::Timestep;
 
@@ -48,9 +48,9 @@ pub mod prelude {
         begin_session, drain_profile_results, end_session, ProfileResult, ProfileTimer,
     };
     pub use crate::renderer::{
-        as_bytes, BufferElement, BufferLayout, IndexBuffer, OrthographicCamera, Pipeline,
-        PresentMode, Renderer, Renderer2DStats, RendererBackend, Shader, ShaderDataType,
-        ShaderLibrary, SubTexture2D, Texture2D, VertexArray, VertexBuffer,
+        as_bytes, BufferElement, BufferLayout, Framebuffer, FramebufferSpec, IndexBuffer,
+        OrthographicCamera, Pipeline, PresentMode, Renderer, Renderer2DStats, RendererBackend,
+        Shader, ShaderDataType, ShaderLibrary, SubTexture2D, Texture2D, VertexArray, VertexBuffer,
     };
     pub use crate::timestep::Timestep;
     pub use crate::{profile_scope, run, Application, Ref, Scope, WindowConfig};

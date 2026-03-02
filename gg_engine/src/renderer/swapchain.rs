@@ -508,6 +508,10 @@ impl Swapchain {
         self.in_flight_fences[self.current_frame]
     }
 
+    pub fn depth_format(&self) -> vk::Format {
+        self.depth_format
+    }
+
     pub fn present_mode(&self) -> vk::PresentModeKHR {
         self.present_mode
     }

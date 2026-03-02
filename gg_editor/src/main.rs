@@ -2,13 +2,13 @@ use gg_engine::egui;
 use gg_engine::prelude::*;
 
 // ---------------------------------------------------------------------------
-// Bottom panel tab selection
+// Tab identifiers
 // ---------------------------------------------------------------------------
 
-#[derive(PartialEq)]
-enum BottomTab {
-    Console,
-    AssetBrowser,
+#[derive(Debug, PartialEq)]
+enum Tab {
+    Viewport,
+    Settings,
 }
 
 // ---------------------------------------------------------------------------
@@ -16,14 +16,35 @@ enum BottomTab {
 // ---------------------------------------------------------------------------
 
 struct GGEditor {
-    bottom_tab: BottomTab,
+    dock_state: egui_dock::DockState<Tab>,
+    scene_fb: Option<Framebuffer>,
+    camera_controller: OrthographicCameraController,
+    viewport_size: (u32, u32),
+    viewport_focused: bool,
+    viewport_hovered: bool,
+    vsync: bool,
+    frame_time_ms: f32,
 }
 
 impl Application for GGEditor {
     fn new(_layers: &mut LayerStack) -> Self {
         info!("GGEditor initialized");
+
+        // Initial layout: Viewport on the left (80%), Settings on the right (20%).
+        let mut dock_state = egui_dock::DockState::new(vec![Tab::Viewport]);
+        let surface = dock_state.main_surface_mut();
+        let root = egui_dock::NodeIndex::root();
+        surface.split_right(root, 0.8, vec![Tab::Settings]);
+
         GGEditor {
-            bottom_tab: BottomTab::Console,
+            dock_state,
+            scene_fb: None,
+            camera_controller: OrthographicCameraController::new(16.0 / 9.0, true),
+            viewport_size: (0, 0),
+            viewport_focused: false,
+            viewport_hovered: false,
+            vsync: true,
+            frame_time_ms: 0.0,
         }
     }
 
@@ -35,311 +56,230 @@ impl Application for GGEditor {
         }
     }
 
+    fn on_attach(&mut self, renderer: &Renderer) {
+        let fb = renderer.create_framebuffer(FramebufferSpec {
+            width: 800,
+            height: 600,
+        });
+        self.scene_fb = Some(fb);
+    }
+
+    fn scene_framebuffer(&self) -> Option<&Framebuffer> {
+        self.scene_fb.as_ref()
+    }
+
+    fn scene_framebuffer_mut(&mut self) -> Option<&mut Framebuffer> {
+        self.scene_fb.as_mut()
+    }
+
+    fn desired_viewport_size(&self) -> Option<(u32, u32)> {
+        if self.viewport_size.0 > 0 && self.viewport_size.1 > 0 {
+            Some(self.viewport_size)
+        } else {
+            None
+        }
+    }
+
+    fn camera(&self) -> Option<&OrthographicCamera> {
+        Some(self.camera_controller.camera())
+    }
+
+    fn present_mode(&self) -> PresentMode {
+        if self.vsync {
+            PresentMode::Fifo
+        } else {
+            PresentMode::Immediate
+        }
+    }
+
+    fn block_events(&self) -> bool {
+        // Allow events through to the engine when the viewport is focused
+        // and hovered (e.g. scroll zoom). Block them otherwise so egui
+        // widgets (checkboxes, sliders, etc.) work normally.
+        !(self.viewport_focused && self.viewport_hovered)
+    }
+
     fn on_event(&mut self, event: &Event, _input: &Input) {
-        trace!("{event}");
+        // Only forward scroll/resize events to the camera when the viewport
+        // is focused AND hovered. This prevents scrolling in the Settings
+        // panel from zooming the scene camera.
+        if self.viewport_focused && self.viewport_hovered {
+            self.camera_controller.on_event(event);
+        }
+    }
+
+    fn on_update(&mut self, dt: Timestep, input: &Input) {
+        // Only poll WASD/QE when the viewport is focused.
+        if self.viewport_focused {
+            self.camera_controller.on_update(dt, input);
+        }
+
+        // Exponential moving average for stable frame time display.
+        // Alpha of 0.05 smooths out per-frame jitter from the double-buffered
+        // fence-wait pattern while still responding to real changes.
+        self.frame_time_ms = self.frame_time_ms * 0.95 + dt.millis() * 0.05;
+
+        // Update camera projection if viewport size changed.
+        if let Some(fb) = &self.scene_fb {
+            let (w, h) = (fb.width(), fb.height());
+            if w > 0 && h > 0 {
+                let aspect = w as f32 / h as f32;
+                let zoom = self.camera_controller.zoom_level();
+                self.camera_controller.camera_mut().set_projection(
+                    -aspect * zoom,
+                    aspect * zoom,
+                    -zoom,
+                    zoom,
+                );
+            }
+        }
+    }
+
+    fn on_render(&self, renderer: &Renderer) {
+        // Test quads.
+        renderer.draw_quad(
+            &Vec3::new(0.0, 0.0, 0.0),
+            &Vec2::new(1.0, 1.0),
+            Vec4::new(0.8, 0.2, 0.3, 1.0),
+        );
+        renderer.draw_quad(
+            &Vec3::new(1.5, 0.0, 0.0),
+            &Vec2::new(0.8, 0.8),
+            Vec4::new(0.2, 0.3, 0.8, 1.0),
+        );
+        renderer.draw_quad(
+            &Vec3::new(-1.5, 0.0, 0.0),
+            &Vec2::new(0.8, 0.8),
+            Vec4::new(0.2, 0.8, 0.3, 1.0),
+        );
+
+        // Checkerboard.
+        for y in -5..5 {
+            for x in -5..5 {
+                let color = if (x + y) % 2 == 0 {
+                    Vec4::new(0.3, 0.3, 0.3, 1.0)
+                } else {
+                    Vec4::new(0.5, 0.5, 0.5, 1.0)
+                };
+                renderer.draw_quad(
+                    &Vec3::new(x as f32 * 0.25, y as f32 * 0.25, -0.1),
+                    &Vec2::new(0.23, 0.23),
+                    color,
+                );
+            }
+        }
     }
 
     fn on_egui(&mut self, ctx: &egui::Context) {
-        // Panel order matters! Outside-in: top → left → right → bottom → center.
-        // Side panels declared before bottom so they span full height.
+        // Gather state the TabViewer needs.
+        let fb_tex_id = self
+            .scene_fb
+            .as_ref()
+            .and_then(|fb| fb.egui_texture_id());
 
-        // --- Menu bar (top) ---
-        egui::TopBottomPanel::top("menu_bar").show(ctx, |ui| {
-            egui::MenuBar::new().ui(ui, |ui| {
-                ui.menu_button("File", |ui| {
-                    if ui.button("New Scene").clicked() {
-                        info!("File > New Scene");
-                        ui.close();
-                    }
-                    if ui.button("Open Scene...").clicked() {
-                        info!("File > Open Scene");
-                        ui.close();
-                    }
-                    if ui.button("Save Scene").clicked() {
-                        info!("File > Save Scene");
-                        ui.close();
-                    }
-                    ui.separator();
-                    if ui.button("Exit").clicked() {
-                        ui.close();
-                    }
-                });
-                ui.menu_button("Edit", |ui| {
-                    if ui.button("Undo").clicked() {
-                        ui.close();
-                    }
-                    if ui.button("Redo").clicked() {
-                        ui.close();
-                    }
-                    ui.separator();
-                    if ui.button("Preferences...").clicked() {
-                        ui.close();
-                    }
-                });
-                ui.menu_button("View", |ui| {
-                    if ui.button("Reset Layout").clicked() {
-                        ui.close();
-                    }
-                });
-            });
-        });
+        let mut viewer = EditorTabViewer {
+            viewport_size: &mut self.viewport_size,
+            viewport_focused: &mut self.viewport_focused,
+            viewport_hovered: &mut self.viewport_hovered,
+            fb_tex_id,
+            vsync: &mut self.vsync,
+            frame_time_ms: self.frame_time_ms,
+        };
 
-        // --- Left panel: Scene Hierarchy (top) + Properties (bottom) ---
-        egui::SidePanel::left("left_panel")
-            .resizable(true)
-            .default_width(240.0)
-            .min_width(150.0)
-            .show(ctx, |ui| {
-                let half = (ui.available_height() / 2.0 - ui.spacing().item_spacing.y).max(60.0);
-
-                // Scene Hierarchy
-                ui.strong("Scene Hierarchy");
-                ui.separator();
-                egui::ScrollArea::vertical()
-                    .id_salt("scene_hierarchy")
-                    .max_height(half - 24.0)
-                    .show(ui, |ui| {
-                        let entities = [
-                            "Main Camera",
-                            "Directional Light",
-                            "Point Light",
-                            "Cube",
-                            "Sphere",
-                            "Ground Plane",
-                            "Player",
-                            "Enemy Spawner",
-                        ];
-                        for (i, entity) in entities.iter().enumerate() {
-                            let _ = ui.selectable_label(i == 3, format!("  {entity}"));
-                        }
-                    });
-
-                ui.add_space(4.0);
-                ui.separator();
-
-                // Properties
-                ui.strong("Properties");
-                ui.separator();
-                egui::ScrollArea::vertical()
-                    .id_salt("properties")
-                    .show(ui, |ui| {
-                        egui::CollapsingHeader::new("Transform")
-                            .default_open(true)
-                            .show(ui, |ui| {
-                                egui::Grid::new("transform_grid").show(ui, |ui| {
-                                    ui.label("Position");
-                                    ui.label("0.0, 2.0, 0.0");
-                                    ui.end_row();
-                                    ui.label("Rotation");
-                                    ui.label("0.0, 45.0, 0.0");
-                                    ui.end_row();
-                                    ui.label("Scale");
-                                    ui.label("1.0, 1.0, 1.0");
-                                    ui.end_row();
-                                });
-                            });
-
-                        egui::CollapsingHeader::new("Material")
-                            .default_open(true)
-                            .show(ui, |ui| {
-                                egui::Grid::new("material_grid").show(ui, |ui| {
-                                    ui.label("Shader");
-                                    ui.label("PBR Standard");
-                                    ui.end_row();
-                                    ui.label("Albedo");
-                                    ui.colored_label(
-                                        egui::Color32::from_rgb(180, 80, 80),
-                                        "■ (0.7, 0.3, 0.3)",
-                                    );
-                                    ui.end_row();
-                                    ui.label("Roughness");
-                                    ui.label("0.5");
-                                    ui.end_row();
-                                    ui.label("Metallic");
-                                    ui.label("0.0");
-                                    ui.end_row();
-                                });
-                            });
-                    });
-            });
-
-        // --- Right panel: Inspector (top) + World Settings (bottom) ---
-        egui::SidePanel::right("right_panel")
-            .resizable(true)
-            .default_width(240.0)
-            .min_width(150.0)
-            .show(ctx, |ui| {
-                let half = (ui.available_height() / 2.0 - ui.spacing().item_spacing.y).max(60.0);
-
-                // Inspector
-                ui.strong("Inspector");
-                ui.separator();
-                egui::ScrollArea::vertical()
-                    .id_salt("inspector")
-                    .max_height(half - 24.0)
-                    .show(ui, |ui| {
-                        egui::CollapsingHeader::new("Mesh Renderer")
-                            .default_open(true)
-                            .show(ui, |ui| {
-                                ui.label("Mesh: Cube");
-                                ui.label("Cast Shadows: true");
-                                ui.label("Receive Shadows: true");
-                            });
-                        egui::CollapsingHeader::new("Rigid Body")
-                            .default_open(true)
-                            .show(ui, |ui| {
-                                ui.label("Type: Static");
-                                ui.label("Mass: 1.0 kg");
-                                ui.label("Friction: 0.5");
-                            });
-                        egui::CollapsingHeader::new("Box Collider")
-                            .default_open(true)
-                            .show(ui, |ui| {
-                                ui.label("Size: 1.0 x 1.0 x 1.0");
-                                ui.label("Center: 0.0, 0.0, 0.0");
-                            });
-                    });
-
-                ui.add_space(4.0);
-                ui.separator();
-
-                // World Settings
-                ui.strong("World Settings");
-                ui.separator();
-                egui::ScrollArea::vertical()
-                    .id_salt("world_settings")
-                    .show(ui, |ui| {
-                        egui::CollapsingHeader::new("Lighting")
-                            .default_open(true)
-                            .show(ui, |ui| {
-                                ui.label("Ambient Intensity: 0.1");
-                                ui.label("Shadow Distance: 100.0");
-                                ui.label("Skybox: None");
-                            });
-                        egui::CollapsingHeader::new("Physics")
-                            .default_open(true)
-                            .show(ui, |ui| {
-                                ui.label("Gravity: (0.0, -9.81, 0.0)");
-                                ui.label("Fixed Timestep: 0.02s");
-                                ui.label("Solver Iterations: 6");
-                            });
-                        egui::CollapsingHeader::new("Rendering")
-                            .default_open(true)
-                            .show(ui, |ui| {
-                                ui.label("VSync: On");
-                                ui.label("MSAA: 4x");
-                                ui.label("Tonemapping: ACES");
-                            });
-                    });
-            });
-
-        // --- Bottom panel: Console / Asset Browser ---
-        // Declared after side panels so it sits between them.
-        egui::TopBottomPanel::bottom("bottom_panel")
-            .resizable(true)
-            .default_height(180.0)
-            .min_height(80.0)
-            .show(ctx, |ui| {
-                // Tab bar
-                ui.horizontal(|ui| {
-                    ui.selectable_value(&mut self.bottom_tab, BottomTab::Console, "Console");
-                    ui.selectable_value(
-                        &mut self.bottom_tab,
-                        BottomTab::AssetBrowser,
-                        "Asset Browser",
-                    );
-                });
-                ui.separator();
-
-                match self.bottom_tab {
-                    BottomTab::Console => {
-                        egui::ScrollArea::vertical()
-                            .id_salt("console_scroll")
-                            .stick_to_bottom(true)
-                            .show(ui, |ui| {
-                                console_line(ui, "INFO", 0xAAAAAA, "GGEngine v0.1.0 initialized");
-                                console_line(ui, "INFO", 0xAAAAAA, "Vulkan context created");
-                                console_line(ui, "INFO", 0xAAAAAA, "Swapchain created (1600x900)");
-                                console_line(
-                                    ui,
-                                    "INFO",
-                                    0x7BC67E,
-                                    "Scene loaded: Untitled.ggscene",
-                                );
-                                console_line(ui, "WARN", 0xE8C44A, "No skybox assigned to scene");
-                                console_line(
-                                    ui,
-                                    "WARN",
-                                    0xE8C44A,
-                                    "Physics world has no ground collider",
-                                );
-                                console_line(ui, "INFO", 0xAAAAAA, "Editor ready");
-                            });
-                    }
-                    BottomTab::AssetBrowser => {
-                        egui::ScrollArea::vertical()
-                            .id_salt("asset_browser_scroll")
-                            .show(ui, |ui| {
-                                ui.horizontal_wrapped(|ui| {
-                                    for name in [
-                                        "default.mat",
-                                        "brick_diffuse.png",
-                                        "metal_normal.png",
-                                        "player.obj",
-                                        "skybox.exr",
-                                        "footstep_01.wav",
-                                        "main_theme.ogg",
-                                        "grass.mat",
-                                        "character_rig.fbx",
-                                    ] {
-                                        ui.group(|ui| {
-                                            ui.set_width(90.0);
-                                            ui.vertical_centered(|ui| {
-                                                ui.label("[file]");
-                                                ui.small(name);
-                                            });
-                                        });
-                                    }
-                                });
-                            });
-                    }
-                }
-            });
-
-        // --- Center: Viewport ---
-        egui::CentralPanel::default()
-            .frame(egui::Frame::new().fill(egui::Color32::from_rgb(25, 25, 30)))
-            .show(ctx, |ui| {
-                let rect = ui.available_rect_before_wrap();
-
-                // Viewport label (centered).
-                ui.scope_builder(egui::UiBuilder::new().max_rect(rect), |ui| {
-                    ui.centered_and_justified(|ui| {
-                        ui.heading("Viewport");
-                    });
-                });
-
-                // Viewport dimensions (bottom-right corner).
-                ui.painter().text(
-                    rect.right_bottom() + egui::vec2(-8.0, -8.0),
-                    egui::Align2::RIGHT_BOTTOM,
-                    format!("{:.0} x {:.0}", rect.width(), rect.height()),
-                    egui::FontId::proportional(11.0),
-                    egui::Color32::from_gray(80),
-                );
-            });
+        egui_dock::DockArea::new(&mut self.dock_state)
+            .style(egui_dock::Style::from_egui(ctx.style().as_ref()))
+            .show(ctx, &mut viewer);
     }
 }
 
-/// Draw a single colored console line.
-fn console_line(ui: &mut egui::Ui, level: &str, color_hex: u32, message: &str) {
-    let r = ((color_hex >> 16) & 0xFF) as u8;
-    let g = ((color_hex >> 8) & 0xFF) as u8;
-    let b = (color_hex & 0xFF) as u8;
-    ui.colored_label(
-        egui::Color32::from_rgb(r, g, b),
-        format!("[{level}] {message}"),
-    );
+// ---------------------------------------------------------------------------
+// TabViewer implementation
+// ---------------------------------------------------------------------------
+
+struct EditorTabViewer<'a> {
+    viewport_size: &'a mut (u32, u32),
+    viewport_focused: &'a mut bool,
+    viewport_hovered: &'a mut bool,
+    fb_tex_id: Option<egui::TextureId>,
+    vsync: &'a mut bool,
+    frame_time_ms: f32,
+}
+
+impl egui_dock::TabViewer for EditorTabViewer<'_> {
+    type Tab = Tab;
+
+    fn title(&mut self, tab: &mut Tab) -> egui::WidgetText {
+        match tab {
+            Tab::Viewport => "Viewport".into(),
+            Tab::Settings => "Settings".into(),
+        }
+    }
+
+    fn ui(&mut self, ui: &mut egui::Ui, tab: &mut Tab) {
+        match tab {
+            Tab::Viewport => {
+                let available = ui.available_size();
+                let w = available.x as u32;
+                let h = available.y as u32;
+                if w > 0 && h > 0 {
+                    *self.viewport_size = (w, h);
+                }
+
+                // Hovered: mouse is over the viewport panel right now.
+                *self.viewport_hovered = ui.ui_contains_pointer();
+
+                // Focused: click-based, persists until another panel is clicked.
+                // Clicking inside the viewport sets focus; clicking outside
+                // (handled in other tab branches) clears it.
+                let clicked = ui.input(|i| i.pointer.any_pressed());
+                if clicked && *self.viewport_hovered {
+                    *self.viewport_focused = true;
+                }
+
+                if let Some(tex_id) = self.fb_tex_id {
+                    let size = egui::vec2(available.x, available.y);
+                    ui.image(egui::load::SizedTexture::new(tex_id, size));
+                }
+            }
+            Tab::Settings => {
+                // Clicking in the Settings panel unfocuses the viewport.
+                let clicked = ui.input(|i| i.pointer.any_pressed());
+                if clicked && ui.ui_contains_pointer() {
+                    *self.viewport_focused = false;
+                }
+
+                ui.heading("Renderer");
+                ui.separator();
+
+                let fps = if self.frame_time_ms > 0.0 {
+                    1000.0 / self.frame_time_ms
+                } else {
+                    0.0
+                };
+                ui.label(format!("Frame time: {:.2} ms", self.frame_time_ms));
+                ui.label(format!("FPS: {:.0}", fps));
+
+                ui.add_space(8.0);
+                ui.checkbox(self.vsync, "VSync");
+            }
+        }
+    }
+
+    fn is_closeable(&self, _tab: &Tab) -> bool {
+        false
+    }
+
+    fn allowed_in_windows(&self, _tab: &mut Tab) -> bool {
+        false
+    }
+
+    fn clear_background(&self, tab: &Tab) -> bool {
+        !matches!(tab, Tab::Viewport)
+    }
+
+    fn scroll_bars(&self, _tab: &Tab) -> [bool; 2] {
+        [false, false]
+    }
 }
 
 fn main() {

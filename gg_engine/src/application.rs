@@ -13,7 +13,7 @@ use crate::input::Input;
 use crate::layer::LayerStack;
 use crate::profiling::ProfileTimer;
 use crate::renderer::{
-    DrawContext, OrthographicCamera, PresentMode, Renderer, Swapchain, VulkanContext,
+    DrawContext, Framebuffer, OrthographicCamera, PresentMode, Renderer, Swapchain, VulkanContext,
 };
 use crate::timestep::Timestep;
 
@@ -81,6 +81,31 @@ pub trait Application {
     fn present_mode(&self) -> PresentMode {
         PresentMode::Fifo
     }
+
+    /// Whether egui should block events from reaching the engine.
+    /// When `true` (default), events consumed by egui (e.g. scroll over an
+    /// egui panel) are not dispatched to the application. Override this in
+    /// editors to let viewport events pass through.
+    fn block_events(&self) -> bool {
+        true
+    }
+
+    /// Return the scene framebuffer if this app renders to an offscreen target.
+    /// When `Some`, the engine uses a dual-pass flow: offscreen scene pass + swapchain egui pass.
+    fn scene_framebuffer(&self) -> Option<&Framebuffer> {
+        None
+    }
+
+    /// Mutable access to the scene framebuffer (for resize, egui registration).
+    fn scene_framebuffer_mut(&mut self) -> Option<&mut Framebuffer> {
+        None
+    }
+
+    /// Desired viewport size for the scene framebuffer. Return `Some((w, h))`
+    /// to trigger a resize when the egui panel size changes.
+    fn desired_viewport_size(&self) -> Option<(u32, u32)> {
+        None
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -127,6 +152,15 @@ impl<T: Application> Drop for EngineRunner<T> {
         if let Some(vk_ctx) = &self.vulkan_context {
             unsafe {
                 let _ = vk_ctx.device().device_wait_idle();
+            }
+        }
+
+        // Unregister scene framebuffer's egui texture before the egui renderer drops.
+        if let Some(fb) = self.app.scene_framebuffer() {
+            if let Some(tex_id) = fb.egui_texture_id() {
+                if let Some(egui_renderer) = &mut self.egui_renderer {
+                    egui_renderer.remove_user_texture(tex_id);
+                }
             }
         }
     }
@@ -195,6 +229,8 @@ impl<T: Application> ApplicationHandler for EngineRunner<T> {
                                             &ctx,
                                             sc.render_pass(),
                                             sc.command_pool(),
+                                            sc.format().format,
+                                            sc.depth_format(),
                                         ));
                                         self.egui_winit_state = Some(egui_winit_state);
                                         self.egui_renderer = Some(egui_rend);
@@ -259,7 +295,10 @@ impl<T: Application> ApplicationHandler for EngineRunner<T> {
         // Forward raw winit event to egui-winit first.
         if let (Some(state), Some(window)) = (&mut self.egui_winit_state, &self.window) {
             let response = state.on_window_event(window, &event);
-            if response.consumed {
+            // Only let egui block events from reaching the engine when the
+            // application says so. Editors override `block_events()` to let
+            // viewport-targeted events (e.g. scroll zoom) pass through.
+            if response.consumed && self.app.block_events() {
                 return;
             }
         }
@@ -379,10 +418,14 @@ impl<T: Application> ApplicationHandler for EngineRunner<T> {
             egui_state.handle_platform_output(window, full_output.platform_output);
 
             // Tessellate.
-            let primitives = egui_ctx.tessellate(full_output.shapes, full_output.pixels_per_point);
+            let primitives = {
+                let _t = ProfileTimer::new("egui::tessellate");
+                egui_ctx.tessellate(full_output.shapes, full_output.pixels_per_point)
+            };
 
             // Upload textures.
             if !full_output.textures_delta.set.is_empty() {
+                let _t = ProfileTimer::new("egui::set_textures");
                 egui_renderer
                     .set_textures(
                         vk_ctx.graphics_queue(),
@@ -392,11 +435,42 @@ impl<T: Application> ApplicationHandler for EngineRunner<T> {
                     .expect("Failed to set egui textures");
             }
 
+            // Egui texture registration for scene framebuffer (first frame).
+            if let Some(fb) = self.app.scene_framebuffer() {
+                if fb.egui_texture_id().is_none() {
+                    let tex_id = egui_renderer.add_user_texture(fb.descriptor_set());
+                    if let Some(fb_mut) = self.app.scene_framebuffer_mut() {
+                        fb_mut.set_egui_texture_id(tex_id);
+                    }
+                }
+            }
+
+            // Resize scene framebuffer if the viewport size changed.
+            if let Some((w, h)) = self.app.desired_viewport_size() {
+                if let Some(fb) = self.app.scene_framebuffer() {
+                    if w > 0 && h > 0 && (fb.width() != w || fb.height() != h) {
+                        log::debug!(target: "gg_engine",
+                            "Framebuffer resize: {}x{} -> {}x{}",
+                            fb.width(), fb.height(), w, h
+                        );
+                        unsafe {
+                            let _ = vk_ctx.device().device_wait_idle();
+                        }
+                        if let Some(fb_mut) = self.app.scene_framebuffer_mut() {
+                            renderer.resize_framebuffer(fb_mut, w, h);
+                        }
+                    }
+                }
+            }
+
             // Poll clear color from application.
             renderer.set_clear_color(self.app.clear_color());
 
             // Use app-provided camera or fall back to the default.
             let camera = self.app.camera().unwrap_or(&self.default_camera);
+
+            // Determine if we're using offscreen rendering.
+            let scene_fb = self.app.scene_framebuffer();
 
             // Render frame.
             let frame_result = render_frame(
@@ -408,6 +482,7 @@ impl<T: Application> ApplicationHandler for EngineRunner<T> {
                 egui_renderer,
                 &primitives,
                 full_output.pixels_per_point,
+                scene_fb,
             );
 
             // Advance to the next frame's sync primitives.
@@ -456,27 +531,35 @@ fn render_frame<T: Application>(
     egui_renderer: &mut egui_ash_renderer::Renderer,
     primitives: &[egui::ClippedPrimitive],
     pixels_per_point: f32,
+    scene_fb: Option<&Framebuffer>,
 ) -> FrameResult {
+    let _total = ProfileTimer::new("render_frame");
     let device = vk_ctx.device();
-    let extent = swapchain.extent();
+    let sc_extent = swapchain.extent();
 
     // Wait for this frame-slot's fence (still signaled from the previous use).
-    unsafe {
-        device
-            .wait_for_fences(&[swapchain.in_flight_fence()], true, u64::MAX)
-            .expect("Failed to wait for fence");
+    {
+        let _t = ProfileTimer::new("render_frame::wait_fence");
+        unsafe {
+            device
+                .wait_for_fences(&[swapchain.in_flight_fence()], true, u64::MAX)
+                .expect("Failed to wait for fence");
+        }
     }
 
     // Acquire next image — do NOT reset the fence yet.
     // If acquire fails with OUT_OF_DATE, the fence stays signaled so the
     // next frame's wait_for_fences won't deadlock.
-    let acquire_result = unsafe {
-        swapchain.swapchain_loader().acquire_next_image(
-            swapchain.swapchain(),
-            u64::MAX,
-            swapchain.image_available_semaphore(),
-            vk::Fence::null(),
-        )
+    let acquire_result = {
+        let _t = ProfileTimer::new("render_frame::acquire_image");
+        unsafe {
+            swapchain.swapchain_loader().acquire_next_image(
+                swapchain.swapchain(),
+                u64::MAX,
+                swapchain.image_available_semaphore(),
+                vk::Fence::null(),
+            )
+        }
     };
 
     let (image_index, acquire_suboptimal) = match acquire_result {
@@ -494,7 +577,8 @@ fn render_frame<T: Application>(
 
     let cmd_buf = swapchain.command_buffer(swapchain.current_frame());
 
-    // Record command buffer.
+    let _record = ProfileTimer::new("render_frame::record_commands");
+
     unsafe {
         device
             .reset_command_buffer(cmd_buf, vk::CommandBufferResetFlags::empty())
@@ -502,6 +586,131 @@ fn render_frame<T: Application>(
         device
             .begin_command_buffer(cmd_buf, &vk::CommandBufferBeginInfo::default())
             .expect("Failed to begin command buffer");
+    }
+
+    if let Some(fb) = scene_fb {
+        // --- Dual-pass path: offscreen scene + swapchain egui ---
+
+        let fb_extent = vk::Extent2D {
+            width: fb.width(),
+            height: fb.height(),
+        };
+
+        // 1. Offscreen render pass (scene draws).
+        let scene_clear = [
+            vk::ClearValue {
+                color: vk::ClearColorValue {
+                    float32: renderer.clear_color(),
+                },
+            },
+            vk::ClearValue {
+                depth_stencil: vk::ClearDepthStencilValue {
+                    depth: 1.0,
+                    stencil: 0,
+                },
+            },
+        ];
+
+        let offscreen_rp_info = vk::RenderPassBeginInfo::default()
+            .render_pass(fb.render_pass())
+            .framebuffer(fb.vk_framebuffer())
+            .render_area(vk::Rect2D {
+                offset: vk::Offset2D { x: 0, y: 0 },
+                extent: fb_extent,
+            })
+            .clear_values(&scene_clear);
+
+        unsafe {
+            device.cmd_begin_render_pass(cmd_buf, &offscreen_rp_info, vk::SubpassContents::INLINE);
+        }
+
+        renderer.begin_scene(
+            camera,
+            DrawContext {
+                cmd_buf,
+                extent: fb_extent,
+                current_frame: swapchain.current_frame(),
+            },
+        );
+        app.on_render(renderer);
+        renderer.end_scene();
+
+        unsafe {
+            device.cmd_end_render_pass(cmd_buf);
+
+            // Pipeline barrier: ensure offscreen color write is visible
+            // as a shader read when egui samples the texture in the
+            // swapchain render pass. This replaces the exit subpass
+            // dependency to keep the dependency count at 1 (matching
+            // the swapchain render pass for pipeline compatibility).
+            let barrier = vk::ImageMemoryBarrier::default()
+                .old_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
+                .new_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
+                .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+                .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+                .image(fb.color_image())
+                .subresource_range(vk::ImageSubresourceRange {
+                    aspect_mask: vk::ImageAspectFlags::COLOR,
+                    base_mip_level: 0,
+                    level_count: 1,
+                    base_array_layer: 0,
+                    layer_count: 1,
+                })
+                .src_access_mask(vk::AccessFlags::COLOR_ATTACHMENT_WRITE)
+                .dst_access_mask(vk::AccessFlags::SHADER_READ);
+
+            device.cmd_pipeline_barrier(
+                cmd_buf,
+                vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT,
+                vk::PipelineStageFlags::FRAGMENT_SHADER,
+                vk::DependencyFlags::empty(),
+                &[],
+                &[],
+                &[barrier],
+            );
+        }
+
+        // 2. Swapchain render pass (egui only, dark background).
+        let egui_clear = [
+            vk::ClearValue {
+                color: vk::ClearColorValue {
+                    float32: [0.06, 0.06, 0.06, 1.0],
+                },
+            },
+            vk::ClearValue {
+                depth_stencil: vk::ClearDepthStencilValue {
+                    depth: 1.0,
+                    stencil: 0,
+                },
+            },
+        ];
+
+        let swapchain_rp_info = vk::RenderPassBeginInfo::default()
+            .render_pass(swapchain.render_pass())
+            .framebuffer(swapchain.framebuffer(image_index as usize))
+            .render_area(vk::Rect2D {
+                offset: vk::Offset2D { x: 0, y: 0 },
+                extent: sc_extent,
+            })
+            .clear_values(&egui_clear);
+
+        unsafe {
+            device.cmd_begin_render_pass(
+                cmd_buf,
+                &swapchain_rp_info,
+                vk::SubpassContents::INLINE,
+            );
+        }
+
+        egui_renderer
+            .cmd_draw(cmd_buf, sc_extent, pixels_per_point, primitives)
+            .expect("Failed to draw egui");
+
+        unsafe {
+            device.cmd_end_render_pass(cmd_buf);
+        }
+    } else {
+        // --- Single-pass path (backward compatible) ---
 
         let clear_values = [
             vk::ClearValue {
@@ -522,41 +731,47 @@ fn render_frame<T: Application>(
             .framebuffer(swapchain.framebuffer(image_index as usize))
             .render_area(vk::Rect2D {
                 offset: vk::Offset2D { x: 0, y: 0 },
-                extent,
+                extent: sc_extent,
             })
             .clear_values(&clear_values);
 
-        device.cmd_begin_render_pass(cmd_buf, &render_pass_info, vk::SubpassContents::INLINE);
+        unsafe {
+            device.cmd_begin_render_pass(
+                cmd_buf,
+                &render_pass_info,
+                vk::SubpassContents::INLINE,
+            );
+        }
+
+        renderer.begin_scene(
+            camera,
+            DrawContext {
+                cmd_buf,
+                extent: sc_extent,
+                current_frame: swapchain.current_frame(),
+            },
+        );
+        app.on_render(renderer);
+        renderer.end_scene();
+
+        egui_renderer
+            .cmd_draw(cmd_buf, sc_extent, pixels_per_point, primitives)
+            .expect("Failed to draw egui");
+
+        unsafe {
+            device.cmd_end_render_pass(cmd_buf);
+        }
     }
 
-    // Begin scene — sets camera VP matrix + viewport/scissor via the Renderer.
-    renderer.begin_scene(
-        camera,
-        DrawContext {
-            cmd_buf,
-            extent,
-            current_frame: swapchain.current_frame(),
-        },
-    );
-
-    // Application draw calls.
-    app.on_render(renderer);
-
-    // End scene.
-    renderer.end_scene();
-
-    // Draw egui.
-    egui_renderer
-        .cmd_draw(cmd_buf, extent, pixels_per_point, primitives)
-        .expect("Failed to draw egui");
-
-    // End render pass and command buffer.
+    // End command buffer.
     unsafe {
-        device.cmd_end_render_pass(cmd_buf);
         device
             .end_command_buffer(cmd_buf)
             .expect("Failed to end command buffer");
     }
+
+    // Explicitly drop the record timer before submit.
+    drop(_record);
 
     // Submit.
     let wait_semaphores = [swapchain.image_available_semaphore()];
@@ -570,14 +785,17 @@ fn render_frame<T: Application>(
         .command_buffers(&command_buffers)
         .signal_semaphores(&signal_semaphores);
 
-    unsafe {
-        device
-            .queue_submit(
-                vk_ctx.graphics_queue(),
-                &[submit_info],
-                swapchain.in_flight_fence(),
-            )
-            .expect("Failed to submit draw command buffer");
+    {
+        let _t = ProfileTimer::new("render_frame::queue_submit");
+        unsafe {
+            device
+                .queue_submit(
+                    vk_ctx.graphics_queue(),
+                    &[submit_info],
+                    swapchain.in_flight_fence(),
+                )
+                .expect("Failed to submit draw command buffer");
+        }
     }
 
     // Present.
@@ -588,10 +806,13 @@ fn render_frame<T: Application>(
         .swapchains(&swapchains)
         .image_indices(&image_indices);
 
-    let present_result = unsafe {
-        swapchain
-            .swapchain_loader()
-            .queue_present(vk_ctx.graphics_queue(), &present_info)
+    let present_result = {
+        let _t = ProfileTimer::new("render_frame::queue_present");
+        unsafe {
+            swapchain
+                .swapchain_loader()
+                .queue_present(vk_ctx.graphics_queue(), &present_info)
+        }
     };
 
     match present_result {
