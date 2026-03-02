@@ -9,6 +9,7 @@ pub mod profiling;
 pub mod renderer;
 pub mod scene;
 mod timestep;
+pub mod ui_theme;
 
 /// Shared-ownership smart pointer for rendering resources.
 /// Wraps `Arc<T>` for thread-safe reference counting.
@@ -65,6 +66,7 @@ pub mod prelude {
         SpriteRendererComponent, TagComponent, TransformComponent,
     };
     pub use crate::timestep::Timestep;
+    pub use crate::ui_theme::BOLD_FONT;
     pub use crate::{profile_scope, run, Application, Ref, Scope, WindowConfig};
     pub use glam::{Mat3, Mat4, Quat, Vec2, Vec3, Vec4};
     pub use log::{debug, error, info, trace, warn};

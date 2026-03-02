@@ -872,7 +872,11 @@ pub fn run<T: Application>() {
         default_camera,
         last_frame_time: Instant::now(),
         minimized: false,
-        egui_ctx: egui::Context::default(),
+        egui_ctx: {
+            let ctx = egui::Context::default();
+            crate::ui_theme::apply_engine_theme(&ctx);
+            ctx
+        },
         egui_winit_state: None,
         egui_renderer: None,
         renderer: None,

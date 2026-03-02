@@ -229,8 +229,41 @@ impl Application for GGEditor {
             frame_time_ms: self.frame_time_ms,
         };
 
+        let mut dock_style = egui_dock::Style::from_egui(ctx.style().as_ref());
+
+        // Tab bar background and separator line.
+        dock_style.tab_bar.bg_fill = egui::Color32::from_rgb(0x18, 0x18, 0x18);
+        dock_style.tab_bar.hline_color = egui::Color32::from_rgb(0x3C, 0x3C, 0x3C);
+
+        // Active tab — matches panel background, white text.
+        dock_style.tab.active.bg_fill = egui::Color32::from_rgb(0x1E, 0x1E, 0x1E);
+        dock_style.tab.active.text_color = egui::Color32::WHITE;
+
+        // Inactive tab — dark, dimmed text.
+        dock_style.tab.inactive.bg_fill = egui::Color32::from_rgb(0x18, 0x18, 0x18);
+        dock_style.tab.inactive.text_color = egui::Color32::from_rgb(0x96, 0x96, 0x96);
+
+        // Focused tab — same as active.
+        dock_style.tab.focused.bg_fill = egui::Color32::from_rgb(0x1E, 0x1E, 0x1E);
+        dock_style.tab.focused.text_color = egui::Color32::WHITE;
+
+        // Hovered tab.
+        dock_style.tab.hovered.bg_fill = egui::Color32::from_rgb(0x25, 0x25, 0x26);
+        dock_style.tab.hovered.text_color = egui::Color32::WHITE;
+
+        // Blue underline on active tab.
+        dock_style.tab.hline_below_active_tab_name = true;
+
+        // Separator colors.
+        dock_style.separator.color_idle = egui::Color32::from_rgb(0x28, 0x28, 0x28);
+        dock_style.separator.color_hovered = egui::Color32::from_rgb(0x00, 0x7A, 0xCC);
+        dock_style.separator.color_dragged = egui::Color32::from_rgb(0x00, 0x7A, 0xCC);
+
+        // Tab body matches panel.
+        dock_style.tab.tab_body.bg_fill = egui::Color32::from_rgb(0x1E, 0x1E, 0x1E);
+
         egui_dock::DockArea::new(&mut self.dock_state)
-            .style(egui_dock::Style::from_egui(ctx.style().as_ref()))
+            .style(dock_style)
             .show(ctx, &mut viewer);
     }
 }
@@ -283,7 +316,7 @@ impl egui_dock::TabViewer for EditorTabViewer<'_> {
                 let mut entity_to_delete = None;
 
                 for (entity, tag) in &entities {
-                    let selected = self.selection_context.map_or(false, |sel| sel == *entity);
+                    let selected = self.selection_context.is_some_and(|sel| sel == *entity);
                     let response = ui.selectable_label(selected, tag);
                     if response.clicked() {
                         *self.selection_context = Some(*entity);
@@ -430,14 +463,20 @@ fn draw_vec3_control(
             col.spacing_mut().item_spacing.x = 0.0;
 
             col.horizontal(|ui| {
+                let bold_family = egui::FontFamily::Name(BOLD_FONT.into());
+
                 // --- X (red) ---
                 let x_color = egui::Color32::from_rgba_unmultiplied(204, 26, 38, 255);
                 if ui
                     .add(
-                        egui::Button::new(egui::RichText::new("X").color(egui::Color32::WHITE))
-                            .fill(x_color)
-                            .min_size(button_size)
-                            .corner_radius(egui::CornerRadius::same(2)),
+                        egui::Button::new(
+                            egui::RichText::new("X")
+                                .color(egui::Color32::WHITE)
+                                .font(egui::FontId::new(14.0, bold_family.clone())),
+                        )
+                        .fill(x_color)
+                        .min_size(button_size)
+                        .corner_radius(egui::CornerRadius::same(2)),
                     )
                     .clicked()
                 {
@@ -462,10 +501,14 @@ fn draw_vec3_control(
                 let y_color = egui::Color32::from_rgba_unmultiplied(47, 153, 47, 255);
                 if ui
                     .add(
-                        egui::Button::new(egui::RichText::new("Y").color(egui::Color32::WHITE))
-                            .fill(y_color)
-                            .min_size(button_size)
-                            .corner_radius(egui::CornerRadius::same(2)),
+                        egui::Button::new(
+                            egui::RichText::new("Y")
+                                .color(egui::Color32::WHITE)
+                                .font(egui::FontId::new(14.0, bold_family.clone())),
+                        )
+                        .fill(y_color)
+                        .min_size(button_size)
+                        .corner_radius(egui::CornerRadius::same(2)),
                     )
                     .clicked()
                 {
@@ -489,10 +532,14 @@ fn draw_vec3_control(
                 let z_color = egui::Color32::from_rgba_unmultiplied(20, 64, 204, 255);
                 if ui
                     .add(
-                        egui::Button::new(egui::RichText::new("Z").color(egui::Color32::WHITE))
-                            .fill(z_color)
-                            .min_size(button_size)
-                            .corner_radius(egui::CornerRadius::same(2)),
+                        egui::Button::new(
+                            egui::RichText::new("Z")
+                                .color(egui::Color32::WHITE)
+                                .font(egui::FontId::new(14.0, bold_family)),
+                        )
+                        .fill(z_color)
+                        .min_size(button_size)
+                        .corner_radius(egui::CornerRadius::same(2)),
                     )
                     .clicked()
                 {
@@ -535,9 +582,14 @@ fn draw_components(ui: &mut egui::Ui, scene: &mut Scene, entity: Entity) {
         ui.separator();
     }
 
+    let bold_family = egui::FontFamily::Name(BOLD_FONT.into());
+
     // -- Transform Component (not removable) --
     if scene.has_component::<TransformComponent>(entity) {
-        egui::CollapsingHeader::new("Transform")
+        egui::CollapsingHeader::new(
+            egui::RichText::new("Transform")
+                .font(egui::FontId::new(14.0, bold_family.clone())),
+        )
             .id_salt(("transform", entity.id()))
             .default_open(true)
             .show(ui, |ui| {
@@ -576,7 +628,10 @@ fn draw_components(ui: &mut egui::Ui, scene: &mut Scene, entity: Entity) {
     // -- Camera Component (removable) --
     let mut remove_camera = false;
     if scene.has_component::<CameraComponent>(entity) {
-        let cr = egui::CollapsingHeader::new("Camera")
+        let cr = egui::CollapsingHeader::new(
+            egui::RichText::new("Camera")
+                .font(egui::FontId::new(14.0, bold_family.clone())),
+        )
             .id_salt(("camera", entity.id()))
             .default_open(true)
             .show(ui, |ui| {
@@ -774,7 +829,10 @@ fn draw_components(ui: &mut egui::Ui, scene: &mut Scene, entity: Entity) {
     // -- Sprite Renderer Component (removable) --
     let mut remove_sprite = false;
     if scene.has_component::<SpriteRendererComponent>(entity) {
-        let cr = egui::CollapsingHeader::new("Sprite Renderer")
+        let cr = egui::CollapsingHeader::new(
+            egui::RichText::new("Sprite Renderer")
+                .font(egui::FontId::new(14.0, bold_family.clone())),
+        )
             .id_salt(("sprite_renderer", entity.id()))
             .default_open(true)
             .show(ui, |ui| {
@@ -829,27 +887,45 @@ fn draw_components(ui: &mut egui::Ui, scene: &mut Scene, entity: Entity) {
         scene.remove_component::<SpriteRendererComponent>(entity);
     }
 
-    // -- Add Component button --
+    // -- Add Component button (full-width, blue accent) --
     ui.add_space(8.0);
-    let button_width = ui.available_width().min(200.0);
-    ui.horizontal(|ui| {
-        let padding = (ui.available_width() - button_width) / 2.0;
-        if padding > 0.0 {
-            ui.add_space(padding);
+    let popup_id = ui.make_persistent_id("add_component_popup");
+    let add_btn = ui.add_sized(
+        [ui.available_width(), 0.0],
+        egui::Button::new(
+            egui::RichText::new("Add Component")
+                .color(egui::Color32::WHITE)
+                .font(egui::FontId::new(14.0, bold_family)),
+        )
+        .fill(egui::Color32::from_rgb(0x00, 0x7A, 0xCC)),
+    );
+    if add_btn.clicked() {
+        egui::Popup::toggle_id(ui.ctx(), popup_id);
+    }
+    if egui::Popup::is_id_open(ui.ctx(), popup_id) {
+        let area_response = egui::Area::new(popup_id)
+            .order(egui::Order::Foreground)
+            .default_pos(add_btn.rect.left_bottom())
+            .show(ui.ctx(), |ui| {
+                egui::Frame::popup(ui.style()).show(ui, |ui| {
+                    if !scene.has_component::<CameraComponent>(entity)
+                        && ui.button("Camera").clicked()
+                    {
+                        scene.add_component(entity, CameraComponent::default());
+                        egui::Popup::close_id(ui.ctx(), popup_id);
+                    }
+                    if !scene.has_component::<SpriteRendererComponent>(entity)
+                        && ui.button("Sprite Renderer").clicked()
+                    {
+                        scene.add_component(entity, SpriteRendererComponent::default());
+                        egui::Popup::close_id(ui.ctx(), popup_id);
+                    }
+                });
+            });
+        if area_response.response.clicked_elsewhere() {
+            egui::Popup::close_id(ui.ctx(), popup_id);
         }
-        ui.menu_button("Add Component", |ui| {
-            if !scene.has_component::<CameraComponent>(entity) && ui.button("Camera").clicked() {
-                scene.add_component(entity, CameraComponent::default());
-                ui.close();
-            }
-            if !scene.has_component::<SpriteRendererComponent>(entity)
-                && ui.button("Sprite Renderer").clicked()
-            {
-                scene.add_component(entity, SpriteRendererComponent::default());
-                ui.close();
-            }
-        });
-    });
+    }
 }
 
 /// Draw a small "+" button right-aligned on a component header line.
@@ -872,9 +948,9 @@ fn draw_component_settings_button(
 
     let popup_id = header_response.id.with("component_settings");
     if settings_btn.clicked() {
-        ui.ctx().memory_mut(|m| m.toggle_popup(popup_id));
+        egui::Popup::toggle_id(ui.ctx(), popup_id);
     }
-    if ui.ctx().memory(|m| m.is_popup_open(popup_id)) {
+    if egui::Popup::is_id_open(ui.ctx(), popup_id) {
         let area_response = egui::Area::new(popup_id)
             .order(egui::Order::Foreground)
             .default_pos(settings_btn.rect.left_bottom())
@@ -882,12 +958,12 @@ fn draw_component_settings_button(
                 egui::Frame::popup(ui.style()).show(ui, |ui| {
                     if ui.button("Remove Component").clicked() {
                         on_remove();
-                        ui.ctx().memory_mut(|m| m.close_popup(popup_id));
+                        egui::Popup::close_id(ui.ctx(), popup_id);
                     }
                 });
             });
         if area_response.response.clicked_elsewhere() {
-            ui.ctx().memory_mut(|m| m.close_popup(popup_id));
+            egui::Popup::close_id(ui.ctx(), popup_id);
         }
     }
 }
