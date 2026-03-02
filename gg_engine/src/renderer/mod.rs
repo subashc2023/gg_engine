@@ -22,6 +22,7 @@ pub(crate) use draw_context::DrawContext;
 pub use orthographic_camera::OrthographicCamera;
 pub use pipeline::Pipeline;
 pub use renderer::Renderer;
+pub use renderer_2d::Renderer2DStats;
 pub use shader::Shader;
 pub use shader_library::ShaderLibrary;
 pub use swapchain::{Swapchain, SwapchainError};

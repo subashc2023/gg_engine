@@ -198,12 +198,10 @@ impl Swapchain {
         );
 
         // Find a supported depth format.
-        let depth_format =
-            find_depth_format(vk_ctx.instance(), vk_ctx.physical_device());
+        let depth_format = find_depth_format(vk_ctx.instance(), vk_ctx.physical_device());
 
         // Create render pass (color + depth attachments).
-        let render_pass =
-            create_render_pass(&device, format.format, depth_format)?;
+        let render_pass = create_render_pass(&device, format.format, depth_format)?;
 
         // Create depth buffer resources.
         let (depth_image, depth_image_memory, depth_image_view) = create_depth_resources(
@@ -215,13 +213,8 @@ impl Swapchain {
         )?;
 
         // Create framebuffers (color + depth).
-        let framebuffers = create_framebuffers(
-            &device,
-            render_pass,
-            &image_views,
-            depth_image_view,
-            extent,
-        )?;
+        let framebuffers =
+            create_framebuffers(&device, render_pass, &image_views, depth_image_view, extent)?;
 
         // Create command pool
         let pool_info = vk::CommandPoolCreateInfo::default()
@@ -314,7 +307,12 @@ impl Swapchain {
         for &view in &self.image_views {
             unsafe { self.device.destroy_image_view(view, None) };
         }
-        destroy_depth_resources(&self.device, self.depth_image, self.depth_image_memory, self.depth_image_view);
+        destroy_depth_resources(
+            &self.device,
+            self.depth_image,
+            self.depth_image_memory,
+            self.depth_image_view,
+        );
 
         // Destroy old per-swapchain-image render_finished semaphores
         // (image count may change after recreation).
@@ -413,9 +411,8 @@ impl Swapchain {
             .collect();
 
         // Recreate render pass and depth resources at new extent.
-        self.render_pass =
-            create_render_pass(&self.device, self.format.format, self.depth_format)
-                .expect("Failed to recreate render pass during resize");
+        self.render_pass = create_render_pass(&self.device, self.format.format, self.depth_format)
+            .expect("Failed to recreate render pass during resize");
 
         let (depth_image, depth_image_memory, depth_image_view) = create_depth_resources(
             vk_ctx.instance(),
@@ -526,10 +523,7 @@ impl Swapchain {
 
 /// Find a supported depth format. Prefers D32_SFLOAT, falls back to
 /// D32_SFLOAT_S8_UINT, then D24_UNORM_S8_UINT.
-fn find_depth_format(
-    instance: &ash::Instance,
-    physical_device: vk::PhysicalDevice,
-) -> vk::Format {
+fn find_depth_format(instance: &ash::Instance, physical_device: vk::PhysicalDevice) -> vk::Format {
     let candidates = [
         vk::Format::D32_SFLOAT,
         vk::Format::D32_SFLOAT_S8_UINT,

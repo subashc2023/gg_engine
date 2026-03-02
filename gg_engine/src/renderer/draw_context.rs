@@ -8,4 +8,5 @@ use ash::vk;
 pub(crate) struct DrawContext {
     pub cmd_buf: vk::CommandBuffer,
     pub extent: vk::Extent2D,
+    pub current_frame: usize,
 }

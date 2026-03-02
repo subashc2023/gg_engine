@@ -2,8 +2,8 @@ use glam::Vec3;
 
 use crate::events::{Event, KeyCode, MouseEvent, WindowEvent};
 use crate::input::Input;
-use crate::renderer::OrthographicCamera;
 use crate::profiling::ProfileTimer;
+use crate::renderer::OrthographicCamera;
 use crate::timestep::Timestep;
 
 /// Wraps an [`OrthographicCamera`] with WASD movement, Q/E rotation, mouse

@@ -9,7 +9,7 @@ use super::draw_context::DrawContext;
 use super::orthographic_camera::OrthographicCamera;
 use super::pipeline::{self, Pipeline};
 use super::render_command::RenderCommand;
-use super::renderer_2d::Renderer2DData;
+use super::renderer_2d::{BatchQuadVertex, Renderer2DData, Renderer2DStats};
 use super::renderer_api::{RendererAPI, VulkanRendererAPI};
 use super::shader::Shader;
 use super::texture::Texture2D;
@@ -17,6 +17,24 @@ use super::vertex_array::VertexArray;
 use super::VulkanContext;
 
 use crate::profiling::ProfileTimer;
+
+// ---------------------------------------------------------------------------
+// Unit quad positions and tex coords (used for CPU pre-transformation)
+// ---------------------------------------------------------------------------
+
+const QUAD_POSITIONS: [Vec4; 4] = [
+    Vec4::new(-0.5, 0.5, 0.0, 1.0),  // top-left
+    Vec4::new(0.5, 0.5, 0.0, 1.0),   // top-right
+    Vec4::new(0.5, -0.5, 0.0, 1.0),  // bottom-right
+    Vec4::new(-0.5, -0.5, 0.0, 1.0), // bottom-left
+];
+
+const QUAD_TEX_COORDS: [[f32; 2]; 4] = [
+    [0.0, 0.0], // top-left
+    [1.0, 0.0], // top-right
+    [1.0, 1.0], // bottom-right
+    [0.0, 1.0], // bottom-left
+];
 
 /// High-level renderer. Owns the `RendererAPI` and the current frame's
 /// `DrawContext`. Provides `begin_scene` / `end_scene` / `submit` for
@@ -41,6 +59,9 @@ pub struct Renderer {
 
     // Built-in 2D renderer resources.
     renderer_2d: Option<Renderer2DData>,
+
+    // Stats from the previous frame (snapshotted at end_scene).
+    last_stats_2d: Renderer2DStats,
 }
 
 impl Renderer {
@@ -88,6 +109,7 @@ impl Renderer {
             descriptor_pool,
             texture_descriptor_set_layout,
             renderer_2d: None,
+            last_stats_2d: Renderer2DStats::default(),
         }
     }
 
@@ -156,7 +178,7 @@ impl Renderer {
 
     /// Load a texture from an image file.
     pub fn create_texture_from_file(&self, path: &Path) -> Texture2D {
-        Texture2D::from_file(
+        let mut texture = Texture2D::from_file(
             &self.instance,
             self.physical_device,
             &self.device,
@@ -165,12 +187,17 @@ impl Renderer {
             self.descriptor_pool,
             self.texture_descriptor_set_layout,
             path,
-        )
+        );
+        if let Some(data) = &self.renderer_2d {
+            let index = data.register_texture(&texture);
+            texture.set_bindless_index(index);
+        }
+        texture
     }
 
     /// Create a texture from raw RGBA8 pixel data.
     pub fn create_texture_from_rgba8(&self, width: u32, height: u32, pixels: &[u8]) -> Texture2D {
-        Texture2D::from_rgba8(
+        let mut texture = Texture2D::from_rgba8(
             &self.instance,
             self.physical_device,
             &self.device,
@@ -181,7 +208,12 @@ impl Renderer {
             width,
             height,
             pixels,
-        )
+        );
+        if let Some(data) = &self.renderer_2d {
+            let index = data.register_texture(&texture);
+            texture.set_bindless_index(index);
+        }
+        texture
     }
 
     /// The descriptor set layout used for texture pipelines.
@@ -196,85 +228,93 @@ impl Renderer {
 
     // -- Built-in 2D renderer -------------------------------------------------
 
-    /// Initialize built-in 2D rendering resources (unified shader/pipeline,
-    /// unit quad, 1×1 white default texture). Called once by the engine after
-    /// Vulkan is ready.
+    /// Initialize built-in 2D rendering resources (batch pipeline,
+    /// dynamic VBs, static IB, bindless descriptor sets, 1×1 white
+    /// default texture). Called once by the engine after Vulkan is ready.
     pub(crate) fn init_2d(&mut self) {
         let _timer = ProfileTimer::new("Renderer::init_2d");
         let white_texture = self.create_texture_from_rgba8(1, 1, &[255, 255, 255, 255]);
-        self.renderer_2d = Some(Renderer2DData::new(
+        let data = Renderer2DData::new(
             &self.instance,
             self.physical_device,
             &self.device,
             self.render_pass,
-            self.texture_descriptor_set_layout,
             white_texture,
-        ));
+        );
+        // White texture gets bindless index 0.
+        data.register_texture(&data.white_texture);
+        self.renderer_2d = Some(data);
     }
 
-    /// Internal: submit a 2D draw call with the unified pipeline (texture × color).
-    fn submit_2d(
+    /// Get the 2D renderer batch statistics from the last completed frame.
+    pub fn stats_2d(&self) -> Renderer2DStats {
+        self.last_stats_2d
+    }
+
+    // -- Internal: push a quad into the batch ---------------------------------
+
+    fn push_quad_to_batch(
         &self,
         transform: &Mat4,
         color: Vec4,
-        texture: &Texture2D,
+        tex_index: f32,
         tiling_factor: f32,
     ) {
         let data = self
             .renderer_2d
             .as_ref()
             .expect("Renderer2D not initialized — call init_2d first");
-        let ctx = self
-            .draw_context
-            .expect("Renderer::submit_2d called outside begin_scene/end_scene");
 
-        // Push tiling factor (offset 144, 4 bytes, fragment stage).
-        unsafe {
-            let tiling_bytes = std::slice::from_raw_parts(
-                &tiling_factor as *const f32 as *const u8,
-                std::mem::size_of::<f32>(),
-            );
-            self.device.cmd_push_constants(
-                ctx.cmd_buf,
-                data.pipeline().layout(),
-                vk::ShaderStageFlags::FRAGMENT,
-                144,
-                tiling_bytes,
-            );
+        // Pre-transform quad vertices on CPU.
+        let mut vertices = [BatchQuadVertex {
+            position: [0.0; 3],
+            color: [color.x, color.y, color.z, color.w],
+            tex_coord: [0.0; 2],
+            tex_index,
+        }; 4];
+
+        for (i, v) in vertices.iter_mut().enumerate() {
+            let world_pos = *transform * QUAD_POSITIONS[i];
+            v.position = [world_pos.x, world_pos.y, world_pos.z];
+            v.tex_coord = [
+                QUAD_TEX_COORDS[i][0] * tiling_factor,
+                QUAD_TEX_COORDS[i][1] * tiling_factor,
+            ];
         }
 
-        RenderCommand::draw_indexed(
-            &self.api,
-            &ctx,
-            data.pipeline().pipeline(),
-            data.pipeline().layout(),
-            data.vertex_array(),
-            &self.view_projection,
-            transform,
-            Some(&color),
-            Some(texture.descriptor_set()),
-        );
+        if !data.push_quad(vertices) {
+            // Batch full — flush and retry.
+            self.flush_batch();
+            data.push_quad(vertices);
+        }
     }
+
+    /// Flush the current 2D batch (if any quads are pending).
+    fn flush_batch(&self) {
+        let data = self
+            .renderer_2d
+            .as_ref()
+            .expect("Renderer2D not initialized — call init_2d first");
+        let ctx = self
+            .draw_context
+            .expect("flush_batch called outside begin_scene/end_scene");
+
+        data.flush(ctx.cmd_buf, &self.view_projection, ctx.current_frame);
+    }
+
 
     // -- Axis-aligned quads (no rotation) ------------------------------------
 
     /// Draw a flat-colored quad at a 3D position with the given size and color.
-    ///
-    /// Internally binds the 1×1 white default texture so the unified shader
-    /// produces `white × color = color`.
     pub fn draw_quad(&self, position: &Vec3, size: &Vec2, color: Vec4) {
         let _timer = ProfileTimer::new("Renderer::draw_quad");
-        let white = self
-            .renderer_2d
-            .as_ref()
-            .expect("Renderer2D not initialized — call init_2d first")
-            .white_texture();
         let transform = Mat4::from_scale_rotation_translation(
             Vec3::new(size.x, size.y, 1.0),
             Quat::IDENTITY,
             *position,
         );
-        self.submit_2d(&transform, color, white, 1.0);
+        // tex_index 0 = white texture
+        self.push_quad_to_batch(&transform, color, 0.0, 1.0);
     }
 
     /// Draw a flat-colored quad at a 2D position (z = 0).
@@ -285,7 +325,7 @@ impl Renderer {
     /// Draw a textured quad at a 3D position with the given size.
     ///
     /// `tiling_factor` scales the texture coordinates (e.g. 10.0 tiles the
-    /// texture 10× in each direction). `tint_color` is multiplied with the
+    /// texture 10x in each direction). `tint_color` is multiplied with the
     /// sampled texel — pass `Vec4::ONE` for no tint.
     pub fn draw_textured_quad(
         &self,
@@ -301,7 +341,7 @@ impl Renderer {
             Quat::IDENTITY,
             *position,
         );
-        self.submit_2d(&transform, tint_color, texture, tiling_factor);
+        self.push_quad_to_batch(&transform, tint_color, texture.bindless_index() as f32, tiling_factor);
     }
 
     /// Draw a textured quad at a 2D position (z = 0).
@@ -325,36 +365,19 @@ impl Renderer {
     // -- Rotated quads --------------------------------------------------------
 
     /// Draw a rotated flat-colored quad. `rotation` is in radians (Z-axis).
-    pub fn draw_rotated_quad(
-        &self,
-        position: &Vec3,
-        size: &Vec2,
-        rotation: f32,
-        color: Vec4,
-    ) {
+    pub fn draw_rotated_quad(&self, position: &Vec3, size: &Vec2, rotation: f32, color: Vec4) {
         let _timer = ProfileTimer::new("Renderer::draw_rotated_quad");
-        let white = self
-            .renderer_2d
-            .as_ref()
-            .expect("Renderer2D not initialized — call init_2d first")
-            .white_texture();
         let transform = Mat4::from_scale_rotation_translation(
             Vec3::new(size.x, size.y, 1.0),
             Quat::from_rotation_z(rotation),
             *position,
         );
-        self.submit_2d(&transform, color, white, 1.0);
+        self.push_quad_to_batch(&transform, color, 0.0, 1.0);
     }
 
     /// Draw a rotated flat-colored quad at a 2D position (z = 0).
     /// `rotation` is in radians (Z-axis).
-    pub fn draw_rotated_quad_2d(
-        &self,
-        position: &Vec2,
-        size: &Vec2,
-        rotation: f32,
-        color: Vec4,
-    ) {
+    pub fn draw_rotated_quad_2d(&self, position: &Vec2, size: &Vec2, rotation: f32, color: Vec4) {
         self.draw_rotated_quad(
             &Vec3::new(position.x, position.y, 0.0),
             size,
@@ -379,7 +402,7 @@ impl Renderer {
             Quat::from_rotation_z(rotation),
             *position,
         );
-        self.submit_2d(&transform, tint_color, texture, tiling_factor);
+        self.push_quad_to_batch(&transform, tint_color, texture.bindless_index() as f32, tiling_factor);
     }
 
     /// Draw a rotated textured quad at a 2D position (z = 0).
@@ -418,16 +441,32 @@ impl Renderer {
     // -- Scene management (engine-internal) -----------------------------------
 
     /// Begin a new scene — stores the camera's view-projection matrix,
-    /// saves the draw context, and sets viewport/scissor.
+    /// saves the draw context, sets viewport/scissor, and resets the batch.
     pub(crate) fn begin_scene(&mut self, camera: &OrthographicCamera, ctx: DrawContext) {
         let _timer = ProfileTimer::new("Renderer::begin_scene");
         self.view_projection = *camera.view_projection_matrix();
         self.draw_context = Some(ctx);
         RenderCommand::set_viewport(&self.api, &ctx);
+
+        // Reset batch state for this frame.
+        if let Some(data) = &self.renderer_2d {
+            data.reset_batch();
+        }
     }
 
-    /// End the current scene — clears the draw context.
+    /// End the current scene — flushes any pending batch, snapshots stats,
+    /// and clears the draw context.
     pub(crate) fn end_scene(&mut self) {
+        // Flush any remaining quads in the batch.
+        if let Some(data) = &self.renderer_2d {
+            if data.has_pending() {
+                if let Some(ctx) = self.draw_context {
+                    data.flush(ctx.cmd_buf, &self.view_projection, ctx.current_frame);
+                }
+            }
+            // Snapshot stats for this frame (available via stats_2d() until next end_scene).
+            self.last_stats_2d = data.stats();
+        }
         self.draw_context = None;
     }
 

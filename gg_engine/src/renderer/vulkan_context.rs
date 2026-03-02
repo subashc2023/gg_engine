@@ -185,12 +185,22 @@ impl VulkanContext {
 
         let device_extensions = [ash::khr::swapchain::NAME.as_ptr()];
 
-        let features = vk::PhysicalDeviceFeatures::default().sampler_anisotropy(true);
+        let features10 = vk::PhysicalDeviceFeatures::default().sampler_anisotropy(true);
+
+        let mut features12 = vk::PhysicalDeviceVulkan12Features::default()
+            .descriptor_binding_partially_bound(true)
+            .descriptor_binding_sampled_image_update_after_bind(true)
+            .shader_sampled_image_array_non_uniform_indexing(true)
+            .runtime_descriptor_array(true);
+
+        let mut features2 = vk::PhysicalDeviceFeatures2::default()
+            .features(features10)
+            .push_next(&mut features12);
 
         let device_create_info = vk::DeviceCreateInfo::default()
             .queue_create_infos(std::slice::from_ref(&queue_create_info))
             .enabled_extension_names(&device_extensions)
-            .enabled_features(&features);
+            .push_next(&mut features2);
 
         let device = unsafe { instance.create_device(physical_device, &device_create_info, None) }
             .map_err(VulkanInitError::DeviceCreation)?;

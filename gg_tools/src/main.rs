@@ -30,23 +30,29 @@ fn main() {
         process::exit(1);
     });
 
-    let trace: TraceFile = serde_json::from_str(&data).or_else(|_| {
-        // The session was likely killed before end_session() could write the
-        // closing "]}". Truncate back to the last complete event and close.
-        eprintln!("(repairing truncated JSON)");
-        let repaired = repair_truncated_trace(&data);
-        serde_json::from_str(&repaired)
-    }).unwrap_or_else(|e| {
-        eprintln!("Error parsing JSON: {e}");
-        process::exit(1);
-    });
+    let trace: TraceFile = serde_json::from_str(&data)
+        .or_else(|_| {
+            // The session was likely killed before end_session() could write the
+            // closing "]}". Truncate back to the last complete event and close.
+            eprintln!("(repairing truncated JSON)");
+            let repaired = repair_truncated_trace(&data);
+            serde_json::from_str(&repaired)
+        })
+        .unwrap_or_else(|e| {
+            eprintln!("Error parsing JSON: {e}");
+            process::exit(1);
+        });
 
     if trace.trace_events.is_empty() {
         println!("No trace events found.");
         return;
     }
 
-    println!("Loaded {} events from {}\n", trace.trace_events.len(), path.display());
+    println!(
+        "Loaded {} events from {}\n",
+        trace.trace_events.len(),
+        path.display()
+    );
 
     // --- Frame summary (detect via "Run loop" events) ---
     let frame_times_us: Vec<u64> = trace

@@ -316,11 +316,110 @@ impl IndexBuffer {
     pub fn count(&self) -> u32 {
         self.count
     }
+
+    pub(crate) fn buffer(&self) -> vk::Buffer {
+        self.buffer
+    }
 }
 
 impl Drop for IndexBuffer {
     fn drop(&mut self) {
         unsafe {
+            self.device.free_memory(self.memory, None);
+            self.device.destroy_buffer(self.buffer, None);
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// DynamicVertexBuffer (persistently mapped, for batch rendering)
+// ---------------------------------------------------------------------------
+
+/// GPU vertex buffer with persistent host mapping for per-frame streaming.
+///
+/// Created with `HOST_VISIBLE | HOST_COHERENT` memory that stays mapped for
+/// the lifetime of the buffer. Use `write()` to copy vertex data each frame.
+pub(crate) struct DynamicVertexBuffer {
+    buffer: vk::Buffer,
+    memory: vk::DeviceMemory,
+    mapped_ptr: *mut u8,
+    capacity: usize,
+    layout: BufferLayout,
+    device: ash::Device,
+}
+
+// Safety: The mapped_ptr is only written to by one frame at a time (guarded
+// by frame-in-flight fencing), and reads are on the GPU side via Vulkan sync.
+unsafe impl Send for DynamicVertexBuffer {}
+unsafe impl Sync for DynamicVertexBuffer {}
+
+impl DynamicVertexBuffer {
+    pub fn new(
+        instance: &ash::Instance,
+        physical_device: vk::PhysicalDevice,
+        device: &ash::Device,
+        capacity: usize,
+        layout: BufferLayout,
+    ) -> Self {
+        let (buffer, memory) = create_buffer_and_memory(
+            instance,
+            physical_device,
+            device,
+            capacity as vk::DeviceSize,
+            vk::BufferUsageFlags::VERTEX_BUFFER,
+        );
+
+        let mapped_ptr = unsafe {
+            device
+                .map_memory(
+                    memory,
+                    0,
+                    capacity as vk::DeviceSize,
+                    vk::MemoryMapFlags::empty(),
+                )
+                .expect("Failed to map dynamic vertex buffer memory") as *mut u8
+        };
+
+        Self {
+            buffer,
+            memory,
+            mapped_ptr,
+            capacity,
+            layout,
+            device: device.clone(),
+        }
+    }
+
+    /// Copy vertex data into the persistently mapped buffer at a byte offset.
+    ///
+    /// # Panics
+    /// Panics if `offset + data.len()` exceeds the buffer's capacity.
+    pub fn write_at(&self, offset: usize, data: &[u8]) {
+        assert!(
+            offset + data.len() <= self.capacity,
+            "DynamicVertexBuffer::write_at: offset ({}) + data ({} bytes) exceeds capacity ({} bytes)",
+            offset,
+            data.len(),
+            self.capacity
+        );
+        unsafe {
+            std::ptr::copy_nonoverlapping(data.as_ptr(), self.mapped_ptr.add(offset), data.len());
+        }
+    }
+
+    pub fn handle(&self) -> vk::Buffer {
+        self.buffer
+    }
+
+    pub fn layout(&self) -> &BufferLayout {
+        &self.layout
+    }
+}
+
+impl Drop for DynamicVertexBuffer {
+    fn drop(&mut self) {
+        unsafe {
+            self.device.unmap_memory(self.memory);
             self.device.free_memory(self.memory, None);
             self.device.destroy_buffer(self.buffer, None);
         }

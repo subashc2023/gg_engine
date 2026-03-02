@@ -11,10 +11,10 @@ use winit::window::{Window, WindowAttributes};
 use crate::events::{Event, KeyCode, KeyEvent, MouseButton, MouseEvent, WindowEvent};
 use crate::input::Input;
 use crate::layer::LayerStack;
+use crate::profiling::ProfileTimer;
 use crate::renderer::{
     DrawContext, OrthographicCamera, PresentMode, Renderer, Swapchain, VulkanContext,
 };
-use crate::profiling::ProfileTimer;
 use crate::timestep::Timestep;
 
 // ---------------------------------------------------------------------------
@@ -215,7 +215,10 @@ impl<T: Application> ApplicationHandler for EngineRunner<T> {
                                         // Startup is complete — close the startup profile
                                         // and begin the runtime profile.
                                         crate::profiling::end_session();
-                                        crate::profiling::begin_session("Runtime", "gg_profile_runtime.json");
+                                        crate::profiling::begin_session(
+                                            "Runtime",
+                                            "gg_profile_runtime.json",
+                                        );
                                     }
                                     Err(e) => {
                                         log::error!(target: "gg_engine", "Egui renderer init failed: {e}");
@@ -527,7 +530,14 @@ fn render_frame<T: Application>(
     }
 
     // Begin scene — sets camera VP matrix + viewport/scissor via the Renderer.
-    renderer.begin_scene(camera, DrawContext { cmd_buf, extent });
+    renderer.begin_scene(
+        camera,
+        DrawContext {
+            cmd_buf,
+            extent,
+            current_frame: swapchain.current_frame(),
+        },
+    );
 
     // Application draw calls.
     app.on_render(renderer);

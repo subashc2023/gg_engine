@@ -26,8 +26,8 @@ pub use orthographic_camera_controller::OrthographicCameraController;
 pub use renderer::shaders;
 pub use renderer::{
     as_bytes, BufferElement, BufferLayout, IndexBuffer, OrthographicCamera, Pipeline, PresentMode,
-    Renderer, RendererBackend, Shader, ShaderDataType, ShaderLibrary, Texture2D, VertexArray,
-    VertexBuffer,
+    Renderer, Renderer2DStats, RendererBackend, Shader, ShaderDataType, ShaderLibrary, Texture2D,
+    VertexArray, VertexBuffer,
 };
 pub use timestep::Timestep;
 
@@ -40,16 +40,16 @@ pub mod prelude {
     pub use crate::events::{Event, KeyCode, KeyEvent, MouseButton, MouseEvent, WindowEvent};
     pub use crate::input::Input;
     pub use crate::layer::{Layer, LayerStack};
-    pub use crate::renderer::{
-        as_bytes, BufferElement, BufferLayout, IndexBuffer, OrthographicCamera, Pipeline,
-        PresentMode, Renderer, RendererBackend, Shader, ShaderDataType, ShaderLibrary, Texture2D,
-        VertexArray, VertexBuffer,
-    };
-    pub use crate::timestep::Timestep;
     pub use crate::orthographic_camera_controller::OrthographicCameraController;
     pub use crate::profiling::{
         begin_session, drain_profile_results, end_session, ProfileResult, ProfileTimer,
     };
+    pub use crate::renderer::{
+        as_bytes, BufferElement, BufferLayout, IndexBuffer, OrthographicCamera, Pipeline,
+        PresentMode, Renderer, Renderer2DStats, RendererBackend, Shader, ShaderDataType,
+        ShaderLibrary, Texture2D, VertexArray, VertexBuffer,
+    };
+    pub use crate::timestep::Timestep;
     pub use crate::{profile_scope, run, Application, Ref, Scope, WindowConfig};
     pub use glam::{Mat3, Mat4, Quat, Vec2, Vec3, Vec4};
     pub use log::{debug, error, info, trace, warn};

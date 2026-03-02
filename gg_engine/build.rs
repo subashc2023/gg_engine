@@ -56,8 +56,7 @@ fn main() {
     }
 
     let shaders_rs = out_dir.join("shaders.rs");
-    fs::write(&shaders_rs, &generated)
-        .unwrap_or_else(|e| panic!("Cannot write shaders.rs: {e}"));
+    fs::write(&shaders_rs, &generated).unwrap_or_else(|e| panic!("Cannot write shaders.rs: {e}"));
 }
 
 /// Split a combined `.glsl` source into (vertex_source, fragment_source).
@@ -100,6 +99,7 @@ fn split_glsl_source(source: &str, path: &Path) -> (String, String) {
 /// Invoke `glslc` to compile a GLSL source file to SPIR-V.
 fn compile_glslc(input: &Path, output: &Path) {
     let status = Command::new("glslc")
+        .arg("--target-env=vulkan1.2")
         .arg(input)
         .arg("-o")
         .arg(output)

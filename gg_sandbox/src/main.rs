@@ -344,7 +344,11 @@ impl Application for ExampleApp {
             ui.horizontal(|ui| {
                 ui.label("Zoom");
                 if ui
-                    .add(gg_engine::egui::DragValue::new(&mut zoom).speed(0.05).range(0.25..=10.0))
+                    .add(
+                        gg_engine::egui::DragValue::new(&mut zoom)
+                            .speed(0.05)
+                            .range(0.25..=10.0),
+                    )
                     .changed()
                 {
                     self.camera_controller.set_zoom_level(zoom);
@@ -359,7 +363,10 @@ impl Application for ExampleApp {
                 (self.square_color[2] * 255.0) as u8,
                 (self.square_color[3] * 255.0) as u8,
             ];
-            if ui.color_edit_button_srgba_unmultiplied(&mut srgba).changed() {
+            if ui
+                .color_edit_button_srgba_unmultiplied(&mut srgba)
+                .changed()
+            {
                 self.square_color = [
                     srgba[0] as f32 / 255.0,
                     srgba[1] as f32 / 255.0,

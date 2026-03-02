@@ -19,6 +19,7 @@ pub struct Texture2D {
     image_view: vk::ImageView,
     sampler: vk::Sampler,
     descriptor_set: vk::DescriptorSet,
+    bindless_index: u32,
     _width: u32,
     _height: u32,
     device: ash::Device,
@@ -240,6 +241,7 @@ impl Texture2D {
             image_view,
             sampler,
             descriptor_set,
+            bindless_index: 0,
             _width: width,
             _height: height,
             device: device.clone(),
@@ -249,6 +251,26 @@ impl Texture2D {
     /// The descriptor set for binding this texture in a draw call.
     pub fn descriptor_set(&self) -> vk::DescriptorSet {
         self.descriptor_set
+    }
+
+    /// The Vulkan image view backing this texture.
+    pub(crate) fn image_view(&self) -> vk::ImageView {
+        self.image_view
+    }
+
+    /// The Vulkan sampler for this texture.
+    pub(crate) fn sampler(&self) -> vk::Sampler {
+        self.sampler
+    }
+
+    /// The global bindless descriptor array index for this texture.
+    pub fn bindless_index(&self) -> u32 {
+        self.bindless_index
+    }
+
+    /// Set the bindless descriptor array index (called by Renderer after registration).
+    pub(crate) fn set_bindless_index(&mut self, index: u32) {
+        self.bindless_index = index;
     }
 }
 
