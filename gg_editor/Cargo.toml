@@ -11,3 +11,4 @@ profiling = ["gg_engine/profiling"]
 [dependencies]
 gg_engine = { path = "../gg_engine", default-features = false }
 egui_dock = "0.18"
+transform-gizmo-egui = "0.8"

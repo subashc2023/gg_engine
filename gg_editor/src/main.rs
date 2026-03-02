@@ -1,5 +1,8 @@
 use gg_engine::egui;
 use gg_engine::prelude::*;
+use gg_engine::glam::EulerRot;
+use transform_gizmo_egui::math::{DQuat, DVec3, Transform as GizmoTransform};
+use transform_gizmo_egui::{EnumSet, Gizmo, GizmoConfig, GizmoExt, GizmoMode, GizmoOrientation};
 
 // ---------------------------------------------------------------------------
 // CameraController native script — WASD movement demo
@@ -52,6 +55,46 @@ enum Tab {
 }
 
 // ---------------------------------------------------------------------------
+// Gizmo operation modes
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum GizmoOperation {
+    None,      // Q — select mode, no gizmo
+    Translate, // W
+    Rotate,    // E
+    Scale,     // R
+}
+
+fn gizmo_modes_for(op: GizmoOperation) -> EnumSet<GizmoMode> {
+    match op {
+        GizmoOperation::None => EnumSet::empty(),
+        GizmoOperation::Translate => {
+            GizmoMode::TranslateX
+                | GizmoMode::TranslateY
+                | GizmoMode::TranslateZ
+                | GizmoMode::TranslateXY
+                | GizmoMode::TranslateXZ
+                | GizmoMode::TranslateYZ
+        }
+        GizmoOperation::Rotate => {
+            GizmoMode::RotateX | GizmoMode::RotateY | GizmoMode::RotateZ
+        }
+        GizmoOperation::Scale => {
+            GizmoMode::ScaleX
+                | GizmoMode::ScaleY
+                | GizmoMode::ScaleZ
+                | GizmoMode::ScaleUniform
+        }
+    }
+}
+
+/// Convert a glam Mat4 (f32) to a column-major f64 array for the gizmo library.
+fn mat4_to_f64(m: &Mat4) -> [[f64; 4]; 4] {
+    m.to_cols_array_2d().map(|col| col.map(|v| v as f64))
+}
+
+// ---------------------------------------------------------------------------
 // GGEditor
 // ---------------------------------------------------------------------------
 
@@ -65,6 +108,8 @@ struct GGEditor {
     frame_time_ms: f32,
     scene: Scene,
     selection_context: Option<Entity>,
+    gizmo: Gizmo,
+    gizmo_operation: GizmoOperation,
 }
 
 impl Application for GGEditor {
@@ -148,6 +193,8 @@ impl Application for GGEditor {
             frame_time_ms: 0.0,
             scene,
             selection_context: None,
+            gizmo: Gizmo::default(),
+            gizmo_operation: GizmoOperation::Translate,
         }
     }
 
@@ -207,9 +254,24 @@ impl Application for GGEditor {
                 || input.is_key_pressed(KeyCode::RightShift);
 
             match key_code {
+                // File commands.
                 KeyCode::N if ctrl => self.new_scene(),
                 KeyCode::O if ctrl => self.open_scene(),
                 KeyCode::S if ctrl && shift => self.save_scene_as(),
+
+                // Gizmo shortcuts (Q/W/E/R) — only when no modifier is held.
+                KeyCode::Q if !ctrl && !shift => {
+                    self.gizmo_operation = GizmoOperation::None;
+                }
+                KeyCode::W if !ctrl && !shift => {
+                    self.gizmo_operation = GizmoOperation::Translate;
+                }
+                KeyCode::E if !ctrl && !shift => {
+                    self.gizmo_operation = GizmoOperation::Rotate;
+                }
+                KeyCode::R if !ctrl && !shift => {
+                    self.gizmo_operation = GizmoOperation::Scale;
+                }
                 _ => {}
             }
         }
@@ -274,6 +336,8 @@ impl Application for GGEditor {
             fb_tex_id,
             vsync: &mut self.vsync,
             frame_time_ms: self.frame_time_ms,
+            gizmo: &mut self.gizmo,
+            gizmo_operation: self.gizmo_operation,
         };
 
         let mut dock_style = egui_dock::Style::from_egui(ctx.style().as_ref());
@@ -366,6 +430,8 @@ struct EditorTabViewer<'a> {
     fb_tex_id: Option<egui::TextureId>,
     vsync: &'a mut bool,
     frame_time_ms: f32,
+    gizmo: &'a mut Gizmo,
+    gizmo_operation: GizmoOperation,
 }
 
 impl EditorTabViewer<'_> {
@@ -459,6 +525,141 @@ impl egui_dock::TabViewer for EditorTabViewer<'_> {
                 if let Some(tex_id) = self.fb_tex_id {
                     let size = egui::vec2(available.x, available.y);
                     ui.image(egui::load::SizedTexture::new(tex_id, size));
+                }
+
+                // -- Gizmos --
+                if let Some(entity) = *self.selection_context {
+                    if self.scene.is_alive(entity)
+                        && self.gizmo_operation != GizmoOperation::None
+                    {
+                        if let Some(cam_entity) = self.scene.get_primary_camera_entity() {
+                            // Read camera data into locals (drops hecs borrows).
+                            let camera_matrices = {
+                                let cam = self.scene.get_component::<CameraComponent>(cam_entity);
+                                let cam_t =
+                                    self.scene.get_component::<TransformComponent>(cam_entity);
+                                if let (Some(cam), Some(cam_t)) = (cam, cam_t) {
+                                    let view = cam_t.get_transform().inverse();
+                                    // Undo Vulkan Y-flip for the gizmo library.
+                                    let mut proj = *cam.camera.projection();
+                                    proj.y_axis.y *= -1.0;
+                                    Some((view, proj))
+                                } else {
+                                    None
+                                }
+                            };
+
+                            if let Some((camera_view, camera_projection)) = camera_matrices {
+                                // Read entity transform.
+                                let entity_transform = {
+                                    let tc =
+                                        self.scene.get_component::<TransformComponent>(entity);
+                                    tc.map(|tc| {
+                                        let original_rotation = tc.rotation;
+                                        let quat = Quat::from_euler(
+                                            EulerRot::XYZ,
+                                            tc.rotation.x,
+                                            tc.rotation.y,
+                                            tc.rotation.z,
+                                        );
+                                        (tc.translation, quat, tc.scale, original_rotation)
+                                    })
+                                };
+
+                                if let Some((translation, quat, scale, original_rotation)) =
+                                    entity_transform
+                                {
+                                    // Snapping: Ctrl held enables snap.
+                                    let snapping =
+                                        ui.input(|i| i.modifiers.ctrl);
+
+                                    // Configure the gizmo.
+                                    self.gizmo.update_config(GizmoConfig {
+                                        view_matrix: mat4_to_f64(&camera_view).into(),
+                                        projection_matrix: mat4_to_f64(&camera_projection).into(),
+                                        viewport: ui.clip_rect(),
+                                        modes: gizmo_modes_for(self.gizmo_operation),
+                                        orientation: GizmoOrientation::Local,
+                                        snapping,
+                                        snap_angle: std::f32::consts::FRAC_PI_4, // 45 degrees
+                                        snap_distance: 0.5_f32,
+                                        snap_scale: 0.5_f32,
+                                        ..Default::default()
+                                    });
+
+                                    // Build gizmo Transform from entity data.
+                                    let gizmo_transform =
+                                        GizmoTransform::from_scale_rotation_translation(
+                                            DVec3::new(
+                                                scale.x as f64,
+                                                scale.y as f64,
+                                                scale.z as f64,
+                                            ),
+                                            DQuat::from_xyzw(
+                                                quat.x as f64,
+                                                quat.y as f64,
+                                                quat.z as f64,
+                                                quat.w as f64,
+                                            ),
+                                            DVec3::new(
+                                                translation.x as f64,
+                                                translation.y as f64,
+                                                translation.z as f64,
+                                            ),
+                                        );
+
+                                    // Interact (renders gizmo + returns new transforms).
+                                    if let Some((_result, new_transforms)) =
+                                        self.gizmo.interact(ui, &[gizmo_transform])
+                                    {
+                                        if let Some(new_t) = new_transforms.first() {
+                                            // Read back translation & scale from mint types.
+                                            let new_translation = Vec3::new(
+                                                new_t.translation.x as f32,
+                                                new_t.translation.y as f32,
+                                                new_t.translation.z as f32,
+                                            );
+                                            let new_scale = Vec3::new(
+                                                new_t.scale.x as f32,
+                                                new_t.scale.y as f32,
+                                                new_t.scale.z as f32,
+                                            );
+
+                                            // Rotation: use delta approach to avoid
+                                            // gimbal lock snapping.
+                                            let new_quat = Quat::from_xyzw(
+                                                new_t.rotation.v.x as f32,
+                                                new_t.rotation.v.y as f32,
+                                                new_t.rotation.v.z as f32,
+                                                new_t.rotation.s as f32,
+                                            );
+                                            let (nx, ny, nz) = new_quat
+                                                .to_euler(EulerRot::XYZ);
+                                            let (ox, oy, oz) =
+                                                quat.to_euler(EulerRot::XYZ);
+                                            let delta_rotation = Vec3::new(
+                                                nx - ox,
+                                                ny - oy,
+                                                nz - oz,
+                                            );
+                                            let new_rotation =
+                                                original_rotation + delta_rotation;
+
+                                            // Write back to component.
+                                            if let Some(mut tc) = self
+                                                .scene
+                                                .get_component_mut::<TransformComponent>(entity)
+                                            {
+                                                tc.translation = new_translation;
+                                                tc.rotation = new_rotation;
+                                                tc.scale = new_scale;
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
                 }
             }
 

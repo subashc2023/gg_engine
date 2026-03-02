@@ -175,6 +175,22 @@ impl Scene {
         self.world.contains(entity.handle())
     }
 
+    /// Return the entity that has a [`CameraComponent`] with `primary = true`.
+    ///
+    /// Returns `None` if no primary camera exists in the scene.
+    pub fn get_primary_camera_entity(&self) -> Option<Entity> {
+        for (handle, camera) in self
+            .world
+            .query::<(hecs::Entity, &CameraComponent)>()
+            .iter()
+        {
+            if camera.primary {
+                return Some(Entity::new(handle));
+            }
+        }
+        None
+    }
+
     /// Set `entity` as the primary camera, clearing the `primary` flag on
     /// all other [`CameraComponent`]s. If `entity` does not have a
     /// `CameraComponent`, this is a no-op.
