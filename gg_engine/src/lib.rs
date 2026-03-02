@@ -4,6 +4,7 @@ mod input;
 mod layer;
 mod logging;
 mod orthographic_camera_controller;
+pub mod profiling;
 pub mod renderer;
 mod timestep;
 
@@ -46,7 +47,10 @@ pub mod prelude {
     };
     pub use crate::timestep::Timestep;
     pub use crate::orthographic_camera_controller::OrthographicCameraController;
-    pub use crate::{run, Application, Ref, Scope, WindowConfig};
+    pub use crate::profiling::{
+        begin_session, drain_profile_results, end_session, ProfileResult, ProfileTimer,
+    };
+    pub use crate::{profile_scope, run, Application, Ref, Scope, WindowConfig};
     pub use glam::{Mat3, Mat4, Quat, Vec2, Vec3, Vec4};
     pub use log::{debug, error, info, trace, warn};
 }

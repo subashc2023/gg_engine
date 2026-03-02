@@ -2,18 +2,21 @@ use std::path::Path;
 use std::sync::Arc;
 
 use ash::vk;
-use glam::{Mat4, Vec4};
+use glam::{Mat4, Quat, Vec2, Vec3, Vec4};
 
 use super::buffer::{IndexBuffer, VertexBuffer};
 use super::draw_context::DrawContext;
 use super::orthographic_camera::OrthographicCamera;
 use super::pipeline::{self, Pipeline};
 use super::render_command::RenderCommand;
+use super::renderer_2d::Renderer2DData;
 use super::renderer_api::{RendererAPI, VulkanRendererAPI};
 use super::shader::Shader;
 use super::texture::Texture2D;
 use super::vertex_array::VertexArray;
 use super::VulkanContext;
+
+use crate::profiling::ProfileTimer;
 
 /// High-level renderer. Owns the `RendererAPI` and the current frame's
 /// `DrawContext`. Provides `begin_scene` / `end_scene` / `submit` for
@@ -35,6 +38,9 @@ pub struct Renderer {
     // Texture descriptor infrastructure.
     descriptor_pool: vk::DescriptorPool,
     texture_descriptor_set_layout: vk::DescriptorSetLayout,
+
+    // Built-in 2D renderer resources.
+    renderer_2d: Option<Renderer2DData>,
 }
 
 impl Renderer {
@@ -81,6 +87,7 @@ impl Renderer {
             command_pool,
             descriptor_pool,
             texture_descriptor_set_layout,
+            renderer_2d: None,
         }
     }
 
@@ -187,6 +194,96 @@ impl Renderer {
         self.render_pass = render_pass;
     }
 
+    // -- Built-in 2D renderer -------------------------------------------------
+
+    /// Initialize built-in 2D rendering resources (unified shader/pipeline,
+    /// unit quad, 1×1 white default texture). Called once by the engine after
+    /// Vulkan is ready.
+    pub(crate) fn init_2d(&mut self) {
+        let _timer = ProfileTimer::new("Renderer::init_2d");
+        let white_texture = self.create_texture_from_rgba8(1, 1, &[255, 255, 255, 255]);
+        self.renderer_2d = Some(Renderer2DData::new(
+            &self.instance,
+            self.physical_device,
+            &self.device,
+            self.render_pass,
+            self.texture_descriptor_set_layout,
+            white_texture,
+        ));
+    }
+
+    /// Internal: submit a 2D draw call with the unified pipeline (texture × color).
+    fn submit_2d(&self, transform: &Mat4, color: Vec4, texture: &Texture2D) {
+        let data = self
+            .renderer_2d
+            .as_ref()
+            .expect("Renderer2D not initialized — call init_2d first");
+        let ctx = self
+            .draw_context
+            .expect("Renderer::submit_2d called outside begin_scene/end_scene");
+        RenderCommand::draw_indexed(
+            &self.api,
+            &ctx,
+            data.pipeline().pipeline(),
+            data.pipeline().layout(),
+            data.vertex_array(),
+            &self.view_projection,
+            transform,
+            Some(&color),
+            Some(texture.descriptor_set()),
+        );
+    }
+
+    /// Draw a flat-colored quad at a 3D position with the given size and color.
+    ///
+    /// Internally binds the 1×1 white default texture so the unified shader
+    /// produces `white × color = color`.
+    pub fn draw_quad(&self, position: &Vec3, size: &Vec2, color: Vec4) {
+        let _timer = ProfileTimer::new("Renderer::draw_quad");
+        let white = self
+            .renderer_2d
+            .as_ref()
+            .expect("Renderer2D not initialized — call init_2d first")
+            .white_texture();
+        let transform = Mat4::from_scale_rotation_translation(
+            Vec3::new(size.x, size.y, 1.0),
+            Quat::IDENTITY,
+            *position,
+        );
+        self.submit_2d(&transform, color, white);
+    }
+
+    /// Draw a flat-colored quad at a 2D position (z = 0).
+    pub fn draw_quad_2d(&self, position: &Vec2, size: &Vec2, color: Vec4) {
+        self.draw_quad(&Vec3::new(position.x, position.y, 0.0), size, color);
+    }
+
+    /// Draw a textured quad at a 3D position with the given size.
+    pub fn draw_textured_quad(
+        &self,
+        position: &Vec3,
+        size: &Vec2,
+        texture: &Texture2D,
+    ) {
+        let _timer = ProfileTimer::new("Renderer::draw_textured_quad");
+        let transform = Mat4::from_scale_rotation_translation(
+            Vec3::new(size.x, size.y, 1.0),
+            Quat::IDENTITY,
+            *position,
+        );
+        self.submit_2d(&transform, Vec4::ONE, texture);
+    }
+
+    /// Draw a textured quad at a 2D position (z = 0).
+    pub fn draw_textured_quad_2d(
+        &self,
+        position: &Vec2,
+        size: &Vec2,
+        texture: &Texture2D,
+    ) {
+        self.draw_textured_quad(&Vec3::new(position.x, position.y, 0.0), size, texture);
+    }
+
     // -- Clear color ----------------------------------------------------------
 
     /// Set the clear color used at the start of each render pass.
@@ -204,6 +301,7 @@ impl Renderer {
     /// Begin a new scene — stores the camera's view-projection matrix,
     /// saves the draw context, and sets viewport/scissor.
     pub(crate) fn begin_scene(&mut self, camera: &OrthographicCamera, ctx: DrawContext) {
+        let _timer = ProfileTimer::new("Renderer::begin_scene");
         self.view_projection = *camera.view_projection_matrix();
         self.draw_context = Some(ctx);
         RenderCommand::set_viewport(&self.api, &ctx);

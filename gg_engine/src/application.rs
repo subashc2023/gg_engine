@@ -14,6 +14,7 @@ use crate::layer::LayerStack;
 use crate::renderer::{
     DrawContext, OrthographicCamera, PresentMode, Renderer, Swapchain, VulkanContext,
 };
+use crate::profiling::ProfileTimer;
 use crate::timestep::Timestep;
 
 // ---------------------------------------------------------------------------
@@ -119,6 +120,9 @@ struct EngineRunner<T: Application> {
 
 impl<T: Application> Drop for EngineRunner<T> {
     fn drop(&mut self) {
+        // End the runtime profiling session before resource teardown.
+        crate::profiling::end_session();
+
         // Wait for all GPU work to finish before Rust drops the Vulkan resources.
         if let Some(vk_ctx) = &self.vulkan_context {
             unsafe {
@@ -198,10 +202,20 @@ impl<T: Application> ApplicationHandler for EngineRunner<T> {
                                         self.vulkan_context = Some(ctx);
                                         log::info!(target: "gg_engine", "Egui initialized");
 
+                                        // Initialize built-in 2D renderer resources.
+                                        if let Some(renderer) = &mut self.renderer {
+                                            renderer.init_2d();
+                                        }
+
                                         // Notify the application that the renderer is ready.
                                         if let Some(renderer) = &self.renderer {
                                             self.app.on_attach(renderer);
                                         }
+
+                                        // Startup is complete — close the startup profile
+                                        // and begin the runtime profile.
+                                        crate::profiling::end_session();
+                                        crate::profiling::begin_session("Runtime", "gg_profile_runtime.json");
                                     }
                                     Err(e) => {
                                         log::error!(target: "gg_engine", "Egui renderer init failed: {e}");
@@ -307,12 +321,16 @@ impl<T: Application> ApplicationHandler for EngineRunner<T> {
     }
 
     fn about_to_wait(&mut self, _event_loop: &ActiveEventLoop) {
+        let _run_loop = ProfileTimer::new("Run loop");
         let now = Instant::now();
         let dt = Timestep::from_seconds(now.duration_since(self.last_frame_time).as_secs_f32());
         self.last_frame_time = now;
 
         if !self.minimized {
-            self.layers.update_all(dt, &self.input);
+            {
+                let _timer = ProfileTimer::new("LayerStack::on_update");
+                self.layers.update_all(dt, &self.input);
+            }
             self.app.on_update(dt, &self.input);
         }
 
@@ -350,6 +368,7 @@ impl<T: Application> ApplicationHandler for EngineRunner<T> {
             let egui_ctx = &self.egui_ctx;
             let app = &mut self.app;
             let full_output = egui_ctx.run(raw_input, |ctx| {
+                let _timer = ProfileTimer::new("Application::on_egui");
                 app.on_egui(ctx);
             });
 
@@ -481,11 +500,19 @@ fn render_frame<T: Application>(
             .begin_command_buffer(cmd_buf, &vk::CommandBufferBeginInfo::default())
             .expect("Failed to begin command buffer");
 
-        let clear_values = [vk::ClearValue {
-            color: vk::ClearColorValue {
-                float32: renderer.clear_color(),
+        let clear_values = [
+            vk::ClearValue {
+                color: vk::ClearColorValue {
+                    float32: renderer.clear_color(),
+                },
             },
-        }];
+            vk::ClearValue {
+                depth_stencil: vk::ClearDepthStencilValue {
+                    depth: 1.0,
+                    stencil: 0,
+                },
+            },
+        ];
 
         let render_pass_info = vk::RenderPassBeginInfo::default()
             .render_pass(swapchain.render_pass())
@@ -573,6 +600,8 @@ pub fn run<T: Application>() {
     crate::log_init();
     log::info!(target: "gg_engine", "Engine v{}", crate::engine_version());
 
+    crate::profiling::begin_session("Startup", "gg_profile_startup.json");
+
     let mut layers = LayerStack::new();
     let app = T::new(&mut layers);
     let window_config = app.window_config();
@@ -584,6 +613,10 @@ pub fn run<T: Application>() {
 
     let event_loop = EventLoop::new().expect("failed to create event loop");
     event_loop.set_control_flow(ControlFlow::Poll);
+
+    // NOTE: Startup session stays open — it will be ended inside resumed()
+    // after Vulkan init + on_attach, so the startup profile captures
+    // everything up to first frame.
 
     let mut runner = EngineRunner {
         app,
@@ -605,7 +638,12 @@ pub fn run<T: Application>() {
 
     event_loop.run_app(&mut runner).expect("event loop error");
 
+    // Runtime session is ended by EngineRunner::Drop, shutdown session wraps
+    // the drop itself.
     log::info!(target: "gg_engine", "Shutting down");
+    crate::profiling::begin_session("Shutdown", "gg_profile_shutdown.json");
+    drop(runner);
+    crate::profiling::end_session();
 }
 
 // ---------------------------------------------------------------------------

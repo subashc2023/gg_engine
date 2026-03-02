@@ -3,6 +3,7 @@ use glam::Vec3;
 use crate::events::{Event, KeyCode, MouseEvent, WindowEvent};
 use crate::input::Input;
 use crate::renderer::OrthographicCamera;
+use crate::profiling::ProfileTimer;
 use crate::timestep::Timestep;
 
 /// Wraps an [`OrthographicCamera`] with WASD movement, Q/E rotation, mouse
@@ -56,6 +57,7 @@ impl OrthographicCameraController {
     /// Call each frame from `Application::on_update`. Polls WASD/QE for
     /// movement and rotation. Translation speed scales with the zoom level.
     pub fn on_update(&mut self, dt: Timestep, input: &Input) {
+        let _timer = ProfileTimer::new("CameraController::on_update");
         let mut changed = false;
 
         // Translation speed proportional to zoom so it feels consistent.
@@ -98,6 +100,7 @@ impl OrthographicCameraController {
     /// Call from `Application::on_event`. Handles mouse scroll (zoom) and
     /// window resize (aspect ratio).
     pub fn on_event(&mut self, event: &Event) {
+        let _timer = ProfileTimer::new("CameraController::on_event");
         match event {
             Event::Mouse(MouseEvent::Scrolled { y_offset, .. }) => {
                 self.on_mouse_scrolled(*y_offset);

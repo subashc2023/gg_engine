@@ -4,5 +4,9 @@ version = "0.1.0"
 edition = "2021"
 license = "MIT"
 
+[features]
+default = ["profiling"]
+profiling = ["gg_engine/profiling"]
+
 [dependencies]
-gg_engine = { path = "../gg_engine" }
+gg_engine = { path = "../gg_engine", default-features = false }

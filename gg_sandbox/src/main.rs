@@ -1,3 +1,5 @@
+mod sandbox2d;
+
 use gg_engine::prelude::*;
 use gg_engine::shaders;
 
@@ -84,7 +86,8 @@ const TEXTURED_QUAD_INDICES: [u32; 6] = [0, 1, 2, 2, 3, 0];
 // Sandbox
 // ---------------------------------------------------------------------------
 
-struct Sandbox {
+#[allow(dead_code)]
+struct ExampleApp {
     vsync: bool,
     frame_time_ms: f32,
 
@@ -109,14 +112,15 @@ struct Sandbox {
     checkerboard_texture: Option<Texture2D>,
 }
 
-impl Application for Sandbox {
+#[allow(dead_code)]
+impl Application for ExampleApp {
     fn new(_layers: &mut LayerStack) -> Self {
-        info!("Sandbox initialized");
+        info!("ExampleApp initialized");
 
         let aspect = 1280.0_f32 / 720.0;
         let camera_controller = OrthographicCameraController::new(aspect, true);
 
-        Sandbox {
+        ExampleApp {
             vsync: false,
             frame_time_ms: 0.0,
             camera_controller,
@@ -374,5 +378,7 @@ impl Application for Sandbox {
 }
 
 fn main() {
-    run::<Sandbox>();
+    // Switch between ExampleApp (full test scene) and Sandbox2D (2D renderer prep).
+    // run::<ExampleApp>();
+    run::<sandbox2d::Sandbox2D>();
 }

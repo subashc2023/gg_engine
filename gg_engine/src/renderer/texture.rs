@@ -4,6 +4,8 @@ use ash::vk;
 
 use super::buffer::{create_staging_buffer, find_memory_type};
 
+use crate::profiling::ProfileTimer;
+
 // ---------------------------------------------------------------------------
 // Texture2D
 // ---------------------------------------------------------------------------
@@ -35,6 +37,7 @@ impl Texture2D {
         descriptor_set_layout: vk::DescriptorSetLayout,
         path: &Path,
     ) -> Self {
+        let _timer = ProfileTimer::new("Texture2D::from_file");
         let img = image::open(path)
             .unwrap_or_else(|e| panic!("Failed to load texture '{}': {e}", path.display()));
         let rgba = img.to_rgba8();
@@ -69,6 +72,7 @@ impl Texture2D {
         height: u32,
         pixels: &[u8],
     ) -> Self {
+        let _timer = ProfileTimer::new("Texture2D::from_rgba8");
         let image_size = (width * height * 4) as vk::DeviceSize;
         assert_eq!(pixels.len() as vk::DeviceSize, image_size);
 

@@ -5,6 +5,7 @@ mod pipeline;
 mod render_command;
 #[allow(clippy::module_inception)]
 mod renderer;
+mod renderer_2d;
 mod renderer_api;
 mod shader;
 mod shader_library;

@@ -4,6 +4,10 @@ version = "0.1.0"
 edition = "2021"
 license = "MIT"
 
+[features]
+default = ["profiling"]
+profiling = []
+
 [dependencies]
 log = { version = "0.4", features = ["release_max_level_info"] }
 winit = "0.30"

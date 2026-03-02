@@ -1,5 +1,7 @@
 use ash::vk;
 
+use crate::profiling::ProfileTimer;
+
 // ---------------------------------------------------------------------------
 // Utilities
 // ---------------------------------------------------------------------------
@@ -210,6 +212,7 @@ impl VertexBuffer {
         device: &ash::Device,
         data: &[u8],
     ) -> Self {
+        let _timer = ProfileTimer::new("VertexBuffer::new");
         let size = data.len() as vk::DeviceSize;
 
         let (buffer, memory) = create_buffer_and_memory(
@@ -277,6 +280,7 @@ impl IndexBuffer {
         device: &ash::Device,
         indices: &[u32],
     ) -> Self {
+        let _timer = ProfileTimer::new("IndexBuffer::new");
         let size = std::mem::size_of_val(indices) as vk::DeviceSize;
 
         let (buffer, memory) = create_buffer_and_memory(

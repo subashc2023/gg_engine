@@ -1,6 +1,7 @@
 use ash::khr;
 use ash::vk;
 
+use super::buffer::find_memory_type;
 use super::{PresentMode, VulkanContext};
 
 // ---------------------------------------------------------------------------
@@ -20,6 +21,8 @@ pub enum SwapchainError {
     CommandBufferAllocation(vk::Result),
     SemaphoreCreation(vk::Result),
     FenceCreation(vk::Result),
+    DepthImageCreation(vk::Result),
+    DepthMemoryAllocation(vk::Result),
 }
 
 impl std::fmt::Display for SwapchainError {
@@ -38,6 +41,10 @@ impl std::fmt::Display for SwapchainError {
             }
             Self::SemaphoreCreation(e) => write!(f, "Failed to create semaphore: {e}"),
             Self::FenceCreation(e) => write!(f, "Failed to create fence: {e}"),
+            Self::DepthImageCreation(e) => write!(f, "Failed to create depth image: {e}"),
+            Self::DepthMemoryAllocation(e) => {
+                write!(f, "Failed to allocate depth image memory: {e}")
+            }
         }
     }
 }
@@ -70,6 +77,11 @@ pub struct Swapchain {
     render_finished_semaphores: Vec<vk::Semaphore>,
     present_mode: vk::PresentModeKHR,
     current_frame: usize,
+    // Depth buffer resources.
+    depth_format: vk::Format,
+    depth_image: vk::Image,
+    depth_image_memory: vk::DeviceMemory,
+    depth_image_view: vk::ImageView,
     device: ash::Device,
 }
 
@@ -185,56 +197,31 @@ impl Swapchain {
             extent.width, extent.height, images.len(), format.format, present_mode
         );
 
-        // Create render pass
-        let color_attachment = vk::AttachmentDescription::default()
-            .format(format.format)
-            .samples(vk::SampleCountFlags::TYPE_1)
-            .load_op(vk::AttachmentLoadOp::CLEAR)
-            .store_op(vk::AttachmentStoreOp::STORE)
-            .stencil_load_op(vk::AttachmentLoadOp::DONT_CARE)
-            .stencil_store_op(vk::AttachmentStoreOp::DONT_CARE)
-            .initial_layout(vk::ImageLayout::UNDEFINED)
-            .final_layout(vk::ImageLayout::PRESENT_SRC_KHR);
+        // Find a supported depth format.
+        let depth_format =
+            find_depth_format(vk_ctx.instance(), vk_ctx.physical_device());
 
-        let color_attachment_ref = vk::AttachmentReference {
-            attachment: 0,
-            layout: vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL,
-        };
+        // Create render pass (color + depth attachments).
+        let render_pass =
+            create_render_pass(&device, format.format, depth_format)?;
 
-        let subpass = vk::SubpassDescription::default()
-            .pipeline_bind_point(vk::PipelineBindPoint::GRAPHICS)
-            .color_attachments(std::slice::from_ref(&color_attachment_ref));
+        // Create depth buffer resources.
+        let (depth_image, depth_image_memory, depth_image_view) = create_depth_resources(
+            vk_ctx.instance(),
+            vk_ctx.physical_device(),
+            &device,
+            extent,
+            depth_format,
+        )?;
 
-        let dependency = vk::SubpassDependency::default()
-            .src_subpass(vk::SUBPASS_EXTERNAL)
-            .dst_subpass(0)
-            .src_stage_mask(vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT)
-            .src_access_mask(vk::AccessFlags::empty())
-            .dst_stage_mask(vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT)
-            .dst_access_mask(vk::AccessFlags::COLOR_ATTACHMENT_WRITE);
-
-        let render_pass_info = vk::RenderPassCreateInfo::default()
-            .attachments(std::slice::from_ref(&color_attachment))
-            .subpasses(std::slice::from_ref(&subpass))
-            .dependencies(std::slice::from_ref(&dependency));
-
-        let render_pass = unsafe { device.create_render_pass(&render_pass_info, None) }
-            .map_err(SwapchainError::RenderPassCreation)?;
-
-        // Create framebuffers
-        let framebuffers = image_views
-            .iter()
-            .map(|view| {
-                let fb_info = vk::FramebufferCreateInfo::default()
-                    .render_pass(render_pass)
-                    .attachments(std::slice::from_ref(view))
-                    .width(extent.width)
-                    .height(extent.height)
-                    .layers(1);
-                unsafe { device.create_framebuffer(&fb_info, None) }
-                    .map_err(SwapchainError::FramebufferCreation)
-            })
-            .collect::<Result<Vec<_>, _>>()?;
+        // Create framebuffers (color + depth).
+        let framebuffers = create_framebuffers(
+            &device,
+            render_pass,
+            &image_views,
+            depth_image_view,
+            extent,
+        )?;
 
         // Create command pool
         let pool_info = vk::CommandPoolCreateInfo::default()
@@ -298,6 +285,10 @@ impl Swapchain {
             in_flight_fences,
             present_mode,
             current_frame: 0,
+            depth_format,
+            depth_image,
+            depth_image_memory,
+            depth_image_view,
             device,
         })
     }
@@ -316,19 +307,23 @@ impl Swapchain {
             let _ = self.device.device_wait_idle();
         }
 
-        // Destroy old framebuffers and image views
+        // Destroy old framebuffers, image views, and depth resources.
         for &fb in &self.framebuffers {
             unsafe { self.device.destroy_framebuffer(fb, None) };
         }
         for &view in &self.image_views {
             unsafe { self.device.destroy_image_view(view, None) };
         }
+        destroy_depth_resources(&self.device, self.depth_image, self.depth_image_memory, self.depth_image_view);
 
         // Destroy old per-swapchain-image render_finished semaphores
         // (image count may change after recreation).
         for &sem in &self.render_finished_semaphores {
             unsafe { self.device.destroy_semaphore(sem, None) };
         }
+
+        // Destroy old render pass (depth format may theoretically change).
+        unsafe { self.device.destroy_render_pass(self.render_pass, None) };
 
         let old_swapchain = self.swapchain;
 
@@ -417,20 +412,31 @@ impl Swapchain {
             })
             .collect();
 
-        self.framebuffers = self
-            .image_views
-            .iter()
-            .map(|view| {
-                let fb_info = vk::FramebufferCreateInfo::default()
-                    .render_pass(self.render_pass)
-                    .attachments(std::slice::from_ref(view))
-                    .width(extent.width)
-                    .height(extent.height)
-                    .layers(1);
-                unsafe { self.device.create_framebuffer(&fb_info, None) }
-                    .expect("Failed to create framebuffer during resize")
-            })
-            .collect();
+        // Recreate render pass and depth resources at new extent.
+        self.render_pass =
+            create_render_pass(&self.device, self.format.format, self.depth_format)
+                .expect("Failed to recreate render pass during resize");
+
+        let (depth_image, depth_image_memory, depth_image_view) = create_depth_resources(
+            vk_ctx.instance(),
+            vk_ctx.physical_device(),
+            &self.device,
+            extent,
+            self.depth_format,
+        )
+        .expect("Failed to recreate depth resources during resize");
+        self.depth_image = depth_image;
+        self.depth_image_memory = depth_image_memory;
+        self.depth_image_view = depth_image_view;
+
+        self.framebuffers = create_framebuffers(
+            &self.device,
+            self.render_pass,
+            &self.image_views,
+            self.depth_image_view,
+            extent,
+        )
+        .expect("Failed to recreate framebuffers during resize");
 
         // Create new render_finished semaphores matching new image count.
         let semaphore_info = vk::SemaphoreCreateInfo::default();
@@ -515,6 +521,209 @@ impl Swapchain {
 }
 
 // ---------------------------------------------------------------------------
+// Depth buffer helpers
+// ---------------------------------------------------------------------------
+
+/// Find a supported depth format. Prefers D32_SFLOAT, falls back to
+/// D32_SFLOAT_S8_UINT, then D24_UNORM_S8_UINT.
+fn find_depth_format(
+    instance: &ash::Instance,
+    physical_device: vk::PhysicalDevice,
+) -> vk::Format {
+    let candidates = [
+        vk::Format::D32_SFLOAT,
+        vk::Format::D32_SFLOAT_S8_UINT,
+        vk::Format::D24_UNORM_S8_UINT,
+    ];
+    for &format in &candidates {
+        let props =
+            unsafe { instance.get_physical_device_format_properties(physical_device, format) };
+        if props
+            .optimal_tiling_features
+            .contains(vk::FormatFeatureFlags::DEPTH_STENCIL_ATTACHMENT)
+        {
+            return format;
+        }
+    }
+    panic!("No supported depth format found");
+}
+
+/// Create the depth image, allocate memory, create the image view.
+fn create_depth_resources(
+    instance: &ash::Instance,
+    physical_device: vk::PhysicalDevice,
+    device: &ash::Device,
+    extent: vk::Extent2D,
+    depth_format: vk::Format,
+) -> Result<(vk::Image, vk::DeviceMemory, vk::ImageView), SwapchainError> {
+    let image_info = vk::ImageCreateInfo::default()
+        .image_type(vk::ImageType::TYPE_2D)
+        .extent(vk::Extent3D {
+            width: extent.width,
+            height: extent.height,
+            depth: 1,
+        })
+        .mip_levels(1)
+        .array_layers(1)
+        .format(depth_format)
+        .tiling(vk::ImageTiling::OPTIMAL)
+        .initial_layout(vk::ImageLayout::UNDEFINED)
+        .usage(vk::ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT)
+        .sharing_mode(vk::SharingMode::EXCLUSIVE)
+        .samples(vk::SampleCountFlags::TYPE_1);
+
+    let depth_image = unsafe { device.create_image(&image_info, None) }
+        .map_err(SwapchainError::DepthImageCreation)?;
+
+    let mem_requirements = unsafe { device.get_image_memory_requirements(depth_image) };
+    let mem_type_index = find_memory_type(
+        instance,
+        physical_device,
+        mem_requirements.memory_type_bits,
+        vk::MemoryPropertyFlags::DEVICE_LOCAL,
+    );
+
+    let alloc_info = vk::MemoryAllocateInfo::default()
+        .allocation_size(mem_requirements.size)
+        .memory_type_index(mem_type_index);
+
+    let depth_image_memory = unsafe { device.allocate_memory(&alloc_info, None) }
+        .map_err(SwapchainError::DepthMemoryAllocation)?;
+
+    unsafe { device.bind_image_memory(depth_image, depth_image_memory, 0) }
+        .map_err(SwapchainError::DepthMemoryAllocation)?;
+
+    let view_info = vk::ImageViewCreateInfo::default()
+        .image(depth_image)
+        .view_type(vk::ImageViewType::TYPE_2D)
+        .format(depth_format)
+        .subresource_range(vk::ImageSubresourceRange {
+            aspect_mask: vk::ImageAspectFlags::DEPTH,
+            base_mip_level: 0,
+            level_count: 1,
+            base_array_layer: 0,
+            layer_count: 1,
+        });
+
+    let depth_image_view = unsafe { device.create_image_view(&view_info, None) }
+        .map_err(SwapchainError::ImageViewCreation)?;
+
+    Ok((depth_image, depth_image_memory, depth_image_view))
+}
+
+/// Destroy depth image, memory, and view.
+fn destroy_depth_resources(
+    device: &ash::Device,
+    image: vk::Image,
+    memory: vk::DeviceMemory,
+    view: vk::ImageView,
+) {
+    unsafe {
+        device.destroy_image_view(view, None);
+        device.destroy_image(image, None);
+        device.free_memory(memory, None);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Render pass helper
+// ---------------------------------------------------------------------------
+
+fn create_render_pass(
+    device: &ash::Device,
+    color_format: vk::Format,
+    depth_format: vk::Format,
+) -> Result<vk::RenderPass, SwapchainError> {
+    let color_attachment = vk::AttachmentDescription::default()
+        .format(color_format)
+        .samples(vk::SampleCountFlags::TYPE_1)
+        .load_op(vk::AttachmentLoadOp::CLEAR)
+        .store_op(vk::AttachmentStoreOp::STORE)
+        .stencil_load_op(vk::AttachmentLoadOp::DONT_CARE)
+        .stencil_store_op(vk::AttachmentStoreOp::DONT_CARE)
+        .initial_layout(vk::ImageLayout::UNDEFINED)
+        .final_layout(vk::ImageLayout::PRESENT_SRC_KHR);
+
+    let depth_attachment = vk::AttachmentDescription::default()
+        .format(depth_format)
+        .samples(vk::SampleCountFlags::TYPE_1)
+        .load_op(vk::AttachmentLoadOp::CLEAR)
+        .store_op(vk::AttachmentStoreOp::DONT_CARE)
+        .stencil_load_op(vk::AttachmentLoadOp::DONT_CARE)
+        .stencil_store_op(vk::AttachmentStoreOp::DONT_CARE)
+        .initial_layout(vk::ImageLayout::UNDEFINED)
+        .final_layout(vk::ImageLayout::DEPTH_STENCIL_ATTACHMENT_OPTIMAL);
+
+    let color_attachment_ref = vk::AttachmentReference {
+        attachment: 0,
+        layout: vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL,
+    };
+
+    let depth_attachment_ref = vk::AttachmentReference {
+        attachment: 1,
+        layout: vk::ImageLayout::DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
+    };
+
+    let subpass = vk::SubpassDescription::default()
+        .pipeline_bind_point(vk::PipelineBindPoint::GRAPHICS)
+        .color_attachments(std::slice::from_ref(&color_attachment_ref))
+        .depth_stencil_attachment(&depth_attachment_ref);
+
+    let dependency = vk::SubpassDependency::default()
+        .src_subpass(vk::SUBPASS_EXTERNAL)
+        .dst_subpass(0)
+        .src_stage_mask(
+            vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT
+                | vk::PipelineStageFlags::EARLY_FRAGMENT_TESTS,
+        )
+        .src_access_mask(vk::AccessFlags::empty())
+        .dst_stage_mask(
+            vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT
+                | vk::PipelineStageFlags::EARLY_FRAGMENT_TESTS,
+        )
+        .dst_access_mask(
+            vk::AccessFlags::COLOR_ATTACHMENT_WRITE
+                | vk::AccessFlags::DEPTH_STENCIL_ATTACHMENT_WRITE,
+        );
+
+    let attachments = [color_attachment, depth_attachment];
+    let render_pass_info = vk::RenderPassCreateInfo::default()
+        .attachments(&attachments)
+        .subpasses(std::slice::from_ref(&subpass))
+        .dependencies(std::slice::from_ref(&dependency));
+
+    unsafe { device.create_render_pass(&render_pass_info, None) }
+        .map_err(SwapchainError::RenderPassCreation)
+}
+
+// ---------------------------------------------------------------------------
+// Framebuffer helper
+// ---------------------------------------------------------------------------
+
+fn create_framebuffers(
+    device: &ash::Device,
+    render_pass: vk::RenderPass,
+    color_views: &[vk::ImageView],
+    depth_view: vk::ImageView,
+    extent: vk::Extent2D,
+) -> Result<Vec<vk::Framebuffer>, SwapchainError> {
+    color_views
+        .iter()
+        .map(|&color_view| {
+            let attachments = [color_view, depth_view];
+            let fb_info = vk::FramebufferCreateInfo::default()
+                .render_pass(render_pass)
+                .attachments(&attachments)
+                .width(extent.width)
+                .height(extent.height)
+                .layers(1);
+            unsafe { device.create_framebuffer(&fb_info, None) }
+                .map_err(SwapchainError::FramebufferCreation)
+        })
+        .collect()
+}
+
+// ---------------------------------------------------------------------------
 // Present mode helpers
 // ---------------------------------------------------------------------------
 
@@ -571,6 +780,14 @@ impl Drop for Swapchain {
             for &fb in &self.framebuffers {
                 self.device.destroy_framebuffer(fb, None);
             }
+        }
+        destroy_depth_resources(
+            &self.device,
+            self.depth_image,
+            self.depth_image_memory,
+            self.depth_image_view,
+        );
+        unsafe {
             self.device.destroy_render_pass(self.render_pass, None);
             for &view in &self.image_views {
                 self.device.destroy_image_view(view, None);

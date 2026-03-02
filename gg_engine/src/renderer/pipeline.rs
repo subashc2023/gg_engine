@@ -3,6 +3,8 @@ use ash::vk;
 use super::shader::Shader;
 use super::vertex_array::VertexArray;
 
+use crate::profiling::ProfileTimer;
+
 // ---------------------------------------------------------------------------
 // Pipeline
 // ---------------------------------------------------------------------------
@@ -59,6 +61,7 @@ pub(crate) fn create_pipeline(
     descriptor_set_layouts: &[vk::DescriptorSetLayout],
     blend_enable: bool,
 ) -> Pipeline {
+    let _timer = ProfileTimer::new("Pipeline::create");
     let entry_point = c"main";
 
     let vert_stage = vk::PipelineShaderStageCreateInfo::default()
@@ -102,6 +105,13 @@ pub(crate) fn create_pipeline(
 
     let multisampling = vk::PipelineMultisampleStateCreateInfo::default()
         .rasterization_samples(vk::SampleCountFlags::TYPE_1);
+
+    let depth_stencil = vk::PipelineDepthStencilStateCreateInfo::default()
+        .depth_test_enable(true)
+        .depth_write_enable(true)
+        .depth_compare_op(vk::CompareOp::LESS_OR_EQUAL)
+        .depth_bounds_test_enable(false)
+        .stencil_test_enable(false);
 
     let color_blend_attachment = if blend_enable {
         vk::PipelineColorBlendAttachmentState::default()
@@ -158,6 +168,7 @@ pub(crate) fn create_pipeline(
         .viewport_state(&viewport_state)
         .rasterization_state(&rasterizer)
         .multisample_state(&multisampling)
+        .depth_stencil_state(&depth_stencil)
         .color_blend_state(&color_blending)
         .dynamic_state(&dynamic_state)
         .layout(pipeline_layout)

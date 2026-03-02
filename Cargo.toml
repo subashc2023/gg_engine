@@ -3,6 +3,7 @@ members = [
     "gg_engine",
     "gg_editor",
     "gg_sandbox",
+    "gg_tools",
 ]
 resolver = "2"
 
@@ -12,10 +13,15 @@ opt-level = 0
 debug = true
 overflow-checks = true
 
-# Release
+# Release (optimized, profiling still available)
 [profile.release]
 opt-level = 3
 debug = false
 lto = true
 codegen-units = 1
+strip = "symbols"
+
+# Dist (shipping build — profiling stripped, everything optimized)
+[profile.dist]
+inherits = "release"
 strip = true
