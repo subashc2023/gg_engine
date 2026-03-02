@@ -6,6 +6,13 @@ mod logging;
 pub mod renderer;
 mod timestep;
 
+/// Shared-ownership smart pointer for rendering resources.
+/// Wraps `Arc<T>` for thread-safe reference counting.
+pub type Ref<T> = std::sync::Arc<T>;
+
+/// Owning smart pointer (heap-allocated, single owner).
+pub type Scope<T> = Box<T>;
+
 pub use application::{run, Application, WindowConfig};
 pub use egui;
 pub use renderer::{
@@ -33,7 +40,7 @@ pub mod prelude {
         PresentMode, Renderer, RendererBackend, Shader, ShaderDataType, VertexArray, VertexBuffer,
     };
     pub use crate::timestep::Timestep;
-    pub use crate::{run, Application, WindowConfig};
+    pub use crate::{run, Application, Ref, Scope, WindowConfig};
     pub use glam::{Mat3, Mat4, Quat, Vec2, Vec3, Vec4};
     pub use log::{debug, error, info, trace, warn};
 }

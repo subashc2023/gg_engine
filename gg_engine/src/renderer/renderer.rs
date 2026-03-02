@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use ash::vk;
 use glam::{Mat4, Vec4};
 
@@ -44,8 +46,8 @@ impl Renderer {
     // -- Public resource creation API -----------------------------------------
 
     /// Create a shader from pre-compiled SPIR-V bytecode.
-    pub fn create_shader(&self, name: &str, vert_spv: &[u8], frag_spv: &[u8]) -> Shader {
-        Shader::new(&self.device, name, vert_spv, frag_spv)
+    pub fn create_shader(&self, name: &str, vert_spv: &[u8], frag_spv: &[u8]) -> Arc<Shader> {
+        Arc::new(Shader::new(&self.device, name, vert_spv, frag_spv))
     }
 
     /// Create a GPU vertex buffer from raw byte data.
@@ -74,8 +76,19 @@ impl Renderer {
         shader: &Shader,
         va: &VertexArray,
         has_material_color: bool,
-    ) -> Pipeline {
-        pipeline::create_pipeline(&self.device, shader, va, self.render_pass, has_material_color)
+    ) -> Arc<Pipeline> {
+        Arc::new(pipeline::create_pipeline(
+            &self.device,
+            shader,
+            va,
+            self.render_pass,
+            has_material_color,
+        ))
+    }
+
+    /// Update the stored render pass handle (e.g. after swapchain recreation).
+    pub(crate) fn update_render_pass(&mut self, render_pass: vk::RenderPass) {
+        self.render_pass = render_pass;
     }
 
     // -- Clear color ----------------------------------------------------------

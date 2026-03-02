@@ -276,6 +276,9 @@ impl<T: Application> ApplicationHandler for EngineRunner<T> {
                     (&self.vulkan_context, &mut self.swapchain)
                 {
                     sc.recreate(vk_ctx, size.width, size.height, None);
+                    if let Some(renderer) = &mut self.renderer {
+                        renderer.update_render_pass(sc.render_pass());
+                    }
                 }
                 let aspect = size.width as f32 / size.height as f32;
                 self.default_camera
@@ -283,8 +286,9 @@ impl<T: Application> ApplicationHandler for EngineRunner<T> {
             }
         }
 
-        // Map to engine event and dispatch through layer stack.
-        if let Some(engine_event) = map_window_event(&event) {
+        // Map to engine event(s) and dispatch through layer stack.
+        let (primary, secondary) = map_window_event(&event);
+        for engine_event in primary.into_iter().chain(secondary) {
             if !self.layers.dispatch_event(&engine_event, &self.input) {
                 self.app.on_event(&engine_event, &self.input);
             }
@@ -396,6 +400,7 @@ impl<T: Application> ApplicationHandler for EngineRunner<T> {
                 if size.width > 0 && size.height > 0 {
                     let mode_arg = if mode_changed { Some(desired) } else { None };
                     swapchain.recreate(vk_ctx, size.width, size.height, mode_arg);
+                    renderer.update_render_pass(swapchain.render_pass());
                     self.current_present_mode = desired;
                 }
             }
@@ -598,64 +603,88 @@ pub fn run<T: Application>() {
 // Event mapping: winit → GGEngine
 // ---------------------------------------------------------------------------
 
-fn map_window_event(event: &winit::event::WindowEvent) -> Option<Event> {
+/// Map a winit window event to one or two engine events.
+///
+/// Returns `(primary, secondary)`. For keyboard presses that produce printable
+/// text the primary event is the `Pressed` key event and the secondary is the
+/// `Typed(char)` event. Previously only the `Typed` event was returned,
+/// swallowing the `Pressed` event.
+fn map_window_event(event: &winit::event::WindowEvent) -> (Option<Event>, Option<Event>) {
     match event {
-        winit::event::WindowEvent::CloseRequested => Some(Event::Window(WindowEvent::Close)),
+        winit::event::WindowEvent::CloseRequested => {
+            (Some(Event::Window(WindowEvent::Close)), None)
+        }
 
-        winit::event::WindowEvent::Resized(size) => Some(Event::Window(WindowEvent::Resize {
-            width: size.width,
-            height: size.height,
-        })),
+        winit::event::WindowEvent::Resized(size) => (
+            Some(Event::Window(WindowEvent::Resize {
+                width: size.width,
+                height: size.height,
+            })),
+            None,
+        ),
 
         winit::event::WindowEvent::KeyboardInput { event, .. } => {
-            // Emit a Typed event for character input on press (not repeat).
-            if event.state == ElementState::Pressed && !event.repeat {
-                if let Some(text) = &event.text {
-                    for c in text.chars() {
-                        if !c.is_control() {
-                            return Some(Event::Key(KeyEvent::Typed(c)));
-                        }
-                    }
-                }
-            }
-
             let PhysicalKey::Code(code) = event.physical_key else {
-                return None;
+                return (None, None);
             };
             let key_code = map_key_code(code);
-            match event.state {
+
+            let primary = match event.state {
                 ElementState::Pressed => Some(Event::Key(KeyEvent::Pressed {
                     key_code,
                     repeat: event.repeat,
                 })),
                 ElementState::Released => Some(Event::Key(KeyEvent::Released { key_code })),
-            }
+            };
+
+            // Emit an additional Typed event for printable characters on
+            // non-repeat presses.
+            let secondary = if event.state == ElementState::Pressed && !event.repeat {
+                event
+                    .text
+                    .as_ref()
+                    .and_then(|t| t.chars().find(|c| !c.is_control()))
+                    .map(|c| Event::Key(KeyEvent::Typed(c)))
+            } else {
+                None
+            };
+
+            (primary, secondary)
         }
 
-        winit::event::WindowEvent::CursorMoved { position, .. } => {
+        winit::event::WindowEvent::CursorMoved { position, .. } => (
             Some(Event::Mouse(MouseEvent::Moved {
                 x: position.x,
                 y: position.y,
-            }))
-        }
+            })),
+            None,
+        ),
 
         winit::event::WindowEvent::MouseWheel { delta, .. } => {
             let (x_offset, y_offset) = match delta {
                 MouseScrollDelta::LineDelta(x, y) => (*x as f64, *y as f64),
                 MouseScrollDelta::PixelDelta(pos) => (pos.x, pos.y),
             };
-            Some(Event::Mouse(MouseEvent::Scrolled { x_offset, y_offset }))
+            (
+                Some(Event::Mouse(MouseEvent::Scrolled { x_offset, y_offset })),
+                None,
+            )
         }
 
         winit::event::WindowEvent::MouseInput { state, button, .. } => {
             let btn = map_mouse_button(*button);
-            match state {
-                ElementState::Pressed => Some(Event::Mouse(MouseEvent::ButtonPressed(btn))),
-                ElementState::Released => Some(Event::Mouse(MouseEvent::ButtonReleased(btn))),
-            }
+            (
+                match state {
+                    ElementState::Pressed => Some(Event::Mouse(MouseEvent::ButtonPressed(btn))),
+                    ElementState::Released => {
+                        Some(Event::Mouse(MouseEvent::ButtonReleased(btn)))
+                    }
+                },
+                None,
+            )
         }
 
-        _ => None,
+        _ => (None, None),
     }
 }
 

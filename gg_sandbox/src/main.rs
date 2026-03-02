@@ -53,11 +53,11 @@ struct Sandbox {
     square_color: [f32; 3],
 
     // Rendering resources (initialized in on_attach)
-    triangle_shader: Option<Shader>,
-    triangle_pipeline: Option<Pipeline>,
+    triangle_shader: Option<Ref<Shader>>,
+    triangle_pipeline: Option<Ref<Pipeline>>,
     triangle_va: Option<VertexArray>,
-    square_shader: Option<Shader>,
-    square_pipeline: Option<Pipeline>,
+    square_shader: Option<Ref<Shader>>,
+    square_pipeline: Option<Ref<Pipeline>>,
     square_va: Option<VertexArray>,
 }
 
@@ -157,7 +157,14 @@ impl Application for Sandbox {
         Some(&self.camera)
     }
 
-    fn on_event(&mut self, _event: &Event, _input: &Input) {}
+    fn on_event(&mut self, event: &Event, _input: &Input) {
+        if let Event::Window(WindowEvent::Resize { width, height }) = event {
+            if *width > 0 && *height > 0 {
+                let aspect = *width as f32 / *height as f32;
+                self.camera.set_projection(-aspect, aspect, -1.0, 1.0);
+            }
+        }
+    }
 
     fn on_update(&mut self, dt: Timestep, input: &Input) {
         self.frame_time_ms = dt.millis();
