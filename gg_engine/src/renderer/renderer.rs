@@ -7,7 +7,6 @@ use glam::{Mat4, Quat, Vec2, Vec3, Vec4};
 use super::buffer::{IndexBuffer, VertexBuffer};
 use super::draw_context::DrawContext;
 use super::framebuffer::{Framebuffer, FramebufferSpec};
-use super::orthographic_camera::OrthographicCamera;
 use super::pipeline::{self, Pipeline};
 use super::render_command::RenderCommand;
 use super::renderer_2d::{BatchQuadVertex, Renderer2DData, Renderer2DStats};
@@ -400,6 +399,24 @@ impl Renderer {
     }
 
 
+    // -- Transform-based quads (raw Mat4) ------------------------------------
+
+    /// Draw a flat-colored quad with a pre-built transform matrix.
+    pub fn draw_quad_transform(&self, transform: &Mat4, color: Vec4) {
+        self.push_quad_to_batch(transform, color, 0.0, 1.0);
+    }
+
+    /// Draw a textured quad with a pre-built transform matrix.
+    pub fn draw_textured_quad_transform(
+        &self,
+        transform: &Mat4,
+        texture: &Texture2D,
+        tiling_factor: f32,
+        tint_color: Vec4,
+    ) {
+        self.push_quad_to_batch(transform, tint_color, texture.bindless_index() as f32, tiling_factor);
+    }
+
     // -- Axis-aligned quads (no rotation) ------------------------------------
 
     /// Draw a flat-colored quad at a 3D position with the given size and color.
@@ -626,11 +643,11 @@ impl Renderer {
 
     // -- Scene management (engine-internal) -----------------------------------
 
-    /// Begin a new scene — stores the camera's view-projection matrix,
+    /// Begin a new scene — stores the view-projection matrix,
     /// saves the draw context, sets viewport/scissor, and resets the batch.
-    pub(crate) fn begin_scene(&mut self, camera: &OrthographicCamera, ctx: DrawContext) {
+    pub(crate) fn begin_scene(&mut self, camera_vp: &Mat4, ctx: DrawContext) {
         let _timer = ProfileTimer::new("Renderer::begin_scene");
-        self.view_projection = *camera.view_projection_matrix();
+        self.view_projection = *camera_vp;
         self.draw_context = Some(ctx);
         RenderCommand::set_viewport(&self.api, &ctx);
 
@@ -638,6 +655,15 @@ impl Renderer {
         if let Some(data) = &self.renderer_2d {
             data.reset_batch();
         }
+    }
+
+    /// Override the view-projection matrix for the current scene.
+    ///
+    /// Call this between `begin_scene` / `end_scene` to change the camera
+    /// used for subsequent draw calls. Used by [`Scene`](crate::scene::Scene)
+    /// to render through the primary ECS camera entity.
+    pub fn set_view_projection(&mut self, vp: Mat4) {
+        self.view_projection = vp;
     }
 
     /// End the current scene — flushes any pending batch, snapshots stats,

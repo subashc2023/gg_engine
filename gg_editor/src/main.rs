@@ -8,6 +8,7 @@ use gg_engine::prelude::*;
 #[derive(Debug, PartialEq)]
 enum Tab {
     Viewport,
+    Properties,
     Settings,
 }
 
@@ -18,35 +19,68 @@ enum Tab {
 struct GGEditor {
     dock_state: egui_dock::DockState<Tab>,
     scene_fb: Option<Framebuffer>,
-    camera_controller: OrthographicCameraController,
     viewport_size: (u32, u32),
-    last_projection_key: (u32, u32, u32), // (width, height, zoom_bits) for dirty check
     viewport_focused: bool,
     viewport_hovered: bool,
     vsync: bool,
     frame_time_ms: f32,
+    scene: Scene,
+    square_entity: Entity,
+    camera_entity: Entity,
+    second_camera_entity: Entity,
+    square_color: [f32; 4],
+    camera_transform: [f32; 3],
+    primary_camera: bool, // true = Camera A, false = Camera B
+    second_camera_ortho_size: f32,
 }
 
 impl Application for GGEditor {
     fn new(_layers: &mut LayerStack) -> Self {
         info!("GGEditor initialized");
 
-        // Initial layout: Viewport on the left (80%), Settings on the right (20%).
+        // Initial layout: Viewport on the left (70%), right column (30%)
+        // split into Properties (top) and Settings (bottom).
         let mut dock_state = egui_dock::DockState::new(vec![Tab::Viewport]);
         let surface = dock_state.main_surface_mut();
         let root = egui_dock::NodeIndex::root();
-        surface.split_right(root, 0.8, vec![Tab::Settings]);
+        let [_viewport, right] = surface.split_right(root, 0.7, vec![Tab::Properties]);
+        surface.split_below(right, 0.6, vec![Tab::Settings]);
+
+        // Create scene.
+        let mut scene = Scene::new();
+
+        // Green square entity.
+        let square_entity = scene.create_entity_with_tag("Green Square");
+        let green = Vec4::new(0.2, 0.8, 0.3, 1.0);
+        scene.add_component(square_entity, SpriteRendererComponent::new(green));
+
+        // Camera A — primary, default orthographic (size 10).
+        let camera_entity = scene.create_entity_with_tag("Camera A");
+        scene.add_component(camera_entity, CameraComponent::default());
+
+        // Camera B — clip space camera (secondary).
+        let second_camera_entity = scene.create_entity_with_tag("Clip Space Camera");
+        scene.add_component(
+            second_camera_entity,
+            CameraComponent::new(SceneCamera::default(), false),
+        );
 
         GGEditor {
             dock_state,
             scene_fb: None,
-            camera_controller: OrthographicCameraController::new(16.0 / 9.0, true),
             viewport_size: (0, 0),
-            last_projection_key: (0, 0, 0),
             viewport_focused: false,
             viewport_hovered: false,
             vsync: true,
             frame_time_ms: 0.0,
+            scene,
+            square_entity,
+            camera_entity,
+            second_camera_entity,
+            square_color: [green.x, green.y, green.z, green.w],
+            camera_transform: [0.0, 0.0, 0.0],
+            primary_camera: true,
+            second_camera_ortho_size: 10.0,
         }
     }
 
@@ -82,10 +116,6 @@ impl Application for GGEditor {
         }
     }
 
-    fn camera(&self) -> Option<&OrthographicCamera> {
-        Some(self.camera_controller.camera())
-    }
-
     fn present_mode(&self) -> PresentMode {
         if self.vsync {
             PresentMode::Fifo
@@ -95,83 +125,24 @@ impl Application for GGEditor {
     }
 
     fn block_events(&self) -> bool {
-        // Allow events through to the engine when the viewport is focused
-        // and hovered (e.g. scroll zoom). Block them otherwise so egui
-        // widgets (checkboxes, sliders, etc.) work normally.
         !(self.viewport_focused && self.viewport_hovered)
     }
 
-    fn on_event(&mut self, event: &Event, _input: &Input) {
-        // Only forward scroll/resize events to the camera when the viewport
-        // is focused AND hovered. This prevents scrolling in the Settings
-        // panel from zooming the scene camera.
-        if self.viewport_focused && self.viewport_hovered {
-            self.camera_controller.on_event(event);
-        }
-    }
+    fn on_event(&mut self, _event: &Event, _input: &Input) {}
 
-    fn on_update(&mut self, dt: Timestep, input: &Input) {
-        // Only poll WASD/QE when the viewport is focused.
-        if self.viewport_focused {
-            self.camera_controller.on_update(dt, input);
-        }
-
+    fn on_update(&mut self, dt: Timestep, _input: &Input) {
         // Exponential moving average for stable frame time display.
-        // Alpha of 0.05 smooths out per-frame jitter from the double-buffered
-        // fence-wait pattern while still responding to real changes.
         self.frame_time_ms = self.frame_time_ms * 0.95 + dt.millis() * 0.05;
 
-        // Update camera projection when viewport size or zoom changes.
-        if let Some(fb) = &self.scene_fb {
-            let (w, h) = (fb.width(), fb.height());
-            let zoom = self.camera_controller.zoom_level();
-            let key = (w, h, zoom.to_bits());
-            if w > 0 && h > 0 && key != self.last_projection_key {
-                self.last_projection_key = key;
-                let aspect = w as f32 / h as f32;
-                self.camera_controller.camera_mut().set_projection(
-                    -aspect * zoom,
-                    aspect * zoom,
-                    -zoom,
-                    zoom,
-                );
-            }
+        // Notify scene cameras of viewport resize.
+        let (w, h) = self.viewport_size;
+        if w > 0 && h > 0 {
+            self.scene.on_viewport_resize(w, h);
         }
     }
 
-    fn on_render(&self, renderer: &Renderer) {
-        // Test quads.
-        renderer.draw_quad(
-            &Vec3::new(0.0, 0.0, 0.0),
-            &Vec2::new(1.0, 1.0),
-            Vec4::new(0.8, 0.2, 0.3, 1.0),
-        );
-        renderer.draw_quad(
-            &Vec3::new(1.5, 0.0, 0.0),
-            &Vec2::new(0.8, 0.8),
-            Vec4::new(0.2, 0.3, 0.8, 1.0),
-        );
-        renderer.draw_quad(
-            &Vec3::new(-1.5, 0.0, 0.0),
-            &Vec2::new(0.8, 0.8),
-            Vec4::new(0.2, 0.8, 0.3, 1.0),
-        );
-
-        // Checkerboard.
-        for y in -5..5 {
-            for x in -5..5 {
-                let color = if (x + y) % 2 == 0 {
-                    Vec4::new(0.3, 0.3, 0.3, 1.0)
-                } else {
-                    Vec4::new(0.5, 0.5, 0.5, 1.0)
-                };
-                renderer.draw_quad(
-                    &Vec3::new(x as f32 * 0.25, y as f32 * 0.25, -0.1),
-                    &Vec2::new(0.23, 0.23),
-                    color,
-                );
-            }
-        }
+    fn on_render(&mut self, renderer: &mut Renderer) {
+        self.scene.on_update(renderer);
     }
 
     fn on_egui(&mut self, ctx: &egui::Context) {
@@ -181,6 +152,13 @@ impl Application for GGEditor {
             .as_ref()
             .and_then(|fb| fb.egui_texture_id());
 
+        // Read entity tag from the ECS (clone to avoid borrow conflicts).
+        let entity_tag = self
+            .scene
+            .get_component::<TagComponent>(self.square_entity)
+            .map(|t| t.tag.clone())
+            .unwrap_or_default();
+
         let mut viewer = EditorTabViewer {
             viewport_size: &mut self.viewport_size,
             viewport_focused: &mut self.viewport_focused,
@@ -188,11 +166,52 @@ impl Application for GGEditor {
             fb_tex_id,
             vsync: &mut self.vsync,
             frame_time_ms: self.frame_time_ms,
+            square_color: &mut self.square_color,
+            entity_tag: &entity_tag,
+            camera_transform: &mut self.camera_transform,
+            primary_camera: &mut self.primary_camera,
+            second_camera_ortho_size: &mut self.second_camera_ortho_size,
         };
 
         egui_dock::DockArea::new(&mut self.dock_state)
             .style(egui_dock::Style::from_egui(ctx.style().as_ref()))
             .show(ctx, &mut viewer);
+
+        // Write the (possibly edited) color back into the ECS component.
+        if let Some(mut sprite) = self
+            .scene
+            .get_component_mut::<SpriteRendererComponent>(self.square_entity)
+        {
+            sprite.color = Vec4::from(self.square_color);
+        }
+
+        // Write Camera A's transform back from the UI controls.
+        if let Some(mut transform) = self
+            .scene
+            .get_component_mut::<TransformComponent>(self.camera_entity)
+        {
+            transform.transform = Mat4::from_translation(Vec3::from(self.camera_transform));
+        }
+
+        // Sync primary flag to the camera entities.
+        if let Some(mut cam) = self
+            .scene
+            .get_component_mut::<CameraComponent>(self.camera_entity)
+        {
+            cam.primary = self.primary_camera;
+        }
+        if let Some(mut cam) = self
+            .scene
+            .get_component_mut::<CameraComponent>(self.second_camera_entity)
+        {
+            cam.primary = !self.primary_camera;
+
+            // Sync orthographic size from UI.
+            let current = cam.camera.orthographic_size();
+            if (current - self.second_camera_ortho_size).abs() > f32::EPSILON {
+                cam.camera.set_orthographic_size(self.second_camera_ortho_size);
+            }
+        }
     }
 }
 
@@ -207,6 +226,11 @@ struct EditorTabViewer<'a> {
     fb_tex_id: Option<egui::TextureId>,
     vsync: &'a mut bool,
     frame_time_ms: f32,
+    square_color: &'a mut [f32; 4],
+    entity_tag: &'a str,
+    camera_transform: &'a mut [f32; 3],
+    primary_camera: &'a mut bool,
+    second_camera_ortho_size: &'a mut f32,
 }
 
 impl egui_dock::TabViewer for EditorTabViewer<'_> {
@@ -215,6 +239,7 @@ impl egui_dock::TabViewer for EditorTabViewer<'_> {
     fn title(&mut self, tab: &mut Tab) -> egui::WidgetText {
         match tab {
             Tab::Viewport => "Viewport".into(),
+            Tab::Properties => "Properties".into(),
             Tab::Settings => "Settings".into(),
         }
     }
@@ -233,8 +258,6 @@ impl egui_dock::TabViewer for EditorTabViewer<'_> {
                 *self.viewport_hovered = ui.ui_contains_pointer();
 
                 // Focused: click-based, persists until another panel is clicked.
-                // Clicking inside the viewport sets focus; clicking outside
-                // (handled in other tab branches) clears it.
                 let clicked = ui.input(|i| i.pointer.any_pressed());
                 if clicked && *self.viewport_hovered {
                     *self.viewport_focused = true;
@@ -244,6 +267,63 @@ impl egui_dock::TabViewer for EditorTabViewer<'_> {
                     let size = egui::vec2(available.x, available.y);
                     ui.image(egui::load::SizedTexture::new(tex_id, size));
                 }
+            }
+            Tab::Properties => {
+                let clicked = ui.input(|i| i.pointer.any_pressed());
+                if clicked && ui.ui_contains_pointer() {
+                    *self.viewport_focused = false;
+                }
+
+                // -- Square entity --
+                ui.heading(self.entity_tag);
+                ui.separator();
+
+                let mut color = egui::Color32::from_rgba_unmultiplied(
+                    (self.square_color[0] * 255.0) as u8,
+                    (self.square_color[1] * 255.0) as u8,
+                    (self.square_color[2] * 255.0) as u8,
+                    (self.square_color[3] * 255.0) as u8,
+                );
+                if egui::color_picker::color_edit_button_srgba(
+                    ui,
+                    &mut color,
+                    egui::color_picker::Alpha::OnlyBlend,
+                )
+                .changed()
+                {
+                    let [r, g, b, a] = color.to_srgba_unmultiplied();
+                    self.square_color[0] = r as f32 / 255.0;
+                    self.square_color[1] = g as f32 / 255.0;
+                    self.square_color[2] = b as f32 / 255.0;
+                    self.square_color[3] = a as f32 / 255.0;
+                }
+
+                ui.add_space(12.0);
+
+                // -- Camera controls --
+                ui.heading("Camera");
+                ui.separator();
+                ui.checkbox(self.primary_camera, "Camera A");
+                ui.label(if *self.primary_camera {
+                    "Rendering through Camera A"
+                } else {
+                    "Rendering through Clip Space Camera"
+                });
+
+                ui.add_space(8.0);
+                ui.label("Camera A Transform:");
+                ui.horizontal(|ui| {
+                    ui.label("X");
+                    ui.add(egui::DragValue::new(&mut self.camera_transform[0]).speed(0.1));
+                    ui.label("Y");
+                    ui.add(egui::DragValue::new(&mut self.camera_transform[1]).speed(0.1));
+                    ui.label("Z");
+                    ui.add(egui::DragValue::new(&mut self.camera_transform[2]).speed(0.1));
+                });
+
+                ui.add_space(8.0);
+                ui.label("Second Camera Ortho Size:");
+                ui.add(egui::DragValue::new(self.second_camera_ortho_size).speed(0.1));
             }
             Tab::Settings => {
                 // Clicking in the Settings panel unfocuses the viewport.

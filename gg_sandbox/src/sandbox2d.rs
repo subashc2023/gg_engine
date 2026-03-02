@@ -148,7 +148,7 @@ impl Application for Sandbox2D {
         self.particle_system.on_update(dt);
     }
 
-    fn on_render(&self, renderer: &Renderer) {
+    fn on_render(&mut self, renderer: &mut Renderer) {
         profile_scope!("Sandbox2D::on_render");
         self.last_stats.set(renderer.stats_2d());
 

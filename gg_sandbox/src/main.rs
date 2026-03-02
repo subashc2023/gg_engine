@@ -267,7 +267,7 @@ impl Application for ExampleApp {
         self.camera_controller.on_update(dt, input);
     }
 
-    fn on_render(&self, renderer: &Renderer) {
+    fn on_render(&mut self, renderer: &mut Renderer) {
         let scale = Mat4::from_scale(Vec3::splat(0.1));
 
         // Draw a 20×20 grid of small squares with a dynamic color.

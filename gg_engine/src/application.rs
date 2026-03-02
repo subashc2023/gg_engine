@@ -15,6 +15,7 @@ use crate::profiling::ProfileTimer;
 use crate::renderer::{
     DrawContext, Framebuffer, OrthographicCamera, PresentMode, Renderer, Swapchain, VulkanContext,
 };
+use glam::Mat4;
 use crate::timestep::Timestep;
 
 // ---------------------------------------------------------------------------
@@ -61,7 +62,7 @@ pub trait Application {
     fn on_update(&mut self, _dt: Timestep, _input: &Input) {}
 
     /// Submit draw calls. Called each frame between `begin_scene` / `end_scene`.
-    fn on_render(&self, _renderer: &Renderer) {}
+    fn on_render(&mut self, _renderer: &mut Renderer) {}
 
     /// Build immediate-mode UI each frame. Called inside `egui::Context::run`.
     fn on_egui(&mut self, _ctx: &egui::Context) {}
@@ -465,23 +466,35 @@ impl<T: Application> ApplicationHandler for EngineRunner<T> {
             // Poll clear color from application.
             renderer.set_clear_color(self.app.clear_color());
 
-            // Use app-provided camera or fall back to the default.
-            let camera = self.app.camera().unwrap_or(&self.default_camera);
+            // Copy the VP matrix before the mutable borrow for render_frame.
+            let camera_vp = *self
+                .app
+                .camera()
+                .unwrap_or(&self.default_camera)
+                .view_projection_matrix();
 
-            // Determine if we're using offscreen rendering.
-            let scene_fb = self.app.scene_framebuffer();
+            // Extract offscreen framebuffer info (all Copy values) so
+            // the immutable borrow on self.app drops before render_frame
+            // takes &mut self.app.
+            let scene_fb_info = self.app.scene_framebuffer().map(|fb| SceneFbInfo {
+                render_pass: fb.render_pass(),
+                vk_framebuffer: fb.vk_framebuffer(),
+                width: fb.width(),
+                height: fb.height(),
+                color_image: fb.color_image(),
+            });
 
             // Render frame.
             let frame_result = render_frame(
                 vk_ctx,
                 swapchain,
                 renderer,
-                camera,
-                &self.app,
+                &camera_vp,
+                &mut self.app,
                 egui_renderer,
                 &primitives,
                 full_output.pixels_per_point,
-                scene_fb,
+                scene_fb_info,
             );
 
             // Advance to the next frame's sync primitives.
@@ -520,17 +533,27 @@ impl<T: Application> ApplicationHandler for EngineRunner<T> {
 // Frame rendering
 // ---------------------------------------------------------------------------
 
+/// Extracted framebuffer data (all Copy) so we don't hold a borrow on the app.
+#[derive(Clone, Copy)]
+struct SceneFbInfo {
+    render_pass: vk::RenderPass,
+    vk_framebuffer: vk::Framebuffer,
+    width: u32,
+    height: u32,
+    color_image: vk::Image,
+}
+
 #[allow(clippy::too_many_arguments)]
 fn render_frame<T: Application>(
     vk_ctx: &VulkanContext,
     swapchain: &mut Swapchain,
     renderer: &mut Renderer,
-    camera: &OrthographicCamera,
-    app: &T,
+    camera_vp: &Mat4,
+    app: &mut T,
     egui_renderer: &mut egui_ash_renderer::Renderer,
     primitives: &[egui::ClippedPrimitive],
     pixels_per_point: f32,
-    scene_fb: Option<&Framebuffer>,
+    scene_fb: Option<SceneFbInfo>,
 ) -> FrameResult {
     let _total = ProfileTimer::new("render_frame");
     let device = vk_ctx.device();
@@ -591,8 +614,8 @@ fn render_frame<T: Application>(
         // --- Dual-pass path: offscreen scene + swapchain egui ---
 
         let fb_extent = vk::Extent2D {
-            width: fb.width(),
-            height: fb.height(),
+            width: fb.width,
+            height: fb.height,
         };
 
         // 1. Offscreen render pass (scene draws).
@@ -611,8 +634,8 @@ fn render_frame<T: Application>(
         ];
 
         let offscreen_rp_info = vk::RenderPassBeginInfo::default()
-            .render_pass(fb.render_pass())
-            .framebuffer(fb.vk_framebuffer())
+            .render_pass(fb.render_pass)
+            .framebuffer(fb.vk_framebuffer)
             .render_area(vk::Rect2D {
                 offset: vk::Offset2D { x: 0, y: 0 },
                 extent: fb_extent,
@@ -624,7 +647,7 @@ fn render_frame<T: Application>(
         }
 
         renderer.begin_scene(
-            camera,
+            camera_vp,
             DrawContext {
                 cmd_buf,
                 extent: fb_extent,
@@ -647,7 +670,7 @@ fn render_frame<T: Application>(
                 .new_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
                 .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
                 .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
-                .image(fb.color_image())
+                .image(fb.color_image)
                 .subresource_range(vk::ImageSubresourceRange {
                     aspect_mask: vk::ImageAspectFlags::COLOR,
                     base_mip_level: 0,
@@ -743,7 +766,7 @@ fn render_frame<T: Application>(
         }
 
         renderer.begin_scene(
-            camera,
+            camera_vp,
             DrawContext {
                 cmd_buf,
                 extent: sc_extent,

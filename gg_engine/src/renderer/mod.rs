@@ -6,6 +6,7 @@ mod pipeline;
 mod render_command;
 #[allow(clippy::module_inception)]
 mod renderer;
+mod scene_camera;
 mod renderer_2d;
 mod renderer_api;
 mod shader;
@@ -26,6 +27,7 @@ pub use orthographic_camera::OrthographicCamera;
 pub use pipeline::Pipeline;
 pub use renderer::Renderer;
 pub use renderer_2d::Renderer2DStats;
+pub use scene_camera::SceneCamera;
 pub use shader::Shader;
 pub use shader_library::ShaderLibrary;
 pub use sub_texture::SubTexture2D;
