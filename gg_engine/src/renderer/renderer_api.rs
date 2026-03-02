@@ -1,5 +1,5 @@
 use ash::vk;
-use glam::Mat4;
+use glam::{Mat4, Vec4};
 
 use super::draw_context::DrawContext;
 use super::vertex_array::VertexArray;
@@ -13,6 +13,7 @@ pub(crate) struct VulkanRendererAPI {
     clear_color: [f32; 4],
 }
 
+#[allow(clippy::too_many_arguments)]
 impl VulkanRendererAPI {
     pub fn new(device: &ash::Device) -> Self {
         Self {
@@ -55,6 +56,8 @@ impl VulkanRendererAPI {
         pipeline_layout: vk::PipelineLayout,
         vertex_array: &VertexArray,
         vp_matrix: &Mat4,
+        transform: &Mat4,
+        color: Option<&Vec4>,
     ) {
         unsafe {
             self.device.cmd_bind_pipeline(
@@ -63,8 +66,8 @@ impl VulkanRendererAPI {
                 pipeline,
             );
 
-            // Push the view-projection matrix as a push constant.
-            let matrix_bytes = std::slice::from_raw_parts(
+            // Push the view-projection matrix (offset 0, 64 bytes).
+            let vp_bytes = std::slice::from_raw_parts(
                 vp_matrix as *const Mat4 as *const u8,
                 std::mem::size_of::<Mat4>(),
             );
@@ -73,8 +76,36 @@ impl VulkanRendererAPI {
                 pipeline_layout,
                 vk::ShaderStageFlags::VERTEX,
                 0,
-                matrix_bytes,
+                vp_bytes,
             );
+
+            // Push the model/transform matrix (offset 64, 64 bytes).
+            let transform_bytes = std::slice::from_raw_parts(
+                transform as *const Mat4 as *const u8,
+                std::mem::size_of::<Mat4>(),
+            );
+            self.device.cmd_push_constants(
+                ctx.cmd_buf,
+                pipeline_layout,
+                vk::ShaderStageFlags::VERTEX,
+                std::mem::size_of::<Mat4>() as u32,
+                transform_bytes,
+            );
+
+            // Push material color (offset 128, 16 bytes, fragment stage).
+            if let Some(c) = color {
+                let color_bytes = std::slice::from_raw_parts(
+                    c as *const Vec4 as *const u8,
+                    std::mem::size_of::<Vec4>(),
+                );
+                self.device.cmd_push_constants(
+                    ctx.cmd_buf,
+                    pipeline_layout,
+                    vk::ShaderStageFlags::FRAGMENT,
+                    128,
+                    color_bytes,
+                );
+            }
         }
         vertex_array.bind(ctx.cmd_buf);
         let index_count = vertex_array
@@ -98,6 +129,7 @@ pub(crate) enum RendererAPI {
     Vulkan(VulkanRendererAPI),
 }
 
+#[allow(clippy::too_many_arguments)]
 impl RendererAPI {
     pub fn set_clear_color(&mut self, color: [f32; 4]) {
         match self {
@@ -124,10 +156,12 @@ impl RendererAPI {
         pipeline_layout: vk::PipelineLayout,
         vertex_array: &VertexArray,
         vp_matrix: &Mat4,
+        transform: &Mat4,
+        color: Option<&Vec4>,
     ) {
         match self {
             Self::Vulkan(api) => {
-                api.draw_indexed(ctx, pipeline, pipeline_layout, vertex_array, vp_matrix)
+                api.draw_indexed(ctx, pipeline, pipeline_layout, vertex_array, vp_matrix, transform, color)
             }
         }
     }

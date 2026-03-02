@@ -44,11 +44,15 @@ impl Drop for Pipeline {
 ///
 /// Uses sensible defaults: triangle list topology, no culling, fill mode,
 /// dynamic viewport/scissor, and a push constant range for the VP matrix.
+///
+/// When `has_material_color` is true, an additional push constant range is
+/// added for a `vec4` color at offset 128 (fragment stage, 16 bytes).
 pub(crate) fn create_pipeline(
     device: &ash::Device,
     shader: &Shader,
     va: &VertexArray,
     render_pass: vk::RenderPass,
+    has_material_color: bool,
 ) -> Pipeline {
     let entry_point = c"main";
 
@@ -102,16 +106,30 @@ pub(crate) fn create_pipeline(
     let color_blending =
         vk::PipelineColorBlendStateCreateInfo::default().attachments(&blend_attachments);
 
-    // Push constant range for the view-projection matrix (mat4 = 64 bytes).
-    let push_constant_range = vk::PushConstantRange {
+    // Push constant range: VP matrix + transform matrix (2 × mat4 = 128 bytes).
+    let vertex_range = vk::PushConstantRange {
         stage_flags: vk::ShaderStageFlags::VERTEX,
         offset: 0,
-        size: std::mem::size_of::<[f32; 16]>() as u32,
+        size: (std::mem::size_of::<[f32; 16]>() * 2) as u32,
     };
-    let push_constant_ranges = [push_constant_range];
+
+    // Optional: material color (vec4 = 16 bytes at offset 128, fragment stage).
+    let fragment_range = vk::PushConstantRange {
+        stage_flags: vk::ShaderStageFlags::FRAGMENT,
+        offset: 128,
+        size: std::mem::size_of::<[f32; 4]>() as u32,
+    };
+
+    let ranges_with_color = [vertex_range, fragment_range];
+    let ranges_without = [vertex_range];
+    let push_constant_ranges: &[vk::PushConstantRange] = if has_material_color {
+        &ranges_with_color
+    } else {
+        &ranges_without
+    };
 
     let layout_info = vk::PipelineLayoutCreateInfo::default()
-        .push_constant_ranges(&push_constant_ranges);
+        .push_constant_ranges(push_constant_ranges);
     let pipeline_layout = unsafe { device.create_pipeline_layout(&layout_info, None) }
         .expect("Failed to create pipeline layout");
 

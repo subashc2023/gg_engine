@@ -1,5 +1,5 @@
 use ash::vk;
-use glam::Mat4;
+use glam::{Mat4, Vec4};
 
 use super::buffer::{IndexBuffer, VertexBuffer};
 use super::draw_context::DrawContext;
@@ -66,8 +66,16 @@ impl Renderer {
     }
 
     /// Create a graphics pipeline from a shader and vertex array.
-    pub fn create_pipeline(&self, shader: &Shader, va: &VertexArray) -> Pipeline {
-        pipeline::create_pipeline(&self.device, shader, va, self.render_pass)
+    ///
+    /// When `has_material_color` is true, the pipeline layout includes a
+    /// fragment-stage push constant range for a `vec4` color at offset 128.
+    pub fn create_pipeline(
+        &self,
+        shader: &Shader,
+        va: &VertexArray,
+        has_material_color: bool,
+    ) -> Pipeline {
+        pipeline::create_pipeline(&self.device, shader, va, self.render_pass, has_material_color)
     }
 
     // -- Clear color ----------------------------------------------------------
@@ -97,9 +105,15 @@ impl Renderer {
         self.draw_context = None;
     }
 
-    /// Submit a draw call: bind pipeline, push VP matrix, bind vertex array,
-    /// draw indexed.
-    pub fn submit(&self, pipeline: &Pipeline, vertex_array: &VertexArray) {
+    /// Submit a draw call: bind pipeline, push VP + transform matrices,
+    /// optionally push material color, bind vertex array, draw indexed.
+    pub fn submit(
+        &self,
+        pipeline: &Pipeline,
+        vertex_array: &VertexArray,
+        transform: &Mat4,
+        color: Option<Vec4>,
+    ) {
         let ctx = self
             .draw_context
             .expect("Renderer::submit called outside begin_scene/end_scene");
@@ -110,6 +124,8 @@ impl Renderer {
             pipeline.layout(),
             vertex_array,
             &self.view_projection,
+            transform,
+            color.as_ref(),
         );
     }
 }

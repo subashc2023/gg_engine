@@ -17,20 +17,19 @@ struct SquareVertex {
     position: [f32; 3],
 }
 
-// Y-flipped for Vulkan NDC (Y+ is downward).
 const TRIANGLE_VERTICES: [TriangleVertex; 3] = [
-    TriangleVertex { position: [-0.5, 0.5, 0.0], color: [0.8, 0.2, 0.3, 1.0] },
-    TriangleVertex { position: [0.5, 0.5, 0.0],  color: [0.2, 0.3, 0.8, 1.0] },
-    TriangleVertex { position: [0.0, -0.5, 0.0], color: [0.8, 0.8, 0.2, 1.0] },
+    TriangleVertex { position: [-0.5, -0.5, 0.0], color: [0.8, 0.2, 0.3, 1.0] },
+    TriangleVertex { position: [ 0.5, -0.5, 0.0], color: [0.2, 0.3, 0.8, 1.0] },
+    TriangleVertex { position: [ 0.0,  0.5, 0.0], color: [0.8, 0.8, 0.2, 1.0] },
 ];
 
 const TRIANGLE_INDICES: [u32; 3] = [0, 1, 2];
 
 const SQUARE_VERTICES: [SquareVertex; 4] = [
-    SquareVertex { position: [-0.75,  0.75, 0.0] },
-    SquareVertex { position: [ 0.75,  0.75, 0.0] },
-    SquareVertex { position: [ 0.75, -0.75, 0.0] },
-    SquareVertex { position: [-0.75, -0.75, 0.0] },
+    SquareVertex { position: [-0.5,  0.5, 0.0] },
+    SquareVertex { position: [ 0.5,  0.5, 0.0] },
+    SquareVertex { position: [ 0.5, -0.5, 0.0] },
+    SquareVertex { position: [-0.5, -0.5, 0.0] },
 ];
 
 const SQUARE_INDICES: [u32; 6] = [0, 1, 2, 2, 3, 0];
@@ -49,6 +48,9 @@ struct Sandbox {
     camera_rotation: f32,
     camera_move_speed: f32,
     camera_rotation_speed: f32,
+
+    // Material
+    square_color: [f32; 3],
 
     // Rendering resources (initialized in on_attach)
     triangle_shader: Option<Shader>,
@@ -74,6 +76,7 @@ impl Application for Sandbox {
             camera_rotation: 0.0,
             camera_move_speed: 5.0,
             camera_rotation_speed: 180.0,
+            square_color: [0.2, 0.3, 0.8],
             triangle_shader: None,
             triangle_pipeline: None,
             triangle_va: None,
@@ -102,7 +105,7 @@ impl Application for Sandbox {
         square_va.add_vertex_buffer(square_vb);
         square_va.set_index_buffer(square_ib);
 
-        let square_pipeline = renderer.create_pipeline(&square_shader, &square_va);
+        let square_pipeline = renderer.create_pipeline(&square_shader, &square_va, true);
 
         // ==== Triangle (vertex colors) =======================================
         let triangle_shader = renderer.create_shader(
@@ -123,7 +126,7 @@ impl Application for Sandbox {
         triangle_va.add_vertex_buffer(triangle_vb);
         triangle_va.set_index_buffer(triangle_ib);
 
-        let triangle_pipeline = renderer.create_pipeline(&triangle_shader, &triangle_va);
+        let triangle_pipeline = renderer.create_pipeline(&triangle_shader, &triangle_va, false);
 
         self.square_shader = Some(square_shader);
         self.square_pipeline = Some(square_pipeline);
@@ -193,12 +196,25 @@ impl Application for Sandbox {
     }
 
     fn on_render(&self, renderer: &Renderer) {
-        // Draw square first (behind), then triangle on top.
+        let scale = Mat4::from_scale(Vec3::splat(0.1));
+
+        // Draw a 20×20 grid of small squares with a dynamic color.
+        let [r, g, b] = self.square_color;
+        let color = Vec4::new(r, g, b, 1.0);
+
         if let (Some(pipeline), Some(va)) = (&self.square_pipeline, &self.square_va) {
-            renderer.submit(pipeline, va);
+            for y in 0..20 {
+                for x in 0..20 {
+                    let pos = Vec3::new(x as f32 * 0.11, y as f32 * 0.11, 0.0);
+                    let transform = Mat4::from_translation(pos) * scale;
+                    renderer.submit(pipeline, va, &transform, Some(color));
+                }
+            }
         }
+
+        // Draw triangle on top at the origin.
         if let (Some(pipeline), Some(va)) = (&self.triangle_pipeline, &self.triangle_va) {
-            renderer.submit(pipeline, va);
+            renderer.submit(pipeline, va, &Mat4::IDENTITY, None);
         }
     }
 
@@ -245,6 +261,10 @@ impl Application for Sandbox {
                 self.camera.set_position(self.camera_position);
                 self.camera.set_rotation(self.camera_rotation);
             }
+
+            ui.separator();
+            ui.strong("Material");
+            ui.color_edit_button_rgb(&mut self.square_color);
 
             ui.separator();
             ui.strong("Controls");

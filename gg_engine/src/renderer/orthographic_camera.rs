@@ -20,7 +20,8 @@ impl OrthographicCamera {
     ///
     /// Near/far default to -1.0 / 1.0 which is fine for 2D rendering.
     pub fn new(left: f32, right: f32, bottom: f32, top: f32) -> Self {
-        let projection_matrix = Mat4::orthographic_lh(left, right, bottom, top, -1.0, 1.0);
+        let mut projection_matrix = Mat4::orthographic_lh(left, right, bottom, top, -1.0, 1.0);
+        projection_matrix.y_axis.y *= -1.0; // Vulkan Y-flip: NDC Y+ is down, we want Y+ up.
         let view_matrix = Mat4::IDENTITY;
         let view_projection_matrix = projection_matrix * view_matrix;
 
@@ -50,6 +51,7 @@ impl OrthographicCamera {
     /// Recalculate the projection matrix (e.g. after a window resize).
     pub fn set_projection(&mut self, left: f32, right: f32, bottom: f32, top: f32) {
         self.projection_matrix = Mat4::orthographic_lh(left, right, bottom, top, -1.0, 1.0);
+        self.projection_matrix.y_axis.y *= -1.0; // Vulkan Y-flip.
         self.view_projection_matrix = self.projection_matrix * self.view_matrix;
     }
 
