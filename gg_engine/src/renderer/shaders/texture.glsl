@@ -21,6 +21,7 @@ void main() {
 
 layout(push_constant) uniform PushConstants {
     layout(offset = 128) vec4 u_color;
+    layout(offset = 144) float u_tiling_factor;
 };
 
 layout(set = 0, binding = 0) uniform sampler2D u_texture;
@@ -29,5 +30,5 @@ layout(location = 0) in vec2 v_tex_coord;
 layout(location = 0) out vec4 out_color;
 
 void main() {
-    out_color = texture(u_texture, v_tex_coord) * u_color;
+    out_color = texture(u_texture, v_tex_coord * u_tiling_factor) * u_color;
 }

@@ -213,7 +213,13 @@ impl Renderer {
     }
 
     /// Internal: submit a 2D draw call with the unified pipeline (texture × color).
-    fn submit_2d(&self, transform: &Mat4, color: Vec4, texture: &Texture2D) {
+    fn submit_2d(
+        &self,
+        transform: &Mat4,
+        color: Vec4,
+        texture: &Texture2D,
+        tiling_factor: f32,
+    ) {
         let data = self
             .renderer_2d
             .as_ref()
@@ -221,6 +227,22 @@ impl Renderer {
         let ctx = self
             .draw_context
             .expect("Renderer::submit_2d called outside begin_scene/end_scene");
+
+        // Push tiling factor (offset 144, 4 bytes, fragment stage).
+        unsafe {
+            let tiling_bytes = std::slice::from_raw_parts(
+                &tiling_factor as *const f32 as *const u8,
+                std::mem::size_of::<f32>(),
+            );
+            self.device.cmd_push_constants(
+                ctx.cmd_buf,
+                data.pipeline().layout(),
+                vk::ShaderStageFlags::FRAGMENT,
+                144,
+                tiling_bytes,
+            );
+        }
+
         RenderCommand::draw_indexed(
             &self.api,
             &ctx,
@@ -233,6 +255,8 @@ impl Renderer {
             Some(texture.descriptor_set()),
         );
     }
+
+    // -- Axis-aligned quads (no rotation) ------------------------------------
 
     /// Draw a flat-colored quad at a 3D position with the given size and color.
     ///
@@ -250,7 +274,7 @@ impl Renderer {
             Quat::IDENTITY,
             *position,
         );
-        self.submit_2d(&transform, color, white);
+        self.submit_2d(&transform, color, white, 1.0);
     }
 
     /// Draw a flat-colored quad at a 2D position (z = 0).
@@ -259,11 +283,17 @@ impl Renderer {
     }
 
     /// Draw a textured quad at a 3D position with the given size.
+    ///
+    /// `tiling_factor` scales the texture coordinates (e.g. 10.0 tiles the
+    /// texture 10× in each direction). `tint_color` is multiplied with the
+    /// sampled texel — pass `Vec4::ONE` for no tint.
     pub fn draw_textured_quad(
         &self,
         position: &Vec3,
         size: &Vec2,
         texture: &Texture2D,
+        tiling_factor: f32,
+        tint_color: Vec4,
     ) {
         let _timer = ProfileTimer::new("Renderer::draw_textured_quad");
         let transform = Mat4::from_scale_rotation_translation(
@@ -271,7 +301,7 @@ impl Renderer {
             Quat::IDENTITY,
             *position,
         );
-        self.submit_2d(&transform, Vec4::ONE, texture);
+        self.submit_2d(&transform, tint_color, texture, tiling_factor);
     }
 
     /// Draw a textured quad at a 2D position (z = 0).
@@ -280,8 +310,97 @@ impl Renderer {
         position: &Vec2,
         size: &Vec2,
         texture: &Texture2D,
+        tiling_factor: f32,
+        tint_color: Vec4,
     ) {
-        self.draw_textured_quad(&Vec3::new(position.x, position.y, 0.0), size, texture);
+        self.draw_textured_quad(
+            &Vec3::new(position.x, position.y, 0.0),
+            size,
+            texture,
+            tiling_factor,
+            tint_color,
+        );
+    }
+
+    // -- Rotated quads --------------------------------------------------------
+
+    /// Draw a rotated flat-colored quad. `rotation` is in radians (Z-axis).
+    pub fn draw_rotated_quad(
+        &self,
+        position: &Vec3,
+        size: &Vec2,
+        rotation: f32,
+        color: Vec4,
+    ) {
+        let _timer = ProfileTimer::new("Renderer::draw_rotated_quad");
+        let white = self
+            .renderer_2d
+            .as_ref()
+            .expect("Renderer2D not initialized — call init_2d first")
+            .white_texture();
+        let transform = Mat4::from_scale_rotation_translation(
+            Vec3::new(size.x, size.y, 1.0),
+            Quat::from_rotation_z(rotation),
+            *position,
+        );
+        self.submit_2d(&transform, color, white, 1.0);
+    }
+
+    /// Draw a rotated flat-colored quad at a 2D position (z = 0).
+    /// `rotation` is in radians (Z-axis).
+    pub fn draw_rotated_quad_2d(
+        &self,
+        position: &Vec2,
+        size: &Vec2,
+        rotation: f32,
+        color: Vec4,
+    ) {
+        self.draw_rotated_quad(
+            &Vec3::new(position.x, position.y, 0.0),
+            size,
+            rotation,
+            color,
+        );
+    }
+
+    /// Draw a rotated textured quad. `rotation` is in radians (Z-axis).
+    pub fn draw_rotated_textured_quad(
+        &self,
+        position: &Vec3,
+        size: &Vec2,
+        rotation: f32,
+        texture: &Texture2D,
+        tiling_factor: f32,
+        tint_color: Vec4,
+    ) {
+        let _timer = ProfileTimer::new("Renderer::draw_rotated_textured_quad");
+        let transform = Mat4::from_scale_rotation_translation(
+            Vec3::new(size.x, size.y, 1.0),
+            Quat::from_rotation_z(rotation),
+            *position,
+        );
+        self.submit_2d(&transform, tint_color, texture, tiling_factor);
+    }
+
+    /// Draw a rotated textured quad at a 2D position (z = 0).
+    /// `rotation` is in radians (Z-axis).
+    pub fn draw_rotated_textured_quad_2d(
+        &self,
+        position: &Vec2,
+        size: &Vec2,
+        rotation: f32,
+        texture: &Texture2D,
+        tiling_factor: f32,
+        tint_color: Vec4,
+    ) {
+        self.draw_rotated_textured_quad(
+            &Vec3::new(position.x, position.y, 0.0),
+            size,
+            rotation,
+            texture,
+            tiling_factor,
+            tint_color,
+        );
     }
 
     // -- Clear color ----------------------------------------------------------

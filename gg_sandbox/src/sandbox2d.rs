@@ -71,12 +71,14 @@ impl Application for Sandbox2D {
     fn on_render(&self, renderer: &Renderer) {
         profile_scope!("Sandbox2D::on_render");
 
-        // Draw checkerboard background (z = 0.1 pushes it behind the quads at z = 0).
+        // Draw checkerboard background with 10× tiling (z = 0.1 pushes it behind the quads).
         if let Some(tex) = &self.checkerboard_texture {
             renderer.draw_textured_quad(
                 &Vec3::new(0.0, 0.0, 0.1),
                 &Vec2::new(10.0, 10.0),
                 tex,
+                10.0,
+                Vec4::ONE,
             );
         }
 
@@ -91,6 +93,26 @@ impl Application for Sandbox2D {
             &Vec2::new(0.5, 0.75),
             Vec4::new(0.8, 0.2, 0.3, 1.0),
         );
+
+        // Rotated colored quad (45 degrees).
+        renderer.draw_rotated_quad(
+            &Vec3::new(-2.0, 0.0, 0.0),
+            &Vec2::new(0.8, 0.8),
+            std::f32::consts::FRAC_PI_4,
+            Vec4::new(0.2, 0.8, 0.3, 1.0),
+        );
+
+        // Tinted textured quad with slight red tint.
+        if let Some(tex) = &self.checkerboard_texture {
+            renderer.draw_rotated_textured_quad(
+                &Vec3::new(1.5, 0.5, 0.0),
+                &Vec2::new(1.0, 1.0),
+                std::f32::consts::FRAC_PI_4,
+                tex,
+                1.0,
+                Vec4::new(1.0, 0.8, 0.8, 1.0),
+            );
+        }
     }
 
     fn on_egui(&mut self, ctx: &gg_engine::egui::Context) {

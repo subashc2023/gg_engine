@@ -140,11 +140,11 @@ pub(crate) fn create_pipeline(
         size: (std::mem::size_of::<[f32; 16]>() * 2) as u32,
     };
 
-    // Optional: material color (vec4 = 16 bytes at offset 128, fragment stage).
+    // Optional: material color + tiling factor (vec4 + float = 20 bytes at offset 128, fragment stage).
     let fragment_range = vk::PushConstantRange {
         stage_flags: vk::ShaderStageFlags::FRAGMENT,
         offset: 128,
-        size: std::mem::size_of::<[f32; 4]>() as u32,
+        size: (std::mem::size_of::<[f32; 4]>() + std::mem::size_of::<f32>()) as u32,
     };
 
     let ranges_with_color = [vertex_range, fragment_range];
