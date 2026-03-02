@@ -1,15 +1,24 @@
 mod buffer;
+mod draw_context;
+mod orthographic_camera;
+mod pipeline;
+mod render_command;
+#[allow(clippy::module_inception)]
+mod renderer;
+mod renderer_api;
 mod shader;
 mod swapchain;
-mod triangle;
 mod vertex_array;
 mod vulkan_context;
 
-pub use buffer::{BufferElement, BufferLayout, ShaderDataType};
-pub(crate) use buffer::{IndexBuffer, VertexBuffer};
-pub(crate) use shader::Shader;
+pub use buffer::{as_bytes, BufferElement, BufferLayout, IndexBuffer, ShaderDataType, VertexBuffer};
+pub(crate) use draw_context::DrawContext;
+pub use orthographic_camera::OrthographicCamera;
+pub use pipeline::Pipeline;
+pub use renderer::Renderer;
+pub use shader::Shader;
 pub use swapchain::{Swapchain, SwapchainError};
-pub(crate) use triangle::TriangleRenderer;
+pub use vertex_array::VertexArray;
 pub use vulkan_context::{VulkanContext, VulkanInitError};
 
 // ---------------------------------------------------------------------------

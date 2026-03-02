@@ -6,9 +6,9 @@ use ash::vk;
 
 /// A compiled shader program (vertex + fragment) loaded from SPIR-V bytecode.
 ///
-/// Owns the Vulkan shader modules and exposes handles for pipeline creation.
-/// Modules are destroyed on drop.
-pub(crate) struct Shader {
+/// Created via [`Renderer::create_shader`](super::Renderer::create_shader).
+/// Owns the Vulkan shader modules; destroyed on drop.
+pub struct Shader {
     vert_module: vk::ShaderModule,
     frag_module: vk::ShaderModule,
     device: ash::Device,
@@ -16,7 +16,7 @@ pub(crate) struct Shader {
 
 impl Shader {
     /// Create a shader from pre-compiled SPIR-V bytecode.
-    pub fn new(
+    pub(crate) fn new(
         device: &ash::Device,
         name: &str,
         vert_spv: &[u8],

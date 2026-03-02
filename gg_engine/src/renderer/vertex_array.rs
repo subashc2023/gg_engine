@@ -8,17 +8,18 @@ use super::buffer::{IndexBuffer, VertexBuffer};
 
 /// Groups vertex buffers and an index buffer into a single bindable unit.
 ///
+/// Created via [`Renderer::create_vertex_array`](super::Renderer::create_vertex_array).
 /// In OpenGL this maps to a Vertex Array Object (VAO).
 /// In Vulkan there is no native equivalent — this is a CPU-side abstraction
 /// that owns the buffers, validates their layouts, and records bind commands.
-pub(crate) struct VertexArray {
+pub struct VertexArray {
     vertex_buffers: Vec<VertexBuffer>,
     index_buffer: Option<IndexBuffer>,
     device: ash::Device,
 }
 
 impl VertexArray {
-    pub fn new(device: &ash::Device) -> Self {
+    pub(crate) fn new(device: &ash::Device) -> Self {
         Self {
             vertex_buffers: Vec::new(),
             index_buffer: None,

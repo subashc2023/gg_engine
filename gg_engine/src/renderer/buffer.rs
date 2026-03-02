@@ -1,6 +1,17 @@
 use ash::vk;
 
-use super::VulkanContext;
+// ---------------------------------------------------------------------------
+// Utilities
+// ---------------------------------------------------------------------------
+
+/// Cast a typed slice to raw bytes for uploading into a vertex buffer.
+///
+/// # Safety contract
+/// `T` must be `Copy` (no drop glue) and `#[repr(C)]` for the bytes to be
+/// meaningful as vertex data.
+pub fn as_bytes<T: Copy>(data: &[T]) -> &[u8] {
+    unsafe { std::slice::from_raw_parts(data.as_ptr() as *const u8, std::mem::size_of_val(data)) }
+}
 
 // ---------------------------------------------------------------------------
 // ShaderDataType
@@ -184,7 +195,8 @@ impl BufferLayout {
 // VertexBuffer
 // ---------------------------------------------------------------------------
 
-pub(crate) struct VertexBuffer {
+/// GPU vertex buffer. Created via [`Renderer::create_vertex_buffer`](super::Renderer::create_vertex_buffer).
+pub struct VertexBuffer {
     buffer: vk::Buffer,
     memory: vk::DeviceMemory,
     layout: Option<BufferLayout>,
@@ -192,12 +204,21 @@ pub(crate) struct VertexBuffer {
 }
 
 impl VertexBuffer {
-    pub fn new(vk_ctx: &VulkanContext, data: &[u8]) -> Self {
-        let device = vk_ctx.device();
+    pub(crate) fn new(
+        instance: &ash::Instance,
+        physical_device: vk::PhysicalDevice,
+        device: &ash::Device,
+        data: &[u8],
+    ) -> Self {
         let size = data.len() as vk::DeviceSize;
 
-        let (buffer, memory) =
-            create_buffer_and_memory(vk_ctx, size, vk::BufferUsageFlags::VERTEX_BUFFER);
+        let (buffer, memory) = create_buffer_and_memory(
+            instance,
+            physical_device,
+            device,
+            size,
+            vk::BufferUsageFlags::VERTEX_BUFFER,
+        );
 
         unsafe {
             let ptr = device
@@ -226,12 +247,6 @@ impl VertexBuffer {
     pub(crate) fn handle(&self) -> vk::Buffer {
         self.buffer
     }
-
-    pub fn bind(&self, device: &ash::Device, cmd_buf: vk::CommandBuffer) {
-        unsafe {
-            device.cmd_bind_vertex_buffers(cmd_buf, 0, &[self.buffer], &[0]);
-        }
-    }
 }
 
 impl Drop for VertexBuffer {
@@ -247,7 +262,8 @@ impl Drop for VertexBuffer {
 // IndexBuffer
 // ---------------------------------------------------------------------------
 
-pub(crate) struct IndexBuffer {
+/// GPU index buffer. Created via [`Renderer::create_index_buffer`](super::Renderer::create_index_buffer).
+pub struct IndexBuffer {
     buffer: vk::Buffer,
     memory: vk::DeviceMemory,
     count: u32,
@@ -255,12 +271,21 @@ pub(crate) struct IndexBuffer {
 }
 
 impl IndexBuffer {
-    pub fn new(vk_ctx: &VulkanContext, indices: &[u32]) -> Self {
-        let device = vk_ctx.device();
+    pub(crate) fn new(
+        instance: &ash::Instance,
+        physical_device: vk::PhysicalDevice,
+        device: &ash::Device,
+        indices: &[u32],
+    ) -> Self {
         let size = std::mem::size_of_val(indices) as vk::DeviceSize;
 
-        let (buffer, memory) =
-            create_buffer_and_memory(vk_ctx, size, vk::BufferUsageFlags::INDEX_BUFFER);
+        let (buffer, memory) = create_buffer_and_memory(
+            instance,
+            physical_device,
+            device,
+            size,
+            vk::BufferUsageFlags::INDEX_BUFFER,
+        );
 
         unsafe {
             let ptr = device
@@ -278,7 +303,7 @@ impl IndexBuffer {
         }
     }
 
-    pub fn bind(&self, device: &ash::Device, cmd_buf: vk::CommandBuffer) {
+    pub(crate) fn bind(&self, device: &ash::Device, cmd_buf: vk::CommandBuffer) {
         unsafe {
             device.cmd_bind_index_buffer(cmd_buf, self.buffer, 0, vk::IndexType::UINT32);
         }
@@ -303,12 +328,12 @@ impl Drop for IndexBuffer {
 // ---------------------------------------------------------------------------
 
 fn create_buffer_and_memory(
-    vk_ctx: &VulkanContext,
+    instance: &ash::Instance,
+    physical_device: vk::PhysicalDevice,
+    device: &ash::Device,
     size: vk::DeviceSize,
     usage: vk::BufferUsageFlags,
 ) -> (vk::Buffer, vk::DeviceMemory) {
-    let device = vk_ctx.device();
-
     let buffer_info = vk::BufferCreateInfo::default()
         .size(size)
         .usage(usage)
@@ -319,7 +344,8 @@ fn create_buffer_and_memory(
 
     let mem_req = unsafe { device.get_buffer_memory_requirements(buffer) };
     let mem_type_index = find_memory_type(
-        vk_ctx,
+        instance,
+        physical_device,
         mem_req.memory_type_bits,
         vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
     );
@@ -338,15 +364,13 @@ fn create_buffer_and_memory(
 }
 
 fn find_memory_type(
-    vk_ctx: &VulkanContext,
+    instance: &ash::Instance,
+    physical_device: vk::PhysicalDevice,
     type_filter: u32,
     properties: vk::MemoryPropertyFlags,
 ) -> u32 {
-    let mem_props = unsafe {
-        vk_ctx
-            .instance()
-            .get_physical_device_memory_properties(vk_ctx.physical_device())
-    };
+    let mem_props =
+        unsafe { instance.get_physical_device_memory_properties(physical_device) };
 
     for i in 0..mem_props.memory_type_count {
         let type_matches = (type_filter & (1 << i)) != 0;

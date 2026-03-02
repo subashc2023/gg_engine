@@ -10,7 +10,9 @@ use winit::window::{Window, WindowAttributes};
 use crate::events::{Event, KeyCode, KeyEvent, MouseButton, MouseEvent, WindowEvent};
 use crate::input::Input;
 use crate::layer::LayerStack;
-use crate::renderer::{PresentMode, Swapchain, TriangleRenderer, VulkanContext};
+use crate::renderer::{
+    DrawContext, OrthographicCamera, PresentMode, Renderer, Swapchain, VulkanContext,
+};
 
 // ---------------------------------------------------------------------------
 // WindowConfig
@@ -45,14 +47,32 @@ pub trait Application {
         WindowConfig::default()
     }
 
+    /// Called once after the renderer is initialized. Use this to create
+    /// rendering resources (shaders, buffers, vertex arrays, pipelines).
+    fn on_attach(&mut self, _renderer: &Renderer) {}
+
     fn on_event(&mut self, event: &Event, _input: &Input) {
         log::trace!("{event}");
     }
 
     fn on_update(&mut self, _input: &Input) {}
 
+    /// Submit draw calls. Called each frame between `begin_scene` / `end_scene`.
+    fn on_render(&self, _renderer: &Renderer) {}
+
     /// Build immediate-mode UI each frame. Called inside `egui::Context::run`.
     fn on_egui(&mut self, _ctx: &egui::Context) {}
+
+    /// Clear color for the render pass. Polled each frame.
+    fn clear_color(&self) -> [f32; 4] {
+        [0.01, 0.01, 0.01, 1.0]
+    }
+
+    /// Orthographic camera used for rendering. Return `Some` to override
+    /// the engine's default aspect-ratio camera.
+    fn camera(&self) -> Option<&OrthographicCamera> {
+        None
+    }
 
     /// Desired present mode. Polled each frame; changes trigger swapchain recreation.
     fn present_mode(&self) -> PresentMode {
@@ -75,14 +95,15 @@ struct EngineRunner<T: Application> {
     input: Input,
     window_config: WindowConfig,
     current_present_mode: PresentMode,
+    default_camera: OrthographicCamera,
 
     // egui state — dropped before Vulkan resources.
     egui_ctx: egui::Context,
     egui_winit_state: Option<egui_winit::State>,
     egui_renderer: Option<egui_ash_renderer::Renderer>,
 
-    // Triangle renderer — dropped before swapchain/device.
-    triangle_renderer: Option<TriangleRenderer>,
+    // Renderer abstraction — dropped before swapchain/device.
+    renderer: Option<Renderer>,
 
     // Swapchain — dropped before VulkanContext.
     swapchain: Option<Swapchain>,
@@ -161,14 +182,19 @@ impl<T: Application> ApplicationHandler for EngineRunner<T> {
                                         ..Default::default()
                                     },
                                 ) {
-                                    Ok(renderer) => {
-                                        self.triangle_renderer =
-                                            Some(TriangleRenderer::new(&ctx, sc.render_pass()));
+                                    Ok(egui_rend) => {
+                                        self.renderer =
+                                            Some(Renderer::new(&ctx, sc.render_pass()));
                                         self.egui_winit_state = Some(egui_winit_state);
-                                        self.egui_renderer = Some(renderer);
+                                        self.egui_renderer = Some(egui_rend);
                                         self.swapchain = Some(sc);
                                         self.vulkan_context = Some(ctx);
                                         log::info!(target: "gg_engine", "Egui initialized");
+
+                                        // Notify the application that the renderer is ready.
+                                        if let Some(renderer) = &self.renderer {
+                                            self.app.on_attach(renderer);
+                                        }
                                     }
                                     Err(e) => {
                                         log::error!(target: "gg_engine", "Egui renderer init failed: {e}");
@@ -240,7 +266,7 @@ impl<T: Application> ApplicationHandler for EngineRunner<T> {
             _ => {}
         }
 
-        // Handle resize for swapchain recreation.
+        // Handle resize for swapchain recreation and camera projection update.
         if let winit::event::WindowEvent::Resized(size) = &event {
             if size.width > 0 && size.height > 0 {
                 if let (Some(vk_ctx), Some(sc)) =
@@ -248,6 +274,9 @@ impl<T: Application> ApplicationHandler for EngineRunner<T> {
                 {
                     sc.recreate(vk_ctx, size.width, size.height, None);
                 }
+                let aspect = size.width as f32 / size.height as f32;
+                self.default_camera
+                    .set_projection(-aspect, aspect, -1.0, 1.0);
             }
         }
 
@@ -282,6 +311,9 @@ impl<T: Application> ApplicationHandler for EngineRunner<T> {
                 break 'render;
             };
             let Some(egui_renderer) = self.egui_renderer.as_mut() else {
+                break 'render;
+            };
+            let Some(renderer) = self.renderer.as_mut() else {
                 break 'render;
             };
 
@@ -319,11 +351,19 @@ impl<T: Application> ApplicationHandler for EngineRunner<T> {
                     .expect("Failed to set egui textures");
             }
 
+            // Poll clear color from application.
+            renderer.set_clear_color(self.app.clear_color());
+
+            // Use app-provided camera or fall back to the default.
+            let camera = self.app.camera().unwrap_or(&self.default_camera);
+
             // Render frame.
             let frame_result = render_frame(
                 vk_ctx,
                 swapchain,
-                self.triangle_renderer.as_ref(),
+                renderer,
+                camera,
+                &self.app,
                 egui_renderer,
                 &primitives,
                 full_output.pixels_per_point,
@@ -364,10 +404,13 @@ impl<T: Application> ApplicationHandler for EngineRunner<T> {
 // Frame rendering
 // ---------------------------------------------------------------------------
 
-fn render_frame(
+#[allow(clippy::too_many_arguments)]
+fn render_frame<T: Application>(
     vk_ctx: &VulkanContext,
     swapchain: &mut Swapchain,
-    triangle_renderer: Option<&TriangleRenderer>,
+    renderer: &mut Renderer,
+    camera: &OrthographicCamera,
+    app: &T,
     egui_renderer: &mut egui_ash_renderer::Renderer,
     primitives: &[egui::ClippedPrimitive],
     pixels_per_point: f32,
@@ -420,7 +463,7 @@ fn render_frame(
 
         let clear_values = [vk::ClearValue {
             color: vk::ClearColorValue {
-                float32: [0.01, 0.01, 0.01, 1.0],
+                float32: renderer.clear_color(),
             },
         }];
 
@@ -436,10 +479,14 @@ fn render_frame(
         device.cmd_begin_render_pass(cmd_buf, &render_pass_info, vk::SubpassContents::INLINE);
     }
 
-    // Draw triangle (under egui).
-    if let Some(tri) = triangle_renderer {
-        tri.cmd_draw(device, cmd_buf, extent);
-    }
+    // Begin scene — sets camera VP matrix + viewport/scissor via the Renderer.
+    renderer.begin_scene(camera, DrawContext { cmd_buf, extent });
+
+    // Application draw calls.
+    app.on_render(renderer);
+
+    // End scene.
+    renderer.end_scene();
 
     // Draw egui.
     egui_renderer
@@ -511,6 +558,10 @@ pub fn run<T: Application>() {
     let window_config = app.window_config();
     let current_present_mode = app.present_mode();
 
+    // Default camera sized to the window's aspect ratio.
+    let aspect = window_config.width as f32 / window_config.height as f32;
+    let default_camera = OrthographicCamera::new(-aspect, aspect, -1.0, 1.0);
+
     let event_loop = EventLoop::new().expect("failed to create event loop");
     event_loop.set_control_flow(ControlFlow::Poll);
 
@@ -520,10 +571,11 @@ pub fn run<T: Application>() {
         input: Input::new(),
         window_config,
         current_present_mode,
+        default_camera,
         egui_ctx: egui::Context::default(),
         egui_winit_state: None,
         egui_renderer: None,
-        triangle_renderer: None,
+        renderer: None,
         swapchain: None,
         vulkan_context: None,
         window: None,
