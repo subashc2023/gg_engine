@@ -112,6 +112,9 @@ pub trait Application {
 // EngineRunner (internal winit bridge)
 // ---------------------------------------------------------------------------
 
+/// Background clear color for the editor chrome (swapchain pass in dual-pass mode).
+const EDITOR_CHROME_CLEAR: [f32; 4] = [0.06, 0.06, 0.06, 1.0];
+
 enum FrameResult {
     Ok,
     RecreateSwapchain,
@@ -436,18 +439,16 @@ impl<T: Application> ApplicationHandler for EngineRunner<T> {
             }
 
             // Egui texture registration for scene framebuffer (first frame).
-            if let Some(fb) = self.app.scene_framebuffer() {
+            if let Some(fb) = self.app.scene_framebuffer_mut() {
                 if fb.egui_texture_id().is_none() {
                     let tex_id = egui_renderer.add_user_texture(fb.descriptor_set());
-                    if let Some(fb_mut) = self.app.scene_framebuffer_mut() {
-                        fb_mut.set_egui_texture_id(tex_id);
-                    }
+                    fb.set_egui_texture_id(tex_id);
                 }
             }
 
             // Resize scene framebuffer if the viewport size changed.
             if let Some((w, h)) = self.app.desired_viewport_size() {
-                if let Some(fb) = self.app.scene_framebuffer() {
+                if let Some(fb) = self.app.scene_framebuffer_mut() {
                     if w > 0 && h > 0 && (fb.width() != w || fb.height() != h) {
                         log::debug!(target: "gg_engine",
                             "Framebuffer resize: {}x{} -> {}x{}",
@@ -456,9 +457,7 @@ impl<T: Application> ApplicationHandler for EngineRunner<T> {
                         unsafe {
                             let _ = vk_ctx.device().device_wait_idle();
                         }
-                        if let Some(fb_mut) = self.app.scene_framebuffer_mut() {
-                            renderer.resize_framebuffer(fb_mut, w, h);
-                        }
+                        fb.resize(w, h);
                     }
                 }
             }
@@ -674,7 +673,7 @@ fn render_frame<T: Application>(
         let egui_clear = [
             vk::ClearValue {
                 color: vk::ClearColorValue {
-                    float32: [0.06, 0.06, 0.06, 1.0],
+                    float32: EDITOR_CHROME_CLEAR,
                 },
             },
             vk::ClearValue {

@@ -6,6 +6,10 @@ use super::buffer::find_memory_type;
 // FramebufferSpec
 // ---------------------------------------------------------------------------
 
+/// Maximum allowed framebuffer dimension. Should eventually come from GPU
+/// capabilities, but this is a safe upper bound for now (~8K).
+const MAX_FRAMEBUFFER_SIZE: u32 = 8192;
+
 /// Configuration for creating an offscreen framebuffer.
 pub struct FramebufferSpec {
     pub width: u32,
@@ -61,6 +65,17 @@ impl Framebuffer {
         depth_format: vk::Format,
         spec: FramebufferSpec,
     ) -> Self {
+        debug_assert!(
+            spec.width > 0
+                && spec.height > 0
+                && spec.width <= MAX_FRAMEBUFFER_SIZE
+                && spec.height <= MAX_FRAMEBUFFER_SIZE,
+            "Invalid framebuffer size: {}x{} (max {})",
+            spec.width,
+            spec.height,
+            MAX_FRAMEBUFFER_SIZE,
+        );
+
         let render_pass = create_offscreen_render_pass(device, color_format, depth_format);
 
         let sampler = create_sampler(device);
@@ -103,6 +118,15 @@ impl Framebuffer {
     /// egui TextureId remains valid.
     pub fn resize(&mut self, width: u32, height: u32) {
         if self.spec.width == width && self.spec.height == height {
+            return;
+        }
+
+        if width == 0 || height == 0 || width > MAX_FRAMEBUFFER_SIZE || height > MAX_FRAMEBUFFER_SIZE
+        {
+            log::warn!(target: "gg_engine",
+                "Attempted to resize framebuffer to {}x{} (max {}) — ignoring",
+                width, height, MAX_FRAMEBUFFER_SIZE,
+            );
             return;
         }
 

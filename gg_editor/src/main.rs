@@ -20,6 +20,7 @@ struct GGEditor {
     scene_fb: Option<Framebuffer>,
     camera_controller: OrthographicCameraController,
     viewport_size: (u32, u32),
+    last_projection_key: (u32, u32, u32), // (width, height, zoom_bits) for dirty check
     viewport_focused: bool,
     viewport_hovered: bool,
     vsync: bool,
@@ -41,6 +42,7 @@ impl Application for GGEditor {
             scene_fb: None,
             camera_controller: OrthographicCameraController::new(16.0 / 9.0, true),
             viewport_size: (0, 0),
+            last_projection_key: (0, 0, 0),
             viewport_focused: false,
             viewport_hovered: false,
             vsync: true,
@@ -119,12 +121,14 @@ impl Application for GGEditor {
         // fence-wait pattern while still responding to real changes.
         self.frame_time_ms = self.frame_time_ms * 0.95 + dt.millis() * 0.05;
 
-        // Update camera projection if viewport size changed.
+        // Update camera projection when viewport size or zoom changes.
         if let Some(fb) = &self.scene_fb {
             let (w, h) = (fb.width(), fb.height());
-            if w > 0 && h > 0 {
+            let zoom = self.camera_controller.zoom_level();
+            let key = (w, h, zoom.to_bits());
+            if w > 0 && h > 0 && key != self.last_projection_key {
+                self.last_projection_key = key;
                 let aspect = w as f32 / h as f32;
-                let zoom = self.camera_controller.zoom_level();
                 self.camera_controller.camera_mut().set_projection(
                     -aspect * zoom,
                     aspect * zoom,
@@ -219,10 +223,10 @@ impl egui_dock::TabViewer for EditorTabViewer<'_> {
         match tab {
             Tab::Viewport => {
                 let available = ui.available_size();
-                let w = available.x as u32;
-                let h = available.y as u32;
-                if w > 0 && h > 0 {
-                    *self.viewport_size = (w, h);
+                // Guard against negative or zero sizes (egui can report
+                // negative available regions during minimize/Win+D).
+                if available.x > 0.0 && available.y > 0.0 {
+                    *self.viewport_size = (available.x as u32, available.y as u32);
                 }
 
                 // Hovered: mouse is over the viewport panel right now.

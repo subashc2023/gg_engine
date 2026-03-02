@@ -245,11 +245,6 @@ impl Renderer {
         )
     }
 
-    /// Resize an offscreen framebuffer. No-op if the size hasn't changed.
-    pub fn resize_framebuffer(&self, fb: &mut Framebuffer, width: u32, height: u32) {
-        fb.resize(width, height);
-    }
-
     /// Update the stored render pass handle (e.g. after swapchain recreation).
     pub(crate) fn update_render_pass(&mut self, render_pass: vk::RenderPass) {
         self.render_pass = render_pass;
