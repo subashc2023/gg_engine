@@ -31,6 +31,14 @@ pub struct Sandbox2D {
     particle_props: ParticleProps,
     window_width: u32,
     window_height: u32,
+
+    // Sprite sheet demo.
+    sprite_sheet: Option<Texture2D>,
+    sprite_red: Option<SubTexture2D>,
+    sprite_green: Option<SubTexture2D>,
+    sprite_blue: Option<SubTexture2D>,
+    sprite_yellow: Option<SubTexture2D>,
+    sprite_wide: Option<SubTexture2D>, // 2x1 multi-cell sprite
 }
 
 impl Application for Sandbox2D {
@@ -48,6 +56,13 @@ impl Application for Sandbox2D {
             particle_props: ParticleProps::default(),
             window_width: 1280,
             window_height: 720,
+
+            sprite_sheet: None,
+            sprite_red: None,
+            sprite_green: None,
+            sprite_blue: None,
+            sprite_yellow: None,
+            sprite_wide: None,
         }
     }
 
@@ -72,6 +87,31 @@ impl Application for Sandbox2D {
             }
         }
         self.checkerboard_texture = Some(renderer.create_texture_from_rgba8(8, 8, &pixels));
+
+        // Programmatic 4x4 sprite sheet (each cell = 1 pixel, 16 distinct colors).
+        //  Row 0: Red,      Green,    Blue,     Yellow
+        //  Row 1: Cyan,     Magenta,  Orange,   White
+        //  Row 2: DarkRed,  DarkGreen,DarkBlue, Purple
+        //  Row 3: Pink,     Lime,     Teal,     Gray
+        #[rustfmt::skip]
+        let sheet_pixels: [u8; 4 * 4 * 4] = [
+            255,0,0,255,     0,255,0,255,     0,0,255,255,     255,255,0,255,
+            0,255,255,255,   255,0,255,255,   255,165,0,255,   255,255,255,255,
+            139,0,0,255,     0,100,0,255,     0,0,139,255,     128,0,128,255,
+            255,182,193,255, 50,205,50,255,   0,128,128,255,   128,128,128,255,
+        ];
+        let sheet = renderer.create_texture_from_rgba8(4, 4, &sheet_pixels);
+
+        // Pick individual sprites from the sheet using grid coordinates.
+        let cell = Vec2::new(1.0, 1.0); // each cell is 1x1 pixel
+        self.sprite_red = Some(SubTexture2D::from_coords(&sheet, Vec2::new(0.0, 0.0), cell, Vec2::ONE));
+        self.sprite_green = Some(SubTexture2D::from_coords(&sheet, Vec2::new(1.0, 0.0), cell, Vec2::ONE));
+        self.sprite_blue = Some(SubTexture2D::from_coords(&sheet, Vec2::new(2.0, 0.0), cell, Vec2::ONE));
+        self.sprite_yellow = Some(SubTexture2D::from_coords(&sheet, Vec2::new(3.0, 0.0), cell, Vec2::ONE));
+        // Multi-cell sprite: 2 cells wide (Cyan + Magenta from row 1).
+        self.sprite_wide = Some(SubTexture2D::from_coords(&sheet, Vec2::new(0.0, 1.0), cell, Vec2::new(2.0, 1.0)));
+        self.sprite_sheet = Some(sheet);
+
         info!("Sandbox2D rendering resources created");
     }
 
@@ -160,6 +200,49 @@ impl Application for Sandbox2D {
                 tex,
                 1.0,
                 Vec4::new(1.0, 0.8, 0.8, 1.0),
+            );
+        }
+
+        // Sub-texture / sprite sheet demo: individual sprites from a 4x4 color grid.
+        if let Some(red) = &self.sprite_red {
+            renderer.draw_sub_textured_quad(
+                &Vec3::new(-2.0, -1.5, 0.0),
+                &Vec2::new(0.6, 0.6),
+                red,
+                Vec4::ONE,
+            );
+        }
+        if let Some(green) = &self.sprite_green {
+            renderer.draw_sub_textured_quad(
+                &Vec3::new(-1.2, -1.5, 0.0),
+                &Vec2::new(0.6, 0.6),
+                green,
+                Vec4::ONE,
+            );
+        }
+        if let Some(blue) = &self.sprite_blue {
+            renderer.draw_sub_textured_quad(
+                &Vec3::new(-0.4, -1.5, 0.0),
+                &Vec2::new(0.6, 0.6),
+                blue,
+                Vec4::ONE,
+            );
+        }
+        if let Some(yellow) = &self.sprite_yellow {
+            renderer.draw_sub_textured_quad(
+                &Vec3::new(0.4, -1.5, 0.0),
+                &Vec2::new(0.6, 0.6),
+                yellow,
+                Vec4::ONE,
+            );
+        }
+        // Multi-cell sprite (2x1) rendered wider to match its aspect ratio.
+        if let Some(wide) = &self.sprite_wide {
+            renderer.draw_sub_textured_quad(
+                &Vec3::new(1.5, -1.5, 0.0),
+                &Vec2::new(1.2, 0.6),
+                wide,
+                Vec4::ONE,
             );
         }
 

@@ -12,6 +12,7 @@ use super::render_command::RenderCommand;
 use super::renderer_2d::{BatchQuadVertex, Renderer2DData, Renderer2DStats};
 use super::renderer_api::{RendererAPI, VulkanRendererAPI};
 use super::shader::Shader;
+use super::sub_texture::SubTexture2D;
 use super::texture::Texture2D;
 use super::vertex_array::VertexArray;
 use super::VulkanContext;
@@ -260,6 +261,17 @@ impl Renderer {
         tex_index: f32,
         tiling_factor: f32,
     ) {
+        self.push_quad_to_batch_uv(transform, color, tex_index, &QUAD_TEX_COORDS, tiling_factor);
+    }
+
+    fn push_quad_to_batch_uv(
+        &self,
+        transform: &Mat4,
+        color: Vec4,
+        tex_index: f32,
+        tex_coords: &[[f32; 2]; 4],
+        tiling_factor: f32,
+    ) {
         let data = self
             .renderer_2d
             .as_ref()
@@ -277,8 +289,8 @@ impl Renderer {
             let world_pos = *transform * QUAD_POSITIONS[i];
             v.position = [world_pos.x, world_pos.y, world_pos.z];
             v.tex_coord = [
-                QUAD_TEX_COORDS[i][0] * tiling_factor,
-                QUAD_TEX_COORDS[i][1] * tiling_factor,
+                tex_coords[i][0] * tiling_factor,
+                tex_coords[i][1] * tiling_factor,
             ];
         }
 
@@ -484,6 +496,95 @@ impl Renderer {
             rotation,
             texture,
             tiling_factor,
+            tint_color,
+        );
+    }
+
+    // -- Sub-textured quads (sprite sheet regions) ----------------------------
+
+    /// Draw a sub-textured quad at a 3D position.
+    ///
+    /// Uses the pre-computed texture coordinates from the [`SubTexture2D`] to
+    /// render a specific region of a sprite sheet / texture atlas.
+    /// `tint_color` is multiplied with the sampled texel — pass `Vec4::ONE`
+    /// for no tint.
+    pub fn draw_sub_textured_quad(
+        &self,
+        position: &Vec3,
+        size: &Vec2,
+        sub_texture: &SubTexture2D,
+        tint_color: Vec4,
+    ) {
+        let _timer = ProfileTimer::new("Renderer::draw_sub_textured_quad");
+        let transform = Mat4::from_scale_rotation_translation(
+            Vec3::new(size.x, size.y, 1.0),
+            Quat::IDENTITY,
+            *position,
+        );
+        self.push_quad_to_batch_uv(
+            &transform,
+            tint_color,
+            sub_texture.bindless_index() as f32,
+            sub_texture.tex_coords(),
+            1.0,
+        );
+    }
+
+    /// Draw a sub-textured quad at a 2D position (z = 0).
+    pub fn draw_sub_textured_quad_2d(
+        &self,
+        position: &Vec2,
+        size: &Vec2,
+        sub_texture: &SubTexture2D,
+        tint_color: Vec4,
+    ) {
+        self.draw_sub_textured_quad(
+            &Vec3::new(position.x, position.y, 0.0),
+            size,
+            sub_texture,
+            tint_color,
+        );
+    }
+
+    /// Draw a rotated sub-textured quad. `rotation` is in radians (Z-axis).
+    pub fn draw_rotated_sub_textured_quad(
+        &self,
+        position: &Vec3,
+        size: &Vec2,
+        rotation: f32,
+        sub_texture: &SubTexture2D,
+        tint_color: Vec4,
+    ) {
+        let _timer = ProfileTimer::new("Renderer::draw_rotated_sub_textured_quad");
+        let transform = Mat4::from_scale_rotation_translation(
+            Vec3::new(size.x, size.y, 1.0),
+            Quat::from_rotation_z(rotation),
+            *position,
+        );
+        self.push_quad_to_batch_uv(
+            &transform,
+            tint_color,
+            sub_texture.bindless_index() as f32,
+            sub_texture.tex_coords(),
+            1.0,
+        );
+    }
+
+    /// Draw a rotated sub-textured quad at a 2D position (z = 0).
+    /// `rotation` is in radians (Z-axis).
+    pub fn draw_rotated_sub_textured_quad_2d(
+        &self,
+        position: &Vec2,
+        size: &Vec2,
+        rotation: f32,
+        sub_texture: &SubTexture2D,
+        tint_color: Vec4,
+    ) {
+        self.draw_rotated_sub_textured_quad(
+            &Vec3::new(position.x, position.y, 0.0),
+            size,
+            rotation,
+            sub_texture,
             tint_color,
         );
     }

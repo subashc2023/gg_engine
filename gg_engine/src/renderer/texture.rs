@@ -263,6 +263,16 @@ impl Texture2D {
         self.sampler
     }
 
+    /// The width of the texture in pixels.
+    pub fn width(&self) -> u32 {
+        self._width
+    }
+
+    /// The height of the texture in pixels.
+    pub fn height(&self) -> u32 {
+        self._height
+    }
+
     /// The global bindless descriptor array index for this texture.
     pub fn bindless_index(&self) -> u32 {
         self.bindless_index
