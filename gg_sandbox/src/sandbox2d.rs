@@ -1,4 +1,5 @@
 use std::cell::Cell;
+use std::collections::HashMap;
 
 use gg_engine::prelude::*;
 
@@ -20,10 +21,38 @@ fn srgba_to_vec4(s: [u8; 4]) -> Vec4 {
     )
 }
 
+// ---------------------------------------------------------------------------
+// Tilemap data
+// ---------------------------------------------------------------------------
+
+const MAP_WIDTH: u32 = 24;
+
+/// ASCII tilemap: 'W' = water, 'D' = dirt, 'G' = grass.
+/// Read top-to-bottom, left-to-right. Each row is MAP_WIDTH chars.
+/// The map is a small island with a grass interior, dirt shores, and
+/// a water lake in the center — surrounded by ocean.
+#[rustfmt::skip]
+const MAP_TILES: &str = "\
+WWWWWWWWWWWWWWWWWWWWWWWW\
+WWWWWWWDDDDDDDDWWWWWWWWW\
+WWWWWDDDDDDDDDDDDWWWWWWW\
+WWWWDDDDGGGGGGGDDDDDWWWW\
+WWWDDDGGGGGGGGGGGDDDDWWW\
+WWDDDDGGGGGGGGGGGDDDDDWW\
+WWDDDDGGGGWWGGGGGDDDDDWW\
+WWDDDDGGGGWWGGGGDDDDDDWW\
+WWWDDDGGGGGGGGGDDDDDWWWW\
+WWWWDDDDDGGGGGGDDDDDDWWW\
+WWWWWDDDDDDDDDDDDDDWWWWW\
+WWWWWWWDDDDDDDDDWWWWWWWW\
+WWWWWWWWWWWWWWWWWWWWWWWW";
+
+// ---------------------------------------------------------------------------
+// Sandbox2D
+// ---------------------------------------------------------------------------
+
 pub struct Sandbox2D {
     camera_controller: OrthographicCameraController,
-    square_color: [f32; 4],
-    checkerboard_texture: Option<Texture2D>,
     last_dt: f32,
     last_stats: Cell<Renderer2DStats>,
 
@@ -32,23 +61,21 @@ pub struct Sandbox2D {
     window_width: u32,
     window_height: u32,
 
-    // Sprite sheet demo.
-    sprite_sheet: Option<Texture2D>,
-    sprite_red: Option<SubTexture2D>,
-    sprite_green: Option<SubTexture2D>,
-    sprite_blue: Option<SubTexture2D>,
-    sprite_yellow: Option<SubTexture2D>,
-    sprite_wide: Option<SubTexture2D>, // 2x1 multi-cell sprite
+    // Tilemap rendering.
+    tile_colors: HashMap<char, Vec4>,
+    map_width: u32,
+    map_height: u32,
 }
 
 impl Application for Sandbox2D {
     fn new(_layers: &mut LayerStack) -> Self {
         let aspect = 1280.0_f32 / 720.0;
+        let mut camera_controller = OrthographicCameraController::new(aspect, true);
+        camera_controller.set_zoom_level(6.0);
+
         info!("Sandbox2D initialized");
         Sandbox2D {
-            camera_controller: OrthographicCameraController::new(aspect, true),
-            square_color: [0.2, 0.3, 0.8, 1.0],
-            checkerboard_texture: None,
+            camera_controller,
             last_dt: 0.0,
             last_stats: Cell::new(Renderer2DStats::default()),
 
@@ -57,62 +84,28 @@ impl Application for Sandbox2D {
             window_width: 1280,
             window_height: 720,
 
-            sprite_sheet: None,
-            sprite_red: None,
-            sprite_green: None,
-            sprite_blue: None,
-            sprite_yellow: None,
-            sprite_wide: None,
+            tile_colors: HashMap::new(),
+            map_width: MAP_WIDTH,
+            map_height: 0,
         }
     }
 
-    fn on_attach(&mut self, renderer: &Renderer) {
+    fn on_attach(&mut self, _renderer: &Renderer) {
         profile_scope!("Sandbox2D::on_attach");
-        // Programmatic 8x8 checkerboard texture (magenta / dark gray).
-        let mut pixels = vec![0u8; 8 * 8 * 4];
-        for y in 0..8u32 {
-            for x in 0..8u32 {
-                let idx = ((y * 8 + x) * 4) as usize;
-                if (x + y) % 2 == 0 {
-                    pixels[idx] = 255;
-                    pixels[idx + 1] = 0;
-                    pixels[idx + 2] = 255;
-                    pixels[idx + 3] = 255;
-                } else {
-                    pixels[idx] = 40;
-                    pixels[idx + 1] = 40;
-                    pixels[idx + 2] = 40;
-                    pixels[idx + 3] = 255;
-                }
-            }
-        }
-        self.checkerboard_texture = Some(renderer.create_texture_from_rgba8(8, 8, &pixels));
 
-        // Programmatic 4x4 sprite sheet (each cell = 1 pixel, 16 distinct colors).
-        //  Row 0: Red,      Green,    Blue,     Yellow
-        //  Row 1: Cyan,     Magenta,  Orange,   White
-        //  Row 2: DarkRed,  DarkGreen,DarkBlue, Purple
-        //  Row 3: Pink,     Lime,     Teal,     Gray
-        #[rustfmt::skip]
-        let sheet_pixels: [u8; 4 * 4 * 4] = [
-            255,0,0,255,     0,255,0,255,     0,0,255,255,     255,255,0,255,
-            0,255,255,255,   255,0,255,255,   255,165,0,255,   255,255,255,255,
-            139,0,0,255,     0,100,0,255,     0,0,139,255,     128,0,128,255,
-            255,182,193,255, 50,205,50,255,   0,128,128,255,   128,128,128,255,
-        ];
-        let sheet = renderer.create_texture_from_rgba8(4, 4, &sheet_pixels);
+        self.map_height = MAP_TILES.len() as u32 / self.map_width;
 
-        // Pick individual sprites from the sheet using grid coordinates.
-        let cell = Vec2::new(1.0, 1.0); // each cell is 1x1 pixel
-        self.sprite_red = Some(SubTexture2D::from_coords(&sheet, Vec2::new(0.0, 0.0), cell, Vec2::ONE));
-        self.sprite_green = Some(SubTexture2D::from_coords(&sheet, Vec2::new(1.0, 0.0), cell, Vec2::ONE));
-        self.sprite_blue = Some(SubTexture2D::from_coords(&sheet, Vec2::new(2.0, 0.0), cell, Vec2::ONE));
-        self.sprite_yellow = Some(SubTexture2D::from_coords(&sheet, Vec2::new(3.0, 0.0), cell, Vec2::ONE));
-        // Multi-cell sprite: 2 cells wide (Cyan + Magenta from row 1).
-        self.sprite_wide = Some(SubTexture2D::from_coords(&sheet, Vec2::new(0.0, 1.0), cell, Vec2::new(2.0, 1.0)));
-        self.sprite_sheet = Some(sheet);
+        // Tile type → color mapping (flat-colored quads, no texture atlas needed).
+        self.tile_colors.insert('W', Vec4::new(0.157, 0.392, 0.784, 1.0)); // Water (blue)
+        self.tile_colors.insert('D', Vec4::new(0.706, 0.510, 0.275, 1.0)); // Dirt  (brown)
+        self.tile_colors.insert('G', Vec4::new(0.196, 0.706, 0.196, 1.0)); // Grass (green)
 
-        info!("Sandbox2D rendering resources created");
+        info!(
+            "Tilemap loaded: {}x{} ({} tiles)",
+            self.map_width,
+            self.map_height,
+            MAP_TILES.len()
+        );
     }
 
     fn window_config(&self) -> WindowConfig {
@@ -146,7 +139,7 @@ impl Application for Sandbox2D {
         self.last_dt = dt.seconds();
         self.camera_controller.on_update(dt, input);
 
-        // Continuously emit particles at the origin for benchmarking.
+        // Continuously emit particles at the origin.
         self.particle_props.position = Vec2::ZERO;
         for _ in 0..5 {
             self.particle_system.emit(&self.particle_props);
@@ -157,93 +150,29 @@ impl Application for Sandbox2D {
 
     fn on_render(&self, renderer: &Renderer) {
         profile_scope!("Sandbox2D::on_render");
-        // Capture last frame's stats (snapshotted at end_scene).
         self.last_stats.set(renderer.stats_2d());
 
-        // Draw checkerboard background with 10x tiling (z = 0.1 pushes it behind the quads).
-        if let Some(tex) = &self.checkerboard_texture {
-            renderer.draw_textured_quad(
-                &Vec3::new(0.0, 0.0, 0.1),
-                &Vec2::new(10.0, 10.0),
-                tex,
-                10.0,
-                Vec4::ONE,
-            );
-        }
+        // Render tilemap. Inner loop iterates X (contiguous in memory) for cache
+        // friendliness. Y is flipped so row 0 of the string is the top of the map.
+        let half_w = self.map_width as f32 * 0.5;
+        let half_h = self.map_height as f32 * 0.5;
+        let bytes = MAP_TILES.as_bytes();
 
-        // Draw colored quads in front (z = 0).
-        renderer.draw_quad(
-            &Vec3::new(-1.0, 0.0, 0.0),
-            &Vec2::new(0.8, 0.8),
-            Vec4::from(self.square_color),
-        );
-        renderer.draw_quad(
-            &Vec3::new(0.5, -0.5, 0.0),
-            &Vec2::new(0.5, 0.75),
-            Vec4::new(0.8, 0.2, 0.3, 1.0),
-        );
+        for y in 0..self.map_height {
+            for x in 0..self.map_width {
+                let tile_char = bytes[(x + y * self.map_width) as usize] as char;
 
-        // Rotated colored quad (45 degrees).
-        renderer.draw_rotated_quad(
-            &Vec3::new(-2.0, 0.0, 0.0),
-            &Vec2::new(0.8, 0.8),
-            std::f32::consts::FRAC_PI_4,
-            Vec4::new(0.2, 0.8, 0.3, 1.0),
-        );
+                let color = match self.tile_colors.get(&tile_char) {
+                    Some(&c) => c,
+                    None => continue,
+                };
 
-        // Tinted textured quad with slight red tint.
-        if let Some(tex) = &self.checkerboard_texture {
-            renderer.draw_rotated_textured_quad(
-                &Vec3::new(1.5, 0.5, 0.0),
-                &Vec2::new(1.0, 1.0),
-                std::f32::consts::FRAC_PI_4,
-                tex,
-                1.0,
-                Vec4::new(1.0, 0.8, 0.8, 1.0),
-            );
-        }
-
-        // Sub-texture / sprite sheet demo: individual sprites from a 4x4 color grid.
-        if let Some(red) = &self.sprite_red {
-            renderer.draw_sub_textured_quad(
-                &Vec3::new(-2.0, -1.5, 0.0),
-                &Vec2::new(0.6, 0.6),
-                red,
-                Vec4::ONE,
-            );
-        }
-        if let Some(green) = &self.sprite_green {
-            renderer.draw_sub_textured_quad(
-                &Vec3::new(-1.2, -1.5, 0.0),
-                &Vec2::new(0.6, 0.6),
-                green,
-                Vec4::ONE,
-            );
-        }
-        if let Some(blue) = &self.sprite_blue {
-            renderer.draw_sub_textured_quad(
-                &Vec3::new(-0.4, -1.5, 0.0),
-                &Vec2::new(0.6, 0.6),
-                blue,
-                Vec4::ONE,
-            );
-        }
-        if let Some(yellow) = &self.sprite_yellow {
-            renderer.draw_sub_textured_quad(
-                &Vec3::new(0.4, -1.5, 0.0),
-                &Vec2::new(0.6, 0.6),
-                yellow,
-                Vec4::ONE,
-            );
-        }
-        // Multi-cell sprite (2x1) rendered wider to match its aspect ratio.
-        if let Some(wide) = &self.sprite_wide {
-            renderer.draw_sub_textured_quad(
-                &Vec3::new(1.5, -1.5, 0.0),
-                &Vec2::new(1.2, 0.6),
-                wide,
-                Vec4::ONE,
-            );
+                renderer.draw_quad(
+                    &Vec3::new(x as f32 - half_w, half_h - 1.0 - y as f32, 0.0),
+                    &Vec2::new(1.0, 1.0),
+                    color,
+                );
+            }
         }
 
         // Render particles (z = -0.1, in front of scene geometry).
@@ -266,34 +195,19 @@ impl Application for Sandbox2D {
             ui.label(format!("Quads: {}", stats.quad_count));
             ui.label(format!("Vertices: {}", stats.total_vertex_count()));
             ui.label(format!("Indices: {}", stats.total_index_count()));
+            ui.separator();
+            ui.label(format!(
+                "Map: {}x{} ({} tiles)",
+                self.map_width,
+                self.map_height,
+                self.map_width * self.map_height
+            ));
         });
 
-        gg_engine::egui::Window::new("Settings").show(ctx, |ui| {
-            ui.strong("Material");
-            let mut srgba = [
-                (self.square_color[0] * 255.0) as u8,
-                (self.square_color[1] * 255.0) as u8,
-                (self.square_color[2] * 255.0) as u8,
-                (self.square_color[3] * 255.0) as u8,
-            ];
-            if ui
-                .color_edit_button_srgba_unmultiplied(&mut srgba)
-                .changed()
-            {
-                self.square_color = [
-                    srgba[0] as f32 / 255.0,
-                    srgba[1] as f32 / 255.0,
-                    srgba[2] as f32 / 255.0,
-                    srgba[3] as f32 / 255.0,
-                ];
-            }
-
-            ui.separator();
-            ui.strong("Controls");
+        gg_engine::egui::Window::new("Controls").show(ctx, |ui| {
             ui.label("WASD: Move camera");
             ui.label("Q/E: Rotate camera");
             ui.label("Scroll: Zoom");
-            ui.label("Left click: Emit particles");
         });
 
         gg_engine::egui::Window::new("Particles").show(ctx, |ui| {
