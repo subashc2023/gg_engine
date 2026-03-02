@@ -57,10 +57,7 @@ impl SubTexture2D {
         let tw = texture.width() as f32;
         let th = texture.height() as f32;
 
-        let min = Vec2::new(
-            (coords.x * cell_size.x) / tw,
-            (coords.y * cell_size.y) / th,
-        );
+        let min = Vec2::new((coords.x * cell_size.x) / tw, (coords.y * cell_size.y) / th);
         let max = Vec2::new(
             ((coords.x + sprite_size.x) * cell_size.x) / tw,
             ((coords.y + sprite_size.y) * cell_size.y) / th,

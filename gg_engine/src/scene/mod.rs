@@ -47,10 +47,9 @@ impl Scene {
     /// Create a new entity with the given tag name and a default
     /// [`TransformComponent`] (identity matrix).
     pub fn create_entity_with_tag(&mut self, name: &str) -> Entity {
-        let handle = self.world.spawn((
-            TagComponent::new(name),
-            TransformComponent::default(),
-        ));
+        let handle = self
+            .world
+            .spawn((TagComponent::new(name), TransformComponent::default()));
         Entity::new(handle)
     }
 
@@ -66,6 +65,9 @@ impl Scene {
     /// Add a component to an entity. If the entity already has a
     /// component of this type, it is replaced.
     ///
+    /// Automatically handles component-specific initialization (e.g.
+    /// setting the viewport size on a newly added [`CameraComponent`]).
+    ///
     /// # Panics
     ///
     /// Panics if the entity does not exist.
@@ -73,6 +75,21 @@ impl Scene {
         self.world
             .insert_one(entity.handle(), component)
             .expect("Entity does not exist");
+        self.on_component_added::<T>(entity);
+    }
+
+    /// Component-specific initialization after insertion.
+    fn on_component_added<T: 'static>(&mut self, entity: Entity) {
+        if std::any::TypeId::of::<T>() == std::any::TypeId::of::<CameraComponent>() {
+            let (w, h) = (self.viewport_width, self.viewport_height);
+            if w > 0 && h > 0 {
+                if let Ok(mut cam) = self.world.get::<&mut CameraComponent>(entity.handle()) {
+                    if !cam.fixed_aspect_ratio {
+                        cam.camera.set_viewport_size(w, h);
+                    }
+                }
+            }
+        }
     }
 
     /// Get an immutable reference to a component on an entity.
@@ -131,6 +148,21 @@ impl Scene {
     // Utility
     // -----------------------------------------------------------------
 
+    /// Iterate all entities that have a [`TagComponent`], returning each
+    /// entity handle paired with a clone of its tag string.
+    ///
+    /// Results are sorted by entity ID for stable display ordering.
+    pub fn each_entity_with_tag(&self) -> Vec<(Entity, String)> {
+        let mut entities: Vec<(Entity, String)> = self
+            .world
+            .query::<(hecs::Entity, &TagComponent)>()
+            .iter()
+            .map(|(handle, tag)| (Entity::new(handle), tag.tag.clone()))
+            .collect();
+        entities.sort_by_key(|(e, _)| e.id());
+        entities
+    }
+
     /// Number of living entities in the scene.
     pub fn entity_count(&self) -> u32 {
         self.world.len()
@@ -139,6 +171,18 @@ impl Scene {
     /// Returns `true` if the entity handle is still valid (alive).
     pub fn is_alive(&self, entity: Entity) -> bool {
         self.world.contains(entity.handle())
+    }
+
+    /// Set `entity` as the primary camera, clearing the `primary` flag on
+    /// all other [`CameraComponent`]s. If `entity` does not have a
+    /// `CameraComponent`, this is a no-op.
+    pub fn set_primary_camera(&mut self, entity: Entity) {
+        for (handle, camera) in self
+            .world
+            .query_mut::<(hecs::Entity, &mut CameraComponent)>()
+        {
+            camera.primary = handle == entity.handle();
+        }
     }
 
     // -----------------------------------------------------------------
@@ -240,7 +284,7 @@ impl Scene {
             if camera.primary {
                 // VP = projection * inverse(camera_transform)
                 main_camera_vp =
-                    Some(*camera.camera.projection() * transform.transform.inverse());
+                    Some(*camera.camera.projection() * transform.get_transform().inverse());
                 break;
             }
         }
@@ -254,7 +298,7 @@ impl Scene {
                 .query::<(&TransformComponent, &SpriteRendererComponent)>()
                 .iter()
             {
-                renderer.draw_quad_transform(&transform.transform, sprite.color);
+                renderer.draw_quad_transform(&transform.get_transform(), sprite.color);
             }
         }
     }
@@ -300,7 +344,7 @@ mod tests {
         let mut scene = Scene::new();
         let e = scene.create_entity();
         let t = scene.get_component::<TransformComponent>(e).unwrap();
-        assert_eq!(t.transform, Mat4::IDENTITY);
+        assert_eq!(t.get_transform(), Mat4::IDENTITY);
     }
 
     #[test]
@@ -330,13 +374,10 @@ mod tests {
         let e = scene.create_entity();
         {
             let mut t = scene.get_component_mut::<TransformComponent>(e).unwrap();
-            t.transform = Mat4::from_translation(Vec3::new(1.0, 2.0, 3.0));
+            t.translation = Vec3::new(1.0, 2.0, 3.0);
         }
         let t = scene.get_component::<TransformComponent>(e).unwrap();
-        assert_eq!(
-            t.transform,
-            Mat4::from_translation(Vec3::new(1.0, 2.0, 3.0))
-        );
+        assert_eq!(t.translation, Vec3::new(1.0, 2.0, 3.0));
     }
 
     #[test]

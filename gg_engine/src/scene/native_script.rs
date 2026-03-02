@@ -23,7 +23,7 @@ use crate::timestep::Timestep;
 ///     fn on_update(&mut self, entity: Entity, scene: &mut Scene, dt: Timestep, input: &Input) {
 ///         if let Some(mut t) = scene.get_component_mut::<TransformComponent>(entity) {
 ///             if input.is_key_pressed(KeyCode::D) {
-///                 t.transform.w_axis.x += self.speed * dt.seconds();
+///                 t.translation.x += self.speed * dt.seconds();
 ///             }
 ///         }
 ///     }

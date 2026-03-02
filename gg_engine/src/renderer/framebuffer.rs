@@ -86,10 +86,10 @@ impl Framebuffer {
         let (depth_image, depth_memory, depth_view) =
             create_depth_resources(instance, physical_device, device, &spec, depth_format);
 
-        let framebuffer =
-            create_vk_framebuffer(device, render_pass, color_view, depth_view, &spec);
+        let framebuffer = create_vk_framebuffer(device, render_pass, color_view, depth_view, &spec);
 
-        let descriptor_set = allocate_descriptor_set(device, descriptor_pool, descriptor_set_layout);
+        let descriptor_set =
+            allocate_descriptor_set(device, descriptor_pool, descriptor_set_layout);
         write_descriptor_set(device, descriptor_set, color_view, sampler);
 
         Self {
@@ -121,7 +121,10 @@ impl Framebuffer {
             return;
         }
 
-        if width == 0 || height == 0 || width > MAX_FRAMEBUFFER_SIZE || height > MAX_FRAMEBUFFER_SIZE
+        if width == 0
+            || height == 0
+            || width > MAX_FRAMEBUFFER_SIZE
+            || height > MAX_FRAMEBUFFER_SIZE
         {
             log::warn!(target: "gg_engine",
                 "Attempted to resize framebuffer to {}x{} (max {}) — ignoring",
@@ -175,7 +178,12 @@ impl Framebuffer {
         );
 
         // Update the existing descriptor set in-place with the new image view.
-        write_descriptor_set(&self.device, self.descriptor_set, self.color_view, self.sampler);
+        write_descriptor_set(
+            &self.device,
+            self.descriptor_set,
+            self.color_view,
+            self.sampler,
+        );
     }
 
     // -- Accessors ------------------------------------------------------------

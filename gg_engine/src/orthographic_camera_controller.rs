@@ -140,9 +140,9 @@ impl OrthographicCameraController {
         let hh = self.zoom_level;
         (
             -hw + self.camera_position.x,
-             hw + self.camera_position.x,
+            hw + self.camera_position.x,
             -hh + self.camera_position.y,
-             hh + self.camera_position.y,
+            hh + self.camera_position.y,
         )
     }
 

@@ -325,13 +325,7 @@ impl Renderer {
 
     /// Push a particle quad directly — bypasses Mat4 construction.
     /// Uses one sin/cos + direct vertex math instead of a full matrix transform.
-    pub fn draw_particle(
-        &self,
-        position: &Vec3,
-        size: f32,
-        rotation: f32,
-        color: Vec4,
-    ) {
+    pub fn draw_particle(&self, position: &Vec3, size: f32, rotation: f32, color: Vec4) {
         let data = self
             .renderer_2d
             .as_ref()
@@ -398,7 +392,6 @@ impl Renderer {
         data.flush(ctx.cmd_buf, &self.view_projection, ctx.current_frame);
     }
 
-
     // -- Transform-based quads (raw Mat4) ------------------------------------
 
     /// Draw a flat-colored quad with a pre-built transform matrix.
@@ -414,7 +407,12 @@ impl Renderer {
         tiling_factor: f32,
         tint_color: Vec4,
     ) {
-        self.push_quad_to_batch(transform, tint_color, texture.bindless_index() as f32, tiling_factor);
+        self.push_quad_to_batch(
+            transform,
+            tint_color,
+            texture.bindless_index() as f32,
+            tiling_factor,
+        );
     }
 
     // -- Axis-aligned quads (no rotation) ------------------------------------
@@ -455,7 +453,12 @@ impl Renderer {
             Quat::IDENTITY,
             *position,
         );
-        self.push_quad_to_batch(&transform, tint_color, texture.bindless_index() as f32, tiling_factor);
+        self.push_quad_to_batch(
+            &transform,
+            tint_color,
+            texture.bindless_index() as f32,
+            tiling_factor,
+        );
     }
 
     /// Draw a textured quad at a 2D position (z = 0).
@@ -516,7 +519,12 @@ impl Renderer {
             Quat::from_rotation_z(rotation),
             *position,
         );
-        self.push_quad_to_batch(&transform, tint_color, texture.bindless_index() as f32, tiling_factor);
+        self.push_quad_to_batch(
+            &transform,
+            tint_color,
+            texture.bindless_index() as f32,
+            tiling_factor,
+        );
     }
 
     /// Draw a rotated textured quad at a 2D position (z = 0).

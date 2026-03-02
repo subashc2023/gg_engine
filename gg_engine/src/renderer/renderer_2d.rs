@@ -131,7 +131,8 @@ impl Renderer2DData {
 
         // -- Vertex layout --
         let layout = batch_vertex_layout();
-        let vb_capacity = MAX_VERTICES * MAX_BATCHES_PER_FRAME * std::mem::size_of::<BatchQuadVertex>();
+        let vb_capacity =
+            MAX_VERTICES * MAX_BATCHES_PER_FRAME * std::mem::size_of::<BatchQuadVertex>();
 
         // -- Per-frame-in-flight vertex buffers (persistently mapped) --
         let vertex_buffers = [
@@ -174,17 +175,15 @@ impl Renderer2DData {
         let binding_flags = [vk::DescriptorBindingFlags::PARTIALLY_BOUND
             | vk::DescriptorBindingFlags::UPDATE_AFTER_BIND];
         let mut binding_flags_info =
-            vk::DescriptorSetLayoutBindingFlagsCreateInfo::default()
-                .binding_flags(&binding_flags);
+            vk::DescriptorSetLayoutBindingFlagsCreateInfo::default().binding_flags(&binding_flags);
 
         let layout_info = vk::DescriptorSetLayoutCreateInfo::default()
             .bindings(std::slice::from_ref(&binding))
             .flags(vk::DescriptorSetLayoutCreateFlags::UPDATE_AFTER_BIND_POOL)
             .push_next(&mut binding_flags_info);
 
-        let bindless_ds_layout =
-            unsafe { device.create_descriptor_set_layout(&layout_info, None) }
-                .expect("Failed to create bindless descriptor set layout");
+        let bindless_ds_layout = unsafe { device.create_descriptor_set_layout(&layout_info, None) }
+            .expect("Failed to create bindless descriptor set layout");
 
         // -- Pipeline --
         let batch_pipeline = Arc::new(pipeline::create_batch_pipeline(

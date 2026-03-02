@@ -213,7 +213,8 @@ impl ParticleSystem {
 
             let life = particle.life_remaining / particle.lifetime;
             let color = particle.color_begin.lerp(particle.color_end, 1.0 - life);
-            let size = particle.size_begin + (particle.size_end - particle.size_begin) * (1.0 - life);
+            let size =
+                particle.size_begin + (particle.size_end - particle.size_begin) * (1.0 - life);
 
             if size <= 0.0 {
                 continue;
@@ -255,7 +256,10 @@ mod tests {
         let mut rng = Rng::new(42);
         for _ in 0..1000 {
             let v = rng.random_signed();
-            assert!((-1.0..1.0).contains(&v), "random_signed() out of range: {v}");
+            assert!(
+                (-1.0..1.0).contains(&v),
+                "random_signed() out of range: {v}"
+            );
         }
     }
 

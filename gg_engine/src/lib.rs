@@ -21,7 +21,6 @@ pub use application::{run, Application, WindowConfig};
 pub use egui;
 pub use glam;
 pub use hecs;
-pub use scene::{CameraComponent, Entity, NativeScript, NativeScriptComponent, Scene, SpriteRendererComponent, TagComponent, TransformComponent};
 pub use input::Input;
 pub use layer::{Layer, LayerStack};
 pub use log;
@@ -31,9 +30,13 @@ pub use particle_system::{ParticleProps, ParticleSystem};
 pub use renderer::shaders;
 pub use renderer::{
     as_bytes, BufferElement, BufferLayout, Framebuffer, FramebufferSpec, IndexBuffer,
-    OrthographicCamera, Pipeline, PresentMode, Renderer, Renderer2DStats, RendererBackend,
-    SceneCamera, Shader, ShaderDataType, ShaderLibrary, SubTexture2D, Texture2D, VertexArray,
-    VertexBuffer,
+    OrthographicCamera, Pipeline, PresentMode, ProjectionType, Renderer, Renderer2DStats,
+    RendererBackend, SceneCamera, Shader, ShaderDataType, ShaderLibrary, SubTexture2D, Texture2D,
+    VertexArray, VertexBuffer,
+};
+pub use scene::{
+    CameraComponent, Entity, NativeScript, NativeScriptComponent, Scene, SpriteRendererComponent,
+    TagComponent, TransformComponent,
 };
 pub use timestep::Timestep;
 
@@ -48,15 +51,18 @@ pub mod prelude {
     pub use crate::layer::{Layer, LayerStack};
     pub use crate::orthographic_camera_controller::OrthographicCameraController;
     pub use crate::particle_system::{ParticleProps, ParticleSystem};
-    pub use crate::scene::{CameraComponent, Entity, NativeScript, NativeScriptComponent, Scene, SpriteRendererComponent, TagComponent, TransformComponent};
     pub use crate::profiling::{
         begin_session, drain_profile_results, end_session, ProfileResult, ProfileTimer,
     };
     pub use crate::renderer::{
         as_bytes, BufferElement, BufferLayout, Framebuffer, FramebufferSpec, IndexBuffer,
-        OrthographicCamera, Pipeline, PresentMode, Renderer, Renderer2DStats, RendererBackend,
-        SceneCamera, Shader, ShaderDataType, ShaderLibrary, SubTexture2D, Texture2D, VertexArray,
-        VertexBuffer,
+        OrthographicCamera, Pipeline, PresentMode, ProjectionType, Renderer, Renderer2DStats,
+        RendererBackend, SceneCamera, Shader, ShaderDataType, ShaderLibrary, SubTexture2D,
+        Texture2D, VertexArray, VertexBuffer,
+    };
+    pub use crate::scene::{
+        CameraComponent, Entity, NativeScript, NativeScriptComponent, Scene,
+        SpriteRendererComponent, TagComponent, TransformComponent,
     };
     pub use crate::timestep::Timestep;
     pub use crate::{profile_scope, run, Application, Ref, Scope, WindowConfig};

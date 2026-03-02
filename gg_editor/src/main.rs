@@ -16,30 +16,24 @@ impl Default for CameraController {
 }
 
 impl NativeScript for CameraController {
-    fn on_create(&mut self, entity: Entity, scene: &mut Scene) {
-        // Give each camera a random-ish starting X offset derived from its entity ID,
-        // proving that each script instance is independent.
-        if let Some(mut transform) = scene.get_component_mut::<TransformComponent>(entity) {
-            let offset = ((entity.id() * 7 + 3) % 10) as f32 - 5.0;
-            transform.transform.w_axis.x = offset;
-            info!("CameraController created (entity {}, x offset {offset})", entity.id());
-        }
+    fn on_create(&mut self, entity: Entity, _scene: &mut Scene) {
+        info!("CameraController created (entity {})", entity.id());
     }
 
     fn on_update(&mut self, entity: Entity, scene: &mut Scene, dt: Timestep, input: &Input) {
         if let Some(mut transform) = scene.get_component_mut::<TransformComponent>(entity) {
             let speed = self.speed * dt.seconds();
             if input.is_key_pressed(KeyCode::A) {
-                transform.transform.w_axis.x -= speed;
+                transform.translation.x -= speed;
             }
             if input.is_key_pressed(KeyCode::D) {
-                transform.transform.w_axis.x += speed;
+                transform.translation.x += speed;
             }
             if input.is_key_pressed(KeyCode::W) {
-                transform.transform.w_axis.y += speed;
+                transform.translation.y += speed;
             }
             if input.is_key_pressed(KeyCode::S) {
-                transform.transform.w_axis.y -= speed;
+                transform.translation.y -= speed;
             }
         }
     }
@@ -51,6 +45,7 @@ impl NativeScript for CameraController {
 
 #[derive(Debug, PartialEq)]
 enum Tab {
+    SceneHierarchy,
     Viewport,
     Properties,
     Settings,
@@ -69,47 +64,79 @@ struct GGEditor {
     vsync: bool,
     frame_time_ms: f32,
     scene: Scene,
-    square_entity: Entity,
-    camera_entity: Entity,
-    second_camera_entity: Entity,
-    square_color: [f32; 4],
-    camera_transform: [f32; 3],
-    primary_camera: bool, // true = Camera A, false = Camera B
-    second_camera_ortho_size: f32,
+    selection_context: Option<Entity>,
 }
 
 impl Application for GGEditor {
     fn new(_layers: &mut LayerStack) -> Self {
         info!("GGEditor initialized");
 
-        // Initial layout: Viewport on the left (70%), right column (30%)
-        // split into Properties (top) and Settings (bottom).
+        // Layout:
+        //  ┌──────────────────┬──────────────────┐
+        //  │                  │  Scene Hierarchy  │
+        //  │     Viewport     ├──────────────────┤
+        //  ├──────────────────┤    Properties     │
+        //  │     Settings     │                   │
+        //  └──────────────────┴──────────────────┘
         let mut dock_state = egui_dock::DockState::new(vec![Tab::Viewport]);
         let surface = dock_state.main_surface_mut();
         let root = egui_dock::NodeIndex::root();
-        let [_viewport, right] = surface.split_right(root, 0.7, vec![Tab::Properties]);
-        surface.split_below(right, 0.6, vec![Tab::Settings]);
+        // Right sidebar (25%) for hierarchy + properties.
+        let [left, right] = surface.split_right(root, 0.75, vec![Tab::SceneHierarchy]);
+        // Right sidebar: hierarchy top (50%), properties bottom (50%).
+        surface.split_below(right, 0.5, vec![Tab::Properties]);
+        // Left column: viewport top (80%), settings bottom (20%).
+        surface.split_below(left, 0.8, vec![Tab::Settings]);
 
         // Create scene.
         let mut scene = Scene::new();
 
-        // Green square entity.
-        let square_entity = scene.create_entity_with_tag("Green Square");
-        let green = Vec4::new(0.2, 0.8, 0.3, 1.0);
-        scene.add_component(square_entity, SpriteRendererComponent::new(green));
-
-        // Camera A — primary, default orthographic (size 10).
-        let camera_entity = scene.create_entity_with_tag("Camera A");
-        scene.add_component(camera_entity, CameraComponent::default());
-        scene.add_component(camera_entity, NativeScriptComponent::bind::<CameraController>());
-
-        // Camera B — clip space camera (secondary), also with a CameraController.
-        let second_camera_entity = scene.create_entity_with_tag("Clip Space Camera");
+        // Three squares for perspective vs orthographic testing.
+        // Left: small, close (z=0). Middle: bigger, further away (z=-5). Right: small, close (z=0).
+        // In orthographic they'll look different sizes; in perspective the middle one
+        // should appear roughly the same size as the others due to distance.
+        let left_square = scene.create_entity_with_tag("Left Square");
         scene.add_component(
-            second_camera_entity,
-            CameraComponent::new(SceneCamera::default(), false),
+            left_square,
+            SpriteRendererComponent::new(Vec4::new(0.2, 0.8, 0.3, 1.0)),
         );
-        scene.add_component(second_camera_entity, NativeScriptComponent::bind::<CameraController>());
+        if let Some(mut t) = scene.get_component_mut::<TransformComponent>(left_square) {
+            t.translation = Vec3::new(-2.0, 0.0, 0.0);
+        }
+
+        let middle_square = scene.create_entity_with_tag("Middle Square");
+        scene.add_component(
+            middle_square,
+            SpriteRendererComponent::new(Vec4::new(0.8, 0.2, 0.2, 1.0)),
+        );
+        if let Some(mut t) = scene.get_component_mut::<TransformComponent>(middle_square) {
+            t.translation = Vec3::new(0.0, 0.0, -5.0);
+            t.scale = Vec3::new(3.0, 3.0, 1.0);
+        }
+
+        let right_square = scene.create_entity_with_tag("Right Square");
+        scene.add_component(
+            right_square,
+            SpriteRendererComponent::new(Vec4::new(0.2, 0.3, 0.8, 1.0)),
+        );
+        if let Some(mut t) = scene.get_component_mut::<TransformComponent>(right_square) {
+            t.translation = Vec3::new(2.0, 0.0, 0.0);
+        }
+
+        // Orthographic Camera — primary, default ortho (size 10).
+        let ortho_cam = scene.create_entity_with_tag("Orthographic Camera");
+        scene.add_component(ortho_cam, CameraComponent::default());
+        scene.add_component(ortho_cam, NativeScriptComponent::bind::<CameraController>());
+
+        // Perspective Camera — secondary, pulled back on Z so all squares are visible.
+        let persp_cam = scene.create_entity_with_tag("Perspective Camera");
+        let mut persp_scene_camera = SceneCamera::default();
+        persp_scene_camera.set_perspective(45.0_f32.to_radians(), 0.01, 1000.0);
+        scene.add_component(persp_cam, CameraComponent::new(persp_scene_camera, false));
+        if let Some(mut t) = scene.get_component_mut::<TransformComponent>(persp_cam) {
+            t.translation = Vec3::new(0.0, 0.0, -5.0);
+        }
+        scene.add_component(persp_cam, NativeScriptComponent::bind::<CameraController>());
 
         GGEditor {
             dock_state,
@@ -120,13 +147,7 @@ impl Application for GGEditor {
             vsync: true,
             frame_time_ms: 0.0,
             scene,
-            square_entity,
-            camera_entity,
-            second_camera_entity,
-            square_color: [green.x, green.y, green.z, green.w],
-            camera_transform: [0.0, 0.0, 0.0],
-            primary_camera: true,
-            second_camera_ortho_size: 10.0,
+            selection_context: None,
         }
     }
 
@@ -188,16 +209,6 @@ impl Application for GGEditor {
 
         // Run native scripts (e.g. CameraController on Camera A).
         self.scene.on_update_scripts(dt, input);
-
-        // Sync camera transform back from ECS so the UI sliders reflect script changes.
-        if let Some(transform) = self.scene.get_component::<TransformComponent>(self.camera_entity)
-        {
-            self.camera_transform = [
-                transform.transform.w_axis.x,
-                transform.transform.w_axis.y,
-                transform.transform.w_axis.z,
-            ];
-        }
     }
 
     fn on_render(&mut self, renderer: &mut Renderer) {
@@ -205,72 +216,22 @@ impl Application for GGEditor {
     }
 
     fn on_egui(&mut self, ctx: &egui::Context) {
-        // Gather state the TabViewer needs.
-        let fb_tex_id = self
-            .scene_fb
-            .as_ref()
-            .and_then(|fb| fb.egui_texture_id());
-
-        // Read entity tag from the ECS (clone to avoid borrow conflicts).
-        let entity_tag = self
-            .scene
-            .get_component::<TagComponent>(self.square_entity)
-            .map(|t| t.tag.clone())
-            .unwrap_or_default();
+        let fb_tex_id = self.scene_fb.as_ref().and_then(|fb| fb.egui_texture_id());
 
         let mut viewer = EditorTabViewer {
+            scene: &mut self.scene,
+            selection_context: &mut self.selection_context,
             viewport_size: &mut self.viewport_size,
             viewport_focused: &mut self.viewport_focused,
             viewport_hovered: &mut self.viewport_hovered,
             fb_tex_id,
             vsync: &mut self.vsync,
             frame_time_ms: self.frame_time_ms,
-            square_color: &mut self.square_color,
-            entity_tag: &entity_tag,
-            camera_transform: &mut self.camera_transform,
-            primary_camera: &mut self.primary_camera,
-            second_camera_ortho_size: &mut self.second_camera_ortho_size,
         };
 
         egui_dock::DockArea::new(&mut self.dock_state)
             .style(egui_dock::Style::from_egui(ctx.style().as_ref()))
             .show(ctx, &mut viewer);
-
-        // Write the (possibly edited) color back into the ECS component.
-        if let Some(mut sprite) = self
-            .scene
-            .get_component_mut::<SpriteRendererComponent>(self.square_entity)
-        {
-            sprite.color = Vec4::from(self.square_color);
-        }
-
-        // Write Camera A's transform back from the UI controls.
-        if let Some(mut transform) = self
-            .scene
-            .get_component_mut::<TransformComponent>(self.camera_entity)
-        {
-            transform.transform = Mat4::from_translation(Vec3::from(self.camera_transform));
-        }
-
-        // Sync primary flag to the camera entities.
-        if let Some(mut cam) = self
-            .scene
-            .get_component_mut::<CameraComponent>(self.camera_entity)
-        {
-            cam.primary = self.primary_camera;
-        }
-        if let Some(mut cam) = self
-            .scene
-            .get_component_mut::<CameraComponent>(self.second_camera_entity)
-        {
-            cam.primary = !self.primary_camera;
-
-            // Sync orthographic size from UI.
-            let current = cam.camera.orthographic_size();
-            if (current - self.second_camera_ortho_size).abs() > f32::EPSILON {
-                cam.camera.set_orthographic_size(self.second_camera_ortho_size);
-            }
-        }
     }
 }
 
@@ -279,17 +240,23 @@ impl Application for GGEditor {
 // ---------------------------------------------------------------------------
 
 struct EditorTabViewer<'a> {
+    scene: &'a mut Scene,
+    selection_context: &'a mut Option<Entity>,
     viewport_size: &'a mut (u32, u32),
     viewport_focused: &'a mut bool,
     viewport_hovered: &'a mut bool,
     fb_tex_id: Option<egui::TextureId>,
     vsync: &'a mut bool,
     frame_time_ms: f32,
-    square_color: &'a mut [f32; 4],
-    entity_tag: &'a str,
-    camera_transform: &'a mut [f32; 3],
-    primary_camera: &'a mut bool,
-    second_camera_ortho_size: &'a mut f32,
+}
+
+impl EditorTabViewer<'_> {
+    fn unfocus_viewport_on_click(&mut self, ui: &egui::Ui) {
+        let clicked = ui.input(|i| i.pointer.any_pressed());
+        if clicked && ui.ui_contains_pointer() {
+            *self.viewport_focused = false;
+        }
+    }
 }
 
 impl egui_dock::TabViewer for EditorTabViewer<'_> {
@@ -297,6 +264,7 @@ impl egui_dock::TabViewer for EditorTabViewer<'_> {
 
     fn title(&mut self, tab: &mut Tab) -> egui::WidgetText {
         match tab {
+            Tab::SceneHierarchy => "Scene Hierarchy".into(),
             Tab::Viewport => "Viewport".into(),
             Tab::Properties => "Properties".into(),
             Tab::Settings => "Settings".into(),
@@ -305,18 +273,66 @@ impl egui_dock::TabViewer for EditorTabViewer<'_> {
 
     fn ui(&mut self, ui: &mut egui::Ui, tab: &mut Tab) {
         match tab {
+            // ---------------------------------------------------------
+            // Scene Hierarchy — list all entities, support selection
+            // ---------------------------------------------------------
+            Tab::SceneHierarchy => {
+                self.unfocus_viewport_on_click(ui);
+
+                let entities = self.scene.each_entity_with_tag();
+                let mut entity_to_delete = None;
+
+                for (entity, tag) in &entities {
+                    let selected = self.selection_context.map_or(false, |sel| sel == *entity);
+                    let response = ui.selectable_label(selected, tag);
+                    if response.clicked() {
+                        *self.selection_context = Some(*entity);
+                    }
+                    // Right-click on entity → delete.
+                    response.context_menu(|ui| {
+                        if ui.button("Delete Entity").clicked() {
+                            entity_to_delete = Some(*entity);
+                            ui.close();
+                        }
+                    });
+                }
+
+                // Click on blank space to deselect.
+                let remaining = ui.available_rect_before_wrap();
+                if remaining.width() > 0.0 && remaining.height() > 0.0 {
+                    let response = ui.allocate_rect(remaining, egui::Sense::click());
+                    if response.clicked() {
+                        *self.selection_context = None;
+                    }
+                    // Right-click on blank space → create entity.
+                    response.context_menu(|ui| {
+                        if ui.button("Create Empty Entity").clicked() {
+                            self.scene.create_entity_with_tag("Empty Entity");
+                            ui.close();
+                        }
+                    });
+                }
+
+                // Deferred entity deletion.
+                if let Some(entity) = entity_to_delete {
+                    if *self.selection_context == Some(entity) {
+                        *self.selection_context = None;
+                    }
+                    let _ = self.scene.destroy_entity(entity);
+                }
+            }
+
+            // ---------------------------------------------------------
+            // Viewport
+            // ---------------------------------------------------------
             Tab::Viewport => {
                 let available = ui.available_size();
-                // Guard against negative or zero sizes (egui can report
-                // negative available regions during minimize/Win+D).
                 if available.x > 0.0 && available.y > 0.0 {
                     *self.viewport_size = (available.x as u32, available.y as u32);
                 }
 
-                // Hovered: mouse is over the viewport panel right now.
                 *self.viewport_hovered = ui.ui_contains_pointer();
 
-                // Focused: click-based, persists until another panel is clicked.
                 let clicked = ui.input(|i| i.pointer.any_pressed());
                 if clicked && *self.viewport_hovered {
                     *self.viewport_focused = true;
@@ -327,69 +343,27 @@ impl egui_dock::TabViewer for EditorTabViewer<'_> {
                     ui.image(egui::load::SizedTexture::new(tex_id, size));
                 }
             }
+
+            // ---------------------------------------------------------
+            // Properties — component inspector for selected entity
+            // ---------------------------------------------------------
             Tab::Properties => {
-                let clicked = ui.input(|i| i.pointer.any_pressed());
-                if clicked && ui.ui_contains_pointer() {
-                    *self.viewport_focused = false;
+                self.unfocus_viewport_on_click(ui);
+
+                if let Some(entity) = *self.selection_context {
+                    if self.scene.is_alive(entity) {
+                        draw_components(ui, self.scene, entity);
+                    } else {
+                        *self.selection_context = None;
+                    }
                 }
-
-                // -- Square entity --
-                ui.heading(self.entity_tag);
-                ui.separator();
-
-                let mut color = egui::Color32::from_rgba_unmultiplied(
-                    (self.square_color[0] * 255.0) as u8,
-                    (self.square_color[1] * 255.0) as u8,
-                    (self.square_color[2] * 255.0) as u8,
-                    (self.square_color[3] * 255.0) as u8,
-                );
-                if egui::color_picker::color_edit_button_srgba(
-                    ui,
-                    &mut color,
-                    egui::color_picker::Alpha::OnlyBlend,
-                )
-                .changed()
-                {
-                    let [r, g, b, a] = color.to_srgba_unmultiplied();
-                    self.square_color[0] = r as f32 / 255.0;
-                    self.square_color[1] = g as f32 / 255.0;
-                    self.square_color[2] = b as f32 / 255.0;
-                    self.square_color[3] = a as f32 / 255.0;
-                }
-
-                ui.add_space(12.0);
-
-                // -- Camera controls --
-                ui.heading("Camera");
-                ui.separator();
-                ui.checkbox(self.primary_camera, "Camera A");
-                ui.label(if *self.primary_camera {
-                    "Rendering through Camera A"
-                } else {
-                    "Rendering through Clip Space Camera"
-                });
-
-                ui.add_space(8.0);
-                ui.label("Camera A Transform:");
-                ui.horizontal(|ui| {
-                    ui.label("X");
-                    ui.add(egui::DragValue::new(&mut self.camera_transform[0]).speed(0.1));
-                    ui.label("Y");
-                    ui.add(egui::DragValue::new(&mut self.camera_transform[1]).speed(0.1));
-                    ui.label("Z");
-                    ui.add(egui::DragValue::new(&mut self.camera_transform[2]).speed(0.1));
-                });
-
-                ui.add_space(8.0);
-                ui.label("Second Camera Ortho Size:");
-                ui.add(egui::DragValue::new(self.second_camera_ortho_size).speed(0.1));
             }
+
+            // ---------------------------------------------------------
+            // Settings
+            // ---------------------------------------------------------
             Tab::Settings => {
-                // Clicking in the Settings panel unfocuses the viewport.
-                let clicked = ui.input(|i| i.pointer.any_pressed());
-                if clicked && ui.ui_contains_pointer() {
-                    *self.viewport_focused = false;
-                }
+                self.unfocus_viewport_on_click(ui);
 
                 ui.heading("Renderer");
                 ui.separator();
@@ -422,6 +396,499 @@ impl egui_dock::TabViewer for EditorTabViewer<'_> {
 
     fn scroll_bars(&self, _tab: &Tab) -> [bool; 2] {
         [false, false]
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Vec3 control (colored XYZ drag values with reset buttons)
+// ---------------------------------------------------------------------------
+
+/// Draw a labeled Vec3 control with colored X/Y/Z buttons that reset to
+/// `reset_value` on click. `column_width` sets the label column width.
+/// Returns `true` if any value changed.
+fn draw_vec3_control(
+    ui: &mut egui::Ui,
+    label: &str,
+    values: &mut Vec3,
+    reset_value: f32,
+    column_width: f32,
+) -> bool {
+    let mut changed = false;
+
+    ui.push_id(label, |ui| {
+        ui.columns(2, |columns| {
+            columns[0].set_width(column_width);
+            columns[0].label(label);
+
+            let col = &mut columns[1];
+
+            // Compute sizes based on current line height.
+            let line_height = col.text_style_height(&egui::TextStyle::Body)
+                + 2.0 * col.spacing().button_padding.y;
+            let button_size = egui::vec2(line_height + 3.0, line_height);
+
+            col.spacing_mut().item_spacing.x = 0.0;
+
+            col.horizontal(|ui| {
+                // --- X (red) ---
+                let x_color = egui::Color32::from_rgba_unmultiplied(204, 26, 38, 255);
+                if ui
+                    .add(
+                        egui::Button::new(egui::RichText::new("X").color(egui::Color32::WHITE))
+                            .fill(x_color)
+                            .min_size(button_size)
+                            .corner_radius(egui::CornerRadius::same(2)),
+                    )
+                    .clicked()
+                {
+                    values.x = reset_value;
+                    changed = true;
+                }
+
+                // Drag value for X.
+                let drag_x = ui.add(
+                    egui::DragValue::new(&mut values.x)
+                        .speed(0.1)
+                        .custom_formatter(|n, _| format!("{n:.2}"))
+                        .update_while_editing(false),
+                );
+                if drag_x.changed() {
+                    changed = true;
+                }
+
+                ui.add_space(4.0);
+
+                // --- Y (green) ---
+                let y_color = egui::Color32::from_rgba_unmultiplied(47, 153, 47, 255);
+                if ui
+                    .add(
+                        egui::Button::new(egui::RichText::new("Y").color(egui::Color32::WHITE))
+                            .fill(y_color)
+                            .min_size(button_size)
+                            .corner_radius(egui::CornerRadius::same(2)),
+                    )
+                    .clicked()
+                {
+                    values.y = reset_value;
+                    changed = true;
+                }
+
+                let drag_y = ui.add(
+                    egui::DragValue::new(&mut values.y)
+                        .speed(0.1)
+                        .custom_formatter(|n, _| format!("{n:.2}"))
+                        .update_while_editing(false),
+                );
+                if drag_y.changed() {
+                    changed = true;
+                }
+
+                ui.add_space(4.0);
+
+                // --- Z (blue) ---
+                let z_color = egui::Color32::from_rgba_unmultiplied(20, 64, 204, 255);
+                if ui
+                    .add(
+                        egui::Button::new(egui::RichText::new("Z").color(egui::Color32::WHITE))
+                            .fill(z_color)
+                            .min_size(button_size)
+                            .corner_radius(egui::CornerRadius::same(2)),
+                    )
+                    .clicked()
+                {
+                    values.z = reset_value;
+                    changed = true;
+                }
+
+                let drag_z = ui.add(
+                    egui::DragValue::new(&mut values.z)
+                        .speed(0.1)
+                        .custom_formatter(|n, _| format!("{n:.2}"))
+                        .update_while_editing(false),
+                );
+                if drag_z.changed() {
+                    changed = true;
+                }
+            });
+        });
+    });
+
+    changed
+}
+
+// ---------------------------------------------------------------------------
+// Component inspector
+// ---------------------------------------------------------------------------
+
+fn draw_components(ui: &mut egui::Ui, scene: &mut Scene, entity: Entity) {
+    // -- Tag Component (editable entity name) --
+    if scene.has_component::<TagComponent>(entity) {
+        let mut tag = scene
+            .get_component::<TagComponent>(entity)
+            .map(|t| t.tag.clone())
+            .unwrap_or_default();
+        if ui.text_edit_singleline(&mut tag).changed() {
+            if let Some(mut tc) = scene.get_component_mut::<TagComponent>(entity) {
+                tc.tag = tag;
+            }
+        }
+        ui.separator();
+    }
+
+    // -- Transform Component (not removable) --
+    if scene.has_component::<TransformComponent>(entity) {
+        egui::CollapsingHeader::new("Transform")
+            .id_salt(("transform", entity.id()))
+            .default_open(true)
+            .show(ui, |ui| {
+                let (mut translation, mut rotation_deg, mut scale) = {
+                    let tc = scene.get_component::<TransformComponent>(entity).unwrap();
+                    (
+                        tc.translation,
+                        Vec3::new(
+                            tc.rotation.x.to_degrees(),
+                            tc.rotation.y.to_degrees(),
+                            tc.rotation.z.to_degrees(),
+                        ),
+                        tc.scale,
+                    )
+                };
+
+                let mut changed = false;
+                changed |= draw_vec3_control(ui, "Translation", &mut translation, 0.0, 100.0);
+                changed |= draw_vec3_control(ui, "Rotation", &mut rotation_deg, 0.0, 100.0);
+                changed |= draw_vec3_control(ui, "Scale", &mut scale, 1.0, 100.0);
+
+                if changed {
+                    if let Some(mut tc) = scene.get_component_mut::<TransformComponent>(entity) {
+                        tc.translation = translation;
+                        tc.rotation = Vec3::new(
+                            rotation_deg.x.to_radians(),
+                            rotation_deg.y.to_radians(),
+                            rotation_deg.z.to_radians(),
+                        );
+                        tc.scale = scale;
+                    }
+                }
+            });
+    }
+
+    // -- Camera Component (removable) --
+    let mut remove_camera = false;
+    if scene.has_component::<CameraComponent>(entity) {
+        let cr = egui::CollapsingHeader::new("Camera")
+            .id_salt(("camera", entity.id()))
+            .default_open(true)
+            .show(ui, |ui| {
+                // Read all camera state up front.
+                let (
+                    mut primary,
+                    mut fixed_aspect,
+                    mut proj_type,
+                    mut ortho_size,
+                    mut ortho_near,
+                    mut ortho_far,
+                    mut persp_fov_deg,
+                    mut persp_near,
+                    mut persp_far,
+                ) = {
+                    let cam = scene.get_component::<CameraComponent>(entity).unwrap();
+                    (
+                        cam.primary,
+                        cam.fixed_aspect_ratio,
+                        cam.camera.projection_type(),
+                        cam.camera.orthographic_size(),
+                        cam.camera.orthographic_near(),
+                        cam.camera.orthographic_far(),
+                        cam.camera.perspective_vertical_fov().to_degrees(),
+                        cam.camera.perspective_near(),
+                        cam.camera.perspective_far(),
+                    )
+                };
+
+                let mut changed = false;
+
+                // Primary camera toggle — uses set_primary_camera to ensure
+                // only one camera is primary at a time.
+                if ui.checkbox(&mut primary, "Primary").changed() {
+                    if primary {
+                        scene.set_primary_camera(entity);
+                    } else if let Some(mut cam) = scene.get_component_mut::<CameraComponent>(entity)
+                    {
+                        cam.primary = false;
+                    }
+                }
+
+                // Projection type combo box.
+                let proj_type_strings = ["Perspective", "Orthographic"];
+                let current_label = proj_type_strings[proj_type as usize];
+                egui::ComboBox::from_label("Projection")
+                    .selected_text(current_label)
+                    .show_ui(ui, |ui| {
+                        if ui
+                            .selectable_value(
+                                &mut proj_type,
+                                ProjectionType::Perspective,
+                                proj_type_strings[0],
+                            )
+                            .changed()
+                        {
+                            changed = true;
+                        }
+                        if ui
+                            .selectable_value(
+                                &mut proj_type,
+                                ProjectionType::Orthographic,
+                                proj_type_strings[1],
+                            )
+                            .changed()
+                        {
+                            changed = true;
+                        }
+                    });
+
+                // Projection-type-specific controls.
+                match proj_type {
+                    ProjectionType::Perspective => {
+                        ui.horizontal(|ui| {
+                            ui.label("Vertical FOV");
+                            if ui
+                                .add(
+                                    egui::DragValue::new(&mut persp_fov_deg)
+                                        .speed(0.1)
+                                        .range(1.0..=179.0)
+                                        .suffix("°"),
+                                )
+                                .changed()
+                            {
+                                changed = true;
+                            }
+                        });
+                        ui.horizontal(|ui| {
+                            ui.label("Near");
+                            if ui
+                                .add(
+                                    egui::DragValue::new(&mut persp_near)
+                                        .speed(0.01)
+                                        .range(0.001..=f32::MAX),
+                                )
+                                .changed()
+                            {
+                                changed = true;
+                            }
+                        });
+                        ui.horizontal(|ui| {
+                            ui.label("Far");
+                            if ui
+                                .add(egui::DragValue::new(&mut persp_far).speed(1.0))
+                                .changed()
+                            {
+                                changed = true;
+                            }
+                        });
+                    }
+                    ProjectionType::Orthographic => {
+                        ui.horizontal(|ui| {
+                            ui.label("Size");
+                            if ui
+                                .add(
+                                    egui::DragValue::new(&mut ortho_size)
+                                        .speed(0.1)
+                                        .range(0.1..=1000.0),
+                                )
+                                .changed()
+                            {
+                                changed = true;
+                            }
+                        });
+                        ui.horizontal(|ui| {
+                            ui.label("Near");
+                            if ui
+                                .add(egui::DragValue::new(&mut ortho_near).speed(0.1))
+                                .changed()
+                            {
+                                changed = true;
+                            }
+                        });
+                        ui.horizontal(|ui| {
+                            ui.label("Far");
+                            if ui
+                                .add(egui::DragValue::new(&mut ortho_far).speed(0.1))
+                                .changed()
+                            {
+                                changed = true;
+                            }
+                        });
+                    }
+                }
+
+                // Fixed aspect ratio (applies to both projection types).
+                changed |= ui
+                    .checkbox(&mut fixed_aspect, "Fixed Aspect Ratio")
+                    .changed();
+
+                // Write back all changes.
+                if changed {
+                    if let Some(mut cam) = scene.get_component_mut::<CameraComponent>(entity) {
+                        cam.fixed_aspect_ratio = fixed_aspect;
+
+                        if cam.camera.projection_type() != proj_type {
+                            cam.camera.set_projection_type(proj_type);
+                        }
+
+                        // Perspective parameters.
+                        let new_fov_rad = persp_fov_deg.to_radians();
+                        if (cam.camera.perspective_vertical_fov() - new_fov_rad).abs()
+                            > f32::EPSILON
+                        {
+                            cam.camera.set_perspective_vertical_fov(new_fov_rad);
+                        }
+                        if (cam.camera.perspective_near() - persp_near).abs() > f32::EPSILON {
+                            cam.camera.set_perspective_near(persp_near);
+                        }
+                        if (cam.camera.perspective_far() - persp_far).abs() > f32::EPSILON {
+                            cam.camera.set_perspective_far(persp_far);
+                        }
+
+                        // Orthographic parameters.
+                        if (cam.camera.orthographic_size() - ortho_size).abs() > f32::EPSILON {
+                            cam.camera.set_orthographic_size(ortho_size);
+                        }
+                        if (cam.camera.orthographic_near() - ortho_near).abs() > f32::EPSILON {
+                            cam.camera.set_orthographic_near(ortho_near);
+                        }
+                        if (cam.camera.orthographic_far() - ortho_far).abs() > f32::EPSILON {
+                            cam.camera.set_orthographic_far(ortho_far);
+                        }
+                    }
+                }
+            });
+
+        // Settings button (right-aligned on the header line).
+        draw_component_settings_button(ui, &cr.header_response, || remove_camera = true);
+    }
+    if remove_camera {
+        scene.remove_component::<CameraComponent>(entity);
+    }
+
+    // -- Sprite Renderer Component (removable) --
+    let mut remove_sprite = false;
+    if scene.has_component::<SpriteRendererComponent>(entity) {
+        let cr = egui::CollapsingHeader::new("Sprite Renderer")
+            .id_salt(("sprite_renderer", entity.id()))
+            .default_open(true)
+            .show(ui, |ui| {
+                let mut color_arr = {
+                    let sprite = scene
+                        .get_component::<SpriteRendererComponent>(entity)
+                        .unwrap();
+                    [
+                        sprite.color.x,
+                        sprite.color.y,
+                        sprite.color.z,
+                        sprite.color.w,
+                    ]
+                };
+
+                let mut egui_color = egui::Color32::from_rgba_unmultiplied(
+                    (color_arr[0] * 255.0) as u8,
+                    (color_arr[1] * 255.0) as u8,
+                    (color_arr[2] * 255.0) as u8,
+                    (color_arr[3] * 255.0) as u8,
+                );
+
+                ui.horizontal(|ui| {
+                    ui.label("Color");
+                    if egui::color_picker::color_edit_button_srgba(
+                        ui,
+                        &mut egui_color,
+                        egui::color_picker::Alpha::OnlyBlend,
+                    )
+                    .changed()
+                    {
+                        let [r, g, b, a] = egui_color.to_srgba_unmultiplied();
+                        color_arr = [
+                            r as f32 / 255.0,
+                            g as f32 / 255.0,
+                            b as f32 / 255.0,
+                            a as f32 / 255.0,
+                        ];
+                        if let Some(mut sprite) =
+                            scene.get_component_mut::<SpriteRendererComponent>(entity)
+                        {
+                            sprite.color = Vec4::from(color_arr);
+                        }
+                    }
+                });
+            });
+
+        // Settings button (right-aligned on the header line).
+        draw_component_settings_button(ui, &cr.header_response, || remove_sprite = true);
+    }
+    if remove_sprite {
+        scene.remove_component::<SpriteRendererComponent>(entity);
+    }
+
+    // -- Add Component button --
+    ui.add_space(8.0);
+    let button_width = ui.available_width().min(200.0);
+    ui.horizontal(|ui| {
+        let padding = (ui.available_width() - button_width) / 2.0;
+        if padding > 0.0 {
+            ui.add_space(padding);
+        }
+        ui.menu_button("Add Component", |ui| {
+            if !scene.has_component::<CameraComponent>(entity) && ui.button("Camera").clicked() {
+                scene.add_component(entity, CameraComponent::default());
+                ui.close();
+            }
+            if !scene.has_component::<SpriteRendererComponent>(entity)
+                && ui.button("Sprite Renderer").clicked()
+            {
+                scene.add_component(entity, SpriteRendererComponent::default());
+                ui.close();
+            }
+        });
+    });
+}
+
+/// Draw a small "+" button right-aligned on a component header line.
+/// Clicking it opens a popup with "Remove Component".
+fn draw_component_settings_button(
+    ui: &mut egui::Ui,
+    header_response: &egui::Response,
+    mut on_remove: impl FnMut(),
+) {
+    let header_rect = header_response.rect;
+    let btn_size = egui::vec2(20.0, 20.0);
+    let btn_rect = egui::Rect::from_min_size(
+        egui::pos2(
+            ui.max_rect().right() - btn_size.x - 4.0,
+            header_rect.min.y + (header_rect.height() - btn_size.y) / 2.0,
+        ),
+        btn_size,
+    );
+    let settings_btn = ui.put(btn_rect, egui::Button::new("+"));
+
+    let popup_id = header_response.id.with("component_settings");
+    if settings_btn.clicked() {
+        ui.ctx().memory_mut(|m| m.toggle_popup(popup_id));
+    }
+    if ui.ctx().memory(|m| m.is_popup_open(popup_id)) {
+        let area_response = egui::Area::new(popup_id)
+            .order(egui::Order::Foreground)
+            .default_pos(settings_btn.rect.left_bottom())
+            .show(ui.ctx(), |ui| {
+                egui::Frame::popup(ui.style()).show(ui, |ui| {
+                    if ui.button("Remove Component").clicked() {
+                        on_remove();
+                        ui.ctx().memory_mut(|m| m.close_popup(popup_id));
+                    }
+                });
+            });
+        if area_response.response.clicked_elsewhere() {
+            ui.ctx().memory_mut(|m| m.close_popup(popup_id));
+        }
     }
 }
 

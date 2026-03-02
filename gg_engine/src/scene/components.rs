@@ -24,29 +24,47 @@ impl Default for TagComponent {
     }
 }
 
-/// Transform expressed as a 4x4 matrix. Starts as a raw `Mat4`;
-/// decomposition into position/rotation/scale is a future step.
+/// Transform decomposed into translation, rotation, and scale.
+///
+/// Rotation is stored in **radians** (Euler angles, XYZ order).
+/// Use [`get_transform()`](TransformComponent::get_transform) to build
+/// the combined 4×4 matrix for rendering.
 pub struct TransformComponent {
-    pub transform: Mat4,
+    pub translation: Vec3,
+    /// Euler rotation in radians (X, Y, Z).
+    pub rotation: Vec3,
+    pub scale: Vec3,
 }
 
 impl TransformComponent {
-    pub fn new(transform: Mat4) -> Self {
-        Self { transform }
+    pub fn new(translation: Vec3) -> Self {
+        Self {
+            translation,
+            ..Default::default()
+        }
     }
 
-    /// Create from a translation vector (identity rotation/scale).
-    pub fn from_translation(translation: Vec3) -> Self {
-        Self {
-            transform: Mat4::from_translation(translation),
-        }
+    /// Build the combined transform matrix: Translation × Rotation(Z) × Rotation(Y) × Rotation(X) × Scale.
+    pub fn get_transform(&self) -> Mat4 {
+        Mat4::from_scale_rotation_translation(
+            self.scale,
+            glam::Quat::from_euler(
+                glam::EulerRot::XYZ,
+                self.rotation.x,
+                self.rotation.y,
+                self.rotation.z,
+            ),
+            self.translation,
+        )
     }
 }
 
 impl Default for TransformComponent {
     fn default() -> Self {
         Self {
-            transform: Mat4::IDENTITY,
+            translation: Vec3::ZERO,
+            rotation: Vec3::ZERO,
+            scale: Vec3::ONE,
         }
     }
 }

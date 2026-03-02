@@ -96,9 +96,12 @@ impl Application for Sandbox2D {
         self.map_height = MAP_TILES.len() as u32 / self.map_width;
 
         // Tile type → color mapping (flat-colored quads, no texture atlas needed).
-        self.tile_colors.insert('W', Vec4::new(0.157, 0.392, 0.784, 1.0)); // Water (blue)
-        self.tile_colors.insert('D', Vec4::new(0.706, 0.510, 0.275, 1.0)); // Dirt  (brown)
-        self.tile_colors.insert('G', Vec4::new(0.196, 0.706, 0.196, 1.0)); // Grass (green)
+        self.tile_colors
+            .insert('W', Vec4::new(0.157, 0.392, 0.784, 1.0)); // Water (blue)
+        self.tile_colors
+            .insert('D', Vec4::new(0.706, 0.510, 0.275, 1.0)); // Dirt  (brown)
+        self.tile_colors
+            .insert('G', Vec4::new(0.196, 0.706, 0.196, 1.0)); // Grass (green)
 
         info!(
             "Tilemap loaded: {}x{} ({} tiles)",
@@ -211,39 +214,30 @@ impl Application for Sandbox2D {
         });
 
         gg_engine::egui::Window::new("Particles").show(ctx, |ui| {
-            ui.label(format!(
-                "Active: {}",
-                self.particle_system.active_count()
-            ));
+            ui.label(format!("Active: {}", self.particle_system.active_count()));
 
             ui.separator();
             ui.strong("Velocity");
             ui.horizontal(|ui| {
                 ui.label("X");
                 ui.add(
-                    gg_engine::egui::DragValue::new(&mut self.particle_props.velocity.x)
-                        .speed(0.1),
+                    gg_engine::egui::DragValue::new(&mut self.particle_props.velocity.x).speed(0.1),
                 );
                 ui.label("Y");
                 ui.add(
-                    gg_engine::egui::DragValue::new(&mut self.particle_props.velocity.y)
-                        .speed(0.1),
+                    gg_engine::egui::DragValue::new(&mut self.particle_props.velocity.y).speed(0.1),
                 );
             });
             ui.horizontal(|ui| {
                 ui.label("Var X");
                 ui.add(
-                    gg_engine::egui::DragValue::new(
-                        &mut self.particle_props.velocity_variation.x,
-                    )
-                    .speed(0.1),
+                    gg_engine::egui::DragValue::new(&mut self.particle_props.velocity_variation.x)
+                        .speed(0.1),
                 );
                 ui.label("Y");
                 ui.add(
-                    gg_engine::egui::DragValue::new(
-                        &mut self.particle_props.velocity_variation.y,
-                    )
-                    .speed(0.1),
+                    gg_engine::egui::DragValue::new(&mut self.particle_props.velocity_variation.y)
+                        .speed(0.1),
                 );
             });
 

@@ -15,8 +15,8 @@ use crate::profiling::ProfileTimer;
 use crate::renderer::{
     DrawContext, Framebuffer, OrthographicCamera, PresentMode, Renderer, Swapchain, VulkanContext,
 };
-use glam::Mat4;
 use crate::timestep::Timestep;
+use glam::Mat4;
 
 // ---------------------------------------------------------------------------
 // WindowConfig
@@ -717,11 +717,7 @@ fn render_frame<T: Application>(
             .clear_values(&egui_clear);
 
         unsafe {
-            device.cmd_begin_render_pass(
-                cmd_buf,
-                &swapchain_rp_info,
-                vk::SubpassContents::INLINE,
-            );
+            device.cmd_begin_render_pass(cmd_buf, &swapchain_rp_info, vk::SubpassContents::INLINE);
         }
 
         egui_renderer
@@ -758,11 +754,7 @@ fn render_frame<T: Application>(
             .clear_values(&clear_values);
 
         unsafe {
-            device.cmd_begin_render_pass(
-                cmd_buf,
-                &render_pass_info,
-                vk::SubpassContents::INLINE,
-            );
+            device.cmd_begin_render_pass(cmd_buf, &render_pass_info, vk::SubpassContents::INLINE);
         }
 
         renderer.begin_scene(
