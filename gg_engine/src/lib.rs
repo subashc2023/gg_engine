@@ -20,9 +20,11 @@ pub use input::Input;
 pub use layer::{Layer, LayerStack};
 pub use log;
 pub use logging::init as log_init;
+pub use renderer::shaders;
 pub use renderer::{
     as_bytes, BufferElement, BufferLayout, IndexBuffer, OrthographicCamera, Pipeline, PresentMode,
-    Renderer, RendererBackend, Shader, ShaderDataType, Texture2D, VertexArray, VertexBuffer,
+    Renderer, RendererBackend, Shader, ShaderDataType, ShaderLibrary, Texture2D, VertexArray,
+    VertexBuffer,
 };
 pub use timestep::Timestep;
 
@@ -37,8 +39,8 @@ pub mod prelude {
     pub use crate::layer::{Layer, LayerStack};
     pub use crate::renderer::{
         as_bytes, BufferElement, BufferLayout, IndexBuffer, OrthographicCamera, Pipeline,
-        PresentMode, Renderer, RendererBackend, Shader, ShaderDataType, Texture2D, VertexArray,
-        VertexBuffer,
+        PresentMode, Renderer, RendererBackend, Shader, ShaderDataType, ShaderLibrary, Texture2D,
+        VertexArray, VertexBuffer,
     };
     pub use crate::timestep::Timestep;
     pub use crate::{run, Application, Ref, Scope, WindowConfig};

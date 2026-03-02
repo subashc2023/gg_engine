@@ -112,11 +112,14 @@ impl Renderer {
     ///
     /// When `has_material_color` is true, the pipeline layout includes a
     /// fragment-stage push constant range for a `vec4` color at offset 128.
+    /// When `blend_enable` is true, standard alpha blending is enabled
+    /// (src_alpha / one_minus_src_alpha).
     pub fn create_pipeline(
         &self,
         shader: &Shader,
         va: &VertexArray,
         has_material_color: bool,
+        blend_enable: bool,
     ) -> Arc<Pipeline> {
         Arc::new(pipeline::create_pipeline(
             &self.device,
@@ -125,7 +128,7 @@ impl Renderer {
             self.render_pass,
             has_material_color,
             &[],
-            false,
+            blend_enable,
         ))
     }
 

@@ -1,4 +1,5 @@
 use gg_engine::prelude::*;
+use gg_engine::shaders;
 
 // ---------------------------------------------------------------------------
 // Vertex types
@@ -95,7 +96,7 @@ struct Sandbox {
     camera_rotation_speed: f32,
 
     // Material
-    square_color: [f32; 3],
+    square_color: [f32; 4],
 
     // Rendering resources (initialized in on_attach)
     triangle_shader: Option<Ref<Shader>>,
@@ -110,6 +111,9 @@ struct Sandbox {
     texture_pipeline: Option<Ref<Pipeline>>,
     texture_va: Option<VertexArray>,
     checkerboard_texture: Option<Texture2D>,
+
+    // Shader library
+    shader_library: ShaderLibrary,
 }
 
 impl Application for Sandbox {
@@ -127,7 +131,7 @@ impl Application for Sandbox {
             camera_rotation: 0.0,
             camera_move_speed: 5.0,
             camera_rotation_speed: 180.0,
-            square_color: [0.2, 0.3, 0.8],
+            square_color: [0.2, 0.3, 0.8, 1.0],
             triangle_shader: None,
             triangle_pipeline: None,
             triangle_va: None,
@@ -138,6 +142,7 @@ impl Application for Sandbox {
             texture_pipeline: None,
             texture_va: None,
             checkerboard_texture: None,
+            shader_library: ShaderLibrary::new(),
         }
     }
 
@@ -145,8 +150,8 @@ impl Application for Sandbox {
         // ==== Square (flat blue) =============================================
         let square_shader = renderer.create_shader(
             "flat_color",
-            include_bytes!("../../gg_engine/src/renderer/shaders/flat_color_vert.spv"),
-            include_bytes!("../../gg_engine/src/renderer/shaders/flat_color_frag.spv"),
+            shaders::FLAT_COLOR_VERT_SPV,
+            shaders::FLAT_COLOR_FRAG_SPV,
         );
 
         let mut square_vb = renderer.create_vertex_buffer(as_bytes(&SQUARE_VERTICES));
@@ -161,13 +166,13 @@ impl Application for Sandbox {
         square_va.add_vertex_buffer(square_vb);
         square_va.set_index_buffer(square_ib);
 
-        let square_pipeline = renderer.create_pipeline(&square_shader, &square_va, true);
+        let square_pipeline = renderer.create_pipeline(&square_shader, &square_va, true, true);
 
         // ==== Triangle (vertex colors) =======================================
         let triangle_shader = renderer.create_shader(
             "triangle",
-            include_bytes!("../../gg_engine/src/renderer/shaders/triangle_vert.spv"),
-            include_bytes!("../../gg_engine/src/renderer/shaders/triangle_frag.spv"),
+            shaders::TRIANGLE_VERT_SPV,
+            shaders::TRIANGLE_FRAG_SPV,
         );
 
         let mut triangle_vb = renderer.create_vertex_buffer(as_bytes(&TRIANGLE_VERTICES));
@@ -182,13 +187,13 @@ impl Application for Sandbox {
         triangle_va.add_vertex_buffer(triangle_vb);
         triangle_va.set_index_buffer(triangle_ib);
 
-        let triangle_pipeline = renderer.create_pipeline(&triangle_shader, &triangle_va, false);
+        let triangle_pipeline = renderer.create_pipeline(&triangle_shader, &triangle_va, false, false);
 
         // ==== Textured quad =====================================================
         let texture_shader = renderer.create_shader(
             "texture",
-            include_bytes!("../../gg_engine/src/renderer/shaders/texture_vert.spv"),
-            include_bytes!("../../gg_engine/src/renderer/shaders/texture_frag.spv"),
+            shaders::TEXTURE_VERT_SPV,
+            shaders::TEXTURE_FRAG_SPV,
         );
 
         let mut texture_vb = renderer.create_vertex_buffer(as_bytes(&TEXTURED_QUAD_VERTICES));
@@ -226,6 +231,10 @@ impl Application for Sandbox {
             }
         }
         let checkerboard_texture = renderer.create_texture_from_rgba8(8, 8, &checker_pixels);
+
+        self.shader_library.add(square_shader.clone());
+        self.shader_library.add(triangle_shader.clone());
+        self.shader_library.add(texture_shader.clone());
 
         self.square_shader = Some(square_shader);
         self.square_pipeline = Some(square_pipeline);
@@ -309,8 +318,7 @@ impl Application for Sandbox {
         let scale = Mat4::from_scale(Vec3::splat(0.1));
 
         // Draw a 20×20 grid of small squares with a dynamic color.
-        let [r, g, b] = self.square_color;
-        let color = Vec4::new(r, g, b, 1.0);
+        let color = Vec4::from(self.square_color);
 
         if let (Some(pipeline), Some(va)) = (&self.square_pipeline, &self.square_va) {
             for y in 0..20 {
@@ -352,28 +360,28 @@ impl Application for Sandbox {
             ui.strong("Camera");
 
             let mut changed = false;
-            changed |= ui
-                .add(
-                    gg_engine::egui::Slider::new(&mut self.camera_position.x, -2.0..=2.0).text("X"),
-                )
-                .changed();
-            changed |= ui
-                .add(
-                    gg_engine::egui::Slider::new(&mut self.camera_position.y, -2.0..=2.0).text("Y"),
-                )
-                .changed();
+            ui.horizontal(|ui| {
+                ui.label("X");
+                changed |= ui
+                    .add(gg_engine::egui::DragValue::new(&mut self.camera_position.x).speed(0.05))
+                    .changed();
+                ui.label("Y");
+                changed |= ui
+                    .add(gg_engine::egui::DragValue::new(&mut self.camera_position.y).speed(0.05))
+                    .changed();
+            });
 
             let mut rotation_deg = self.camera_rotation.to_degrees();
-            if ui
-                .add(
-                    gg_engine::egui::Slider::new(&mut rotation_deg, -180.0..=180.0)
-                        .text("Rotation"),
-                )
-                .changed()
-            {
-                self.camera_rotation = rotation_deg.to_radians();
-                changed = true;
-            }
+            ui.horizontal(|ui| {
+                ui.label("Rotation");
+                if ui
+                    .add(gg_engine::egui::DragValue::new(&mut rotation_deg).speed(0.5))
+                    .changed()
+                {
+                    self.camera_rotation = rotation_deg.to_radians();
+                    changed = true;
+                }
+            });
 
             if changed {
                 self.camera.set_position(self.camera_position);
@@ -382,7 +390,20 @@ impl Application for Sandbox {
 
             ui.separator();
             ui.strong("Material");
-            ui.color_edit_button_rgb(&mut self.square_color);
+            let mut srgba = [
+                (self.square_color[0] * 255.0) as u8,
+                (self.square_color[1] * 255.0) as u8,
+                (self.square_color[2] * 255.0) as u8,
+                (self.square_color[3] * 255.0) as u8,
+            ];
+            if ui.color_edit_button_srgba_unmultiplied(&mut srgba).changed() {
+                self.square_color = [
+                    srgba[0] as f32 / 255.0,
+                    srgba[1] as f32 / 255.0,
+                    srgba[2] as f32 / 255.0,
+                    srgba[3] as f32 / 255.0,
+                ];
+            }
 
             ui.separator();
             ui.strong("Controls");

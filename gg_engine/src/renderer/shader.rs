@@ -9,6 +9,7 @@ use ash::vk;
 /// Created via [`Renderer::create_shader`](super::Renderer::create_shader).
 /// Owns the Vulkan shader modules; destroyed on drop.
 pub struct Shader {
+    name: String,
     vert_module: vk::ShaderModule,
     frag_module: vk::ShaderModule,
     device: ash::Device,
@@ -23,10 +24,15 @@ impl Shader {
         log::info!(target: "gg_engine", "Shader '{name}' created");
 
         Self {
+            name: name.to_string(),
             vert_module,
             frag_module,
             device: device.clone(),
         }
+    }
+
+    pub fn name(&self) -> &str {
+        &self.name
     }
 
     pub fn vert_module(&self) -> vk::ShaderModule {
