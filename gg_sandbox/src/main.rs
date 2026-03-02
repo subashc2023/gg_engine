@@ -98,22 +98,19 @@ struct Sandbox {
     // Material
     square_color: [f32; 4],
 
+    // Shader library — central registry for all shaders
+    shader_library: ShaderLibrary,
+
     // Rendering resources (initialized in on_attach)
-    triangle_shader: Option<Ref<Shader>>,
     triangle_pipeline: Option<Ref<Pipeline>>,
     triangle_va: Option<VertexArray>,
-    square_shader: Option<Ref<Shader>>,
     square_pipeline: Option<Ref<Pipeline>>,
     square_va: Option<VertexArray>,
 
     // Textured quad
-    texture_shader: Option<Ref<Shader>>,
     texture_pipeline: Option<Ref<Pipeline>>,
     texture_va: Option<VertexArray>,
     checkerboard_texture: Option<Texture2D>,
-
-    // Shader library
-    shader_library: ShaderLibrary,
 }
 
 impl Application for Sandbox {
@@ -132,27 +129,37 @@ impl Application for Sandbox {
             camera_move_speed: 5.0,
             camera_rotation_speed: 180.0,
             square_color: [0.2, 0.3, 0.8, 1.0],
-            triangle_shader: None,
+            shader_library: ShaderLibrary::new(),
             triangle_pipeline: None,
             triangle_va: None,
-            square_shader: None,
             square_pipeline: None,
             square_va: None,
-            texture_shader: None,
             texture_pipeline: None,
             texture_va: None,
             checkerboard_texture: None,
-            shader_library: ShaderLibrary::new(),
         }
     }
 
     fn on_attach(&mut self, renderer: &Renderer) {
-        // ==== Square (flat blue) =============================================
-        let square_shader = renderer.create_shader(
+        // Register all shaders in the library — the central registry owns them.
+        self.shader_library.add(renderer.create_shader(
             "flat_color",
             shaders::FLAT_COLOR_VERT_SPV,
             shaders::FLAT_COLOR_FRAG_SPV,
-        );
+        ));
+        self.shader_library.add(renderer.create_shader(
+            "triangle",
+            shaders::TRIANGLE_VERT_SPV,
+            shaders::TRIANGLE_FRAG_SPV,
+        ));
+        self.shader_library.add(renderer.create_shader(
+            "texture",
+            shaders::TEXTURE_VERT_SPV,
+            shaders::TEXTURE_FRAG_SPV,
+        ));
+
+        // ==== Square (flat color) ============================================
+        let flat_color_shader = self.shader_library.get("flat_color").unwrap();
 
         let mut square_vb = renderer.create_vertex_buffer(as_bytes(&SQUARE_VERTICES));
         square_vb.set_layout(BufferLayout::new(&[BufferElement::new(
@@ -166,14 +173,10 @@ impl Application for Sandbox {
         square_va.add_vertex_buffer(square_vb);
         square_va.set_index_buffer(square_ib);
 
-        let square_pipeline = renderer.create_pipeline(&square_shader, &square_va, true, true);
+        let square_pipeline = renderer.create_pipeline(&flat_color_shader, &square_va, true, true);
 
         // ==== Triangle (vertex colors) =======================================
-        let triangle_shader = renderer.create_shader(
-            "triangle",
-            shaders::TRIANGLE_VERT_SPV,
-            shaders::TRIANGLE_FRAG_SPV,
-        );
+        let triangle_shader = self.shader_library.get("triangle").unwrap();
 
         let mut triangle_vb = renderer.create_vertex_buffer(as_bytes(&TRIANGLE_VERTICES));
         triangle_vb.set_layout(BufferLayout::new(&[
@@ -187,14 +190,11 @@ impl Application for Sandbox {
         triangle_va.add_vertex_buffer(triangle_vb);
         triangle_va.set_index_buffer(triangle_ib);
 
-        let triangle_pipeline = renderer.create_pipeline(&triangle_shader, &triangle_va, false, false);
+        let triangle_pipeline =
+            renderer.create_pipeline(&triangle_shader, &triangle_va, false, false);
 
-        // ==== Textured quad =====================================================
-        let texture_shader = renderer.create_shader(
-            "texture",
-            shaders::TEXTURE_VERT_SPV,
-            shaders::TEXTURE_FRAG_SPV,
-        );
+        // ==== Textured quad ==================================================
+        let texture_shader = self.shader_library.get("texture").unwrap();
 
         let mut texture_vb = renderer.create_vertex_buffer(as_bytes(&TEXTURED_QUAD_VERTICES));
         texture_vb.set_layout(BufferLayout::new(&[
@@ -232,17 +232,10 @@ impl Application for Sandbox {
         }
         let checkerboard_texture = renderer.create_texture_from_rgba8(8, 8, &checker_pixels);
 
-        self.shader_library.add(square_shader.clone());
-        self.shader_library.add(triangle_shader.clone());
-        self.shader_library.add(texture_shader.clone());
-
-        self.square_shader = Some(square_shader);
         self.square_pipeline = Some(square_pipeline);
         self.square_va = Some(square_va);
-        self.triangle_shader = Some(triangle_shader);
         self.triangle_pipeline = Some(triangle_pipeline);
         self.triangle_va = Some(triangle_va);
-        self.texture_shader = Some(texture_shader);
         self.texture_pipeline = Some(texture_pipeline);
         self.texture_va = Some(texture_va);
         self.checkerboard_texture = Some(checkerboard_texture);

@@ -18,8 +18,25 @@ impl ShaderLibrary {
     }
 
     /// Add a shader, keyed by its [`Shader::name`].
+    ///
+    /// Logs a warning and does **not** overwrite if a shader with the same name
+    /// already exists.
     pub fn add(&mut self, shader: Arc<Shader>) {
-        self.shaders.insert(shader.name().to_string(), shader);
+        let name = shader.name().to_string();
+        if self.shaders.contains_key(&name) {
+            log::warn!(target: "gg_engine", "Shader '{}' already exists in library", name);
+            return;
+        }
+        self.shaders.insert(name, shader);
+    }
+
+    /// Add a shader under a custom name, ignoring `shader.name()`.
+    pub fn add_with_name(&mut self, name: &str, shader: Arc<Shader>) {
+        if self.shaders.contains_key(name) {
+            log::warn!(target: "gg_engine", "Shader '{}' already exists in library", name);
+            return;
+        }
+        self.shaders.insert(name.to_string(), shader);
     }
 
     /// Retrieve a shader by name.
@@ -28,7 +45,7 @@ impl ShaderLibrary {
     }
 
     /// Returns `true` if the library contains a shader with the given name.
-    pub fn contains(&self, name: &str) -> bool {
+    pub fn exists(&self, name: &str) -> bool {
         self.shaders.contains_key(name)
     }
 }
