@@ -186,8 +186,11 @@ impl<T: Application> ApplicationHandler for EngineRunner<T> {
                                     },
                                 ) {
                                     Ok(egui_rend) => {
-                                        self.renderer =
-                                            Some(Renderer::new(&ctx, sc.render_pass()));
+                                        self.renderer = Some(Renderer::new(
+                                            &ctx,
+                                            sc.render_pass(),
+                                            sc.command_pool(),
+                                        ));
                                         self.egui_winit_state = Some(egui_winit_state);
                                         self.egui_renderer = Some(egui_rend);
                                         self.swapchain = Some(sc);
@@ -247,7 +250,9 @@ impl<T: Application> ApplicationHandler for EngineRunner<T> {
         // This happens before engine event mapping so that key presses
         // producing Typed events are still tracked by the polling system.
         match &event {
-            winit::event::WindowEvent::KeyboardInput { event: key_event, .. } => {
+            winit::event::WindowEvent::KeyboardInput {
+                event: key_event, ..
+            } => {
                 if let PhysicalKey::Code(code) = key_event.physical_key {
                     let key_code = map_key_code(code);
                     match key_event.state {
@@ -272,9 +277,7 @@ impl<T: Application> ApplicationHandler for EngineRunner<T> {
         // Handle resize for swapchain recreation and camera projection update.
         if let winit::event::WindowEvent::Resized(size) = &event {
             if size.width > 0 && size.height > 0 {
-                if let (Some(vk_ctx), Some(sc)) =
-                    (&self.vulkan_context, &mut self.swapchain)
-                {
+                if let (Some(vk_ctx), Some(sc)) = (&self.vulkan_context, &mut self.swapchain) {
                     sc.recreate(vk_ctx, size.width, size.height, None);
                     if let Some(renderer) = &mut self.renderer {
                         renderer.update_render_pass(sc.render_pass());
@@ -348,8 +351,7 @@ impl<T: Application> ApplicationHandler for EngineRunner<T> {
             egui_state.handle_platform_output(window, full_output.platform_output);
 
             // Tessellate.
-            let primitives = egui_ctx
-                .tessellate(full_output.shapes, full_output.pixels_per_point);
+            let primitives = egui_ctx.tessellate(full_output.shapes, full_output.pixels_per_point);
 
             // Upload textures.
             if !full_output.textures_delta.set.is_empty() {
@@ -676,9 +678,7 @@ fn map_window_event(event: &winit::event::WindowEvent) -> (Option<Event>, Option
             (
                 match state {
                     ElementState::Pressed => Some(Event::Mouse(MouseEvent::ButtonPressed(btn))),
-                    ElementState::Released => {
-                        Some(Event::Mouse(MouseEvent::ButtonReleased(btn)))
-                    }
+                    ElementState::Released => Some(Event::Mouse(MouseEvent::ButtonReleased(btn))),
                 },
                 None,
             )

@@ -80,8 +80,8 @@ impl OrthographicCamera {
     // -- Internal --------------------------------------------------------------
 
     fn recalculate_view_matrix(&mut self) {
-        let transform = Mat4::from_translation(self.position)
-            * Mat4::from_rotation_z(self.rotation);
+        let transform =
+            Mat4::from_translation(self.position) * Mat4::from_rotation_z(self.rotation);
 
         self.view_matrix = transform.inverse();
         self.view_projection_matrix = self.projection_matrix * self.view_matrix;

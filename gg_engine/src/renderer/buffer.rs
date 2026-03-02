@@ -327,7 +327,7 @@ impl Drop for IndexBuffer {
 // Helpers
 // ---------------------------------------------------------------------------
 
-fn create_buffer_and_memory(
+pub(super) fn create_buffer_and_memory(
     instance: &ash::Instance,
     physical_device: vk::PhysicalDevice,
     device: &ash::Device,
@@ -357,20 +357,18 @@ fn create_buffer_and_memory(
     let memory =
         unsafe { device.allocate_memory(&alloc_info, None) }.expect("Failed to allocate memory");
 
-    unsafe { device.bind_buffer_memory(buffer, memory, 0) }
-        .expect("Failed to bind buffer memory");
+    unsafe { device.bind_buffer_memory(buffer, memory, 0) }.expect("Failed to bind buffer memory");
 
     (buffer, memory)
 }
 
-fn find_memory_type(
+pub(super) fn find_memory_type(
     instance: &ash::Instance,
     physical_device: vk::PhysicalDevice,
     type_filter: u32,
     properties: vk::MemoryPropertyFlags,
 ) -> u32 {
-    let mem_props =
-        unsafe { instance.get_physical_device_memory_properties(physical_device) };
+    let mem_props = unsafe { instance.get_physical_device_memory_properties(physical_device) };
 
     for i in 0..mem_props.memory_type_count {
         let type_matches = (type_filter & (1 << i)) != 0;
@@ -383,4 +381,32 @@ fn find_memory_type(
     }
 
     panic!("Failed to find suitable memory type");
+}
+
+/// Create a staging buffer (TRANSFER_SRC, HOST_VISIBLE | HOST_COHERENT) and copy data into it.
+pub(super) fn create_staging_buffer(
+    instance: &ash::Instance,
+    physical_device: vk::PhysicalDevice,
+    device: &ash::Device,
+    data: &[u8],
+) -> (vk::Buffer, vk::DeviceMemory) {
+    let size = data.len() as vk::DeviceSize;
+
+    let (buffer, memory) = create_buffer_and_memory(
+        instance,
+        physical_device,
+        device,
+        size,
+        vk::BufferUsageFlags::TRANSFER_SRC,
+    );
+
+    unsafe {
+        let ptr = device
+            .map_memory(memory, 0, size, vk::MemoryMapFlags::empty())
+            .expect("Failed to map staging buffer memory");
+        std::ptr::copy_nonoverlapping(data.as_ptr(), ptr as *mut u8, data.len());
+        device.unmap_memory(memory);
+    }
+
+    (buffer, memory)
 }

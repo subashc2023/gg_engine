@@ -266,12 +266,7 @@ impl Application for GGEditor {
                                     0x7BC67E,
                                     "Scene loaded: Untitled.ggscene",
                                 );
-                                console_line(
-                                    ui,
-                                    "WARN",
-                                    0xE8C44A,
-                                    "No skybox assigned to scene",
-                                );
+                                console_line(ui, "WARN", 0xE8C44A, "No skybox assigned to scene");
                                 console_line(
                                     ui,
                                     "WARN",
@@ -341,7 +336,10 @@ fn console_line(ui: &mut egui::Ui, level: &str, color_hex: u32, message: &str) {
     let r = ((color_hex >> 16) & 0xFF) as u8;
     let g = ((color_hex >> 8) & 0xFF) as u8;
     let b = (color_hex & 0xFF) as u8;
-    ui.colored_label(egui::Color32::from_rgb(r, g, b), format!("[{level}] {message}"));
+    ui.colored_label(
+        egui::Color32::from_rgb(r, g, b),
+        format!("[{level}] {message}"),
+    );
 }
 
 fn main() {

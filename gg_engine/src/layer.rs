@@ -146,9 +146,7 @@ mod tests {
             self.log.borrow_mut().push(format!("{} update", self.label));
         }
         fn on_event(&mut self, _event: &Event, _input: &Input) -> bool {
-            self.log
-                .borrow_mut()
-                .push(format!("{} event", self.label));
+            self.log.borrow_mut().push(format!("{} event", self.label));
             false
         }
     }

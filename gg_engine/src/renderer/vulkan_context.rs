@@ -91,10 +91,9 @@ impl VulkanContext {
             .map_err(|_| VulkanInitError::NoDisplayHandle)?;
         let raw_display = display_handle.as_raw();
 
-        let mut required_extensions =
-            ash_window::enumerate_required_extensions(raw_display)
-                .map_err(VulkanInitError::SurfaceExtensions)?
-                .to_vec();
+        let mut required_extensions = ash_window::enumerate_required_extensions(raw_display)
+            .map_err(VulkanInitError::SurfaceExtensions)?
+            .to_vec();
 
         #[cfg(debug_assertions)]
         required_extensions.push(ash::ext::debug_utils::NAME.as_ptr());
@@ -155,10 +154,9 @@ impl VulkanContext {
             .map_err(|_| VulkanInitError::NoWindowHandle)?;
         let raw_window = window_handle.as_raw();
 
-        let surface = unsafe {
-            ash_window::create_surface(&entry, &instance, raw_display, raw_window, None)
-        }
-        .map_err(VulkanInitError::SurfaceCreation)?;
+        let surface =
+            unsafe { ash_window::create_surface(&entry, &instance, raw_display, raw_window, None) }
+                .map_err(VulkanInitError::SurfaceCreation)?;
         let surface_loader = surface::Instance::new(&entry, &instance);
         log::info!(target: "gg_engine", "Vulkan surface created");
 
@@ -186,16 +184,17 @@ impl VulkanContext {
 
         let device_extensions = [ash::khr::swapchain::NAME.as_ptr()];
 
+        let features = vk::PhysicalDeviceFeatures::default().sampler_anisotropy(true);
+
         let device_create_info = vk::DeviceCreateInfo::default()
             .queue_create_infos(std::slice::from_ref(&queue_create_info))
-            .enabled_extension_names(&device_extensions);
+            .enabled_extension_names(&device_extensions)
+            .enabled_features(&features);
 
-        let device =
-            unsafe { instance.create_device(physical_device, &device_create_info, None) }
-                .map_err(VulkanInitError::DeviceCreation)?;
+        let device = unsafe { instance.create_device(physical_device, &device_create_info, None) }
+            .map_err(VulkanInitError::DeviceCreation)?;
 
-        let graphics_queue =
-            unsafe { device.get_device_queue(graphics_queue_family_index, 0) };
+        let graphics_queue = unsafe { device.get_device_queue(graphics_queue_family_index, 0) };
 
         log::info!(
             target: "gg_engine",
@@ -318,8 +317,7 @@ fn find_graphics_present_queue(
     surface: vk::SurfaceKHR,
     device: vk::PhysicalDevice,
 ) -> Option<u32> {
-    let queue_families =
-        unsafe { instance.get_physical_device_queue_family_properties(device) };
+    let queue_families = unsafe { instance.get_physical_device_queue_family_properties(device) };
 
     for (index, family) in queue_families.iter().enumerate() {
         let supports_graphics = family.queue_flags.contains(vk::QueueFlags::GRAPHICS);

@@ -17,22 +17,67 @@ struct SquareVertex {
     position: [f32; 3],
 }
 
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct TexturedVertex {
+    position: [f32; 3],
+    tex_coord: [f32; 2],
+}
+
 const TRIANGLE_VERTICES: [TriangleVertex; 3] = [
-    TriangleVertex { position: [-0.5, -0.5, 0.0], color: [0.8, 0.2, 0.3, 1.0] },
-    TriangleVertex { position: [ 0.5, -0.5, 0.0], color: [0.2, 0.3, 0.8, 1.0] },
-    TriangleVertex { position: [ 0.0,  0.5, 0.0], color: [0.8, 0.8, 0.2, 1.0] },
+    TriangleVertex {
+        position: [-0.5, -0.5, 0.0],
+        color: [0.8, 0.2, 0.3, 1.0],
+    },
+    TriangleVertex {
+        position: [0.5, -0.5, 0.0],
+        color: [0.2, 0.3, 0.8, 1.0],
+    },
+    TriangleVertex {
+        position: [0.0, 0.5, 0.0],
+        color: [0.8, 0.8, 0.2, 1.0],
+    },
 ];
 
 const TRIANGLE_INDICES: [u32; 3] = [0, 1, 2];
 
 const SQUARE_VERTICES: [SquareVertex; 4] = [
-    SquareVertex { position: [-0.5,  0.5, 0.0] },
-    SquareVertex { position: [ 0.5,  0.5, 0.0] },
-    SquareVertex { position: [ 0.5, -0.5, 0.0] },
-    SquareVertex { position: [-0.5, -0.5, 0.0] },
+    SquareVertex {
+        position: [-0.5, 0.5, 0.0],
+    },
+    SquareVertex {
+        position: [0.5, 0.5, 0.0],
+    },
+    SquareVertex {
+        position: [0.5, -0.5, 0.0],
+    },
+    SquareVertex {
+        position: [-0.5, -0.5, 0.0],
+    },
 ];
 
 const SQUARE_INDICES: [u32; 6] = [0, 1, 2, 2, 3, 0];
+
+const TEXTURED_QUAD_VERTICES: [TexturedVertex; 4] = [
+    TexturedVertex {
+        position: [-0.5, 0.5, 0.0],
+        tex_coord: [0.0, 0.0],
+    },
+    TexturedVertex {
+        position: [0.5, 0.5, 0.0],
+        tex_coord: [1.0, 0.0],
+    },
+    TexturedVertex {
+        position: [0.5, -0.5, 0.0],
+        tex_coord: [1.0, 1.0],
+    },
+    TexturedVertex {
+        position: [-0.5, -0.5, 0.0],
+        tex_coord: [0.0, 1.0],
+    },
+];
+
+const TEXTURED_QUAD_INDICES: [u32; 6] = [0, 1, 2, 2, 3, 0];
 
 // ---------------------------------------------------------------------------
 // Sandbox
@@ -59,6 +104,12 @@ struct Sandbox {
     square_shader: Option<Ref<Shader>>,
     square_pipeline: Option<Ref<Pipeline>>,
     square_va: Option<VertexArray>,
+
+    // Textured quad
+    texture_shader: Option<Ref<Shader>>,
+    texture_pipeline: Option<Ref<Pipeline>>,
+    texture_va: Option<VertexArray>,
+    checkerboard_texture: Option<Texture2D>,
 }
 
 impl Application for Sandbox {
@@ -83,6 +134,10 @@ impl Application for Sandbox {
             square_shader: None,
             square_pipeline: None,
             square_va: None,
+            texture_shader: None,
+            texture_pipeline: None,
+            texture_va: None,
+            checkerboard_texture: None,
         }
     }
 
@@ -95,9 +150,10 @@ impl Application for Sandbox {
         );
 
         let mut square_vb = renderer.create_vertex_buffer(as_bytes(&SQUARE_VERTICES));
-        square_vb.set_layout(BufferLayout::new(&[
-            BufferElement::new(ShaderDataType::Float3, "a_position"),
-        ]));
+        square_vb.set_layout(BufferLayout::new(&[BufferElement::new(
+            ShaderDataType::Float3,
+            "a_position",
+        )]));
 
         let square_ib = renderer.create_index_buffer(&SQUARE_INDICES);
 
@@ -128,12 +184,59 @@ impl Application for Sandbox {
 
         let triangle_pipeline = renderer.create_pipeline(&triangle_shader, &triangle_va, false);
 
+        // ==== Textured quad =====================================================
+        let texture_shader = renderer.create_shader(
+            "texture",
+            include_bytes!("../../gg_engine/src/renderer/shaders/texture_vert.spv"),
+            include_bytes!("../../gg_engine/src/renderer/shaders/texture_frag.spv"),
+        );
+
+        let mut texture_vb = renderer.create_vertex_buffer(as_bytes(&TEXTURED_QUAD_VERTICES));
+        texture_vb.set_layout(BufferLayout::new(&[
+            BufferElement::new(ShaderDataType::Float3, "a_position"),
+            BufferElement::new(ShaderDataType::Float2, "a_tex_coord"),
+        ]));
+
+        let texture_ib = renderer.create_index_buffer(&TEXTURED_QUAD_INDICES);
+
+        let mut texture_va = renderer.create_vertex_array();
+        texture_va.add_vertex_buffer(texture_vb);
+        texture_va.set_index_buffer(texture_ib);
+
+        let texture_pipeline = renderer.create_texture_pipeline(&texture_shader, &texture_va);
+
+        // Programmatic 8x8 checkerboard texture (magenta/dark gray).
+        let mut checker_pixels = vec![0u8; 8 * 8 * 4];
+        for y in 0..8u32 {
+            for x in 0..8u32 {
+                let idx = ((y * 8 + x) * 4) as usize;
+                if (x + y) % 2 == 0 {
+                    // Magenta
+                    checker_pixels[idx] = 255;
+                    checker_pixels[idx + 1] = 0;
+                    checker_pixels[idx + 2] = 255;
+                    checker_pixels[idx + 3] = 255;
+                } else {
+                    // Dark gray
+                    checker_pixels[idx] = 40;
+                    checker_pixels[idx + 1] = 40;
+                    checker_pixels[idx + 2] = 40;
+                    checker_pixels[idx + 3] = 255;
+                }
+            }
+        }
+        let checkerboard_texture = renderer.create_texture_from_rgba8(8, 8, &checker_pixels);
+
         self.square_shader = Some(square_shader);
         self.square_pipeline = Some(square_pipeline);
         self.square_va = Some(square_va);
         self.triangle_shader = Some(triangle_shader);
         self.triangle_pipeline = Some(triangle_pipeline);
         self.triangle_va = Some(triangle_va);
+        self.texture_shader = Some(texture_shader);
+        self.texture_pipeline = Some(texture_pipeline);
+        self.texture_va = Some(texture_va);
+        self.checkerboard_texture = Some(checkerboard_texture);
 
         info!("Sandbox rendering resources created");
     }
@@ -223,6 +326,16 @@ impl Application for Sandbox {
         if let (Some(pipeline), Some(va)) = (&self.triangle_pipeline, &self.triangle_va) {
             renderer.submit(pipeline, va, &Mat4::IDENTITY, None);
         }
+
+        // Draw textured quad.
+        if let (Some(pipeline), Some(va), Some(tex)) = (
+            &self.texture_pipeline,
+            &self.texture_va,
+            &self.checkerboard_texture,
+        ) {
+            let transform = Mat4::from_translation(Vec3::new(-1.5, 0.5, 0.0));
+            renderer.submit_textured(pipeline, va, &transform, tex);
+        }
     }
 
     fn on_egui(&mut self, ctx: &gg_engine::egui::Context) {
@@ -241,14 +354,12 @@ impl Application for Sandbox {
             let mut changed = false;
             changed |= ui
                 .add(
-                    gg_engine::egui::Slider::new(&mut self.camera_position.x, -2.0..=2.0)
-                        .text("X"),
+                    gg_engine::egui::Slider::new(&mut self.camera_position.x, -2.0..=2.0).text("X"),
                 )
                 .changed();
             changed |= ui
                 .add(
-                    gg_engine::egui::Slider::new(&mut self.camera_position.y, -2.0..=2.0)
-                        .text("Y"),
+                    gg_engine::egui::Slider::new(&mut self.camera_position.y, -2.0..=2.0).text("Y"),
                 )
                 .changed();
 

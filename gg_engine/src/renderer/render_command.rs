@@ -34,7 +34,17 @@ impl RenderCommand {
         vp_matrix: &Mat4,
         transform: &Mat4,
         color: Option<&Vec4>,
+        descriptor_set: Option<vk::DescriptorSet>,
     ) {
-        api.draw_indexed(ctx, pipeline, pipeline_layout, vertex_array, vp_matrix, transform, color);
+        api.draw_indexed(
+            ctx,
+            pipeline,
+            pipeline_layout,
+            vertex_array,
+            vp_matrix,
+            transform,
+            color,
+            descriptor_set,
+        );
     }
 }

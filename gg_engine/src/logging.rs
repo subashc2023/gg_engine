@@ -27,10 +27,7 @@ impl EngineLogger {
     }
 
     fn elapsed() -> impl std::fmt::Display {
-        let elapsed = START_TIME
-            .get()
-            .map(|s| s.elapsed())
-            .unwrap_or_default();
+        let elapsed = START_TIME.get().map(|s| s.elapsed()).unwrap_or_default();
         let total_secs = elapsed.as_secs();
         let m = total_secs / 60;
         let s = total_secs % 60;

@@ -58,13 +58,11 @@ impl VulkanRendererAPI {
         vp_matrix: &Mat4,
         transform: &Mat4,
         color: Option<&Vec4>,
+        descriptor_set: Option<vk::DescriptorSet>,
     ) {
         unsafe {
-            self.device.cmd_bind_pipeline(
-                ctx.cmd_buf,
-                vk::PipelineBindPoint::GRAPHICS,
-                pipeline,
-            );
+            self.device
+                .cmd_bind_pipeline(ctx.cmd_buf, vk::PipelineBindPoint::GRAPHICS, pipeline);
 
             // Push the view-projection matrix (offset 0, 64 bytes).
             let vp_bytes = std::slice::from_raw_parts(
@@ -104,6 +102,18 @@ impl VulkanRendererAPI {
                     vk::ShaderStageFlags::FRAGMENT,
                     128,
                     color_bytes,
+                );
+            }
+
+            // Bind descriptor set (e.g. for texture samplers).
+            if let Some(ds) = descriptor_set {
+                self.device.cmd_bind_descriptor_sets(
+                    ctx.cmd_buf,
+                    vk::PipelineBindPoint::GRAPHICS,
+                    pipeline_layout,
+                    0,
+                    &[ds],
+                    &[],
                 );
             }
         }
@@ -158,11 +168,19 @@ impl RendererAPI {
         vp_matrix: &Mat4,
         transform: &Mat4,
         color: Option<&Vec4>,
+        descriptor_set: Option<vk::DescriptorSet>,
     ) {
         match self {
-            Self::Vulkan(api) => {
-                api.draw_indexed(ctx, pipeline, pipeline_layout, vertex_array, vp_matrix, transform, color)
-            }
+            Self::Vulkan(api) => api.draw_indexed(
+                ctx,
+                pipeline,
+                pipeline_layout,
+                vertex_array,
+                vp_matrix,
+                transform,
+                color,
+                descriptor_set,
+            ),
         }
     }
 }

@@ -15,16 +15,16 @@ pub type Scope<T> = Box<T>;
 
 pub use application::{run, Application, WindowConfig};
 pub use egui;
-pub use renderer::{
-    as_bytes, BufferElement, BufferLayout, IndexBuffer, OrthographicCamera, Pipeline, PresentMode,
-    Renderer, RendererBackend, Shader, ShaderDataType, VertexArray, VertexBuffer,
-};
+pub use glam;
 pub use input::Input;
 pub use layer::{Layer, LayerStack};
-pub use timestep::Timestep;
-pub use glam;
 pub use log;
 pub use logging::init as log_init;
+pub use renderer::{
+    as_bytes, BufferElement, BufferLayout, IndexBuffer, OrthographicCamera, Pipeline, PresentMode,
+    Renderer, RendererBackend, Shader, ShaderDataType, Texture2D, VertexArray, VertexBuffer,
+};
+pub use timestep::Timestep;
 
 pub fn engine_version() -> &'static str {
     env!("CARGO_PKG_VERSION")
@@ -37,7 +37,8 @@ pub mod prelude {
     pub use crate::layer::{Layer, LayerStack};
     pub use crate::renderer::{
         as_bytes, BufferElement, BufferLayout, IndexBuffer, OrthographicCamera, Pipeline,
-        PresentMode, Renderer, RendererBackend, Shader, ShaderDataType, VertexArray, VertexBuffer,
+        PresentMode, Renderer, RendererBackend, Shader, ShaderDataType, Texture2D, VertexArray,
+        VertexBuffer,
     };
     pub use crate::timestep::Timestep;
     pub use crate::{run, Application, Ref, Scope, WindowConfig};

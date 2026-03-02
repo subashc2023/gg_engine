@@ -81,8 +81,7 @@ impl Swapchain {
         desired_present_mode: PresentMode,
     ) -> Result<Self, SwapchainError> {
         let device = vk_ctx.device().clone();
-        let swapchain_loader =
-            khr::swapchain::Device::new(vk_ctx.instance(), vk_ctx.device());
+        let swapchain_loader = khr::swapchain::Device::new(vk_ctx.instance(), vk_ctx.device());
 
         // Query surface capabilities
         let capabilities = unsafe {
@@ -385,13 +384,14 @@ impl Swapchain {
             .clipped(true)
             .old_swapchain(old_swapchain);
 
-        self.swapchain =
-            unsafe { self.swapchain_loader.create_swapchain(&swapchain_info, None) }
-                .expect("Failed to recreate swapchain");
+        self.swapchain = unsafe {
+            self.swapchain_loader
+                .create_swapchain(&swapchain_info, None)
+        }
+        .expect("Failed to recreate swapchain");
 
         unsafe {
-            self.swapchain_loader
-                .destroy_swapchain(old_swapchain, None);
+            self.swapchain_loader.destroy_swapchain(old_swapchain, None);
         }
 
         let images = unsafe { self.swapchain_loader.get_swapchain_images(self.swapchain) }
@@ -523,11 +523,8 @@ fn query_present_modes(
     physical_device: vk::PhysicalDevice,
     surface: vk::SurfaceKHR,
 ) -> Vec<vk::PresentModeKHR> {
-    unsafe {
-        surface_loader
-            .get_physical_device_surface_present_modes(physical_device, surface)
-    }
-    .unwrap_or_else(|_| vec![vk::PresentModeKHR::FIFO])
+    unsafe { surface_loader.get_physical_device_surface_present_modes(physical_device, surface) }
+        .unwrap_or_else(|_| vec![vk::PresentModeKHR::FIFO])
 }
 
 fn resolve_present_mode(

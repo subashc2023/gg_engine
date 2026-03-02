@@ -16,12 +16,7 @@ pub struct Shader {
 
 impl Shader {
     /// Create a shader from pre-compiled SPIR-V bytecode.
-    pub(crate) fn new(
-        device: &ash::Device,
-        name: &str,
-        vert_spv: &[u8],
-        frag_spv: &[u8],
-    ) -> Self {
+    pub(crate) fn new(device: &ash::Device, name: &str, vert_spv: &[u8], frag_spv: &[u8]) -> Self {
         let vert_module = create_shader_module(device, vert_spv);
         let frag_module = create_shader_module(device, frag_spv);
 

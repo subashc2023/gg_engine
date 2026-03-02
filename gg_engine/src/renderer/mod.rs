@@ -8,16 +8,20 @@ mod renderer;
 mod renderer_api;
 mod shader;
 mod swapchain;
+mod texture;
 mod vertex_array;
 mod vulkan_context;
 
-pub use buffer::{as_bytes, BufferElement, BufferLayout, IndexBuffer, ShaderDataType, VertexBuffer};
+pub use buffer::{
+    as_bytes, BufferElement, BufferLayout, IndexBuffer, ShaderDataType, VertexBuffer,
+};
 pub(crate) use draw_context::DrawContext;
 pub use orthographic_camera::OrthographicCamera;
 pub use pipeline::Pipeline;
 pub use renderer::Renderer;
 pub use shader::Shader;
 pub use swapchain::{Swapchain, SwapchainError};
+pub use texture::Texture2D;
 pub use vertex_array::VertexArray;
 pub use vulkan_context::{VulkanContext, VulkanInitError};
 

@@ -47,12 +47,17 @@ impl Drop for Pipeline {
 ///
 /// When `has_material_color` is true, an additional push constant range is
 /// added for a `vec4` color at offset 128 (fragment stage, 16 bytes).
+///
+/// `descriptor_set_layouts` is passed to the pipeline layout (e.g. for texture
+/// samplers). `blend_enable` enables standard alpha blending.
 pub(crate) fn create_pipeline(
     device: &ash::Device,
     shader: &Shader,
     va: &VertexArray,
     render_pass: vk::RenderPass,
     has_material_color: bool,
+    descriptor_set_layouts: &[vk::DescriptorSetLayout],
+    blend_enable: bool,
 ) -> Pipeline {
     let entry_point = c"main";
 
@@ -98,9 +103,21 @@ pub(crate) fn create_pipeline(
     let multisampling = vk::PipelineMultisampleStateCreateInfo::default()
         .rasterization_samples(vk::SampleCountFlags::TYPE_1);
 
-    let color_blend_attachment = vk::PipelineColorBlendAttachmentState::default()
-        .color_write_mask(vk::ColorComponentFlags::RGBA)
-        .blend_enable(false);
+    let color_blend_attachment = if blend_enable {
+        vk::PipelineColorBlendAttachmentState::default()
+            .color_write_mask(vk::ColorComponentFlags::RGBA)
+            .blend_enable(true)
+            .src_color_blend_factor(vk::BlendFactor::SRC_ALPHA)
+            .dst_color_blend_factor(vk::BlendFactor::ONE_MINUS_SRC_ALPHA)
+            .color_blend_op(vk::BlendOp::ADD)
+            .src_alpha_blend_factor(vk::BlendFactor::ONE)
+            .dst_alpha_blend_factor(vk::BlendFactor::ZERO)
+            .alpha_blend_op(vk::BlendOp::ADD)
+    } else {
+        vk::PipelineColorBlendAttachmentState::default()
+            .color_write_mask(vk::ColorComponentFlags::RGBA)
+            .blend_enable(false)
+    };
 
     let blend_attachments = [color_blend_attachment];
     let color_blending =
@@ -129,7 +146,8 @@ pub(crate) fn create_pipeline(
     };
 
     let layout_info = vk::PipelineLayoutCreateInfo::default()
-        .push_constant_ranges(push_constant_ranges);
+        .push_constant_ranges(push_constant_ranges)
+        .set_layouts(descriptor_set_layouts);
     let pipeline_layout = unsafe { device.create_pipeline_layout(&layout_info, None) }
         .expect("Failed to create pipeline layout");
 
