@@ -1,4 +1,5 @@
 use std::sync::Arc;
+use std::time::Instant;
 
 use ash::vk;
 use winit::application::ApplicationHandler;
@@ -13,6 +14,7 @@ use crate::layer::LayerStack;
 use crate::renderer::{
     DrawContext, OrthographicCamera, PresentMode, Renderer, Swapchain, VulkanContext,
 };
+use crate::timestep::Timestep;
 
 // ---------------------------------------------------------------------------
 // WindowConfig
@@ -55,7 +57,7 @@ pub trait Application {
         log::trace!("{event}");
     }
 
-    fn on_update(&mut self, _input: &Input) {}
+    fn on_update(&mut self, _dt: Timestep, _input: &Input) {}
 
     /// Submit draw calls. Called each frame between `begin_scene` / `end_scene`.
     fn on_render(&self, _renderer: &Renderer) {}
@@ -96,6 +98,7 @@ struct EngineRunner<T: Application> {
     window_config: WindowConfig,
     current_present_mode: PresentMode,
     default_camera: OrthographicCamera,
+    last_frame_time: Instant,
 
     // egui state — dropped before Vulkan resources.
     egui_ctx: egui::Context,
@@ -293,8 +296,12 @@ impl<T: Application> ApplicationHandler for EngineRunner<T> {
     }
 
     fn about_to_wait(&mut self, _event_loop: &ActiveEventLoop) {
-        self.layers.update_all(&self.input);
-        self.app.on_update(&self.input);
+        let now = Instant::now();
+        let dt = Timestep::from_seconds(now.duration_since(self.last_frame_time).as_secs_f32());
+        self.last_frame_time = now;
+
+        self.layers.update_all(dt, &self.input);
+        self.app.on_update(dt, &self.input);
 
         // Render egui frame — requires all graphics resources.
         'render: {
@@ -572,6 +579,7 @@ pub fn run<T: Application>() {
         window_config,
         current_present_mode,
         default_camera,
+        last_frame_time: Instant::now(),
         egui_ctx: egui::Context::default(),
         egui_winit_state: None,
         egui_renderer: None,

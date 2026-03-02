@@ -4,6 +4,7 @@ mod input;
 mod layer;
 mod logging;
 pub mod renderer;
+mod timestep;
 
 pub use application::{run, Application, WindowConfig};
 pub use egui;
@@ -13,6 +14,7 @@ pub use renderer::{
 };
 pub use input::Input;
 pub use layer::{Layer, LayerStack};
+pub use timestep::Timestep;
 pub use glam;
 pub use log;
 pub use logging::init as log_init;
@@ -30,6 +32,7 @@ pub mod prelude {
         as_bytes, BufferElement, BufferLayout, IndexBuffer, OrthographicCamera, Pipeline,
         PresentMode, Renderer, RendererBackend, Shader, ShaderDataType, VertexArray, VertexBuffer,
     };
+    pub use crate::timestep::Timestep;
     pub use crate::{run, Application, WindowConfig};
     pub use glam::{Mat3, Mat4, Quat, Vec2, Vec3, Vec4};
     pub use log::{debug, error, info, trace, warn};

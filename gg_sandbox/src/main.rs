@@ -1,5 +1,3 @@
-use std::time::Instant;
-
 use gg_engine::prelude::*;
 
 // ---------------------------------------------------------------------------
@@ -43,8 +41,7 @@ const SQUARE_INDICES: [u32; 6] = [0, 1, 2, 2, 3, 0];
 
 struct Sandbox {
     vsync: bool,
-    last_frame: Instant,
-    frame_time_ms: f64,
+    frame_time_ms: f32,
 
     // Camera
     camera: OrthographicCamera,
@@ -71,13 +68,12 @@ impl Application for Sandbox {
 
         Sandbox {
             vsync: false,
-            last_frame: Instant::now(),
             frame_time_ms: 0.0,
             camera,
             camera_position: Vec3::ZERO,
             camera_rotation: 0.0,
-            camera_move_speed: 0.05,
-            camera_rotation_speed: 2.0,
+            camera_move_speed: 5.0,
+            camera_rotation_speed: 180.0,
             triangle_shader: None,
             triangle_pipeline: None,
             triangle_va: None,
@@ -160,36 +156,33 @@ impl Application for Sandbox {
 
     fn on_event(&mut self, _event: &Event, _input: &Input) {}
 
-    fn on_update(&mut self, input: &Input) {
-        // Frame timing.
-        let now = Instant::now();
-        self.frame_time_ms = now.duration_since(self.last_frame).as_secs_f64() * 1000.0;
-        self.last_frame = now;
+    fn on_update(&mut self, dt: Timestep, input: &Input) {
+        self.frame_time_ms = dt.millis();
 
-        // Camera movement via input polling.
+        // Camera movement via input polling (speeds are per-second).
         let mut camera_changed = false;
 
         if input.is_key_pressed(KeyCode::Left) {
-            self.camera_position.x -= self.camera_move_speed;
+            self.camera_position.x -= self.camera_move_speed * dt;
             camera_changed = true;
         } else if input.is_key_pressed(KeyCode::Right) {
-            self.camera_position.x += self.camera_move_speed;
+            self.camera_position.x += self.camera_move_speed * dt;
             camera_changed = true;
         }
 
         if input.is_key_pressed(KeyCode::Up) {
-            self.camera_position.y += self.camera_move_speed;
+            self.camera_position.y += self.camera_move_speed * dt;
             camera_changed = true;
         } else if input.is_key_pressed(KeyCode::Down) {
-            self.camera_position.y -= self.camera_move_speed;
+            self.camera_position.y -= self.camera_move_speed * dt;
             camera_changed = true;
         }
 
         if input.is_key_pressed(KeyCode::A) {
-            self.camera_rotation += self.camera_rotation_speed.to_radians();
+            self.camera_rotation += (self.camera_rotation_speed * dt).to_radians();
             camera_changed = true;
         } else if input.is_key_pressed(KeyCode::D) {
-            self.camera_rotation -= self.camera_rotation_speed.to_radians();
+            self.camera_rotation -= (self.camera_rotation_speed * dt).to_radians();
             camera_changed = true;
         }
 
@@ -213,9 +206,9 @@ impl Application for Sandbox {
         gg_engine::egui::Window::new("Settings").show(ctx, |ui| {
             ui.checkbox(&mut self.vsync, "VSync");
             let fps = if self.frame_time_ms > 0.0 {
-                1000.0 / self.frame_time_ms
+                1000.0_f32 / self.frame_time_ms
             } else {
-                0.0
+                0.0_f32
             };
             ui.label(format!("{:.2} ms ({:.0} FPS)", self.frame_time_ms, fps));
 

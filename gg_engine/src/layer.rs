@@ -1,5 +1,6 @@
 use crate::events::Event;
 use crate::input::Input;
+use crate::timestep::Timestep;
 
 // ---------------------------------------------------------------------------
 // Layer trait
@@ -18,8 +19,9 @@ pub trait Layer {
     fn on_detach(&mut self) {}
 
     /// Called every frame. Layers are updated bottom-to-top.
+    /// `dt` is the time elapsed since the last frame.
     /// `input` provides pollable keyboard/mouse state.
-    fn on_update(&mut self, _input: &Input) {}
+    fn on_update(&mut self, _dt: Timestep, _input: &Input) {}
 
     /// Called for each event. Layers receive events top-to-bottom.
     /// Return `true` if the event was handled and should not propagate further.
@@ -68,9 +70,9 @@ impl LayerStack {
     }
 
     /// Update all layers forward (bottom-to-top).
-    pub fn update_all(&mut self, input: &Input) {
+    pub fn update_all(&mut self, dt: Timestep, input: &Input) {
         for layer in self.layers.iter_mut() {
-            layer.on_update(input);
+            layer.on_update(dt, input);
         }
     }
 
@@ -110,6 +112,7 @@ mod tests {
     use super::*;
     use crate::events::{MouseButton, MouseEvent};
     use crate::input::Input;
+    use crate::timestep::Timestep;
     use std::cell::RefCell;
     use std::rc::Rc;
 
@@ -139,7 +142,7 @@ mod tests {
         fn on_detach(&mut self) {
             self.log.borrow_mut().push(format!("{} detach", self.label));
         }
-        fn on_update(&mut self, _input: &Input) {
+        fn on_update(&mut self, _dt: Timestep, _input: &Input) {
             self.log.borrow_mut().push(format!("{} update", self.label));
         }
         fn on_event(&mut self, _event: &Event, _input: &Input) -> bool {
@@ -206,7 +209,7 @@ mod tests {
         log.borrow_mut().clear();
 
         let input = Input::new();
-        stack.update_all(&input);
+        stack.update_all(Timestep::from_seconds(0.016), &input);
         assert_eq!(&*log.borrow(), &["A update", "B update", "X update"]);
     }
 
@@ -250,7 +253,7 @@ mod tests {
 
         // Update order should be: A (layer) then X (overlay)
         let input = Input::new();
-        stack.update_all(&input);
+        stack.update_all(Timestep::from_seconds(0.016), &input);
         assert_eq!(&*log.borrow(), &["A update", "X update"]);
     }
 
@@ -272,6 +275,6 @@ mod tests {
         let mut stack = LayerStack::new();
         let input = Input::new();
         assert!(!stack.dispatch_event(&dummy_event(), &input));
-        stack.update_all(&input); // should not panic
+        stack.update_all(Timestep::from_seconds(0.016), &input); // should not panic
     }
 }
