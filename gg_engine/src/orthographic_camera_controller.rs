@@ -134,6 +134,42 @@ impl OrthographicCameraController {
         self.camera_rotation
     }
 
+    /// Returns the visible world bounds as `(left, right, bottom, top)`.
+    pub fn bounds(&self) -> (f32, f32, f32, f32) {
+        let hw = self.aspect_ratio * self.zoom_level;
+        let hh = self.zoom_level;
+        (
+            -hw + self.camera_position.x,
+             hw + self.camera_position.x,
+            -hh + self.camera_position.y,
+             hh + self.camera_position.y,
+        )
+    }
+
+    /// Returns the total visible `(width, height)` in world units.
+    pub fn bounds_size(&self) -> (f32, f32) {
+        (
+            self.aspect_ratio * self.zoom_level * 2.0,
+            self.zoom_level * 2.0,
+        )
+    }
+
+    /// Convert screen-space pixel coordinates to world-space coordinates.
+    ///
+    /// Accounts for camera position and zoom but **not** camera rotation.
+    pub fn screen_to_world(
+        &self,
+        screen_x: f64,
+        screen_y: f64,
+        window_width: u32,
+        window_height: u32,
+    ) -> glam::Vec2 {
+        let (bw, bh) = self.bounds_size();
+        let x = (screen_x as f32 / window_width as f32 - 0.5) * bw + self.camera_position.x;
+        let y = (0.5 - screen_y as f32 / window_height as f32) * bh + self.camera_position.y;
+        glam::Vec2::new(x, y)
+    }
+
     // -- Setters ---------------------------------------------------------------
 
     pub fn set_zoom_level(&mut self, level: f32) {

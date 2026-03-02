@@ -2,14 +2,35 @@ use std::cell::Cell;
 
 use gg_engine::prelude::*;
 
+fn vec4_to_srgba(v: Vec4) -> [u8; 4] {
+    [
+        (v.x * 255.0) as u8,
+        (v.y * 255.0) as u8,
+        (v.z * 255.0) as u8,
+        (v.w * 255.0) as u8,
+    ]
+}
+
+fn srgba_to_vec4(s: [u8; 4]) -> Vec4 {
+    Vec4::new(
+        s[0] as f32 / 255.0,
+        s[1] as f32 / 255.0,
+        s[2] as f32 / 255.0,
+        s[3] as f32 / 255.0,
+    )
+}
+
 pub struct Sandbox2D {
     camera_controller: OrthographicCameraController,
     square_color: [f32; 4],
     checkerboard_texture: Option<Texture2D>,
     last_dt: f32,
     last_stats: Cell<Renderer2DStats>,
-    stress_test: bool,
-    grid_size: i32,
+
+    particle_system: ParticleSystem,
+    particle_props: ParticleProps,
+    window_width: u32,
+    window_height: u32,
 }
 
 impl Application for Sandbox2D {
@@ -22,8 +43,11 @@ impl Application for Sandbox2D {
             checkerboard_texture: None,
             last_dt: 0.0,
             last_stats: Cell::new(Renderer2DStats::default()),
-            stress_test: false,
-            grid_size: 100,
+
+            particle_system: ParticleSystem::new(10_000),
+            particle_props: ParticleProps::default(),
+            window_width: 1280,
+            window_height: 720,
         }
     }
 
@@ -68,43 +92,33 @@ impl Application for Sandbox2D {
 
     fn on_event(&mut self, event: &Event, _input: &Input) {
         self.camera_controller.on_event(event);
+
+        if let Event::Window(WindowEvent::Resize { width, height }) = event {
+            if *width > 0 && *height > 0 {
+                self.window_width = *width;
+                self.window_height = *height;
+            }
+        }
     }
 
     fn on_update(&mut self, dt: Timestep, input: &Input) {
         profile_scope!("Sandbox2D::on_update");
         self.last_dt = dt.seconds();
         self.camera_controller.on_update(dt, input);
+
+        // Continuously emit particles at the origin for benchmarking.
+        self.particle_props.position = Vec2::ZERO;
+        for _ in 0..5 {
+            self.particle_system.emit(&self.particle_props);
+        }
+
+        self.particle_system.on_update(dt);
     }
 
     fn on_render(&self, renderer: &Renderer) {
         profile_scope!("Sandbox2D::on_render");
         // Capture last frame's stats (snapshotted at end_scene).
         self.last_stats.set(renderer.stats_2d());
-
-        if self.stress_test {
-            // Stress test: NxN grid of colored quads.
-            let n = self.grid_size;
-            let spacing = 0.22_f32;
-            let quad_size = 0.2_f32;
-            let offset = n as f32 * spacing * 0.5;
-            for y in 0..n {
-                for x in 0..n {
-                    let r = x as f32 / n as f32;
-                    let g = y as f32 / n as f32;
-                    let color = Vec4::new(r, g, 0.3, 0.75);
-                    renderer.draw_quad(
-                        &Vec3::new(
-                            x as f32 * spacing - offset,
-                            y as f32 * spacing - offset,
-                            0.0,
-                        ),
-                        &Vec2::new(quad_size, quad_size),
-                        color,
-                    );
-                }
-            }
-            return;
-        }
 
         // Draw checkerboard background with 10x tiling (z = 0.1 pushes it behind the quads).
         if let Some(tex) = &self.checkerboard_texture {
@@ -148,6 +162,9 @@ impl Application for Sandbox2D {
                 Vec4::new(1.0, 0.8, 0.8, 1.0),
             );
         }
+
+        // Render particles (z = -0.1, in front of scene geometry).
+        self.particle_system.on_render(renderer);
     }
 
     fn on_egui(&mut self, ctx: &gg_engine::egui::Context) {
@@ -169,18 +186,6 @@ impl Application for Sandbox2D {
         });
 
         gg_engine::egui::Window::new("Settings").show(ctx, |ui| {
-            ui.strong("Stress Test");
-            ui.checkbox(&mut self.stress_test, "Enable grid");
-            if self.stress_test {
-                ui.add(
-                    gg_engine::egui::Slider::new(&mut self.grid_size, 10..=200)
-                        .text("Grid size"),
-                );
-                let total = self.grid_size as u32 * self.grid_size as u32;
-                ui.label(format!("Total quads: {}", total));
-            }
-
-            ui.separator();
             ui.strong("Material");
             let mut srgba = [
                 (self.square_color[0] * 255.0) as u8,
@@ -205,6 +210,85 @@ impl Application for Sandbox2D {
             ui.label("WASD: Move camera");
             ui.label("Q/E: Rotate camera");
             ui.label("Scroll: Zoom");
+            ui.label("Left click: Emit particles");
+        });
+
+        gg_engine::egui::Window::new("Particles").show(ctx, |ui| {
+            ui.label(format!(
+                "Active: {}",
+                self.particle_system.active_count()
+            ));
+
+            ui.separator();
+            ui.strong("Velocity");
+            ui.horizontal(|ui| {
+                ui.label("X");
+                ui.add(
+                    gg_engine::egui::DragValue::new(&mut self.particle_props.velocity.x)
+                        .speed(0.1),
+                );
+                ui.label("Y");
+                ui.add(
+                    gg_engine::egui::DragValue::new(&mut self.particle_props.velocity.y)
+                        .speed(0.1),
+                );
+            });
+            ui.horizontal(|ui| {
+                ui.label("Var X");
+                ui.add(
+                    gg_engine::egui::DragValue::new(
+                        &mut self.particle_props.velocity_variation.x,
+                    )
+                    .speed(0.1),
+                );
+                ui.label("Y");
+                ui.add(
+                    gg_engine::egui::DragValue::new(
+                        &mut self.particle_props.velocity_variation.y,
+                    )
+                    .speed(0.1),
+                );
+            });
+
+            ui.separator();
+            ui.strong("Color");
+            ui.horizontal(|ui| {
+                ui.label("Begin");
+                let mut begin = vec4_to_srgba(self.particle_props.color_begin);
+                if ui
+                    .color_edit_button_srgba_unmultiplied(&mut begin)
+                    .changed()
+                {
+                    self.particle_props.color_begin = srgba_to_vec4(begin);
+                }
+                ui.label("End");
+                let mut end = vec4_to_srgba(self.particle_props.color_end);
+                if ui.color_edit_button_srgba_unmultiplied(&mut end).changed() {
+                    self.particle_props.color_end = srgba_to_vec4(end);
+                }
+            });
+
+            ui.separator();
+            ui.strong("Size");
+            ui.add(
+                gg_engine::egui::Slider::new(&mut self.particle_props.size_begin, 0.01..=0.5)
+                    .text("Begin"),
+            );
+            ui.add(
+                gg_engine::egui::Slider::new(&mut self.particle_props.size_end, 0.0..=0.5)
+                    .text("End"),
+            );
+            ui.add(
+                gg_engine::egui::Slider::new(&mut self.particle_props.size_variation, 0.0..=0.2)
+                    .text("Variation"),
+            );
+
+            ui.separator();
+            ui.strong("Lifetime");
+            ui.add(
+                gg_engine::egui::Slider::new(&mut self.particle_props.lifetime, 0.1..=5.0)
+                    .text("Seconds"),
+            );
         });
     }
 }

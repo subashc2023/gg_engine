@@ -4,6 +4,7 @@ mod input;
 mod layer;
 mod logging;
 mod orthographic_camera_controller;
+pub mod particle_system;
 pub mod profiling;
 pub mod renderer;
 mod timestep;
@@ -23,6 +24,7 @@ pub use layer::{Layer, LayerStack};
 pub use log;
 pub use logging::init as log_init;
 pub use orthographic_camera_controller::OrthographicCameraController;
+pub use particle_system::{ParticleProps, ParticleSystem};
 pub use renderer::shaders;
 pub use renderer::{
     as_bytes, BufferElement, BufferLayout, IndexBuffer, OrthographicCamera, Pipeline, PresentMode,
@@ -41,6 +43,7 @@ pub mod prelude {
     pub use crate::input::Input;
     pub use crate::layer::{Layer, LayerStack};
     pub use crate::orthographic_camera_controller::OrthographicCameraController;
+    pub use crate::particle_system::{ParticleProps, ParticleSystem};
     pub use crate::profiling::{
         begin_session, drain_profile_results, end_session, ProfileResult, ProfileTimer,
     };

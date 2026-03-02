@@ -289,6 +289,68 @@ impl Renderer {
         }
     }
 
+    /// Push a particle quad directly — bypasses Mat4 construction.
+    /// Uses one sin/cos + direct vertex math instead of a full matrix transform.
+    pub fn draw_particle(
+        &self,
+        position: &Vec3,
+        size: f32,
+        rotation: f32,
+        color: Vec4,
+    ) {
+        let data = self
+            .renderer_2d
+            .as_ref()
+            .expect("Renderer2D not initialized — call init_2d first");
+
+        let half = size * 0.5;
+        let (sin_r, cos_r) = rotation.sin_cos();
+        let cx = cos_r * half;
+        let cy = sin_r * half;
+
+        // Four corners of a rotated quad centered at `position`.
+        //   TL = (-cos - (-sin), -sin - cos)  = (-cx + cy, -cy - cx)
+        //   TR = ( cos - (-sin),  sin - cos)   = ( cx + cy,  cy - cx)
+        //   BR = ( cos - sin,     sin - (-cos)) = ( cx - cy,  cy + cx)
+        //   BL = (-cos - sin,    -sin - (-cos)) = (-cx - cy, -cy + cx)
+        let px = position.x;
+        let py = position.y;
+        let pz = position.z;
+        let col = [color.x, color.y, color.z, color.w];
+
+        let vertices = [
+            BatchQuadVertex {
+                position: [px - cx + cy, py - cy - cx, pz],
+                color: col,
+                tex_coord: [0.0, 0.0],
+                tex_index: 0.0,
+            },
+            BatchQuadVertex {
+                position: [px + cx + cy, py + cy - cx, pz],
+                color: col,
+                tex_coord: [1.0, 0.0],
+                tex_index: 0.0,
+            },
+            BatchQuadVertex {
+                position: [px + cx - cy, py + cy + cx, pz],
+                color: col,
+                tex_coord: [1.0, 1.0],
+                tex_index: 0.0,
+            },
+            BatchQuadVertex {
+                position: [px - cx - cy, py - cy + cx, pz],
+                color: col,
+                tex_coord: [0.0, 1.0],
+                tex_index: 0.0,
+            },
+        ];
+
+        if !data.push_quad(vertices) {
+            self.flush_batch();
+            data.push_quad(vertices);
+        }
+    }
+
     /// Flush the current 2D batch (if any quads are pending).
     fn flush_batch(&self) {
         let data = self
