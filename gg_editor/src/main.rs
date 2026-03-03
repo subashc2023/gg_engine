@@ -350,6 +350,7 @@ impl Application for GGEditor {
                     self.scene.get_component_mut::<SpriteRendererComponent>(entity)
                 {
                     sprite.texture = Some(texture);
+                    sprite.texture_path = Some(path.to_string_lossy().to_string());
                 }
             }
         }
@@ -373,6 +374,19 @@ impl Application for GGEditor {
     }
 
     fn on_egui(&mut self, ctx: &egui::Context, window: &Window) {
+        // Sync window title with active scene name.
+        let title = match &self.editor_scene_path {
+            Some(path) => {
+                let name = std::path::Path::new(path)
+                    .file_name()
+                    .map(|n| n.to_string_lossy().to_string())
+                    .unwrap_or_default();
+                format!("GGEditor - {}", name)
+            }
+            None => "GGEditor".into(),
+        };
+        window.set_title(&title);
+
         // -- Title bar / Menu bar --
         #[cfg(not(target_os = "macos"))]
         {
@@ -387,6 +401,9 @@ impl Application for GGEditor {
                         .add(egui::Button::new("New").shortcut_text("Ctrl+N"))
                         .clicked()
                     {
+                        if self.scene_state != SceneState::Edit {
+                            self.on_scene_stop();
+                        }
                         self.new_scene();
                         ui.close();
                     }
@@ -394,6 +411,9 @@ impl Application for GGEditor {
                         .add(egui::Button::new("Open...").shortcut_text("Ctrl+O"))
                         .clicked()
                     {
+                        if self.scene_state != SceneState::Edit {
+                            self.on_scene_stop();
+                        }
                         self.open_scene();
                         ui.close();
                     }
@@ -401,6 +421,9 @@ impl Application for GGEditor {
                         .add(egui::Button::new("Save").shortcut_text("Ctrl+S"))
                         .clicked()
                     {
+                        if self.scene_state != SceneState::Edit {
+                            self.on_scene_stop();
+                        }
                         self.save_scene();
                         ui.close();
                     }
@@ -408,6 +431,9 @@ impl Application for GGEditor {
                         .add(egui::Button::new("Save As...").shortcut_text("Ctrl+Shift+S"))
                         .clicked()
                     {
+                        if self.scene_state != SceneState::Edit {
+                            self.on_scene_stop();
+                        }
                         self.save_scene_as();
                         ui.close();
                     }
@@ -456,6 +482,9 @@ impl Application for GGEditor {
                             .add(egui::Button::new("New").shortcut_text("Ctrl+N"))
                             .clicked()
                         {
+                            if self.scene_state != SceneState::Edit {
+                                self.on_scene_stop();
+                            }
                             self.new_scene();
                             ui.close();
                         }
@@ -463,6 +492,9 @@ impl Application for GGEditor {
                             .add(egui::Button::new("Open...").shortcut_text("Ctrl+O"))
                             .clicked()
                         {
+                            if self.scene_state != SceneState::Edit {
+                                self.on_scene_stop();
+                            }
                             self.open_scene();
                             ui.close();
                         }
@@ -470,6 +502,9 @@ impl Application for GGEditor {
                             .add(egui::Button::new("Save").shortcut_text("Ctrl+S"))
                             .clicked()
                         {
+                            if self.scene_state != SceneState::Edit {
+                                self.on_scene_stop();
+                            }
                             self.save_scene();
                             ui.close();
                         }
@@ -477,6 +512,9 @@ impl Application for GGEditor {
                             .add(egui::Button::new("Save As...").shortcut_text("Ctrl+Shift+S"))
                             .clicked()
                         {
+                            if self.scene_state != SceneState::Edit {
+                                self.on_scene_stop();
+                            }
                             self.save_scene_as();
                             ui.close();
                         }
@@ -575,10 +613,6 @@ impl Application for GGEditor {
 
 impl GGEditor {
     fn on_overlay_render(&self, renderer: &mut Renderer) {
-        if !self.show_physics_colliders {
-            return;
-        }
-
         // Set the appropriate camera for the overlay pass.
         match self.scene_state {
             SceneState::Play => {
@@ -596,54 +630,65 @@ impl GGEditor {
             }
         }
 
-        let collider_color = Vec4::new(0.0, 1.0, 0.0, 1.0);
+        // Physics collider visualization.
+        if self.show_physics_colliders {
+            let collider_color = Vec4::new(0.0, 1.0, 0.0, 1.0);
 
-        // Circle colliders.
-        for (transform, cc) in self
-            .scene
-            .world()
-            .query::<(&TransformComponent, &CircleCollider2DComponent)>()
-            .iter()
-        {
-            let translation = Vec3::new(
-                transform.translation.x + cc.offset.x,
-                transform.translation.y + cc.offset.y,
-                transform.translation.z - 0.001,
-            );
-            let scale = transform.scale * cc.radius * 2.0;
-            let collider_transform = Mat4::from_scale_rotation_translation(
-                Vec3::new(scale.x, scale.y, 1.0),
-                Quat::IDENTITY,
-                translation,
-            );
+            // Circle colliders.
+            for (transform, cc) in self
+                .scene
+                .world()
+                .query::<(&TransformComponent, &CircleCollider2DComponent)>()
+                .iter()
+            {
+                let translation = Vec3::new(
+                    transform.translation.x + cc.offset.x,
+                    transform.translation.y + cc.offset.y,
+                    transform.translation.z - 0.001,
+                );
+                let scale = transform.scale * cc.radius * 2.0;
+                let collider_transform = Mat4::from_scale_rotation_translation(
+                    Vec3::new(scale.x, scale.y, 1.0),
+                    Quat::IDENTITY,
+                    translation,
+                );
 
-            renderer.draw_circle(&collider_transform, collider_color, 0.01, 0.005, -1);
+                renderer.draw_circle(&collider_transform, collider_color, 0.01, 0.005, -1);
+            }
+
+            // Box colliders.
+            for (transform, bc) in self
+                .scene
+                .world()
+                .query::<(&TransformComponent, &BoxCollider2DComponent)>()
+                .iter()
+            {
+                let translation = Vec3::new(
+                    transform.translation.x + bc.offset.x,
+                    transform.translation.y + bc.offset.y,
+                    transform.translation.z - 0.001,
+                );
+                let scale = Vec3::new(
+                    transform.scale.x * bc.size.x * 2.0,
+                    transform.scale.y * bc.size.y * 2.0,
+                    1.0,
+                );
+                let collider_transform = Mat4::from_scale_rotation_translation(
+                    scale,
+                    Quat::from_rotation_z(transform.rotation.z),
+                    translation,
+                );
+
+                renderer.draw_rect_transform(&collider_transform, collider_color, -1);
+            }
         }
 
-        // Box colliders.
-        for (transform, bc) in self
-            .scene
-            .world()
-            .query::<(&TransformComponent, &BoxCollider2DComponent)>()
-            .iter()
-        {
-            let translation = Vec3::new(
-                transform.translation.x + bc.offset.x,
-                transform.translation.y + bc.offset.y,
-                transform.translation.z - 0.001,
-            );
-            let scale = Vec3::new(
-                transform.scale.x * bc.size.x * 2.0,
-                transform.scale.y * bc.size.y * 2.0,
-                1.0,
-            );
-            let collider_transform = Mat4::from_scale_rotation_translation(
-                scale,
-                Quat::from_rotation_z(transform.rotation.z),
-                translation,
-            );
-
-            renderer.draw_rect_transform(&collider_transform, collider_color, -1);
+        // Selected entity outline.
+        if let Some(selected) = self.selection_context {
+            if let Some(transform) = self.scene.get_component::<TransformComponent>(selected) {
+                let outline_color = Vec4::new(1.0, 0.5, 0.0, 1.0);
+                renderer.draw_rect_transform(&transform.get_transform(), outline_color, -1);
+            }
         }
     }
 }
@@ -861,6 +906,7 @@ impl GGEditor {
                 if w > 0 && h > 0 {
                     self.scene.on_viewport_resize(w, h);
                 }
+                self.queue_texture_loads_from_scene();
             }
         }
     }
@@ -899,6 +945,25 @@ impl GGEditor {
             let (w, h) = self.viewport_size;
             if w > 0 && h > 0 {
                 self.scene.on_viewport_resize(w, h);
+            }
+            self.queue_texture_loads_from_scene();
+        }
+    }
+
+    /// Scan the current scene for entities with `texture_path` set on their
+    /// [`SpriteRendererComponent`] and queue them for deferred GPU loading.
+    fn queue_texture_loads_from_scene(&mut self) {
+        let entities = self.scene.each_entity_with_tag();
+        for (entity, _tag) in &entities {
+            if let Some(sprite) = self.scene.get_component::<SpriteRendererComponent>(*entity) {
+                if let Some(ref path_str) = sprite.texture_path {
+                    let path = std::path::PathBuf::from(path_str);
+                    if path.exists() {
+                        self.pending_texture_loads.push((*entity, path));
+                    } else {
+                        warn!("Texture not found: {}", path_str);
+                    }
+                }
             }
         }
     }

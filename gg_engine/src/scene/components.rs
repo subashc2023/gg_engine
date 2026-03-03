@@ -136,6 +136,7 @@ impl Default for CameraComponent {
 pub struct SpriteRendererComponent {
     pub color: Vec4,
     pub texture: Option<Ref<Texture2D>>,
+    pub texture_path: Option<String>,
     pub tiling_factor: f32,
 }
 
@@ -144,6 +145,7 @@ impl SpriteRendererComponent {
         Self {
             color,
             texture: None,
+            texture_path: None,
             tiling_factor: 1.0,
         }
     }
@@ -153,6 +155,7 @@ impl SpriteRendererComponent {
         Self {
             color: Vec4::new(r, g, b, 1.0),
             texture: None,
+            texture_path: None,
             tiling_factor: 1.0,
         }
     }
@@ -163,6 +166,7 @@ impl Default for SpriteRendererComponent {
         Self {
             color: Vec4::ONE,
             texture: None,
+            texture_path: None,
             tiling_factor: 1.0,
         }
     }

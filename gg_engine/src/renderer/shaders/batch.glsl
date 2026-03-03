@@ -40,6 +40,9 @@ layout(location = 1) out int out_entity_id;
 
 void main() {
     int index = int(v_tex_index);
-    out_color = texture(u_textures[nonuniformEXT(index)], v_tex_coord) * v_color;
+    vec4 tex_color = texture(u_textures[nonuniformEXT(index)], v_tex_coord) * v_color;
+    if (tex_color.a == 0.0)
+        discard;
+    out_color = tex_color;
     out_entity_id = v_entity_id;
 }

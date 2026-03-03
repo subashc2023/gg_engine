@@ -35,6 +35,25 @@ pub struct Scene {
     physics_world: Option<PhysicsWorld2D>,
 }
 
+/// Invokes `$callback!` with every cloneable component type.
+///
+/// When adding a new component type, add it here and it will automatically
+/// be included in scene copy, entity duplication, etc.
+/// `NativeScriptComponent` is excluded (not `Clone` — handled manually).
+macro_rules! for_each_cloneable_component {
+    ($callback:ident) => {
+        $callback!(
+            TransformComponent,
+            CameraComponent,
+            SpriteRendererComponent,
+            CircleRendererComponent,
+            RigidBody2DComponent,
+            BoxCollider2DComponent,
+            CircleCollider2DComponent,
+        );
+    };
+}
+
 impl Scene {
     /// Create an empty scene.
     pub fn new() -> Self {
@@ -117,37 +136,13 @@ impl Scene {
             entity_map.insert(*handle, new_entity);
         }
 
-        // Phase 2: Copy components.
-        // TransformComponent — already exists on destination, overwrite values.
-        copy_component_if_has::<TransformComponent>(&source.world, &mut new_scene, &entity_map);
-        // CameraComponent
-        copy_component_if_has::<CameraComponent>(&source.world, &mut new_scene, &entity_map);
-        // SpriteRendererComponent
-        copy_component_if_has::<SpriteRendererComponent>(
-            &source.world,
-            &mut new_scene,
-            &entity_map,
-        );
-        // CircleRendererComponent
-        copy_component_if_has::<CircleRendererComponent>(
-            &source.world,
-            &mut new_scene,
-            &entity_map,
-        );
-        // RigidBody2DComponent (Clone impl resets runtime_body to None)
-        copy_component_if_has::<RigidBody2DComponent>(&source.world, &mut new_scene, &entity_map);
-        // BoxCollider2DComponent (Clone impl resets runtime_fixture to None)
-        copy_component_if_has::<BoxCollider2DComponent>(
-            &source.world,
-            &mut new_scene,
-            &entity_map,
-        );
-        // CircleCollider2DComponent (Clone impl resets runtime_fixture to None)
-        copy_component_if_has::<CircleCollider2DComponent>(
-            &source.world,
-            &mut new_scene,
-            &entity_map,
-        );
+        // Phase 2: Copy cloneable components.
+        macro_rules! copy_all {
+            ($($comp:ty),* $(,)?) => {
+                $(copy_component_if_has::<$comp>(&source.world, &mut new_scene, &entity_map);)*
+            };
+        }
+        for_each_cloneable_component!(copy_all);
         // NativeScriptComponent — manual copy (not Clone-able).
         for (handle, nsc) in source
             .world
@@ -174,59 +169,10 @@ impl Scene {
     /// The duplicate receives a fresh UUID but copies the tag name and all
     /// component data from `entity`. Useful for Ctrl+D in the editor.
     pub fn duplicate_entity(&mut self, entity: Entity) -> Entity {
-        // Phase 1: Extract all component data as owned values.
-        // Each `.map()` closure accesses fields via Deref on hecs::Ref, then
-        // the Ref is dropped — releasing the world borrow before the next get.
         let name = self
             .get_component::<TagComponent>(entity)
             .map(|t| t.tag.clone())
             .unwrap_or_else(|| "Entity".into());
-
-        let transform_data = self
-            .get_component::<TransformComponent>(entity)
-            .map(|tc| (tc.translation, tc.rotation, tc.scale));
-
-        let camera_data = self
-            .get_component::<CameraComponent>(entity)
-            .map(|cam| (cam.camera.clone(), cam.primary, cam.fixed_aspect_ratio));
-
-        let sprite_data = self
-            .get_component::<SpriteRendererComponent>(entity)
-            .map(|s| (s.color, s.texture.clone(), s.tiling_factor));
-
-        let circle_data = self
-            .get_component::<CircleRendererComponent>(entity)
-            .map(|c| (c.color, c.thickness, c.fade));
-
-        let rb_data = self
-            .get_component::<RigidBody2DComponent>(entity)
-            .map(|rb| (rb.body_type, rb.fixed_rotation));
-
-        let bc_data = self
-            .get_component::<BoxCollider2DComponent>(entity)
-            .map(|bc| {
-                (
-                    bc.offset,
-                    bc.size,
-                    bc.density,
-                    bc.friction,
-                    bc.restitution,
-                    bc.restitution_threshold,
-                )
-            });
-
-        let cc_data = self
-            .get_component::<CircleCollider2DComponent>(entity)
-            .map(|cc| {
-                (
-                    cc.offset,
-                    cc.radius,
-                    cc.density,
-                    cc.friction,
-                    cc.restitution,
-                    cc.restitution_threshold,
-                )
-            });
 
         let nsc_data = self
             .world
@@ -234,96 +180,17 @@ impl Scene {
             .ok()
             .map(|nsc| nsc.instantiate_fn);
 
-        // Phase 2: Create new entity with same name but new UUID.
         let new_entity = self.create_entity_with_tag(&name);
 
-        // Phase 3: Copy component data.
-        if let Some((translation, rotation, scale)) = transform_data {
-            if let Some(mut tc) = self.get_component_mut::<TransformComponent>(new_entity) {
-                tc.translation = translation;
-                tc.rotation = rotation;
-                tc.scale = scale;
-            }
+        // Copy all cloneable components.
+        macro_rules! duplicate_all {
+            ($($comp:ty),* $(,)?) => {
+                $(duplicate_component_if_has::<$comp>(self, entity, new_entity);)*
+            };
         }
+        for_each_cloneable_component!(duplicate_all);
 
-        if let Some((camera, primary, fixed_aspect_ratio)) = camera_data {
-            self.add_component(
-                new_entity,
-                CameraComponent {
-                    camera,
-                    primary,
-                    fixed_aspect_ratio,
-                },
-            );
-        }
-
-        if let Some((color, texture, tiling_factor)) = sprite_data {
-            self.add_component(
-                new_entity,
-                SpriteRendererComponent {
-                    color,
-                    texture,
-                    tiling_factor,
-                },
-            );
-        }
-
-        if let Some((color, thickness, fade)) = circle_data {
-            self.add_component(
-                new_entity,
-                CircleRendererComponent {
-                    color,
-                    thickness,
-                    fade,
-                },
-            );
-        }
-
-        if let Some((body_type, fixed_rotation)) = rb_data {
-            self.add_component(
-                new_entity,
-                RigidBody2DComponent {
-                    body_type,
-                    fixed_rotation,
-                    runtime_body: None,
-                },
-            );
-        }
-
-        if let Some((offset, size, density, friction, restitution, restitution_threshold)) =
-            bc_data
-        {
-            self.add_component(
-                new_entity,
-                BoxCollider2DComponent {
-                    offset,
-                    size,
-                    density,
-                    friction,
-                    restitution,
-                    restitution_threshold,
-                    runtime_fixture: None,
-                },
-            );
-        }
-
-        if let Some((offset, radius, density, friction, restitution, restitution_threshold)) =
-            cc_data
-        {
-            self.add_component(
-                new_entity,
-                CircleCollider2DComponent {
-                    offset,
-                    radius,
-                    density,
-                    friction,
-                    restitution,
-                    restitution_threshold,
-                    runtime_fixture: None,
-                },
-            );
-        }
-
+        // NativeScriptComponent — manual (not Clone).
         if let Some(instantiate_fn) = nsc_data {
             self.add_component(
                 new_entity,
@@ -854,6 +721,19 @@ fn copy_component_if_has<T: hecs::Component + Clone>(
         if let Some(&dst_entity) = entity_map.get(&handle) {
             dst.add_component(dst_entity, comp.clone());
         }
+    }
+}
+
+/// Clone a single component from `src` entity to `dst` entity within the same scene.
+/// The hecs::Ref borrow is released (via `.map()`) before mutating the world.
+fn duplicate_component_if_has<T: hecs::Component + Clone>(
+    scene: &mut Scene,
+    src: Entity,
+    dst: Entity,
+) {
+    let cloned = scene.get_component::<T>(src).map(|r| T::clone(&r));
+    if let Some(comp) = cloned {
+        scene.add_component(dst, comp);
     }
 }
 

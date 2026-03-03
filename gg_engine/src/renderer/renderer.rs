@@ -185,7 +185,7 @@ impl Renderer {
             color_format,
             depth_format,
             renderer_2d: None,
-            line_width: 2.0,
+            line_width: 4.0,
             last_stats_2d: Renderer2DStats::default(),
         }
     }
@@ -932,7 +932,7 @@ impl Renderer {
 
     /// Draw a wireframe rectangle at a 3D position with the given size and color.
     /// The rectangle lies in the XY plane at the given Z coordinate.
-    pub fn draw_rect(&self, position: &Vec3, size: &Vec2, color: Vec4) {
+    pub fn draw_rect(&self, position: &Vec3, size: &Vec2, color: Vec4, entity_id: i32) {
         let hx = size.x * 0.5;
         let hy = size.y * 0.5;
         let z = position.z;
@@ -942,10 +942,10 @@ impl Renderer {
         let p2 = Vec3::new(position.x + hx, position.y + hy, z); // top-right
         let p3 = Vec3::new(position.x - hx, position.y + hy, z); // top-left
 
-        self.draw_line(p0, p1, color, -1);
-        self.draw_line(p1, p2, color, -1);
-        self.draw_line(p2, p3, color, -1);
-        self.draw_line(p3, p0, color, -1);
+        self.draw_line(p0, p1, color, entity_id);
+        self.draw_line(p1, p2, color, entity_id);
+        self.draw_line(p2, p3, color, entity_id);
+        self.draw_line(p3, p0, color, entity_id);
     }
 
     /// Draw a wireframe rectangle using a pre-built transform matrix.

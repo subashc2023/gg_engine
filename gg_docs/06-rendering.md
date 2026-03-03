@@ -363,7 +363,7 @@ Debug rendering primitive — **not** an ECS component, purely a renderer API.
 | Method | Description |
 |--------|-------------|
 | `draw_line(p0, p1, color, entity_id)` | Single line segment |
-| `draw_rect(position, size, color)` | Wireframe XY rectangle (4 lines) |
+| `draw_rect(position, size, color, entity_id)` | Wireframe XY rectangle (4 lines) |
 | `draw_rect_transform(transform, color, entity_id)` | Wireframe rect via transform |
 
 ## Framebuffer (Offscreen Rendering)

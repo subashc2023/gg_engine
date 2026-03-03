@@ -115,6 +115,8 @@ struct SpriteData {
     color: [f32; 4],
     #[serde(rename = "TilingFactor", default = "default_tiling_factor")]
     tiling_factor: f32,
+    #[serde(rename = "TexturePath", skip_serializing_if = "Option::is_none", default)]
+    texture_path: Option<String>,
 }
 
 fn default_tiling_factor() -> f32 {
@@ -343,6 +345,7 @@ impl SceneSerializer {
                     .map(|sprite| SpriteData {
                         color: sprite.color.into(),
                         tiling_factor: sprite.tiling_factor,
+                        texture_path: sprite.texture_path.clone(),
                     });
 
             let circle_data =
@@ -475,6 +478,7 @@ impl SceneSerializer {
             if let Some(ref sd) = entity_data.sprite {
                 let mut sprite = SpriteRendererComponent::new(Vec4::from(sd.color));
                 sprite.tiling_factor = sd.tiling_factor;
+                sprite.texture_path = sd.texture_path.clone();
                 scene.add_component(entity, sprite);
             }
 
@@ -553,10 +557,9 @@ mod tests {
             tc.rotation = Vec3::new(0.1, 0.2, 0.3);
             tc.scale = Vec3::new(2.0, 2.0, 2.0);
         }
-        scene.add_component(
-            e1,
-            SpriteRendererComponent::new(Vec4::new(0.8, 0.2, 0.2, 1.0)),
-        );
+        let mut sprite = SpriteRendererComponent::new(Vec4::new(0.8, 0.2, 0.2, 1.0));
+        sprite.texture_path = Some("assets/textures/test.png".to_string());
+        scene.add_component(e1, sprite);
 
         let e2 = scene.create_entity_with_tag("Camera");
         scene.add_component(e2, CameraComponent::default());
@@ -588,11 +591,15 @@ mod tests {
         assert_eq!(tc.rotation, Vec3::new(0.1, 0.2, 0.3));
         assert_eq!(tc.scale, Vec3::new(2.0, 2.0, 2.0));
 
-        // Verify sprite.
+        // Verify sprite (color + texture_path round-trip).
         let sprite = loaded
             .get_component::<SpriteRendererComponent>(*test_entity)
             .unwrap();
         assert_eq!(sprite.color, Vec4::new(0.8, 0.2, 0.2, 1.0));
+        assert_eq!(
+            sprite.texture_path.as_deref(),
+            Some("assets/textures/test.png")
+        );
 
         // Verify camera entity.
         let (cam_entity, _) = entities.iter().find(|(_, n)| n == "Camera").unwrap();
