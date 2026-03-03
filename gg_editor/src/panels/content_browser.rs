@@ -19,8 +19,9 @@ pub(crate) struct ContentBrowserPayload {
 pub(crate) fn content_browser_ui(
     ui: &mut egui::Ui,
     current_directory: &mut std::path::PathBuf,
+    assets_root: &std::path::Path,
 ) {
-    let assets_root = std::path::PathBuf::from(ASSETS_DIR);
+    let assets_root = assets_root.to_path_buf();
 
     // Back button — only when deeper than the assets root.
     if *current_directory != assets_root {

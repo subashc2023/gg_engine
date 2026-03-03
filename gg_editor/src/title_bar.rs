@@ -30,6 +30,7 @@ pub fn title_bar_ui(
     window: &Window,
     play_state: PlayState,
     is_paused: bool,
+    project_title: &str,
     menu_contents: impl FnOnce(&mut egui::Ui),
 ) -> TitleBarResponse {
     let mut close_requested = false;
@@ -96,11 +97,11 @@ pub fn title_bar_ui(
                 menu_contents(ui);
             });
 
-            // -- 4. Centered toolbar buttons --
+            // -- 4. Centered toolbar: [title] [Play] [Simulate] --
             // Layout depends on scene state:
-            //   Edit:                     [Play] [Simulate]
-            //   Play/Simulate:            [Stop] [Pause]
-            //   Play/Simulate + paused:   [Stop] [Pause*] [Step]
+            //   Edit:                     [title] [Play] [Simulate]
+            //   Play/Simulate:            [title] [Stop] [Pause]
+            //   Play/Simulate + paused:   [title] [Stop] [Pause*] [Step]
             let is_edit = play_state == PlayState::Edit;
             let has_play_button = is_edit;
             let has_simulate_button = is_edit;
@@ -114,10 +115,28 @@ pub fn title_bar_ui(
                 .iter()
                 .filter(|&&b| b)
                 .count() as f32;
-            let total_width = btn_size.x * button_count + spacing * (button_count - 1.0).max(0.0);
+            let buttons_width = btn_size.x * button_count + spacing * (button_count - 1.0).max(0.0);
+
+            // Measure title text width so we can center the whole group.
+            let title_font = egui::FontId::new(12.0, egui::FontFamily::Proportional);
+            let title_galley = if !project_title.is_empty() {
+                Some(ui.painter().layout_no_wrap(
+                    project_title.to_string(),
+                    title_font.clone(),
+                    egui::Color32::WHITE, // color doesn't affect measurement
+                ))
+            } else {
+                None
+            };
+            let title_width = title_galley.as_ref().map_or(0.0, |g| g.size().x);
+            let title_gap = if title_width > 0.0 { 10.0 } else { 0.0 };
+            let total_width = title_width + title_gap + buttons_width;
+
             let center_x = title_bar_rect.center().x;
             let center_y = title_bar_rect.center().y;
-            let start_x = center_x - total_width / 2.0 + btn_size.x / 2.0;
+            let group_left = center_x - total_width / 2.0;
+            let buttons_left = group_left + title_width + title_gap;
+            let start_x = buttons_left + btn_size.x / 2.0;
 
             // Allocate button rects left-to-right.
             let mut btn_idx = 0;
@@ -153,6 +172,13 @@ pub fn title_bar_ui(
 
             // -- 5. Paint everything (immutable borrows only) --
             let painter = ui.painter();
+
+            // Project title text (left of buttons, centered as a group).
+            if let Some(galley) = title_galley {
+                let title_color = egui::Color32::from_rgb(0x88, 0x88, 0x88);
+                let title_pos = egui::pos2(group_left, center_y - galley.size().y / 2.0);
+                painter.galley(title_pos, galley, title_color);
+            }
 
             // Play button (green triangle).
             if let Some((rect, ref resp)) = play_rect_resp {

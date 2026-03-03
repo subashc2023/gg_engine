@@ -38,10 +38,11 @@ pub(crate) fn properties_ui(
     selection_context: &mut Option<Entity>,
     pending_texture_loads: &mut Vec<(Entity, std::path::PathBuf)>,
     is_playing: bool,
+    assets_root: &std::path::Path,
 ) {
     if let Some(entity) = *selection_context {
         if scene.is_alive(entity) {
-            draw_components(ui, scene, entity, pending_texture_loads, is_playing);
+            draw_components(ui, scene, entity, pending_texture_loads, is_playing, assets_root);
         } else {
             *selection_context = None;
         }
@@ -201,6 +202,7 @@ fn draw_components(
     entity: Entity,
     pending_texture_loads: &mut Vec<(Entity, std::path::PathBuf)>,
     is_playing: bool,
+    assets_root: &std::path::Path,
 ) {
     let bold_family = egui::FontFamily::Name(BOLD_FONT.into());
 
@@ -576,8 +578,10 @@ fn draw_components(
 
             // Click to open file dialog in assets/textures.
             if btn_resp.clicked() {
+                let textures_dir = assets_root.join("textures");
+                let textures_dir_str = textures_dir.to_string_lossy();
                 if let Some(path_str) =
-                    FileDialogs::open_file_in("Image files", &["png", "jpg", "jpeg"], "assets/textures")
+                    FileDialogs::open_file_in("Image files", &["png", "jpg", "jpeg"], &textures_dir_str)
                 {
                     pending_texture_loads.push((entity, std::path::PathBuf::from(path_str)));
                 }
@@ -1143,8 +1147,10 @@ fn draw_components(
 
                     // Click to open file dialog in assets/scripts.
                     if btn_resp.clicked() {
+                        let scripts_dir = assets_root.join("scripts");
+                        let scripts_dir_str = scripts_dir.to_string_lossy();
                         if let Some(path) =
-                            FileDialogs::open_file_in("Lua scripts", &["lua"], "assets/scripts")
+                            FileDialogs::open_file_in("Lua scripts", &["lua"], &scripts_dir_str)
                         {
                             new_script_path = Some(path);
                         }

@@ -7,6 +7,7 @@ mod orthographic_camera_controller;
 pub mod particle_system;
 mod platform_utils;
 pub mod profiling;
+pub mod project;
 pub mod renderer;
 pub mod scene;
 mod timestep;
@@ -32,6 +33,7 @@ pub use logging::init as log_init;
 pub use orthographic_camera_controller::OrthographicCameraController;
 pub use particle_system::{ParticleProps, ParticleSystem};
 pub use platform_utils::FileDialogs;
+pub use project::Project;
 pub use renderer::shaders;
 pub use renderer::{
     as_bytes, BufferElement, BufferLayout, EditorCamera, Framebuffer, FramebufferSpec,
@@ -64,6 +66,7 @@ pub mod prelude {
     pub use crate::orthographic_camera_controller::OrthographicCameraController;
     pub use crate::particle_system::{ParticleProps, ParticleSystem};
     pub use crate::platform_utils::FileDialogs;
+    pub use crate::project::Project;
     pub use crate::profiling::{
         begin_session, drain_profile_results, end_session, ProfileResult, ProfileTimer,
     };

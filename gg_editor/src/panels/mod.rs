@@ -1,4 +1,5 @@
 pub(crate) mod content_browser;
+mod project;
 mod properties;
 mod scene_hierarchy;
 mod settings;
@@ -21,6 +22,7 @@ pub(crate) enum Tab {
     Properties,
     ContentBrowser,
     Settings,
+    Project,
 }
 
 // ---------------------------------------------------------------------------
@@ -45,6 +47,9 @@ pub(crate) struct EditorTabViewer<'a> {
     pub(crate) pending_open_path: &'a mut Option<std::path::PathBuf>,
     pub(crate) pending_texture_loads: &'a mut Vec<(Entity, std::path::PathBuf)>,
     pub(crate) is_playing: bool,
+    pub(crate) assets_root: &'a std::path::Path,
+    pub(crate) project_name: Option<&'a str>,
+    pub(crate) editor_scene_path: Option<&'a str>,
 }
 
 impl EditorTabViewer<'_> {
@@ -66,6 +71,7 @@ impl egui_dock::TabViewer for EditorTabViewer<'_> {
             Tab::Properties => "Properties".into(),
             Tab::ContentBrowser => "Content Browser".into(),
             Tab::Settings => "Settings".into(),
+            Tab::Project => "Project".into(),
         }
     }
 
@@ -103,12 +109,13 @@ impl egui_dock::TabViewer for EditorTabViewer<'_> {
                     self.selection_context,
                     self.pending_texture_loads,
                     self.is_playing,
+                    self.assets_root,
                 );
             }
 
             Tab::ContentBrowser => {
                 self.unfocus_viewport_on_click(ui);
-                content_browser::content_browser_ui(ui, self.current_directory);
+                content_browser::content_browser_ui(ui, self.current_directory, self.assets_root);
             }
 
             Tab::Settings => {
@@ -119,6 +126,17 @@ impl egui_dock::TabViewer for EditorTabViewer<'_> {
                     self.frame_time_ms,
                     self.vsync,
                     self.hovered_entity,
+                );
+            }
+
+            Tab::Project => {
+                self.unfocus_viewport_on_click(ui);
+                project::project_ui(
+                    ui,
+                    self.project_name,
+                    self.assets_root,
+                    self.editor_scene_path,
+                    self.pending_open_path,
                 );
             }
         }
@@ -138,7 +156,7 @@ impl egui_dock::TabViewer for EditorTabViewer<'_> {
 
     fn scroll_bars(&self, tab: &Tab) -> [bool; 2] {
         match tab {
-            Tab::SceneHierarchy | Tab::Properties | Tab::Settings => [false, true],
+            Tab::SceneHierarchy | Tab::Properties | Tab::Settings | Tab::Project => [false, true],
             _ => [false, false],
         }
     }
