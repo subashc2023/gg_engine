@@ -25,9 +25,14 @@ pub(crate) fn scene_hierarchy_ui(
     }
 
     // Click on blank space to deselect.
+    // Clamp to visible remaining height so the blank area doesn't extend
+    // infinitely inside the scroll area.
     let remaining = ui.available_rect_before_wrap();
-    if remaining.width() > 0.0 && remaining.height() > 0.0 {
-        let response = ui.allocate_rect(remaining, egui::Sense::click());
+    let visible_height = (ui.clip_rect().max.y - remaining.min.y).max(0.0);
+    if remaining.width() > 0.0 && visible_height > 0.0 {
+        let clamped =
+            egui::Rect::from_min_size(remaining.min, egui::vec2(remaining.width(), visible_height));
+        let response = ui.allocate_rect(clamped, egui::Sense::click());
         if response.clicked() {
             *selection_context = None;
         }

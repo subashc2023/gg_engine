@@ -18,6 +18,8 @@ use crate::renderer::Renderer;
 use crate::timestep::Timestep;
 use crate::uuid::Uuid;
 
+use std::collections::HashMap;
+
 use physics_2d::PhysicsWorld2D;
 use rapier2d::na;
 
@@ -75,6 +77,208 @@ impl Scene {
     /// Remove an entity and all its components from the scene.
     pub fn destroy_entity(&mut self, entity: Entity) -> Result<(), hecs::NoSuchEntity> {
         self.world.despawn(entity.handle())
+    }
+
+    // -----------------------------------------------------------------
+    // Scene / Entity copying
+    // -----------------------------------------------------------------
+
+    /// Create a deep copy of the entire scene.
+    ///
+    /// All entities are recreated with their original UUIDs (via
+    /// [`create_entity_with_uuid`](Self::create_entity_with_uuid)) and all
+    /// component data is cloned. Runtime-only handles (physics bodies,
+    /// colliders) are reset to `None`. Script instances are not copied —
+    /// they will be lazily re-instantiated on the first update.
+    ///
+    /// Used by the editor to create a runtime scene from the editor scene
+    /// when entering play mode.
+    pub fn copy(source: &Scene) -> Scene {
+        let mut new_scene = Scene::new();
+        new_scene.viewport_width = source.viewport_width;
+        new_scene.viewport_height = source.viewport_height;
+
+        // Phase 1: Create entities with matching UUIDs.
+        // Build a map from source hecs handle → destination Entity.
+        // Collect and sort by hecs entity ID so the destination world spawns
+        // entities in the same relative order (preserves Scene Hierarchy ordering).
+        let mut entity_map: HashMap<hecs::Entity, Entity> = HashMap::new();
+
+        let mut source_entities: Vec<_> = source
+            .world
+            .query::<(hecs::Entity, &IdComponent, &TagComponent)>()
+            .iter()
+            .map(|(handle, id, tag)| (handle, id.id, tag.tag.clone()))
+            .collect();
+        source_entities.sort_by_key(|(handle, _, _)| handle.id());
+
+        for (handle, uuid, tag) in &source_entities {
+            let new_entity = new_scene.create_entity_with_uuid(*uuid, tag);
+            entity_map.insert(*handle, new_entity);
+        }
+
+        // Phase 2: Copy components.
+        // TransformComponent — already exists on destination, overwrite values.
+        copy_component_if_has::<TransformComponent>(&source.world, &mut new_scene, &entity_map);
+        // CameraComponent
+        copy_component_if_has::<CameraComponent>(&source.world, &mut new_scene, &entity_map);
+        // SpriteRendererComponent
+        copy_component_if_has::<SpriteRendererComponent>(
+            &source.world,
+            &mut new_scene,
+            &entity_map,
+        );
+        // RigidBody2DComponent (Clone impl resets runtime_body to None)
+        copy_component_if_has::<RigidBody2DComponent>(&source.world, &mut new_scene, &entity_map);
+        // BoxCollider2DComponent (Clone impl resets runtime_fixture to None)
+        copy_component_if_has::<BoxCollider2DComponent>(
+            &source.world,
+            &mut new_scene,
+            &entity_map,
+        );
+        // NativeScriptComponent — manual copy (not Clone-able).
+        for (handle, nsc) in source
+            .world
+            .query::<(hecs::Entity, &NativeScriptComponent)>()
+            .iter()
+        {
+            if let Some(&dst_entity) = entity_map.get(&handle) {
+                new_scene.add_component(
+                    dst_entity,
+                    NativeScriptComponent {
+                        instance: None,
+                        instantiate_fn: nsc.instantiate_fn,
+                        created: false,
+                    },
+                );
+            }
+        }
+
+        new_scene
+    }
+
+    /// Duplicate an entity within this scene, returning the new entity.
+    ///
+    /// The duplicate receives a fresh UUID but copies the tag name and all
+    /// component data from `entity`. Useful for Ctrl+D in the editor.
+    pub fn duplicate_entity(&mut self, entity: Entity) -> Entity {
+        // Phase 1: Extract all component data as owned values.
+        // Each `.map()` closure accesses fields via Deref on hecs::Ref, then
+        // the Ref is dropped — releasing the world borrow before the next get.
+        let name = self
+            .get_component::<TagComponent>(entity)
+            .map(|t| t.tag.clone())
+            .unwrap_or_else(|| "Entity".into());
+
+        let transform_data = self
+            .get_component::<TransformComponent>(entity)
+            .map(|tc| (tc.translation, tc.rotation, tc.scale));
+
+        let camera_data = self
+            .get_component::<CameraComponent>(entity)
+            .map(|cam| (cam.camera.clone(), cam.primary, cam.fixed_aspect_ratio));
+
+        let sprite_data = self
+            .get_component::<SpriteRendererComponent>(entity)
+            .map(|s| (s.color, s.texture.clone(), s.tiling_factor));
+
+        let rb_data = self
+            .get_component::<RigidBody2DComponent>(entity)
+            .map(|rb| (rb.body_type, rb.fixed_rotation));
+
+        let bc_data = self
+            .get_component::<BoxCollider2DComponent>(entity)
+            .map(|bc| {
+                (
+                    bc.offset,
+                    bc.size,
+                    bc.density,
+                    bc.friction,
+                    bc.restitution,
+                    bc.restitution_threshold,
+                )
+            });
+
+        let nsc_data = self
+            .world
+            .get::<&NativeScriptComponent>(entity.handle())
+            .ok()
+            .map(|nsc| nsc.instantiate_fn);
+
+        // Phase 2: Create new entity with same name but new UUID.
+        let new_entity = self.create_entity_with_tag(&name);
+
+        // Phase 3: Copy component data.
+        if let Some((translation, rotation, scale)) = transform_data {
+            if let Some(mut tc) = self.get_component_mut::<TransformComponent>(new_entity) {
+                tc.translation = translation;
+                tc.rotation = rotation;
+                tc.scale = scale;
+            }
+        }
+
+        if let Some((camera, primary, fixed_aspect_ratio)) = camera_data {
+            self.add_component(
+                new_entity,
+                CameraComponent {
+                    camera,
+                    primary,
+                    fixed_aspect_ratio,
+                },
+            );
+        }
+
+        if let Some((color, texture, tiling_factor)) = sprite_data {
+            self.add_component(
+                new_entity,
+                SpriteRendererComponent {
+                    color,
+                    texture,
+                    tiling_factor,
+                },
+            );
+        }
+
+        if let Some((body_type, fixed_rotation)) = rb_data {
+            self.add_component(
+                new_entity,
+                RigidBody2DComponent {
+                    body_type,
+                    fixed_rotation,
+                    runtime_body: None,
+                },
+            );
+        }
+
+        if let Some((offset, size, density, friction, restitution, restitution_threshold)) =
+            bc_data
+        {
+            self.add_component(
+                new_entity,
+                BoxCollider2DComponent {
+                    offset,
+                    size,
+                    density,
+                    friction,
+                    restitution,
+                    restitution_threshold,
+                    runtime_fixture: None,
+                },
+            );
+        }
+
+        if let Some(instantiate_fn) = nsc_data {
+            self.add_component(
+                new_entity,
+                NativeScriptComponent {
+                    instance: None,
+                    instantiate_fn,
+                    created: false,
+                },
+            );
+        }
+
+        new_entity
     }
 
     // -----------------------------------------------------------------
@@ -505,6 +709,20 @@ impl Default for Scene {
     }
 }
 
+/// Copy all instances of a cloneable component from `src` world into `dst` scene,
+/// using `entity_map` to translate source hecs handles to destination entities.
+fn copy_component_if_has<T: hecs::Component + Clone>(
+    src: &hecs::World,
+    dst: &mut Scene,
+    entity_map: &HashMap<hecs::Entity, Entity>,
+) {
+    for (handle, comp) in src.query::<(hecs::Entity, &T)>().iter() {
+        if let Some(&dst_entity) = entity_map.get(&handle) {
+            dst.add_component(dst_entity, comp.clone());
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -630,5 +848,118 @@ mod tests {
 
         let count = scene.world().query::<&TagComponent>().iter().count();
         assert_eq!(count, 2);
+    }
+
+    #[test]
+    fn copy_preserves_entity_count() {
+        let mut scene = Scene::new();
+        scene.create_entity_with_tag("A");
+        scene.create_entity_with_tag("B");
+        scene.create_entity_with_tag("C");
+
+        let copy = Scene::copy(&scene);
+        assert_eq!(copy.entity_count(), 3);
+    }
+
+    #[test]
+    fn copy_preserves_uuids() {
+        let mut scene = Scene::new();
+        let e = scene.create_entity_with_tag("Player");
+        let original_uuid = scene.get_component::<IdComponent>(e).unwrap().id.raw();
+
+        let copy = Scene::copy(&scene);
+        // Find the entity in the copy by iterating.
+        let mut found = false;
+        for id in copy.world().query::<&IdComponent>().iter() {
+            if id.id.raw() == original_uuid {
+                found = true;
+                break;
+            }
+        }
+        assert!(found, "UUID not preserved in copy");
+    }
+
+    #[test]
+    fn copy_preserves_transform() {
+        let mut scene = Scene::new();
+        let e = scene.create_entity_with_tag("Obj");
+        {
+            let mut t = scene.get_component_mut::<TransformComponent>(e).unwrap();
+            t.translation = Vec3::new(1.0, 2.0, 3.0);
+            t.rotation = Vec3::new(0.1, 0.2, 0.3);
+            t.scale = Vec3::new(4.0, 5.0, 6.0);
+        }
+
+        let copy = Scene::copy(&scene);
+        let mut query = copy.world().query::<&TransformComponent>();
+        let tc = query.iter().next().unwrap();
+        assert_eq!(tc.translation, Vec3::new(1.0, 2.0, 3.0));
+        assert_eq!(tc.rotation, Vec3::new(0.1, 0.2, 0.3));
+        assert_eq!(tc.scale, Vec3::new(4.0, 5.0, 6.0));
+    }
+
+    #[test]
+    fn copy_is_independent() {
+        let mut scene = Scene::new();
+        let e = scene.create_entity_with_tag("Obj");
+        {
+            let mut t = scene.get_component_mut::<TransformComponent>(e).unwrap();
+            t.translation = Vec3::new(1.0, 0.0, 0.0);
+        }
+
+        let mut copy = Scene::copy(&scene);
+        // Modify the copy — original should be unaffected.
+        for tc in copy.world_mut().query_mut::<&mut TransformComponent>() {
+            tc.translation = Vec3::new(99.0, 99.0, 99.0);
+        }
+
+        let original_tc = scene.get_component::<TransformComponent>(e).unwrap();
+        assert_eq!(original_tc.translation, Vec3::new(1.0, 0.0, 0.0));
+    }
+
+    #[test]
+    fn duplicate_entity_creates_new_entity() {
+        let mut scene = Scene::new();
+        let e = scene.create_entity_with_tag("Original");
+        assert_eq!(scene.entity_count(), 1);
+
+        let dup = scene.duplicate_entity(e);
+        assert_eq!(scene.entity_count(), 2);
+        assert_ne!(e, dup);
+    }
+
+    #[test]
+    fn duplicate_entity_copies_tag() {
+        let mut scene = Scene::new();
+        let e = scene.create_entity_with_tag("Player");
+        let dup = scene.duplicate_entity(e);
+
+        let tag = scene.get_component::<TagComponent>(dup).unwrap();
+        assert_eq!(tag.tag, "Player");
+    }
+
+    #[test]
+    fn duplicate_entity_new_uuid() {
+        let mut scene = Scene::new();
+        let e = scene.create_entity_with_tag("Obj");
+        let dup = scene.duplicate_entity(e);
+
+        let uuid_orig = scene.get_component::<IdComponent>(e).unwrap().id.raw();
+        let uuid_dup = scene.get_component::<IdComponent>(dup).unwrap().id.raw();
+        assert_ne!(uuid_orig, uuid_dup);
+    }
+
+    #[test]
+    fn duplicate_entity_copies_transform() {
+        let mut scene = Scene::new();
+        let e = scene.create_entity_with_tag("Obj");
+        {
+            let mut t = scene.get_component_mut::<TransformComponent>(e).unwrap();
+            t.translation = Vec3::new(5.0, 6.0, 7.0);
+        }
+
+        let dup = scene.duplicate_entity(e);
+        let t = scene.get_component::<TransformComponent>(dup).unwrap();
+        assert_eq!(t.translation, Vec3::new(5.0, 6.0, 7.0));
     }
 }

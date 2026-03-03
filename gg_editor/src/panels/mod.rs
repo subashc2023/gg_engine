@@ -135,7 +135,10 @@ impl egui_dock::TabViewer for EditorTabViewer<'_> {
         !matches!(tab, Tab::Viewport)
     }
 
-    fn scroll_bars(&self, _tab: &Tab) -> [bool; 2] {
-        [false, false]
+    fn scroll_bars(&self, tab: &Tab) -> [bool; 2] {
+        match tab {
+            Tab::SceneHierarchy | Tab::Properties | Tab::Settings => [false, true],
+            _ => [false, false],
+        }
     }
 }

@@ -8,19 +8,27 @@ const BAR_BG: egui::Color32 = egui::Color32::from_rgb(0x18, 0x18, 0x18);
 const BUTTON_ICON_COLOR: egui::Color32 = egui::Color32::from_rgb(0xCC, 0xCC, 0xCC);
 const BUTTON_HOVER_BG: egui::Color32 = egui::Color32::from_rgb(0x40, 0x40, 0x40);
 const CLOSE_HOVER_BG: egui::Color32 = egui::Color32::from_rgb(0xE8, 0x11, 0x23);
-const TITLE_COLOR: egui::Color32 = egui::Color32::from_rgb(0x96, 0x96, 0x96);
+
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum PlayState {
+    Edit,
+    Play,
+}
 
 pub struct TitleBarResponse {
     pub close_requested: bool,
+    pub play_toggled: bool,
 }
 
 pub fn title_bar_ui(
     ctx: &egui::Context,
     window: &Window,
-    title: &str,
+    play_state: PlayState,
     menu_contents: impl FnOnce(&mut egui::Ui),
 ) -> TitleBarResponse {
     let mut close_requested = false;
+    let mut play_toggled = false;
     let is_maximized = window.is_maximized();
 
     egui::TopBottomPanel::top("title_bar")
@@ -80,24 +88,59 @@ pub fn title_bar_ui(
                 menu_contents(ui);
             });
 
-            // -- 4. Paint everything (immutable borrows only) --
+            // -- 4. Play/Stop button (centered) --
+            let btn_size = egui::vec2(28.0, 22.0);
+            let play_rect = egui::Rect::from_center_size(
+                title_bar_rect.center(),
+                btn_size,
+            );
+            let play_resp = ui.allocate_rect(play_rect, egui::Sense::click());
+
+            // -- 5. Paint everything (immutable borrows only) --
             let painter = ui.painter();
 
-            // Title: centered in window, hidden if it would overlap buttons
-            let title_galley = painter.layout_no_wrap(
-                title.to_string(),
-                egui::FontId::proportional(13.0),
-                TITLE_COLOR,
-            );
-            let title_w = title_galley.size().x;
-            let title_x = title_bar_rect.center().x - title_w / 2.0;
-            if title_x + title_w + 8.0 < buttons_x {
-                let title_y = title_bar_rect.center().y - title_galley.size().y / 2.0;
-                painter.galley(
-                    egui::pos2(title_x, title_y),
-                    title_galley,
-                    egui::Color32::TRANSPARENT,
+            // Play/stop button
+            if play_resp.hovered() {
+                painter.rect_filled(
+                    play_rect,
+                    egui::CornerRadius::same(3),
+                    BUTTON_HOVER_BG,
                 );
+            }
+
+            let center = play_rect.center();
+            match play_state {
+                PlayState::Edit => {
+                    // Green play triangle.
+                    let half = 6.0;
+                    let points = vec![
+                        egui::pos2(center.x - half * 0.7, center.y - half),
+                        egui::pos2(center.x + half, center.y),
+                        egui::pos2(center.x - half * 0.7, center.y + half),
+                    ];
+                    painter.add(egui::Shape::convex_polygon(
+                        points,
+                        egui::Color32::from_rgb(0x4E, 0xC9, 0x4E),
+                        egui::Stroke::NONE,
+                    ));
+                }
+                PlayState::Play => {
+                    // Blue stop square.
+                    let half = 5.0;
+                    let stop_rect = egui::Rect::from_center_size(
+                        center,
+                        egui::vec2(half * 2.0, half * 2.0),
+                    );
+                    painter.rect_filled(
+                        stop_rect,
+                        egui::CornerRadius::same(2),
+                        egui::Color32::from_rgb(0x3B, 0x9C, 0xE9),
+                    );
+                }
+            }
+
+            if play_resp.clicked() {
+                play_toggled = true;
             }
 
             // Button icons
@@ -127,7 +170,10 @@ pub fn title_bar_ui(
             }
         });
 
-    TitleBarResponse { close_requested }
+    TitleBarResponse {
+        close_requested,
+        play_toggled,
+    }
 }
 
 // ---------------------------------------------------------------------------

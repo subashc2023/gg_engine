@@ -46,6 +46,7 @@ impl Default for TagComponent {
 /// Rotation is stored in **radians** (Euler angles, XYZ order).
 /// Use [`get_transform()`](TransformComponent::get_transform) to build
 /// the combined 4×4 matrix for rendering.
+#[derive(Clone)]
 pub struct TransformComponent {
     pub translation: Vec3,
     /// Euler rotation in radians (X, Y, Z).
@@ -94,6 +95,7 @@ impl Default for TransformComponent {
 /// Multiple cameras can exist in a scene. Only the one with `primary = true`
 /// is used for rendering. If multiple cameras have `primary = true`, the
 /// last one found in the query is used.
+#[derive(Clone)]
 pub struct CameraComponent {
     pub camera: SceneCamera,
     pub primary: bool,
@@ -130,6 +132,7 @@ impl Default for CameraComponent {
 /// [`TransformComponent`] to submit quad draw calls. When `texture` is
 /// `Some`, the texture is sampled and multiplied by `color` (tint). When
 /// `None`, a white texture is used and the quad is flat-colored.
+#[derive(Clone)]
 pub struct SpriteRendererComponent {
     pub color: Vec4,
     pub texture: Option<Ref<Texture2D>>,
@@ -243,6 +246,16 @@ impl RigidBody2DComponent {
     }
 }
 
+impl Clone for RigidBody2DComponent {
+    fn clone(&self) -> Self {
+        Self {
+            body_type: self.body_type,
+            fixed_rotation: self.fixed_rotation,
+            runtime_body: None, // Runtime-only, not copied.
+        }
+    }
+}
+
 impl Default for RigidBody2DComponent {
     fn default() -> Self {
         Self {
@@ -267,6 +280,20 @@ pub struct BoxCollider2DComponent {
     pub restitution_threshold: f32,
     /// Runtime-only handle into the physics world. Not serialized.
     pub(crate) runtime_fixture: Option<rapier2d::geometry::ColliderHandle>,
+}
+
+impl Clone for BoxCollider2DComponent {
+    fn clone(&self) -> Self {
+        Self {
+            offset: self.offset,
+            size: self.size,
+            density: self.density,
+            friction: self.friction,
+            restitution: self.restitution,
+            restitution_threshold: self.restitution_threshold,
+            runtime_fixture: None, // Runtime-only, not copied.
+        }
+    }
 }
 
 impl Default for BoxCollider2DComponent {

@@ -21,6 +21,7 @@ pub enum ProjectionType {
 ///
 /// Used inside [`CameraComponent`](crate::scene::CameraComponent) to define
 /// how the scene is projected.
+#[derive(Clone)]
 pub struct SceneCamera {
     projection: Mat4,
     projection_type: ProjectionType,

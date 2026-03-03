@@ -29,7 +29,8 @@ enum SceneState {
 
 struct GGEditor {
     scene_state: SceneState,
-    scene_snapshot: Option<String>,
+    editor_scene: Option<Scene>,
+    editor_scene_path: Option<String>,
     dock_state: egui_dock::DockState<Tab>,
     scene_fb: Option<Framebuffer>,
     viewport_size: (u32, u32),
@@ -147,7 +148,8 @@ impl Application for GGEditor {
 
         GGEditor {
             scene_state: SceneState::Edit,
-            scene_snapshot: None,
+            editor_scene: None,
+            editor_scene_path: None,
             dock_state,
             scene_fb: None,
             viewport_size: (0, 0),
@@ -259,6 +261,17 @@ impl Application for GGEditor {
                     }
                     self.save_scene_as();
                 }
+                KeyCode::S if ctrl && !shift => {
+                    if self.scene_state == SceneState::Play {
+                        self.on_scene_stop();
+                    }
+                    self.save_scene();
+                }
+
+                // Entity duplication — edit mode only.
+                KeyCode::D if ctrl && self.scene_state == SceneState::Edit => {
+                    self.on_duplicate_entity();
+                }
 
                 // Gizmo shortcuts (Q/W/E/R) — edit mode only, no modifiers.
                 KeyCode::Q if !ctrl && !shift && self.scene_state == SceneState::Edit => {
@@ -346,7 +359,11 @@ impl Application for GGEditor {
         // -- Title bar / Menu bar --
         #[cfg(not(target_os = "macos"))]
         {
-            let response = title_bar::title_bar_ui(ctx, window, "GGEditor", |ui| {
+            let play_state = match self.scene_state {
+                SceneState::Edit => title_bar::PlayState::Edit,
+                SceneState::Play => title_bar::PlayState::Play,
+            };
+            let response = title_bar::title_bar_ui(ctx, window, play_state, |ui| {
                 ui.menu_button("File", |ui| {
                     if ui
                         .add(egui::Button::new("New").shortcut_text("Ctrl+N"))
@@ -363,6 +380,13 @@ impl Application for GGEditor {
                         ui.close();
                     }
                     if ui
+                        .add(egui::Button::new("Save").shortcut_text("Ctrl+S"))
+                        .clicked()
+                    {
+                        self.save_scene();
+                        ui.close();
+                    }
+                    if ui
                         .add(egui::Button::new("Save As...").shortcut_text("Ctrl+Shift+S"))
                         .clicked()
                     {
@@ -373,6 +397,12 @@ impl Application for GGEditor {
             });
             if response.close_requested {
                 self.should_exit = true;
+            }
+            if response.play_toggled {
+                match self.scene_state {
+                    SceneState::Edit => self.on_scene_play(),
+                    SceneState::Play => self.on_scene_stop(),
+                }
             }
         }
 
@@ -397,6 +427,13 @@ impl Application for GGEditor {
                             ui.close();
                         }
                         if ui
+                            .add(egui::Button::new("Save").shortcut_text("Ctrl+S"))
+                            .clicked()
+                        {
+                            self.save_scene();
+                            ui.close();
+                        }
+                        if ui
                             .add(egui::Button::new("Save As...").shortcut_text("Ctrl+Shift+S"))
                             .clicked()
                         {
@@ -406,10 +443,9 @@ impl Application for GGEditor {
                     });
                 });
             });
+            // Toolbar (Play / Stop) — macOS only (Windows has it in the title bar).
+            self.toolbar_ui(ctx);
         }
-
-        // -- Toolbar (Play / Stop) --
-        self.toolbar_ui(ctx);
 
         let fb_tex_id = self.scene_fb.as_ref().and_then(|fb| fb.egui_texture_id());
 
@@ -490,6 +526,7 @@ impl Application for GGEditor {
 // ---------------------------------------------------------------------------
 
 impl GGEditor {
+    #[cfg(target_os = "macos")]
     fn toolbar_ui(&mut self, ctx: &egui::Context) {
         egui::TopBottomPanel::top("toolbar")
             .exact_height(34.0)
@@ -573,7 +610,9 @@ impl GGEditor {
 
     fn on_scene_play(&mut self) {
         self.scene_state = SceneState::Play;
-        self.scene_snapshot = SceneSerializer::serialize_to_string(&self.scene);
+        let runtime_scene = Scene::copy(&self.scene);
+        let editor_scene = std::mem::replace(&mut self.scene, runtime_scene);
+        self.editor_scene = Some(editor_scene);
         self.scene.on_runtime_start();
     }
 
@@ -581,17 +620,14 @@ impl GGEditor {
         self.scene_state = SceneState::Edit;
         self.scene.on_runtime_stop();
 
-        if let Some(snapshot) = self.scene_snapshot.take() {
-            let mut restored = Scene::new();
-            if SceneSerializer::deserialize_from_string(&mut restored, &snapshot) {
-                let old = std::mem::replace(&mut self.scene, restored);
-                self.pending_drop_scenes.push(old);
-                self.selection_context = None;
+        if let Some(editor_scene) = self.editor_scene.take() {
+            let old = std::mem::replace(&mut self.scene, editor_scene);
+            self.pending_drop_scenes.push(old);
+            self.selection_context = None;
 
-                let (w, h) = self.viewport_size;
-                if w > 0 && h > 0 {
-                    self.scene.on_viewport_resize(w, h);
-                }
+            let (w, h) = self.viewport_size;
+            if w > 0 && h > 0 {
+                self.scene.on_viewport_resize(w, h);
             }
         }
     }
@@ -606,6 +642,7 @@ impl GGEditor {
         let old = std::mem::replace(&mut self.scene, Scene::new());
         self.pending_drop_scenes.push(old);
         self.selection_context = None;
+        self.editor_scene_path = None;
 
         // Ensure cameras get the correct viewport on the next frame.
         let (w, h) = self.viewport_size;
@@ -621,6 +658,7 @@ impl GGEditor {
                 let old = std::mem::replace(&mut self.scene, new_scene);
                 self.pending_drop_scenes.push(old);
                 self.selection_context = None;
+                self.editor_scene_path = Some(path);
 
                 let (w, h) = self.viewport_size;
                 if w > 0 && h > 0 {
@@ -630,19 +668,37 @@ impl GGEditor {
         }
     }
 
-    fn save_scene_as(&self) {
+    fn save_scene(&mut self) {
+        if let Some(ref path) = self.editor_scene_path {
+            SceneSerializer::serialize(&self.scene, path);
+        } else {
+            self.save_scene_as();
+        }
+    }
+
+    fn save_scene_as(&mut self) {
         if let Some(path) = FileDialogs::save_file("GGScene files", &["ggscene"]) {
             SceneSerializer::serialize(&self.scene, &path);
+            self.editor_scene_path = Some(path);
+        }
+    }
+
+    fn on_duplicate_entity(&mut self) {
+        if let Some(selected) = self.selection_context {
+            if self.scene.is_alive(selected) {
+                self.scene.duplicate_entity(selected);
+            }
         }
     }
 
     fn open_scene_from_path(&mut self, path: &std::path::Path) {
-        let path_str = path.to_string_lossy();
+        let path_str = path.to_string_lossy().to_string();
         let mut new_scene = Scene::new();
         if SceneSerializer::deserialize(&mut new_scene, &path_str) {
             let old = std::mem::replace(&mut self.scene, new_scene);
             self.pending_drop_scenes.push(old);
             self.selection_context = None;
+            self.editor_scene_path = Some(path_str);
             let (w, h) = self.viewport_size;
             if w > 0 && h > 0 {
                 self.scene.on_viewport_resize(w, h);
