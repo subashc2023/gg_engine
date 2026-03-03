@@ -207,6 +207,16 @@ fn draw_components(
                 {
                     scene.add_component(entity, SpriteRendererComponent::default());
                 }
+                if !scene.has_component::<RigidBody2DComponent>(entity)
+                    && ui.button("Rigidbody 2D").clicked()
+                {
+                    scene.add_component(entity, RigidBody2DComponent::default());
+                }
+                if !scene.has_component::<BoxCollider2DComponent>(entity)
+                    && ui.button("Box Collider 2D").clicked()
+                {
+                    scene.add_component(entity, BoxCollider2DComponent::default());
+                }
             });
         });
         ui.separator();
@@ -574,5 +584,210 @@ fn draw_components(
     }
     if remove_sprite {
         scene.remove_component::<SpriteRendererComponent>(entity);
+    }
+
+    // -- Rigidbody 2D Component (removable) --
+    let mut remove_rb2d = false;
+    if scene.has_component::<RigidBody2DComponent>(entity) {
+        let cr = egui::CollapsingHeader::new(
+            egui::RichText::new("Rigidbody 2D")
+                .font(egui::FontId::new(14.0, bold_family.clone())),
+        )
+        .id_salt(("rigidbody_2d", entity.id()))
+        .default_open(true)
+        .show(ui, |ui| {
+            let (mut body_type, mut fixed_rotation) = {
+                let rb = scene.get_component::<RigidBody2DComponent>(entity).unwrap();
+                (rb.body_type, rb.fixed_rotation)
+            };
+
+            let mut changed = false;
+
+            let body_type_strings = ["Static", "Dynamic", "Kinematic"];
+            let current_label = match body_type {
+                RigidBody2DType::Static => body_type_strings[0],
+                RigidBody2DType::Dynamic => body_type_strings[1],
+                RigidBody2DType::Kinematic => body_type_strings[2],
+            };
+
+            egui::ComboBox::from_label("Body Type")
+                .selected_text(current_label)
+                .show_ui(ui, |ui| {
+                    if ui
+                        .selectable_value(&mut body_type, RigidBody2DType::Static, "Static")
+                        .changed()
+                    {
+                        changed = true;
+                    }
+                    if ui
+                        .selectable_value(&mut body_type, RigidBody2DType::Dynamic, "Dynamic")
+                        .changed()
+                    {
+                        changed = true;
+                    }
+                    if ui
+                        .selectable_value(&mut body_type, RigidBody2DType::Kinematic, "Kinematic")
+                        .changed()
+                    {
+                        changed = true;
+                    }
+                });
+
+            changed |= ui.checkbox(&mut fixed_rotation, "Fixed Rotation").changed();
+
+            if changed {
+                if let Some(mut rb) = scene.get_component_mut::<RigidBody2DComponent>(entity) {
+                    rb.body_type = body_type;
+                    rb.fixed_rotation = fixed_rotation;
+                }
+            }
+        });
+
+        cr.header_response.context_menu(|ui| {
+            if ui.button("Remove Component").clicked() {
+                remove_rb2d = true;
+                ui.close();
+            }
+        });
+    }
+    if remove_rb2d {
+        scene.remove_component::<RigidBody2DComponent>(entity);
+    }
+
+    // -- Box Collider 2D Component (removable) --
+    let mut remove_bc2d = false;
+    if scene.has_component::<BoxCollider2DComponent>(entity) {
+        let cr = egui::CollapsingHeader::new(
+            egui::RichText::new("Box Collider 2D")
+                .font(egui::FontId::new(14.0, bold_family.clone())),
+        )
+        .id_salt(("box_collider_2d", entity.id()))
+        .default_open(true)
+        .show(ui, |ui| {
+            let (mut offset, mut size, mut density, mut friction, mut restitution, mut restitution_threshold) = {
+                let bc = scene
+                    .get_component::<BoxCollider2DComponent>(entity)
+                    .unwrap();
+                (
+                    bc.offset,
+                    bc.size,
+                    bc.density,
+                    bc.friction,
+                    bc.restitution,
+                    bc.restitution_threshold,
+                )
+            };
+
+            let mut changed = false;
+
+            ui.horizontal(|ui| {
+                ui.label("Offset");
+                if ui
+                    .add(egui::DragValue::new(&mut offset.x).speed(0.01).prefix("X: "))
+                    .changed()
+                {
+                    changed = true;
+                }
+                if ui
+                    .add(egui::DragValue::new(&mut offset.y).speed(0.01).prefix("Y: "))
+                    .changed()
+                {
+                    changed = true;
+                }
+            });
+
+            ui.horizontal(|ui| {
+                ui.label("Size");
+                if ui
+                    .add(
+                        egui::DragValue::new(&mut size.x)
+                            .speed(0.01)
+                            .range(0.01..=f32::MAX)
+                            .prefix("X: "),
+                    )
+                    .changed()
+                {
+                    changed = true;
+                }
+                if ui
+                    .add(
+                        egui::DragValue::new(&mut size.y)
+                            .speed(0.01)
+                            .range(0.01..=f32::MAX)
+                            .prefix("Y: "),
+                    )
+                    .changed()
+                {
+                    changed = true;
+                }
+            });
+
+            ui.horizontal(|ui| {
+                ui.label("Density");
+                changed |= ui
+                    .add(
+                        egui::DragValue::new(&mut density)
+                            .speed(0.01)
+                            .range(0.0..=f32::MAX),
+                    )
+                    .changed();
+            });
+
+            ui.horizontal(|ui| {
+                ui.label("Friction");
+                changed |= ui
+                    .add(
+                        egui::DragValue::new(&mut friction)
+                            .speed(0.01)
+                            .range(0.0..=1.0),
+                    )
+                    .changed();
+            });
+
+            ui.horizontal(|ui| {
+                ui.label("Restitution");
+                changed |= ui
+                    .add(
+                        egui::DragValue::new(&mut restitution)
+                            .speed(0.01)
+                            .range(0.0..=1.0),
+                    )
+                    .changed();
+            });
+
+            ui.horizontal(|ui| {
+                ui.label("Restitution Threshold");
+                changed |= ui
+                    .add(
+                        egui::DragValue::new(&mut restitution_threshold)
+                            .speed(0.01)
+                            .range(0.0..=f32::MAX),
+                    )
+                    .changed();
+            });
+
+            if changed {
+                if let Some(mut bc) =
+                    scene.get_component_mut::<BoxCollider2DComponent>(entity)
+                {
+                    bc.offset = offset;
+                    bc.size = size;
+                    bc.density = density;
+                    bc.friction = friction;
+                    bc.restitution = restitution;
+                    bc.restitution_threshold = restitution_threshold;
+                }
+            }
+        });
+
+        cr.header_response.context_menu(|ui| {
+            if ui.button("Remove Component").clicked() {
+                remove_bc2d = true;
+                ui.close();
+            }
+        });
+    }
+    if remove_bc2d {
+        scene.remove_component::<BoxCollider2DComponent>(entity);
     }
 }

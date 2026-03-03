@@ -1,12 +1,13 @@
 use std::fs;
 use std::path::Path;
 
-use glam::{Vec3, Vec4};
+use glam::{Vec2, Vec3, Vec4};
 use serde::{Deserialize, Serialize};
 
 use crate::renderer::{ProjectionType, SceneCamera};
 use crate::scene::{
-    CameraComponent, Scene, SpriteRendererComponent, TagComponent, TransformComponent,
+    BoxCollider2DComponent, CameraComponent, RigidBody2DComponent, RigidBody2DType, Scene,
+    SpriteRendererComponent, TagComponent, TransformComponent,
 };
 
 // ---------------------------------------------------------------------------
@@ -36,6 +37,18 @@ struct EntityData {
         skip_serializing_if = "Option::is_none"
     )]
     sprite: Option<SpriteData>,
+    #[serde(
+        rename = "RigidBody2DComponent",
+        skip_serializing_if = "Option::is_none",
+        default
+    )]
+    rigidbody_2d: Option<RigidBody2DData>,
+    #[serde(
+        rename = "BoxCollider2DComponent",
+        skip_serializing_if = "Option::is_none",
+        default
+    )]
+    box_collider_2d: Option<BoxCollider2DData>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -92,6 +105,30 @@ struct SpriteData {
 
 fn default_tiling_factor() -> f32 {
     1.0
+}
+
+#[derive(Serialize, Deserialize)]
+struct RigidBody2DData {
+    #[serde(rename = "BodyType")]
+    body_type: String,
+    #[serde(rename = "FixedRotation")]
+    fixed_rotation: bool,
+}
+
+#[derive(Serialize, Deserialize)]
+struct BoxCollider2DData {
+    #[serde(rename = "Offset")]
+    offset: [f32; 2],
+    #[serde(rename = "Size")]
+    size: [f32; 2],
+    #[serde(rename = "Density")]
+    density: f32,
+    #[serde(rename = "Friction")]
+    friction: f32,
+    #[serde(rename = "Restitution")]
+    restitution: f32,
+    #[serde(rename = "RestitutionThreshold")]
+    restitution_threshold: f32,
 }
 
 // ---------------------------------------------------------------------------
@@ -260,12 +297,41 @@ impl SceneSerializer {
                         tiling_factor: sprite.tiling_factor,
                     });
 
+            let rigidbody_2d_data =
+                scene
+                    .get_component::<RigidBody2DComponent>(entity)
+                    .map(|rb| {
+                        let body_type_str = match rb.body_type {
+                            RigidBody2DType::Static => "Static",
+                            RigidBody2DType::Dynamic => "Dynamic",
+                            RigidBody2DType::Kinematic => "Kinematic",
+                        };
+                        RigidBody2DData {
+                            body_type: body_type_str.to_string(),
+                            fixed_rotation: rb.fixed_rotation,
+                        }
+                    });
+
+            let box_collider_2d_data =
+                scene
+                    .get_component::<BoxCollider2DComponent>(entity)
+                    .map(|bc| BoxCollider2DData {
+                        offset: bc.offset.into(),
+                        size: bc.size.into(),
+                        density: bc.density,
+                        friction: bc.friction,
+                        restitution: bc.restitution,
+                        restitution_threshold: bc.restitution_threshold,
+                    });
+
             entities_data.push(EntityData {
                 id: entity.id() as u64, // TODO: UUID
                 tag: tag_data,
                 transform: transform_data,
                 camera: camera_data,
                 sprite: sprite_data,
+                rigidbody_2d: rigidbody_2d_data,
+                box_collider_2d: box_collider_2d_data,
             });
         }
 
@@ -333,6 +399,34 @@ impl SceneSerializer {
                 let mut sprite = SpriteRendererComponent::new(Vec4::from(sd.color));
                 sprite.tiling_factor = sd.tiling_factor;
                 scene.add_component(entity, sprite);
+            }
+
+            // RigidBody2DComponent — added only if present in the file.
+            if let Some(ref rbd) = entity_data.rigidbody_2d {
+                let body_type = match rbd.body_type.as_str() {
+                    "Dynamic" => RigidBody2DType::Dynamic,
+                    "Kinematic" => RigidBody2DType::Kinematic,
+                    _ => RigidBody2DType::Static,
+                };
+                let mut rb = RigidBody2DComponent::new(body_type);
+                rb.fixed_rotation = rbd.fixed_rotation;
+                scene.add_component(entity, rb);
+            }
+
+            // BoxCollider2DComponent — added only if present in the file.
+            if let Some(ref bcd) = entity_data.box_collider_2d {
+                scene.add_component(
+                    entity,
+                    BoxCollider2DComponent {
+                        offset: Vec2::from(bcd.offset),
+                        size: Vec2::from(bcd.size),
+                        density: bcd.density,
+                        friction: bcd.friction,
+                        restitution: bcd.restitution,
+                        restitution_threshold: bcd.restitution_threshold,
+                        runtime_fixture: None,
+                    },
+                );
             }
         }
     }

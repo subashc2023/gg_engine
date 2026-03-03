@@ -106,6 +106,30 @@ impl Application for GGEditor {
             t.translation = Vec3::new(2.0, 0.0, 0.0);
         }
 
+        // Ground — static body with collider.
+        let ground = scene.create_entity_with_tag("Ground");
+        scene.add_component(
+            ground,
+            SpriteRendererComponent::new(Vec4::new(0.4, 0.4, 0.4, 1.0)),
+        );
+        if let Some(mut t) = scene.get_component_mut::<TransformComponent>(ground) {
+            t.translation = Vec3::new(0.0, -3.0, 0.0);
+            t.scale = Vec3::new(10.0, 0.5, 1.0);
+        }
+        scene.add_component(
+            ground,
+            RigidBody2DComponent::new(RigidBody2DType::Static),
+        );
+        scene.add_component(ground, BoxCollider2DComponent::default());
+
+        // Add physics to Left Square — dynamic body.
+        scene.add_component(left_square, RigidBody2DComponent::default());
+        scene.add_component(left_square, BoxCollider2DComponent::default());
+
+        // Add physics to Right Square — dynamic body.
+        scene.add_component(right_square, RigidBody2DComponent::default());
+        scene.add_component(right_square, BoxCollider2DComponent::default());
+
         // Orthographic Camera — primary, default ortho (size 10).
         let ortho_cam = scene.create_entity_with_tag("Orthographic Camera");
         scene.add_component(ortho_cam, CameraComponent::default());
@@ -273,6 +297,8 @@ impl Application for GGEditor {
             SceneState::Play => {
                 // Run native scripts (e.g. CameraController).
                 self.scene.on_update_scripts(dt, input);
+                // Step physics simulation.
+                self.scene.on_update_physics(dt);
             }
         }
 
@@ -548,10 +574,12 @@ impl GGEditor {
     fn on_scene_play(&mut self) {
         self.scene_state = SceneState::Play;
         self.scene_snapshot = SceneSerializer::serialize_to_string(&self.scene);
+        self.scene.on_runtime_start();
     }
 
     fn on_scene_stop(&mut self) {
         self.scene_state = SceneState::Edit;
+        self.scene.on_runtime_stop();
 
         if let Some(snapshot) = self.scene_snapshot.take() {
             let mut restored = Scene::new();

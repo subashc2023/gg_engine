@@ -1,11 +1,12 @@
 mod components;
 mod entity;
 pub mod native_script;
+mod physics_2d;
 mod scene_serializer;
 
 pub use components::{
-    CameraComponent, NativeScriptComponent, SpriteRendererComponent, TagComponent,
-    TransformComponent,
+    BoxCollider2DComponent, CameraComponent, NativeScriptComponent, RigidBody2DComponent,
+    RigidBody2DType, SpriteRendererComponent, TagComponent, TransformComponent,
 };
 pub use entity::Entity;
 pub use native_script::NativeScript;
@@ -14,6 +15,9 @@ pub use scene_serializer::SceneSerializer;
 use crate::input::Input;
 use crate::renderer::Renderer;
 use crate::timestep::Timestep;
+
+use physics_2d::PhysicsWorld2D;
+use rapier2d::na;
 
 /// A scene is a container for entities and their components.
 ///
@@ -24,6 +28,7 @@ pub struct Scene {
     world: hecs::World,
     viewport_width: u32,
     viewport_height: u32,
+    physics_world: Option<PhysicsWorld2D>,
 }
 
 impl Scene {
@@ -33,6 +38,7 @@ impl Scene {
             world: hecs::World::new(),
             viewport_width: 0,
             viewport_height: 0,
+            physics_world: None,
         }
     }
 
@@ -237,6 +243,117 @@ impl Scene {
         for camera in self.world.query_mut::<&mut CameraComponent>() {
             if !camera.fixed_aspect_ratio {
                 camera.camera.set_viewport_size(width, height);
+            }
+        }
+    }
+
+    // -----------------------------------------------------------------
+    // Physics (runtime lifecycle)
+    // -----------------------------------------------------------------
+
+    /// Initialize the physics world and create rigid bodies / colliders
+    /// from all entities that have physics components.
+    ///
+    /// Call this when entering play mode (before the first physics step).
+    pub fn on_runtime_start(&mut self) {
+        let mut physics = PhysicsWorld2D::new(0.0, -9.81);
+
+        // Snapshot entities with RigidBody2DComponent to avoid borrow conflicts.
+        let body_entities: Vec<(hecs::Entity, glam::Vec3, glam::Vec3, glam::Vec3, RigidBody2DType, bool)> = self
+            .world
+            .query::<(
+                hecs::Entity,
+                &TransformComponent,
+                &RigidBody2DComponent,
+            )>()
+            .iter()
+            .map(|(handle, transform, rb)| {
+                (
+                    handle,
+                    transform.translation,
+                    transform.rotation,
+                    transform.scale,
+                    rb.body_type,
+                    rb.fixed_rotation,
+                )
+            })
+            .collect();
+
+        for (handle, translation, rotation, scale, body_type, fixed_rotation) in body_entities {
+            // Create rapier rigid body.
+            let mut body_builder = rapier2d::dynamics::RigidBodyBuilder::new(body_type.to_rapier())
+                .translation(na::Vector2::new(translation.x, translation.y))
+                .rotation(rotation.z);
+
+            if fixed_rotation {
+                body_builder = body_builder.lock_rotations();
+            }
+
+            let body_handle = physics.bodies.insert(body_builder.build());
+
+            // Store the handle back on the component.
+            if let Ok(mut rb) = self.world.get::<&mut RigidBody2DComponent>(handle) {
+                rb.runtime_body = Some(body_handle);
+            }
+
+            // If entity also has a BoxCollider2DComponent, create a collider.
+            if let Ok(mut bc) = self.world.get::<&mut BoxCollider2DComponent>(handle) {
+                let half_x = bc.size.x * scale.x.abs();
+                let half_y = bc.size.y * scale.y.abs();
+
+                let collider = rapier2d::geometry::ColliderBuilder::cuboid(half_x, half_y)
+                    .density(bc.density)
+                    .friction(bc.friction)
+                    .restitution(bc.restitution)
+                    .translation(na::Vector2::new(bc.offset.x, bc.offset.y))
+                    .build();
+
+                let collider_handle =
+                    physics
+                        .colliders
+                        .insert_with_parent(collider, body_handle, &mut physics.bodies);
+                bc.runtime_fixture = Some(collider_handle);
+            }
+        }
+
+        self.physics_world = Some(physics);
+    }
+
+    /// Tear down the physics world and clear all runtime handles.
+    ///
+    /// Call this when exiting play mode (before restoring the snapshot).
+    pub fn on_runtime_stop(&mut self) {
+        self.physics_world = None;
+
+        // Clear runtime handles on all physics components.
+        for rb in self.world.query_mut::<&mut RigidBody2DComponent>() {
+            rb.runtime_body = None;
+        }
+        for bc in self.world.query_mut::<&mut BoxCollider2DComponent>() {
+            bc.runtime_fixture = None;
+        }
+    }
+
+    /// Step the physics simulation and write body transforms back to entities.
+    ///
+    /// Call this each frame during play mode, after `on_update_scripts`.
+    pub fn on_update_physics(&mut self, _dt: Timestep) {
+        if let Some(ref mut physics) = self.physics_world {
+            physics.step();
+
+            // Write physics body positions back to transforms.
+            for (transform, rb) in self
+                .world
+                .query_mut::<(&mut TransformComponent, &RigidBody2DComponent)>()
+            {
+                if let Some(body_handle) = rb.runtime_body {
+                    if let Some(body) = physics.bodies.get(body_handle) {
+                        let pos = body.translation();
+                        transform.translation.x = pos.x;
+                        transform.translation.y = pos.y;
+                        transform.rotation.z = body.rotation().angle();
+                    }
+                }
             }
         }
     }

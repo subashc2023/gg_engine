@@ -1,4 +1,4 @@
-use glam::{Mat4, Vec3, Vec4};
+use glam::{Mat4, Vec2, Vec3, Vec4};
 
 use crate::renderer::SceneCamera;
 use crate::renderer::Texture2D;
@@ -174,6 +174,96 @@ impl NativeScriptComponent {
             instance: None,
             instantiate_fn: instantiate::<T>,
             created: false,
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// 2D Physics Components
+// ---------------------------------------------------------------------------
+
+/// Body type for a 2D rigid body.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RigidBody2DType {
+    Static,
+    Dynamic,
+    Kinematic,
+}
+
+impl Default for RigidBody2DType {
+    fn default() -> Self {
+        Self::Static
+    }
+}
+
+impl RigidBody2DType {
+    pub(crate) fn to_rapier(self) -> rapier2d::dynamics::RigidBodyType {
+        match self {
+            Self::Static => rapier2d::dynamics::RigidBodyType::Fixed,
+            Self::Dynamic => rapier2d::dynamics::RigidBodyType::Dynamic,
+            Self::Kinematic => rapier2d::dynamics::RigidBodyType::KinematicPositionBased,
+        }
+    }
+}
+
+/// 2D rigid body attached to an entity for physics simulation.
+///
+/// Requires a [`TransformComponent`] on the same entity. At runtime start
+/// the scene creates a rapier rigid body from this component's settings and
+/// the entity's transform position/rotation.
+pub struct RigidBody2DComponent {
+    pub body_type: RigidBody2DType,
+    pub fixed_rotation: bool,
+    /// Runtime-only handle into the physics world. Not serialized.
+    pub(crate) runtime_body: Option<rapier2d::dynamics::RigidBodyHandle>,
+}
+
+impl RigidBody2DComponent {
+    pub fn new(body_type: RigidBody2DType) -> Self {
+        Self {
+            body_type,
+            fixed_rotation: false,
+            runtime_body: None,
+        }
+    }
+}
+
+impl Default for RigidBody2DComponent {
+    fn default() -> Self {
+        Self {
+            body_type: RigidBody2DType::Dynamic,
+            fixed_rotation: false,
+            runtime_body: None,
+        }
+    }
+}
+
+/// 2D box collider attached to an entity for collision detection.
+///
+/// Requires a [`RigidBody2DComponent`] on the same entity. The collider
+/// is created as a cuboid whose half-extents are `size * entity_scale`.
+pub struct BoxCollider2DComponent {
+    pub offset: Vec2,
+    /// Half-extents of the box (default 0.5 × 0.5 to match a 1×1 unit sprite).
+    pub size: Vec2,
+    pub density: f32,
+    pub friction: f32,
+    pub restitution: f32,
+    pub restitution_threshold: f32,
+    /// Runtime-only handle into the physics world. Not serialized.
+    pub(crate) runtime_fixture: Option<rapier2d::geometry::ColliderHandle>,
+}
+
+impl Default for BoxCollider2DComponent {
+    fn default() -> Self {
+        Self {
+            offset: Vec2::ZERO,
+            size: Vec2::new(0.5, 0.5),
+            density: 1.0,
+            friction: 0.5,
+            restitution: 0.0,
+            restitution_threshold: 0.5,
+            runtime_fixture: None,
         }
     }
 }
