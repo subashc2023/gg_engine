@@ -81,6 +81,7 @@ impl ScriptEngine {
     /// with `__index = _G`. The entity's UUID is set as `entity_id` in the env.
     /// Returns `true` on success.
     pub fn create_entity_env(&mut self, uuid: u64, script_path: &str) -> bool {
+        let _timer = crate::profiling::ProfileTimer::new("ScriptEngine::create_entity_env");
         let path = Path::new(script_path);
         let source = match std::fs::read_to_string(path) {
             Ok(s) => s,
@@ -172,6 +173,14 @@ impl ScriptEngine {
     /// Call `on_update(dt)` in an entity's environment.
     pub fn call_entity_on_update(&self, uuid: u64, dt: f32) -> bool {
         self.call_entity_function(uuid, "on_update", dt)
+    }
+
+    /// Call `on_fixed_update(dt)` in an entity's environment.
+    ///
+    /// Called once per physics fixed step so that impulses/forces are applied
+    /// at a consistent rate regardless of render frame rate.
+    pub fn call_entity_on_fixed_update(&self, uuid: u64, dt: f32) -> bool {
+        self.call_entity_function(uuid, "on_fixed_update", dt)
     }
 
     /// Call `on_destroy()` in an entity's environment.

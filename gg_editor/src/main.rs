@@ -376,7 +376,7 @@ impl Application for GGEditor {
                     } else {
                         dt
                     };
-                    self.scene.on_update_physics(physics_dt);
+                    self.scene.on_update_physics(physics_dt, None);
                     if self.step_frames > 0 {
                         self.step_frames -= 1;
                     }
@@ -392,8 +392,8 @@ impl Application for GGEditor {
                     } else {
                         dt
                     };
-                    // Step physics first so transforms reflect this frame's positions.
-                    self.scene.on_update_physics(step_dt);
+                    // Step physics + Lua fixed-update interleaved.
+                    self.scene.on_update_physics(step_dt, Some(input));
                     // Run native scripts (e.g. CameraController) with up-to-date transforms.
                     self.scene.on_update_scripts(step_dt, input);
                     // Run Lua scripts.

@@ -549,6 +549,7 @@ impl Renderer {
         sprite: &SpriteRendererComponent,
         entity_id: i32,
     ) {
+        let _timer = ProfileTimer::new("Renderer::draw_sprite");
         let tex_index = sprite
             .texture
             .as_ref()
@@ -855,6 +856,7 @@ impl Renderer {
         circle: &CircleRendererComponent,
         entity_id: i32,
     ) {
+        let _timer = ProfileTimer::new("Renderer::draw_circle_component");
         self.push_circle_to_batch(
             transform,
             circle.color,
@@ -1041,6 +1043,7 @@ impl Renderer {
     /// End the current scene — flushes any pending batches (quads + circles + lines),
     /// snapshots stats, and clears the draw context.
     pub(crate) fn end_scene(&mut self) {
+        let _timer = ProfileTimer::new("Renderer::end_scene");
         if let Some(data) = &self.renderer_2d {
             if let Some(ctx) = self.draw_context {
                 // Flush any remaining quads.

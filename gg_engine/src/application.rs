@@ -63,6 +63,12 @@ pub trait Application {
 
     fn on_update(&mut self, _dt: Timestep, _input: &Input) {}
 
+    /// Called after `on_update` and `on_egui`, right before GPU command recording.
+    /// Use this to recompute camera transforms with the latest input state,
+    /// minimizing input-to-display latency for directly-controlled objects
+    /// (e.g. camera, crosshair) that should bypass physics interpolation.
+    fn on_late_update(&mut self, _input: &Input) {}
+
     /// Submit draw calls. Called each frame between `begin_scene` / `end_scene`.
     fn on_render(&mut self, _renderer: &mut Renderer) {}
 
@@ -89,8 +95,9 @@ pub trait Application {
     }
 
     /// Desired present mode. Polled each frame; changes trigger swapchain recreation.
+    /// Defaults to Mailbox for lowest latency (falls back to Immediate, then Fifo).
     fn present_mode(&self) -> PresentMode {
-        PresentMode::Fifo
+        PresentMode::Mailbox
     }
 
     /// Whether egui should block events from reaching the engine.
@@ -503,6 +510,10 @@ impl<T: Application> ApplicationHandler for EngineRunner<T> {
 
             // Poll clear color from application.
             renderer.set_clear_color(self.app.clear_color());
+
+            // Late input sampling: let the app recompute camera/view with
+            // the latest input state, right before we read the VP matrix.
+            self.app.on_late_update(&self.input);
 
             // Copy the VP matrix before the mutable borrow for render_frame.
             let camera_vp = *self

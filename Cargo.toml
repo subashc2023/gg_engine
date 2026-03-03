@@ -2,6 +2,7 @@
 members = [
     "gg_engine",
     "gg_editor",
+    "gg_player",
     "gg_sandbox",
     "gg_tools",
 ]

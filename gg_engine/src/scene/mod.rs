@@ -441,6 +441,49 @@ impl Scene {
     }
 
     // -----------------------------------------------------------------
+    // Texture loading
+    // -----------------------------------------------------------------
+
+    /// Load GPU textures for all entities that have a
+    /// [`SpriteRendererComponent`] with a non-empty `texture_path`.
+    ///
+    /// Scans every sprite entity, creates a [`Texture2D`] for each path,
+    /// and stores it on the component. Call this after deserializing a
+    /// scene and before the first render.
+    pub fn load_textures(&mut self, renderer: &Renderer) {
+        use std::path::PathBuf;
+        let _timer = crate::profiling::ProfileTimer::new("Scene::load_textures");
+
+        // Phase 1: collect (hecs entity handle, path) pairs.
+        // Snapshot first to release the immutable world borrow before
+        // mutating components in phase 2.
+        let loads: Vec<(hecs::Entity, PathBuf)> = self
+            .world
+            .query::<(hecs::Entity, &SpriteRendererComponent)>()
+            .iter()
+            .filter_map(|(handle, sprite)| {
+                sprite.texture_path.as_ref().and_then(|path_str| {
+                    let path = PathBuf::from(path_str);
+                    if path.exists() {
+                        Some((handle, path))
+                    } else {
+                        log::warn!("Texture not found: {}", path_str);
+                        None
+                    }
+                })
+            })
+            .collect();
+
+        // Phase 2: create GPU textures and assign them to components.
+        for (handle, path) in loads {
+            let texture = crate::Ref::new(renderer.create_texture_from_file(&path));
+            if let Ok(mut sprite) = self.world.get::<&mut SpriteRendererComponent>(handle) {
+                sprite.texture = Some(texture);
+            }
+        }
+    }
+
+    // -----------------------------------------------------------------
     // Physics (shared helpers)
     // -----------------------------------------------------------------
 
@@ -449,6 +492,7 @@ impl Scene {
     ///
     /// Shared by both runtime and simulation start paths.
     fn on_physics_2d_start(&mut self) {
+        let _timer = crate::profiling::ProfileTimer::new("Scene::on_physics_2d_start");
         let mut physics = PhysicsWorld2D::new(0.0, -9.81);
 
         // Snapshot entities with RigidBody2DComponent to avoid borrow conflicts.
@@ -671,6 +715,7 @@ impl Scene {
     ///
     /// Call this when entering play mode (before the first physics step).
     pub fn on_runtime_start(&mut self) {
+        let _timer = crate::profiling::ProfileTimer::new("Scene::on_runtime_start");
         self.on_physics_2d_start();
         #[cfg(feature = "lua-scripting")]
         self.on_lua_scripting_start();
@@ -680,6 +725,7 @@ impl Scene {
     ///
     /// Call this when exiting play mode (before restoring the snapshot).
     pub fn on_runtime_stop(&mut self) {
+        let _timer = crate::profiling::ProfileTimer::new("Scene::on_runtime_stop");
         #[cfg(feature = "lua-scripting")]
         self.on_lua_scripting_stop();
         self.on_physics_2d_stop();
@@ -706,29 +752,114 @@ impl Scene {
 
     /// Step the physics simulation and write body transforms back to entities.
     ///
-    /// Call this each frame during play mode, **before** scripts so that
-    /// scripts (e.g. camera follow) read up-to-date physics positions.
-    pub fn on_update_physics(&mut self, dt: Timestep) {
-        if let Some(ref mut physics) = self.physics_world {
-            let stepped = physics.step(dt.seconds());
+    /// When `input` is `Some`, Lua `on_fixed_update(dt)` callbacks are
+    /// interleaved with physics steps (play mode). When `None`, only physics
+    /// is stepped (simulate mode).
+    ///
+    /// Per fixed step: `on_fixed_update(FIXED_DT)` → `snapshot` → `step_once`.
+    /// After the loop, interpolated transforms are written back for smooth
+    /// rendering.
+    pub fn on_update_physics(&mut self, dt: Timestep, input: Option<&Input>) {
+        let _timer = crate::profiling::ProfileTimer::new("Scene::on_update_physics");
 
-            // Only write back when the simulation actually advanced.
-            if stepped {
-                for (transform, rb) in self
-                    .world
-                    .query_mut::<(&mut TransformComponent, &RigidBody2DComponent)>()
-                {
-                    if let Some(body_handle) = rb.runtime_body {
-                        if let Some(body) = physics.bodies.get(body_handle) {
-                            let pos = body.translation();
-                            transform.translation.x = pos.x;
-                            transform.translation.y = pos.y;
-                            transform.rotation.z = body.rotation().angle();
-                        }
+        // Accumulate frame dt.
+        let Some(physics) = self.physics_world.as_mut() else {
+            return;
+        };
+        physics.accumulate(dt.seconds());
+        let fixed_dt = physics.fixed_timestep();
+
+        // Fixed-step loop: scripts apply impulses → snapshot → rapier step.
+        loop {
+            if !self.physics_world.as_ref().unwrap().can_step() {
+                break;
+            }
+
+            // Run Lua fixed-update scripts so impulses/forces are applied
+            // at the physics rate, not the render rate.
+            #[cfg(feature = "lua-scripting")]
+            if let Some(inp) = input {
+                self.call_lua_fixed_update(fixed_dt, inp);
+            }
+
+            let physics = self.physics_world.as_mut().unwrap();
+            physics.snapshot_transforms();
+            physics.step_once();
+        }
+
+        let physics = self.physics_world.as_ref().unwrap();
+        let alpha = physics.alpha();
+
+        // Write back interpolated transforms for smooth rendering.
+        for (transform, rb) in self
+            .world
+            .query_mut::<(&mut TransformComponent, &RigidBody2DComponent)>()
+        {
+            if let Some(body_handle) = rb.runtime_body {
+                if let Some(body) = physics.bodies.get(body_handle) {
+                    let cur_pos = body.translation();
+                    let cur_angle = body.rotation().angle();
+
+                    if let Some((prev_x, prev_y, prev_angle)) =
+                        physics.prev_transform(body_handle)
+                    {
+                        transform.translation.x =
+                            prev_x + (cur_pos.x - prev_x) * alpha;
+                        transform.translation.y =
+                            prev_y + (cur_pos.y - prev_y) * alpha;
+                        // Shortest-path angle interpolation to avoid
+                        // flipping through the wrong direction on wrap.
+                        let mut angle_diff = cur_angle - prev_angle;
+                        angle_diff = angle_diff - (angle_diff / std::f32::consts::TAU).round() * std::f32::consts::TAU;
+                        transform.rotation.z = prev_angle + angle_diff * alpha;
+                    } else {
+                        // First frame — no previous, use current directly.
+                        transform.translation.x = cur_pos.x;
+                        transform.translation.y = cur_pos.y;
+                        transform.rotation.z = cur_angle;
                     }
                 }
             }
         }
+    }
+
+    /// Call `on_fixed_update(dt)` on all loaded Lua scripts.
+    ///
+    /// Uses the same take-modify-replace pattern as `on_update_lua_scripts`.
+    #[cfg(feature = "lua-scripting")]
+    fn call_lua_fixed_update(&mut self, fixed_dt: f32, input: &Input) {
+        use script_glue::SceneScriptContext;
+
+        let uuids: Vec<u64> = self
+            .world
+            .query::<(&IdComponent, &LuaScriptComponent)>()
+            .iter()
+            .filter(|(_, lsc)| lsc.loaded)
+            .map(|(id, _)| id.id.raw())
+            .collect();
+
+        if uuids.is_empty() {
+            return;
+        }
+
+        let engine = match self.script_engine.take() {
+            Some(e) => e,
+            None => return,
+        };
+
+        let ctx = SceneScriptContext {
+            scene: self as *mut Scene,
+            input: input as *const Input,
+            script_engine: &engine as *const ScriptEngine,
+        };
+        engine.lua().set_app_data(ctx);
+
+        for uuid in &uuids {
+            engine.call_entity_on_fixed_update(*uuid, fixed_dt);
+        }
+
+        engine.lua().remove_app_data::<SceneScriptContext>();
+        self.script_engine = Some(engine);
     }
 
     // -----------------------------------------------------------------
@@ -743,6 +874,7 @@ impl Scene {
     ///
     /// Call this from [`Application::on_update`] each frame, **before** rendering.
     pub fn on_update_scripts(&mut self, dt: Timestep, input: &Input) {
+        let _timer = crate::profiling::ProfileTimer::new("Scene::on_update_scripts");
         // Collect entity handles that have a NativeScriptComponent.
         // We snapshot first because we need &mut self inside the loop.
         let script_entities: Vec<(hecs::Entity, bool)> = self
@@ -794,6 +926,7 @@ impl Scene {
     /// The caller is responsible for setting the view-projection matrix on
     /// the renderer before calling this.
     fn render_scene(&self, renderer: &mut Renderer) {
+        let _timer = crate::profiling::ProfileTimer::new("Scene::render_scene");
         // Draw sprites.
         for (entity, transform, sprite) in self
             .world
@@ -839,6 +972,7 @@ impl Scene {
     /// drives the view. For editor rendering with an external camera, use
     /// [`on_update_editor`](Self::on_update_editor).
     pub fn on_update_runtime(&self, renderer: &mut Renderer) {
+        let _timer = crate::profiling::ProfileTimer::new("Scene::on_update_runtime");
         // Find the primary camera entity.
         let mut main_camera_vp: Option<glam::Mat4> = None;
         for (transform, camera) in self
@@ -866,6 +1000,7 @@ impl Scene {
     /// Unlike [`on_update_runtime`](Self::on_update_runtime), this does **not**
     /// look for a primary camera entity — it always renders.
     pub fn on_update_editor(&self, editor_camera_vp: &glam::Mat4, renderer: &mut Renderer) {
+        let _timer = crate::profiling::ProfileTimer::new("Scene::on_update_editor");
         renderer.set_view_projection(*editor_camera_vp);
         self.render_scene(renderer);
     }
@@ -888,6 +1023,7 @@ impl Scene {
     #[cfg(feature = "lua-scripting")]
     fn on_lua_scripting_start(&mut self) {
         use script_glue::SceneScriptContext;
+        let _timer = crate::profiling::ProfileTimer::new("Scene::on_lua_scripting_start");
 
         let mut engine = ScriptEngine::new();
 
@@ -944,6 +1080,7 @@ impl Scene {
     #[cfg(feature = "lua-scripting")]
     fn on_lua_scripting_stop(&mut self) {
         use script_glue::SceneScriptContext;
+        let _timer = crate::profiling::ProfileTimer::new("Scene::on_lua_scripting_stop");
 
         if let Some(engine) = self.script_engine.take() {
             // Set scene context (no input during on_destroy).
@@ -1004,6 +1141,7 @@ impl Scene {
     #[cfg(feature = "lua-scripting")]
     pub fn on_update_lua_scripts(&mut self, dt: Timestep, input: &Input) {
         use script_glue::SceneScriptContext;
+        let _timer = crate::profiling::ProfileTimer::new("Scene::on_update_lua_scripts");
 
         // Collect UUIDs of loaded script entities.
         let uuids: Vec<u64> = self

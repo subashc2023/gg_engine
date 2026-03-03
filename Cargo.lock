@@ -1144,6 +1144,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "gg_player"
+version = "0.1.0"
+dependencies = [
+ "gg_engine",
+]
+
+[[package]]
 name = "gg_sandbox"
 version = "0.1.0"
 dependencies = [

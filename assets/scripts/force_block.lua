@@ -12,7 +12,7 @@ function on_create()
     Engine.native_log("ForceBlock created on entity", entity_id)
 end
 
-function on_update(dt)
+function on_fixed_update(dt)
     if not Engine.has_component(entity_id, "RigidBody2D") then
         return
     end
@@ -39,8 +39,10 @@ function on_update(dt)
     elseif omega < -10.0 then
         Engine.set_angular_velocity(entity_id, -10.0)
     end
+end
 
-    -- Scale up/down with Z/X
+function on_update(dt)
+    -- Scale up/down with Z/X (visual, dt-scaled — stays in on_update)
     local sx, sy, sz = Engine.get_scale(entity_id)
     if Engine.is_key_down("Z") then
         sx = sx + fields.scale_speed * dt

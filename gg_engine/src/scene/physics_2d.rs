@@ -1,5 +1,6 @@
 use rapier2d::na;
 use rapier2d::prelude::*;
+use std::collections::HashMap;
 
 /// Fixed physics timestep (1/60 s ≈ 16.67 ms).
 const FIXED_TIMESTEP: f32 = 1.0 / 60.0;
@@ -25,6 +26,8 @@ pub(crate) struct PhysicsWorld2D {
     /// Leftover time from the previous frame, carried forward for the next
     /// fixed-step accumulation.
     accumulator: f32,
+    /// Pre-step positions/rotations for interpolation (position_x, position_y, angle).
+    prev_transforms: HashMap<RigidBodyHandle, (f32, f32, f32)>,
 }
 
 impl PhysicsWorld2D {
@@ -45,36 +48,64 @@ impl PhysicsWorld2D {
             ccd_solver: CCDSolver::new(),
             query_pipeline: QueryPipeline::new(),
             accumulator: 0.0,
+            prev_transforms: HashMap::new(),
         }
     }
 
-    /// Accumulate `dt` and step the simulation in fixed increments.
-    ///
-    /// Returns `true` if at least one physics step was taken (i.e. transforms
-    /// may have changed and should be written back).
-    pub(crate) fn step(&mut self, dt: f32) -> bool {
+    /// Feed frame delta-time into the accumulator (clamped to MAX_FRAME_DT).
+    pub(crate) fn accumulate(&mut self, dt: f32) {
         self.accumulator += dt.min(MAX_FRAME_DT);
+    }
 
-        let mut stepped = false;
-        while self.accumulator >= FIXED_TIMESTEP {
-            self.pipeline.step(
-                &self.gravity,
-                &self.integration_parameters,
-                &mut self.island_manager,
-                &mut self.broad_phase,
-                &mut self.narrow_phase,
-                &mut self.bodies,
-                &mut self.colliders,
-                &mut self.impulse_joints,
-                &mut self.multibody_joints,
-                &mut self.ccd_solver,
-                Some(&mut self.query_pipeline),
-                &(),
-                &(),
-            );
-            self.accumulator -= FIXED_TIMESTEP;
-            stepped = true;
+    /// Returns `true` if the accumulator has enough time for another fixed step.
+    pub(crate) fn can_step(&self) -> bool {
+        self.accumulator >= FIXED_TIMESTEP
+    }
+
+    /// Snapshot current body positions as "previous" for interpolation.
+    /// Call this *before* `step_once()`.
+    pub(crate) fn snapshot_transforms(&mut self) {
+        for (handle, body) in self.bodies.iter() {
+            let pos = body.translation();
+            let angle = body.rotation().angle();
+            self.prev_transforms.insert(handle, (pos.x, pos.y, angle));
         }
-        stepped
+    }
+
+    /// Execute a single rapier physics step and drain one FIXED_TIMESTEP
+    /// from the accumulator.
+    pub(crate) fn step_once(&mut self) {
+        self.pipeline.step(
+            &self.gravity,
+            &self.integration_parameters,
+            &mut self.island_manager,
+            &mut self.broad_phase,
+            &mut self.narrow_phase,
+            &mut self.bodies,
+            &mut self.colliders,
+            &mut self.impulse_joints,
+            &mut self.multibody_joints,
+            &mut self.ccd_solver,
+            Some(&mut self.query_pipeline),
+            &(),
+            &(),
+        );
+        self.accumulator -= FIXED_TIMESTEP;
+    }
+
+    /// The fixed timestep value (1/60 s).
+    pub(crate) fn fixed_timestep(&self) -> f32 {
+        FIXED_TIMESTEP
+    }
+
+    /// Interpolation alpha: fraction of a timestep remaining in the accumulator.
+    /// Ranges from 0.0 (just stepped) to ~1.0 (about to step).
+    pub(crate) fn alpha(&self) -> f32 {
+        self.accumulator / FIXED_TIMESTEP
+    }
+
+    /// Get the pre-step (previous) transform for a body, if available.
+    pub(crate) fn prev_transform(&self, handle: RigidBodyHandle) -> Option<(f32, f32, f32)> {
+        self.prev_transforms.get(&handle).copied()
     }
 }

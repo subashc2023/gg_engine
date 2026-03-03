@@ -1,44 +1,37 @@
 -- physics_player.lua
--- WASD impulse-based movement with velocity clamping and Space to jump.
+-- WASD velocity-based movement with impulse jump.
 -- Attach to an entity that has a RigidBody2D (Dynamic) + BoxCollider2D.
 
 fields = {
-    move_speed = 1.0,
+    move_speed = 5.0,
     jump_impulse = 5.0,
-    max_speed = 10.0,
 }
 
 function on_create()
     Engine.native_log("PhysicsPlayer created on entity", entity_id)
 end
 
-function on_update(dt)
+function on_fixed_update(dt)
     if not Engine.has_component(entity_id, "RigidBody2D") then
         return
     end
 
-    -- Horizontal movement via impulses
+    local vx, vy = Engine.get_linear_velocity(entity_id)
+
+    -- Horizontal movement: direct velocity control
     if Engine.is_key_down("A") then
-        Engine.apply_impulse(entity_id, -fields.move_speed, 0)
-    end
-    if Engine.is_key_down("D") then
-        Engine.apply_impulse(entity_id, fields.move_speed, 0)
+        vx = -fields.move_speed
+    elseif Engine.is_key_down("D") then
+        vx = fields.move_speed
+    else
+        vx = 0
     end
 
-    -- Clamp horizontal velocity
-    local vx, vy = Engine.get_linear_velocity(entity_id)
-    if vx > fields.max_speed then
-        Engine.set_linear_velocity(entity_id, fields.max_speed, vy)
-    elseif vx < -fields.max_speed then
-        Engine.set_linear_velocity(entity_id, -fields.max_speed, vy)
-    end
+    Engine.set_linear_velocity(entity_id, vx, vy)
 
     -- Jump (only when roughly grounded — vy near zero)
-    if Engine.is_key_down("Space") then
-        local _, cur_vy = Engine.get_linear_velocity(entity_id)
-        if math.abs(cur_vy) < 0.1 then
-            Engine.apply_impulse(entity_id, 0, fields.jump_impulse)
-        end
+    if Engine.is_key_down("Space") and math.abs(vy) < 0.1 then
+        Engine.apply_impulse(entity_id, 0, fields.jump_impulse)
     end
 end
 
