@@ -45,6 +45,10 @@ pub use scene::{
     RigidBody2DType, Scene, SceneSerializer, SpriteRendererComponent, TagComponent,
     TransformComponent,
 };
+#[cfg(feature = "lua-scripting")]
+pub use scene::{LuaScriptComponent, ScriptEngine};
+#[cfg(feature = "lua-scripting")]
+pub use mlua;
 pub use timestep::Timestep;
 pub use uuid::Uuid;
 
@@ -76,6 +80,8 @@ pub mod prelude {
         RigidBody2DComponent, RigidBody2DType, Scene, SceneSerializer, SpriteRendererComponent,
         TagComponent, TransformComponent,
     };
+    #[cfg(feature = "lua-scripting")]
+    pub use crate::scene::{LuaScriptComponent, ScriptEngine};
     pub use crate::timestep::Timestep;
     pub use crate::uuid::Uuid;
     pub use crate::ui_theme::BOLD_FONT;

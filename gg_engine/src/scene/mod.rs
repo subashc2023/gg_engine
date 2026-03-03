@@ -3,15 +3,23 @@ mod entity;
 pub mod native_script;
 mod physics_2d;
 mod scene_serializer;
+#[cfg(feature = "lua-scripting")]
+mod script_glue;
+#[cfg(feature = "lua-scripting")]
+pub(crate) mod script_engine;
 
 pub use components::{
     BoxCollider2DComponent, CameraComponent, CircleCollider2DComponent, CircleRendererComponent,
     IdComponent, NativeScriptComponent, RigidBody2DComponent, RigidBody2DType,
     SpriteRendererComponent, TagComponent, TransformComponent,
 };
+#[cfg(feature = "lua-scripting")]
+pub use components::LuaScriptComponent;
 pub use entity::Entity;
 pub use native_script::NativeScript;
 pub use scene_serializer::SceneSerializer;
+#[cfg(feature = "lua-scripting")]
+pub use script_engine::ScriptEngine;
 
 use crate::input::Input;
 use crate::renderer::Renderer;
@@ -33,6 +41,8 @@ pub struct Scene {
     viewport_width: u32,
     viewport_height: u32,
     physics_world: Option<PhysicsWorld2D>,
+    #[cfg(feature = "lua-scripting")]
+    script_engine: Option<ScriptEngine>,
 }
 
 /// Invokes `$callback!` with every cloneable component type.
@@ -62,6 +72,8 @@ impl Scene {
             viewport_width: 0,
             viewport_height: 0,
             physics_world: None,
+            #[cfg(feature = "lua-scripting")]
+            script_engine: None,
         }
     }
 
@@ -161,6 +173,10 @@ impl Scene {
             }
         }
 
+        // LuaScriptComponent — Clone-able, copy via helper.
+        #[cfg(feature = "lua-scripting")]
+        copy_component_if_has::<LuaScriptComponent>(&source.world, &mut new_scene, &entity_map);
+
         new_scene
     }
 
@@ -201,6 +217,10 @@ impl Scene {
                 },
             );
         }
+
+        // LuaScriptComponent — Clone-able, duplicate via helper.
+        #[cfg(feature = "lua-scripting")]
+        duplicate_component_if_has::<LuaScriptComponent>(self, entity, new_entity);
 
         new_entity
     }
@@ -316,6 +336,23 @@ impl Scene {
     pub fn find_entity_by_id(&self, id: u32) -> Option<Entity> {
         for handle in self.world.query::<hecs::Entity>().iter() {
             if handle.id() == id {
+                return Some(Entity::new(handle));
+            }
+        }
+        None
+    }
+
+    /// Find an entity by its UUID (from [`IdComponent`]).
+    ///
+    /// O(n) scan — sufficient for script callbacks; optimize with a cache
+    /// if this becomes a bottleneck.
+    pub fn find_entity_by_uuid(&self, uuid: u64) -> Option<Entity> {
+        for (handle, id) in self
+            .world
+            .query::<(hecs::Entity, &IdComponent)>()
+            .iter()
+        {
+            if id.id.raw() == uuid {
                 return Some(Entity::new(handle));
             }
         }
@@ -498,17 +535,21 @@ impl Scene {
     // Runtime lifecycle
     // -----------------------------------------------------------------
 
-    /// Initialize physics for runtime (play mode).
+    /// Initialize physics and scripting for runtime (play mode).
     ///
     /// Call this when entering play mode (before the first physics step).
     pub fn on_runtime_start(&mut self) {
         self.on_physics_2d_start();
+        #[cfg(feature = "lua-scripting")]
+        self.on_lua_scripting_start();
     }
 
-    /// Tear down physics for runtime (play mode).
+    /// Tear down physics and scripting for runtime (play mode).
     ///
     /// Call this when exiting play mode (before restoring the snapshot).
     pub fn on_runtime_stop(&mut self) {
+        #[cfg(feature = "lua-scripting")]
+        self.on_lua_scripting_stop();
         self.on_physics_2d_stop();
     }
 
@@ -701,6 +742,138 @@ impl Scene {
     pub fn on_update_simulation(&self, editor_camera_vp: &glam::Mat4, renderer: &mut Renderer) {
         renderer.set_view_projection(*editor_camera_vp);
         self.render_scene(renderer);
+    }
+
+    // -----------------------------------------------------------------
+    // Lua Scripting lifecycle
+    // -----------------------------------------------------------------
+
+    /// Create the Lua script engine, set up per-entity environments, and
+    /// call `on_create()` for each entity with a [`LuaScriptComponent`].
+    #[cfg(feature = "lua-scripting")]
+    fn on_lua_scripting_start(&mut self) {
+        use script_glue::SceneScriptContext;
+
+        let mut engine = ScriptEngine::new();
+
+        // Collect entities with non-empty script paths (avoid borrow conflicts).
+        let scripts: Vec<(hecs::Entity, u64, String)> = self
+            .world
+            .query::<(hecs::Entity, &IdComponent, &LuaScriptComponent)>()
+            .iter()
+            .filter(|(_, _, lsc)| !lsc.script_path.is_empty())
+            .map(|(handle, id, lsc)| (handle, id.id.raw(), lsc.script_path.clone()))
+            .collect();
+
+        // Create per-entity environments and load scripts.
+        for (handle, uuid, path) in &scripts {
+            if engine.create_entity_env(*uuid, path) {
+                if let Ok(mut lsc) = self.world.get::<&mut LuaScriptComponent>(*handle) {
+                    lsc.loaded = true;
+                }
+            }
+        }
+
+        // Store engine in self, then take it out for on_create calls
+        // (callbacks need scene pointer via app_data).
+        self.script_engine = Some(engine);
+        let engine = self.script_engine.take().unwrap();
+
+        // Set scene context (no input during on_create).
+        let ctx = SceneScriptContext {
+            scene: self as *mut Scene,
+            input: std::ptr::null(),
+        };
+        engine.lua().set_app_data(ctx);
+
+        // Call on_create for each entity.
+        let uuids: Vec<u64> = scripts.iter().map(|(_, uuid, _)| *uuid).collect();
+        for uuid in &uuids {
+            engine.call_entity_on_create(*uuid);
+        }
+
+        // Clear context and put engine back.
+        engine.lua().remove_app_data::<SceneScriptContext>();
+        self.script_engine = Some(engine);
+    }
+
+    /// Tear down the Lua script engine: call `on_destroy()` per entity,
+    /// drop the engine, and reset loaded flags.
+    #[cfg(feature = "lua-scripting")]
+    fn on_lua_scripting_stop(&mut self) {
+        use script_glue::SceneScriptContext;
+
+        if let Some(engine) = self.script_engine.take() {
+            // Set scene context (no input during on_destroy).
+            let ctx = SceneScriptContext {
+                scene: self as *mut Scene,
+                input: std::ptr::null(),
+            };
+            engine.lua().set_app_data(ctx);
+
+            // Call on_destroy for each entity.
+            let uuids = engine.entity_uuids();
+            for uuid in &uuids {
+                engine.call_entity_on_destroy(*uuid);
+            }
+
+            // Clear context — engine is dropped after this block.
+            engine.lua().remove_app_data::<SceneScriptContext>();
+        }
+
+        // Reset loaded flags.
+        for lsc in self.world.query_mut::<&mut LuaScriptComponent>() {
+            lsc.loaded = false;
+        }
+    }
+
+    /// Call per-entity `on_update(dt)` for all loaded Lua scripts.
+    ///
+    /// Call this each frame during play mode, passing the current [`Input`]
+    /// so scripts can query key state via `Engine.is_key_down()`.
+    #[cfg(feature = "lua-scripting")]
+    pub fn on_update_lua_scripts(&mut self, dt: Timestep, input: &Input) {
+        use script_glue::SceneScriptContext;
+
+        // Collect UUIDs of loaded script entities.
+        let uuids: Vec<u64> = self
+            .world
+            .query::<(&IdComponent, &LuaScriptComponent)>()
+            .iter()
+            .filter(|(_, lsc)| lsc.loaded)
+            .map(|(id, _)| id.id.raw())
+            .collect();
+
+        if uuids.is_empty() {
+            return;
+        }
+
+        // Take engine out (take-modify-replace pattern).
+        let engine = match self.script_engine.take() {
+            Some(e) => e,
+            None => return,
+        };
+
+        // Set scene + input context.
+        let ctx = SceneScriptContext {
+            scene: self as *mut Scene,
+            input: input as *const Input,
+        };
+        engine.lua().set_app_data(ctx);
+
+        for uuid in &uuids {
+            engine.call_entity_on_update(*uuid, dt.seconds());
+        }
+
+        // Clear context and put engine back.
+        engine.lua().remove_app_data::<SceneScriptContext>();
+        self.script_engine = Some(engine);
+    }
+
+    /// Access the script engine (if active).
+    #[cfg(feature = "lua-scripting")]
+    pub fn script_engine(&self) -> Option<&ScriptEngine> {
+        self.script_engine.as_ref()
     }
 }
 

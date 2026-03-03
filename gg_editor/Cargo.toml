@@ -5,8 +5,9 @@ edition = "2021"
 license = "MIT"
 
 [features]
-default = ["profiling"]
+default = ["profiling", "lua-scripting"]
 profiling = ["gg_engine/profiling"]
+lua-scripting = ["gg_engine/lua-scripting"]
 
 [dependencies]
 gg_engine = { path = "../gg_engine", default-features = false }

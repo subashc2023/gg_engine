@@ -227,6 +227,12 @@ fn draw_components(
                 {
                     scene.add_component(entity, CircleCollider2DComponent::default());
                 }
+                #[cfg(feature = "lua-scripting")]
+                if !scene.has_component::<LuaScriptComponent>(entity)
+                    && ui.button("Lua Script").clicked()
+                {
+                    scene.add_component(entity, LuaScriptComponent::default());
+                }
             });
         });
         ui.separator();
@@ -531,11 +537,20 @@ fn draw_components(
                 }
             });
 
-            // Texture drop target.
+            // Texture drop target (drag-and-drop + click to browse).
             let btn_resp = ui.add_sized(
                 [100.0, 0.0],
                 egui::Button::new("Texture"),
             );
+
+            // Click to open file dialog in assets/textures.
+            if btn_resp.clicked() {
+                if let Some(path_str) =
+                    FileDialogs::open_file_in("Image files", &["png", "jpg", "jpeg"], "assets/textures")
+                {
+                    pending_texture_loads.push((entity, std::path::PathBuf::from(path_str)));
+                }
+            }
 
             // Accept texture drag-and-drop from the content browser.
             if let Some(payload) =
@@ -1026,5 +1041,135 @@ fn draw_components(
     }
     if remove_cc2d {
         scene.remove_component::<CircleCollider2DComponent>(entity);
+    }
+
+    // -- Native Script Component (removable, read-only display) --
+    let mut remove_native_script = false;
+    if scene.has_component::<NativeScriptComponent>(entity) {
+        let cr = egui::CollapsingHeader::new(
+            egui::RichText::new("Native Script")
+                .font(egui::FontId::new(14.0, bold_family.clone())),
+        )
+        .id_salt(("native_script", entity.id()))
+        .default_open(true)
+        .show(ui, |ui| {
+            ui.horizontal(|ui| {
+                ui.label("Script");
+                ui.label(
+                    egui::RichText::new("(bound in code)")
+                        .color(egui::Color32::from_rgb(0x96, 0x96, 0x96))
+                        .italics(),
+                );
+            });
+        });
+
+        cr.header_response.context_menu(|ui| {
+            if ui.button("Remove Component").clicked() {
+                remove_native_script = true;
+                ui.close();
+            }
+        });
+    }
+    if remove_native_script {
+        scene.remove_component::<NativeScriptComponent>(entity);
+    }
+
+    // -- Lua Script Component (removable) --
+    #[cfg(feature = "lua-scripting")]
+    {
+        let mut remove_lua_script = false;
+        if scene.has_component::<LuaScriptComponent>(entity) {
+            let cr = egui::CollapsingHeader::new(
+                egui::RichText::new("Lua Script")
+                    .font(egui::FontId::new(14.0, bold_family.clone())),
+            )
+            .id_salt(("lua_script", entity.id()))
+            .default_open(true)
+            .show(ui, |ui| {
+                let script_path = scene
+                    .get_component::<LuaScriptComponent>(entity)
+                    .map(|lsc| lsc.script_path.clone())
+                    .unwrap_or_default();
+
+                ui.horizontal(|ui| {
+                    ui.label("Script");
+
+                    // Show filename or "None" on the button.
+                    let display = if script_path.is_empty() {
+                        "None".to_string()
+                    } else {
+                        std::path::Path::new(&script_path)
+                            .file_name()
+                            .map(|n| n.to_string_lossy().to_string())
+                            .unwrap_or_else(|| script_path.clone())
+                    };
+                    let btn_resp = ui.add_sized(
+                        [ui.available_width(), 0.0],
+                        egui::Button::new(display),
+                    );
+
+                    // Click to open file dialog in assets/scripts.
+                    if btn_resp.clicked() {
+                        if let Some(path) =
+                            FileDialogs::open_file_in("Lua scripts", &["lua"], "assets/scripts")
+                        {
+                            if let Some(mut lsc) =
+                                scene.get_component_mut::<LuaScriptComponent>(entity)
+                            {
+                                lsc.script_path = path;
+                            }
+                        }
+                    }
+
+                    // Accept script drag-and-drop from the content browser.
+                    if let Some(payload) =
+                        btn_resp.dnd_release_payload::<ContentBrowserPayload>()
+                    {
+                        if !payload.is_directory {
+                            let ext = payload
+                                .path
+                                .extension()
+                                .and_then(|e| e.to_str())
+                                .unwrap_or("")
+                                .to_lowercase();
+                            if ext == "lua" {
+                                if let Some(mut lsc) =
+                                    scene.get_component_mut::<LuaScriptComponent>(entity)
+                                {
+                                    lsc.script_path =
+                                        payload.path.to_string_lossy().to_string();
+                                }
+                            }
+                        }
+                    }
+
+                    // Visual feedback when dragging over the button.
+                    if btn_resp
+                        .dnd_hover_payload::<ContentBrowserPayload>()
+                        .is_some()
+                    {
+                        ui.painter().rect_stroke(
+                            btn_resp.rect,
+                            egui::CornerRadius::same(2),
+                            egui::Stroke::new(
+                                2.0,
+                                egui::Color32::from_rgb(0x56, 0x9C, 0xD6),
+                            ),
+                            egui::StrokeKind::Inside,
+                        );
+                    }
+                });
+            });
+
+            cr.header_response.context_menu(|ui| {
+                if ui.button("Remove Component").clicked() {
+                    remove_lua_script = true;
+                    ui.close();
+                }
+            });
+        }
+        if remove_lua_script {
+            scene.remove_component::<LuaScriptComponent>(entity);
+        }
     }
 }

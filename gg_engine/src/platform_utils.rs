@@ -19,6 +19,18 @@ impl FileDialogs {
             .map(|p| p.to_string_lossy().to_string())
     }
 
+    /// Show a native "Open File" dialog starting in a specific directory.
+    ///
+    /// Like [`open_file`](Self::open_file) but sets the initial directory for
+    /// the dialog (e.g. `"assets/textures"`).
+    pub fn open_file_in(description: &str, extensions: &[&str], directory: &str) -> Option<String> {
+        rfd::FileDialog::new()
+            .add_filter(description, extensions)
+            .set_directory(directory)
+            .pick_file()
+            .map(|p| p.to_string_lossy().to_string())
+    }
+
     /// Show a native "Save File" dialog.
     ///
     /// `description` is the human-readable filter label (e.g. `"GGScene files"`).

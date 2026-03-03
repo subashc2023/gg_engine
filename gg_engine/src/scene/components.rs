@@ -394,3 +394,52 @@ impl Default for CircleCollider2DComponent {
         }
     }
 }
+
+// ---------------------------------------------------------------------------
+// Lua Scripting Component
+// ---------------------------------------------------------------------------
+
+/// Lua script attached to an entity for per-frame behavior via LuaJIT.
+///
+/// The `script_path` points to a `.lua` file relative to the project root.
+/// At runtime start, the [`Scene`](super::Scene) loads the script into
+/// its [`ScriptEngine`](super::script_engine::ScriptEngine) and sets
+/// `loaded = true`. The `loaded` flag is reset on clone (same pattern as
+/// physics runtime handles).
+#[cfg(feature = "lua-scripting")]
+pub struct LuaScriptComponent {
+    pub script_path: String,
+    /// Runtime-only flag indicating whether the script has been loaded.
+    /// Reset on clone (same pattern as physics handles).
+    pub(crate) loaded: bool,
+}
+
+#[cfg(feature = "lua-scripting")]
+impl LuaScriptComponent {
+    pub fn new(script_path: impl Into<String>) -> Self {
+        Self {
+            script_path: script_path.into(),
+            loaded: false,
+        }
+    }
+}
+
+#[cfg(feature = "lua-scripting")]
+impl Clone for LuaScriptComponent {
+    fn clone(&self) -> Self {
+        Self {
+            script_path: self.script_path.clone(),
+            loaded: false, // Runtime-only, not copied.
+        }
+    }
+}
+
+#[cfg(feature = "lua-scripting")]
+impl Default for LuaScriptComponent {
+    fn default() -> Self {
+        Self {
+            script_path: String::new(),
+            loaded: false,
+        }
+    }
+}

@@ -320,6 +320,9 @@ impl Application for GGEditor {
             SceneState::Play => {
                 // Run native scripts (e.g. CameraController).
                 self.scene.on_update_scripts(dt, input);
+                // Run Lua scripts.
+                #[cfg(feature = "lua-scripting")]
+                self.scene.on_update_lua_scripts(dt, input);
                 // Step physics simulation.
                 self.scene.on_update_physics(dt);
             }

@@ -10,6 +10,8 @@ use crate::scene::{
     IdComponent, RigidBody2DComponent, RigidBody2DType, Scene, SpriteRendererComponent,
     TagComponent, TransformComponent,
 };
+#[cfg(feature = "lua-scripting")]
+use crate::scene::LuaScriptComponent;
 use crate::uuid::Uuid;
 
 // ---------------------------------------------------------------------------
@@ -63,6 +65,12 @@ struct EntityData {
         default
     )]
     circle_collider_2d: Option<CircleCollider2DData>,
+    #[serde(
+        rename = "LuaScriptComponent",
+        skip_serializing_if = "Option::is_none",
+        default
+    )]
+    lua_script: Option<LuaScriptData>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -179,6 +187,12 @@ struct CircleCollider2DData {
     restitution: f32,
     #[serde(rename = "RestitutionThreshold")]
     restitution_threshold: f32,
+}
+
+#[derive(Serialize, Deserialize)]
+struct LuaScriptData {
+    #[serde(rename = "ScriptPath")]
+    script_path: String,
 }
 
 // ---------------------------------------------------------------------------
@@ -396,6 +410,16 @@ impl SceneSerializer {
                         restitution_threshold: cc.restitution_threshold,
                     });
 
+            #[cfg(feature = "lua-scripting")]
+            let lua_script_data =
+                scene
+                    .get_component::<LuaScriptComponent>(entity)
+                    .map(|lsc| LuaScriptData {
+                        script_path: lsc.script_path.clone(),
+                    });
+            #[cfg(not(feature = "lua-scripting"))]
+            let lua_script_data: Option<LuaScriptData> = None;
+
             let uuid = scene
                 .get_component::<IdComponent>(entity)
                 .map(|id| id.id.raw())
@@ -411,6 +435,7 @@ impl SceneSerializer {
                 rigidbody_2d: rigidbody_2d_data,
                 box_collider_2d: box_collider_2d_data,
                 circle_collider_2d: circle_collider_2d_data,
+                lua_script: lua_script_data,
             });
         }
 
@@ -536,6 +561,12 @@ impl SceneSerializer {
                         runtime_fixture: None,
                     },
                 );
+            }
+
+            // LuaScriptComponent — added only if present in the file.
+            #[cfg(feature = "lua-scripting")]
+            if let Some(ref lsd) = entity_data.lua_script {
+                scene.add_component(entity, LuaScriptComponent::new(&lsd.script_path));
             }
         }
     }
