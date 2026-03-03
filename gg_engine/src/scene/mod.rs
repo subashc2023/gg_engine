@@ -970,6 +970,33 @@ impl Scene {
         }
     }
 
+    /// Reload all Lua scripts from disk without leaving play mode.
+    ///
+    /// **Play mode**: tears down the current script engine (calling `on_destroy`
+    /// for each entity), creates a fresh LuaJIT state, re-loads every script
+    /// file from disk, re-applies editor field overrides, and calls `on_create`.
+    /// This lets you edit a `.lua` file and see changes immediately without
+    /// stopping and restarting.
+    ///
+    /// **Edit mode**: no-op (scripts are loaded fresh on each play-mode entry).
+    #[cfg(feature = "lua-scripting")]
+    pub fn reload_lua_scripts(&mut self) {
+        if self.script_engine.is_none() {
+            log::info!("Scripts will reload on next play (no active script engine)");
+            return;
+        }
+
+        log::info!("Reloading Lua scripts...");
+
+        // Tear down the running engine (calls on_destroy, resets loaded flags).
+        self.on_lua_scripting_stop();
+
+        // Spin up a fresh engine and re-load everything from disk.
+        self.on_lua_scripting_start();
+
+        log::info!("Lua scripts reloaded");
+    }
+
     /// Call per-entity `on_update(dt)` for all loaded Lua scripts.
     ///
     /// Call this each frame during play mode, passing the current [`Input`]

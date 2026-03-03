@@ -351,6 +351,12 @@ impl Application for GGEditor {
                     self.on_duplicate_entity();
                 }
 
+                // Script reload — available in any scene state.
+                #[cfg(feature = "lua-scripting")]
+                KeyCode::R if ctrl && !shift => {
+                    self.scene.reload_lua_scripts();
+                }
+
                 // Gizmo shortcuts (Q/W/E/R) — edit mode only, no modifiers.
                 KeyCode::Q if !ctrl && !shift && self.scene_state == SceneState::Edit => {
                     self.gizmo_operation = GizmoOperation::None;
@@ -602,6 +608,16 @@ impl Application for GGEditor {
                             .checkbox(&mut self.show_physics_colliders, "Show Physics Colliders")
                             .clicked()
                         {
+                            ui.close();
+                        }
+                    });
+                    #[cfg(feature = "lua-scripting")]
+                    ui.menu_button("Script", |ui| {
+                        if ui
+                            .add(egui::Button::new("Reload Scripts").shortcut_text("Ctrl+R"))
+                            .clicked()
+                        {
+                            self.scene.reload_lua_scripts();
                             ui.close();
                         }
                     });
