@@ -193,6 +193,8 @@ struct CircleCollider2DData {
 struct LuaScriptData {
     #[serde(rename = "ScriptPath")]
     script_path: String,
+    #[serde(rename = "Fields", default, skip_serializing_if = "Option::is_none")]
+    fields: Option<std::collections::HashMap<String, super::script_engine::ScriptFieldValue>>,
 }
 
 // ---------------------------------------------------------------------------
@@ -414,8 +416,16 @@ impl SceneSerializer {
             let lua_script_data =
                 scene
                     .get_component::<LuaScriptComponent>(entity)
-                    .map(|lsc| LuaScriptData {
-                        script_path: lsc.script_path.clone(),
+                    .map(|lsc| {
+                        let fields = if lsc.field_overrides.is_empty() {
+                            None
+                        } else {
+                            Some(lsc.field_overrides.clone())
+                        };
+                        LuaScriptData {
+                            script_path: lsc.script_path.clone(),
+                            fields,
+                        }
                     });
             #[cfg(not(feature = "lua-scripting"))]
             let lua_script_data: Option<LuaScriptData> = None;
@@ -566,7 +576,11 @@ impl SceneSerializer {
             // LuaScriptComponent — added only if present in the file.
             #[cfg(feature = "lua-scripting")]
             if let Some(ref lsd) = entity_data.lua_script {
-                scene.add_component(entity, LuaScriptComponent::new(&lsd.script_path));
+                let mut lsc = LuaScriptComponent::new(&lsd.script_path);
+                if let Some(ref fields) = lsd.fields {
+                    lsc.field_overrides = fields.clone();
+                }
+                scene.add_component(entity, lsc);
             }
         }
     }
@@ -642,5 +656,41 @@ mod tests {
 
         // Clean up.
         let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn demo_scene_deserializes() {
+        let yaml = include_str!("../../../assets/scenes/new.ggscene");
+        let mut scene = Scene::new();
+        assert!(
+            SceneSerializer::deserialize_from_string(&mut scene, yaml),
+            "Failed to deserialize demo scene"
+        );
+        assert_eq!(scene.entity_count(), 9);
+
+        let entities = scene.each_entity_with_tag();
+        let names: Vec<&str> = entities.iter().map(|(_, name)| name.as_str()).collect();
+        assert!(names.contains(&"Camera"));
+        assert!(names.contains(&"Lua Player"));
+        assert!(names.contains(&"Native Player"));
+        assert!(names.contains(&"Force Block"));
+        assert!(names.contains(&"Spinner"));
+        assert!(names.contains(&"Bouncy Ball"));
+        assert!(names.contains(&"Ground"));
+        assert!(names.contains(&"Left Wall"));
+        assert!(names.contains(&"Right Wall"));
+
+        // Verify Lua scripts were loaded.
+        let (lua_player, _) = entities.iter().find(|(_, n)| n == "Lua Player").unwrap();
+        assert!(scene.has_component::<LuaScriptComponent>(*lua_player));
+
+        // Verify physics components.
+        assert!(scene.has_component::<RigidBody2DComponent>(*lua_player));
+        assert!(scene.has_component::<BoxCollider2DComponent>(*lua_player));
+
+        // Verify circle collider on bouncy ball.
+        let (bouncy, _) = entities.iter().find(|(_, n)| n == "Bouncy Ball").unwrap();
+        assert!(scene.has_component::<CircleCollider2DComponent>(*bouncy));
+        assert!(scene.has_component::<CircleRendererComponent>(*bouncy));
     }
 }

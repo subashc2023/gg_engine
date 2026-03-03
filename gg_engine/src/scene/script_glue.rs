@@ -27,15 +27,36 @@ unsafe impl Sync for SceneScriptContext {}
 pub fn register_all(lua: &Lua) -> LuaResult<()> {
     let engine = lua.create_table()?;
 
+    // Utility / debug
     engine.set("rust_function", lua.create_function(rust_function)?)?;
     engine.set("native_log", lua.create_function(native_log)?)?;
     engine.set("native_log_vector", lua.create_function(native_log_vector)?)?;
     engine.set("vector_dot", lua.create_function(vector_dot)?)?;
     engine.set("vector_cross", lua.create_function(vector_cross)?)?;
     engine.set("vector_normalize", lua.create_function(vector_normalize)?)?;
+
+    // Transform
     engine.set("get_translation", lua.create_function(get_translation)?)?;
     engine.set("set_translation", lua.create_function(set_translation)?)?;
+    engine.set("get_rotation", lua.create_function(get_rotation)?)?;
+    engine.set("set_rotation", lua.create_function(set_rotation)?)?;
+    engine.set("get_scale", lua.create_function(get_scale)?)?;
+    engine.set("set_scale", lua.create_function(set_scale)?)?;
+
+    // Input
     engine.set("is_key_down", lua.create_function(is_key_down)?)?;
+
+    // Component queries
+    engine.set("has_component", lua.create_function(has_component)?)?;
+
+    // Physics
+    engine.set("apply_impulse", lua.create_function(lua_apply_impulse)?)?;
+    engine.set("apply_impulse_at_point", lua.create_function(lua_apply_impulse_at_point)?)?;
+    engine.set("apply_force", lua.create_function(lua_apply_force)?)?;
+    engine.set("get_linear_velocity", lua.create_function(lua_get_linear_velocity)?)?;
+    engine.set("set_linear_velocity", lua.create_function(lua_set_linear_velocity)?)?;
+    engine.set("get_angular_velocity", lua.create_function(lua_get_angular_velocity)?)?;
+    engine.set("set_angular_velocity", lua.create_function(lua_set_angular_velocity)?)?;
 
     lua.globals().set("Engine", engine)?;
 
@@ -195,6 +216,239 @@ fn is_key_down(lua: &Lua, key_name: String) -> LuaResult<bool> {
 }
 
 // ---------------------------------------------------------------------------
+// Engine.get_rotation / Engine.set_rotation / Engine.get_scale / Engine.set_scale
+// ---------------------------------------------------------------------------
+
+/// `Engine.get_rotation(entity_id)` — returns `(rx, ry, rz)` in radians.
+fn get_rotation(lua: &Lua, entity_id: u64) -> LuaResult<(f32, f32, f32)> {
+    let ctx = match lua.app_data_ref::<SceneScriptContext>() {
+        Some(ctx) => ctx,
+        None => return Ok((0.0, 0.0, 0.0)),
+    };
+
+    let scene = unsafe { &*ctx.scene };
+    if let Some(entity) = scene.find_entity_by_uuid(entity_id) {
+        if let Some(tc) = scene.get_component::<super::TransformComponent>(entity) {
+            return Ok((tc.rotation.x, tc.rotation.y, tc.rotation.z));
+        }
+    }
+
+    Ok((0.0, 0.0, 0.0))
+}
+
+/// `Engine.set_rotation(entity_id, rx, ry, rz)` — sets rotation in radians.
+fn set_rotation(lua: &Lua, (entity_id, rx, ry, rz): (u64, f32, f32, f32)) -> LuaResult<()> {
+    let ctx = match lua.app_data_ref::<SceneScriptContext>() {
+        Some(ctx) => ctx,
+        None => return Ok(()),
+    };
+
+    let scene = unsafe { &mut *ctx.scene };
+    if let Some(entity) = scene.find_entity_by_uuid(entity_id) {
+        if let Some(mut tc) = scene.get_component_mut::<super::TransformComponent>(entity) {
+            tc.rotation.x = rx;
+            tc.rotation.y = ry;
+            tc.rotation.z = rz;
+        }
+    }
+
+    Ok(())
+}
+
+/// `Engine.get_scale(entity_id)` — returns `(sx, sy, sz)`.
+fn get_scale(lua: &Lua, entity_id: u64) -> LuaResult<(f32, f32, f32)> {
+    let ctx = match lua.app_data_ref::<SceneScriptContext>() {
+        Some(ctx) => ctx,
+        None => return Ok((1.0, 1.0, 1.0)),
+    };
+
+    let scene = unsafe { &*ctx.scene };
+    if let Some(entity) = scene.find_entity_by_uuid(entity_id) {
+        if let Some(tc) = scene.get_component::<super::TransformComponent>(entity) {
+            return Ok((tc.scale.x, tc.scale.y, tc.scale.z));
+        }
+    }
+
+    Ok((1.0, 1.0, 1.0))
+}
+
+/// `Engine.set_scale(entity_id, sx, sy, sz)` — sets scale.
+fn set_scale(lua: &Lua, (entity_id, sx, sy, sz): (u64, f32, f32, f32)) -> LuaResult<()> {
+    let ctx = match lua.app_data_ref::<SceneScriptContext>() {
+        Some(ctx) => ctx,
+        None => return Ok(()),
+    };
+
+    let scene = unsafe { &mut *ctx.scene };
+    if let Some(entity) = scene.find_entity_by_uuid(entity_id) {
+        if let Some(mut tc) = scene.get_component_mut::<super::TransformComponent>(entity) {
+            tc.scale.x = sx;
+            tc.scale.y = sy;
+            tc.scale.z = sz;
+        }
+    }
+
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Engine.has_component
+// ---------------------------------------------------------------------------
+
+/// `Engine.has_component(entity_id, component_name)` — string-based component check.
+fn has_component(lua: &Lua, (entity_id, name): (u64, String)) -> LuaResult<bool> {
+    let ctx = match lua.app_data_ref::<SceneScriptContext>() {
+        Some(ctx) => ctx,
+        None => return Ok(false),
+    };
+
+    let scene = unsafe { &*ctx.scene };
+    let entity = match scene.find_entity_by_uuid(entity_id) {
+        Some(e) => e,
+        None => return Ok(false),
+    };
+
+    let result = match name.as_str() {
+        "Transform" => scene.has_component::<super::TransformComponent>(entity),
+        "Camera" => scene.has_component::<super::CameraComponent>(entity),
+        "SpriteRenderer" => scene.has_component::<super::SpriteRendererComponent>(entity),
+        "CircleRenderer" => scene.has_component::<super::CircleRendererComponent>(entity),
+        "RigidBody2D" => scene.has_component::<super::RigidBody2DComponent>(entity),
+        "BoxCollider2D" => scene.has_component::<super::BoxCollider2DComponent>(entity),
+        "CircleCollider2D" => scene.has_component::<super::CircleCollider2DComponent>(entity),
+        "NativeScript" => scene.has_component::<super::NativeScriptComponent>(entity),
+        "LuaScript" => {
+            #[cfg(feature = "lua-scripting")]
+            { scene.has_component::<super::LuaScriptComponent>(entity) }
+            #[cfg(not(feature = "lua-scripting"))]
+            { false }
+        }
+        _ => {
+            log::warn!("ScriptGlue: unknown component name '{}'", name);
+            false
+        }
+    };
+
+    Ok(result)
+}
+
+// ---------------------------------------------------------------------------
+// Physics bindings (delegate to Scene methods)
+// ---------------------------------------------------------------------------
+
+/// `Engine.apply_impulse(entity_id, ix, iy)`
+fn lua_apply_impulse(lua: &Lua, (entity_id, ix, iy): (u64, f32, f32)) -> LuaResult<()> {
+    let ctx = match lua.app_data_ref::<SceneScriptContext>() {
+        Some(ctx) => ctx,
+        None => return Ok(()),
+    };
+
+    let scene = unsafe { &mut *ctx.scene };
+    if let Some(entity) = scene.find_entity_by_uuid(entity_id) {
+        scene.apply_impulse(entity, glam::Vec2::new(ix, iy));
+    }
+
+    Ok(())
+}
+
+/// `Engine.apply_impulse_at_point(entity_id, ix, iy, px, py)`
+fn lua_apply_impulse_at_point(
+    lua: &Lua,
+    (entity_id, ix, iy, px, py): (u64, f32, f32, f32, f32),
+) -> LuaResult<()> {
+    let ctx = match lua.app_data_ref::<SceneScriptContext>() {
+        Some(ctx) => ctx,
+        None => return Ok(()),
+    };
+
+    let scene = unsafe { &mut *ctx.scene };
+    if let Some(entity) = scene.find_entity_by_uuid(entity_id) {
+        scene.apply_impulse_at_point(entity, glam::Vec2::new(ix, iy), glam::Vec2::new(px, py));
+    }
+
+    Ok(())
+}
+
+/// `Engine.apply_force(entity_id, fx, fy)`
+fn lua_apply_force(lua: &Lua, (entity_id, fx, fy): (u64, f32, f32)) -> LuaResult<()> {
+    let ctx = match lua.app_data_ref::<SceneScriptContext>() {
+        Some(ctx) => ctx,
+        None => return Ok(()),
+    };
+
+    let scene = unsafe { &mut *ctx.scene };
+    if let Some(entity) = scene.find_entity_by_uuid(entity_id) {
+        scene.apply_force(entity, glam::Vec2::new(fx, fy));
+    }
+
+    Ok(())
+}
+
+/// `Engine.get_linear_velocity(entity_id)` — returns `(vx, vy)`.
+fn lua_get_linear_velocity(lua: &Lua, entity_id: u64) -> LuaResult<(f32, f32)> {
+    let ctx = match lua.app_data_ref::<SceneScriptContext>() {
+        Some(ctx) => ctx,
+        None => return Ok((0.0, 0.0)),
+    };
+
+    let scene = unsafe { &*ctx.scene };
+    if let Some(entity) = scene.find_entity_by_uuid(entity_id) {
+        if let Some(v) = scene.get_linear_velocity(entity) {
+            return Ok((v.x, v.y));
+        }
+    }
+
+    Ok((0.0, 0.0))
+}
+
+/// `Engine.set_linear_velocity(entity_id, vx, vy)`
+fn lua_set_linear_velocity(lua: &Lua, (entity_id, vx, vy): (u64, f32, f32)) -> LuaResult<()> {
+    let ctx = match lua.app_data_ref::<SceneScriptContext>() {
+        Some(ctx) => ctx,
+        None => return Ok(()),
+    };
+
+    let scene = unsafe { &mut *ctx.scene };
+    if let Some(entity) = scene.find_entity_by_uuid(entity_id) {
+        scene.set_linear_velocity(entity, glam::Vec2::new(vx, vy));
+    }
+
+    Ok(())
+}
+
+/// `Engine.get_angular_velocity(entity_id)` — returns angular velocity in rad/s.
+fn lua_get_angular_velocity(lua: &Lua, entity_id: u64) -> LuaResult<f32> {
+    let ctx = match lua.app_data_ref::<SceneScriptContext>() {
+        Some(ctx) => ctx,
+        None => return Ok(0.0),
+    };
+
+    let scene = unsafe { &*ctx.scene };
+    if let Some(entity) = scene.find_entity_by_uuid(entity_id) {
+        if let Some(omega) = scene.get_angular_velocity(entity) {
+            return Ok(omega);
+        }
+    }
+
+    Ok(0.0)
+}
+
+/// `Engine.set_angular_velocity(entity_id, omega)`
+fn lua_set_angular_velocity(lua: &Lua, (entity_id, omega): (u64, f32)) -> LuaResult<()> {
+    let ctx = match lua.app_data_ref::<SceneScriptContext>() {
+        Some(ctx) => ctx,
+        None => return Ok(()),
+    };
+
+    let scene = unsafe { &mut *ctx.scene };
+    if let Some(entity) = scene.find_entity_by_uuid(entity_id) {
+        scene.set_angular_velocity(entity, omega);
+    }
+
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
 // Existing Engine functions
 // ---------------------------------------------------------------------------
 
@@ -256,15 +510,32 @@ mod tests {
     fn engine_table_exists() {
         let lua = setup();
         let engine: LuaTable = lua.globals().get("Engine").expect("Engine table should exist");
+        // Utility / debug
         assert!(engine.get::<LuaFunction>("rust_function").is_ok());
         assert!(engine.get::<LuaFunction>("native_log").is_ok());
         assert!(engine.get::<LuaFunction>("native_log_vector").is_ok());
         assert!(engine.get::<LuaFunction>("vector_dot").is_ok());
         assert!(engine.get::<LuaFunction>("vector_cross").is_ok());
         assert!(engine.get::<LuaFunction>("vector_normalize").is_ok());
+        // Transform
         assert!(engine.get::<LuaFunction>("get_translation").is_ok());
         assert!(engine.get::<LuaFunction>("set_translation").is_ok());
+        assert!(engine.get::<LuaFunction>("get_rotation").is_ok());
+        assert!(engine.get::<LuaFunction>("set_rotation").is_ok());
+        assert!(engine.get::<LuaFunction>("get_scale").is_ok());
+        assert!(engine.get::<LuaFunction>("set_scale").is_ok());
+        // Input
         assert!(engine.get::<LuaFunction>("is_key_down").is_ok());
+        // Component queries
+        assert!(engine.get::<LuaFunction>("has_component").is_ok());
+        // Physics
+        assert!(engine.get::<LuaFunction>("apply_impulse").is_ok());
+        assert!(engine.get::<LuaFunction>("apply_impulse_at_point").is_ok());
+        assert!(engine.get::<LuaFunction>("apply_force").is_ok());
+        assert!(engine.get::<LuaFunction>("get_linear_velocity").is_ok());
+        assert!(engine.get::<LuaFunction>("set_linear_velocity").is_ok());
+        assert!(engine.get::<LuaFunction>("get_angular_velocity").is_ok());
+        assert!(engine.get::<LuaFunction>("set_angular_velocity").is_ok());
     }
 
     #[test]
@@ -363,5 +634,65 @@ mod tests {
             .unwrap();
         let result: bool = lua.globals().get("key_result").unwrap();
         assert!(!result);
+    }
+
+    #[test]
+    fn get_rotation_no_context_returns_zero() {
+        let lua = setup();
+        lua.load("rx, ry, rz = Engine.get_rotation(12345)")
+            .exec()
+            .unwrap();
+        let rx: f32 = lua.globals().get("rx").unwrap();
+        let ry: f32 = lua.globals().get("ry").unwrap();
+        let rz: f32 = lua.globals().get("rz").unwrap();
+        assert!(rx.abs() < 0.001);
+        assert!(ry.abs() < 0.001);
+        assert!(rz.abs() < 0.001);
+    }
+
+    #[test]
+    fn get_scale_no_context_returns_one() {
+        let lua = setup();
+        lua.load("sx, sy, sz = Engine.get_scale(12345)")
+            .exec()
+            .unwrap();
+        let sx: f32 = lua.globals().get("sx").unwrap();
+        let sy: f32 = lua.globals().get("sy").unwrap();
+        let sz: f32 = lua.globals().get("sz").unwrap();
+        assert!((sx - 1.0).abs() < 0.001);
+        assert!((sy - 1.0).abs() < 0.001);
+        assert!((sz - 1.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn has_component_no_context_returns_false() {
+        let lua = setup();
+        lua.load(r#"result = Engine.has_component(12345, "Transform")"#)
+            .exec()
+            .unwrap();
+        let result: bool = lua.globals().get("result").unwrap();
+        assert!(!result);
+    }
+
+    #[test]
+    fn get_linear_velocity_no_context_returns_zero() {
+        let lua = setup();
+        lua.load("vx, vy = Engine.get_linear_velocity(12345)")
+            .exec()
+            .unwrap();
+        let vx: f32 = lua.globals().get("vx").unwrap();
+        let vy: f32 = lua.globals().get("vy").unwrap();
+        assert!(vx.abs() < 0.001);
+        assert!(vy.abs() < 0.001);
+    }
+
+    #[test]
+    fn get_angular_velocity_no_context_returns_zero() {
+        let lua = setup();
+        lua.load("omega = Engine.get_angular_velocity(12345)")
+            .exec()
+            .unwrap();
+        let omega: f32 = lua.globals().get("omega").unwrap();
+        assert!(omega.abs() < 0.001);
     }
 }

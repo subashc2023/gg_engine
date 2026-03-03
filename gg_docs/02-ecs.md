@@ -243,40 +243,11 @@ scene.on_update_scripts(dt, &input);
 
 ## Scene Serialization
 
-**File:** `scene/scene_serializer.rs`
+YAML-based scene persistence (`.ggscene` files) via external serializer pattern. Scene types have no serde derives — `SceneSerializer` handles conversion through intermediate data structs.
 
-YAML-based scene persistence using `serde` + `serde_yaml`. File extension: `.ggscene`.
+**Not serialized:** `NativeScriptComponent` (runtime-only, code-defined), `Texture2D` GPU resources, physics runtime handles, Lua `loaded` flags.
 
-### API
-
-```rust
-SceneSerializer::serialize(&scene, "path/to/scene.ggscene")   -> bool
-SceneSerializer::deserialize(&mut scene, "path/to/scene.ggscene") -> bool
-
-// In-memory round-trips
-SceneSerializer::serialize_to_string(&scene)              -> String
-SceneSerializer::deserialize_from_string(&mut scene, &s)  -> bool
-```
-
-### Serialized Components
-
-| Component | Fields |
-|-----------|--------|
-| `TagComponent` | tag |
-| `TransformComponent` | translation, rotation, scale |
-| `CameraComponent` | All SceneCamera params, primary, fixed_aspect_ratio |
-| `SpriteRendererComponent` | color, tiling_factor (**not** texture) |
-| `CircleRendererComponent` | color, thickness, fade |
-| `RigidBody2DComponent` | body_type, fixed_rotation |
-| `BoxCollider2DComponent` | offset, size, density, friction, restitution, restitution_threshold |
-
-**Not serialized:** `NativeScriptComponent` (runtime-only), `Texture2D` references.
-
-### Design
-
-- Intermediate serde structs (`SceneData`, `EntityData`, etc.) decouple scene types from serde derive
-- Entity IDs are 64-bit UUIDs via `IdComponent` (serialized as `u64` in YAML)
-- Deserialize creates entities via `create_entity_with_uuid` to preserve UUIDs from file
+See [Scene Serialization](08-serialization.md) for full details: YAML format, intermediate structs, deserialization flow, `Scene::copy()`, UUID system, and editor file operations.
 
 ## hecs Tips & Patterns
 

@@ -1,6 +1,43 @@
 use mlua::prelude::*;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::Path;
+
+/// A value that can be exposed from a Lua script's `fields` table.
+/// Supports the Lua primitive types that map to editor UI widgets.
+///
+/// The `untagged` serde representation produces clean YAML (e.g. `speed: 5.0`
+/// instead of `speed: !Float 5.0`). Variant order matters: `Bool` must come
+/// first so that `true`/`false` are not misinterpreted as strings.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum ScriptFieldValue {
+    Bool(bool),
+    Float(f64),
+    String(String),
+}
+
+impl ScriptFieldValue {
+    /// Convert a Lua value into a `ScriptFieldValue`, if supported.
+    fn from_lua_value(value: &LuaValue) -> Option<Self> {
+        match value {
+            LuaValue::Boolean(b) => Some(Self::Bool(*b)),
+            LuaValue::Integer(n) => Some(Self::Float(*n as f64)),
+            LuaValue::Number(n) => Some(Self::Float(*n)),
+            LuaValue::String(s) => s.to_str().ok().map(|s| Self::String(s.to_string())),
+            _ => None,
+        }
+    }
+
+    /// Push this value into Lua.
+    fn to_lua(&self, lua: &Lua) -> LuaResult<LuaValue> {
+        match self {
+            Self::Bool(b) => Ok(LuaValue::Boolean(*b)),
+            Self::Float(n) => Ok(LuaValue::Number(*n)),
+            Self::String(s) => lua.create_string(s).map(LuaValue::String),
+        }
+    }
+}
 
 /// Lua scripting engine backed by LuaJIT via `mlua`.
 ///
@@ -197,6 +234,114 @@ impl ScriptEngine {
         }
 
         true
+    }
+
+    // -----------------------------------------------------------------
+    // Script field discovery and access
+    // -----------------------------------------------------------------
+
+    /// Execute a script in a temporary Lua state and read its `fields` table.
+    /// Returns `(name, default_value)` pairs sorted by name for stable UI order.
+    /// Used by the editor in edit mode (no running ScriptEngine needed).
+    pub fn discover_fields(script_path: &str) -> Vec<(String, ScriptFieldValue)> {
+        let path = Path::new(script_path);
+        let source = match std::fs::read_to_string(path) {
+            Ok(s) => s,
+            Err(e) => {
+                log::warn!(
+                    "ScriptEngine::discover_fields: failed to read '{}': {}",
+                    path.display(),
+                    e
+                );
+                return Vec::new();
+            }
+        };
+
+        let lua = Lua::new();
+        if let Err(e) = lua.load(&source).exec() {
+            log::warn!(
+                "ScriptEngine::discover_fields: error executing '{}': {}",
+                path.display(),
+                e
+            );
+            return Vec::new();
+        }
+
+        let fields_table: LuaTable = match lua.globals().get("fields") {
+            Ok(t) => t,
+            Err(_) => return Vec::new(),
+        };
+
+        let mut fields = Vec::new();
+        if let Ok(pairs) = fields_table
+            .pairs::<String, LuaValue>()
+            .collect::<Result<Vec<_>, _>>()
+        {
+            for (key, value) in pairs {
+                if let Some(sfv) = ScriptFieldValue::from_lua_value(&value) {
+                    fields.push((key, sfv));
+                }
+            }
+        }
+        fields.sort_by(|(a, _), (b, _)| a.cmp(b));
+        fields
+    }
+
+    /// Read all fields from a running entity's `fields` table.
+    /// Returns `None` if the entity has no environment.
+    pub fn get_entity_fields(&self, uuid: u64) -> Option<Vec<(String, ScriptFieldValue)>> {
+        let key = self.entity_envs.get(&uuid)?;
+        let env: LuaTable = self.lua.registry_value(key).ok()?;
+
+        // Use raw_get so we don't fall through to _G.
+        let fields_table: LuaTable = match env.raw_get("fields") {
+            Ok(t) => t,
+            Err(_) => return Some(Vec::new()),
+        };
+
+        let mut fields = Vec::new();
+        if let Ok(pairs) = fields_table
+            .pairs::<String, LuaValue>()
+            .collect::<Result<Vec<_>, _>>()
+        {
+            for (key, value) in pairs {
+                if let Some(sfv) = ScriptFieldValue::from_lua_value(&value) {
+                    fields.push((key, sfv));
+                }
+            }
+        }
+        fields.sort_by(|(a, _), (b, _)| a.cmp(b));
+        Some(fields)
+    }
+
+    /// Read a single field value from a running entity's `fields` table.
+    pub fn get_entity_field(&self, uuid: u64, name: &str) -> Option<ScriptFieldValue> {
+        let key = self.entity_envs.get(&uuid)?;
+        let env: LuaTable = self.lua.registry_value(key).ok()?;
+        let fields_table: LuaTable = env.raw_get("fields").ok()?;
+        let value: LuaValue = fields_table.get(name).ok()?;
+        ScriptFieldValue::from_lua_value(&value)
+    }
+
+    /// Set a single field value on a running entity's `fields` table.
+    /// Returns `true` on success.
+    pub fn set_entity_field(&self, uuid: u64, name: &str, value: &ScriptFieldValue) -> bool {
+        let key = match self.entity_envs.get(&uuid) {
+            Some(k) => k,
+            None => return false,
+        };
+        let env: LuaTable = match self.lua.registry_value(key) {
+            Ok(t) => t,
+            Err(_) => return false,
+        };
+        let fields_table: LuaTable = match env.raw_get("fields") {
+            Ok(t) => t,
+            Err(_) => return false,
+        };
+        match value.to_lua(&self.lua) {
+            Ok(lua_val) => fields_table.set(name, lua_val).is_ok(),
+            Err(_) => false,
+        }
     }
 
     // -----------------------------------------------------------------
@@ -507,6 +652,115 @@ end
         assert!((ny - 1.0).abs() < 0.001, "normalize(0,3,0) should be (0,1,0)");
 
         std::fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn discover_fields_from_script() {
+        let dir = std::env::temp_dir();
+        let path = dir.join("gg_test_discover_fields.lua");
+        std::fs::write(
+            &path,
+            r#"
+fields = {
+    speed = 5.0,
+    is_active = true,
+    name = "player",
+}
+
+function on_update(dt)
+end
+"#,
+        )
+        .unwrap();
+
+        let fields = ScriptEngine::discover_fields(&path.to_string_lossy());
+        assert_eq!(fields.len(), 3);
+
+        // Sorted by name: is_active, name, speed
+        assert_eq!(fields[0].0, "is_active");
+        assert_eq!(fields[0].1, ScriptFieldValue::Bool(true));
+        assert_eq!(fields[1].0, "name");
+        assert_eq!(fields[1].1, ScriptFieldValue::String("player".into()));
+        assert_eq!(fields[2].0, "speed");
+        assert_eq!(fields[2].1, ScriptFieldValue::Float(5.0));
+
+        std::fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn discover_fields_no_fields_table() {
+        let dir = std::env::temp_dir();
+        let path = dir.join("gg_test_no_fields.lua");
+        std::fs::write(&path, "function on_update(dt) end\n").unwrap();
+
+        let fields = ScriptEngine::discover_fields(&path.to_string_lossy());
+        assert!(fields.is_empty());
+
+        std::fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn entity_field_get_set() {
+        let mut engine = ScriptEngine::new();
+
+        let dir = std::env::temp_dir();
+        let path = dir.join("gg_test_entity_fields.lua");
+        std::fs::write(
+            &path,
+            r#"
+fields = {
+    speed = 1.0,
+    jump = true,
+}
+
+function on_update(dt)
+    -- use fields.speed
+end
+"#,
+        )
+        .unwrap();
+
+        assert!(engine.create_entity_env(42, &path.to_string_lossy()));
+
+        // Read fields.
+        let fields = engine.get_entity_fields(42).unwrap();
+        assert_eq!(fields.len(), 2);
+        assert_eq!(
+            engine.get_entity_field(42, "speed"),
+            Some(ScriptFieldValue::Float(1.0))
+        );
+        assert_eq!(
+            engine.get_entity_field(42, "jump"),
+            Some(ScriptFieldValue::Bool(true))
+        );
+
+        // Write field.
+        assert!(engine.set_entity_field(42, "speed", &ScriptFieldValue::Float(9.9)));
+        assert_eq!(
+            engine.get_entity_field(42, "speed"),
+            Some(ScriptFieldValue::Float(9.9))
+        );
+
+        // Non-existent entity.
+        assert!(engine.get_entity_fields(999).is_none());
+        assert!(!engine.set_entity_field(999, "speed", &ScriptFieldValue::Float(0.0)));
+
+        std::fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn script_field_value_serde_round_trip() {
+        let values = vec![
+            ScriptFieldValue::Bool(true),
+            ScriptFieldValue::Float(3.14),
+            ScriptFieldValue::String("hello".into()),
+        ];
+
+        for v in &values {
+            let yaml = serde_yaml::to_string(v).unwrap();
+            let back: ScriptFieldValue = serde_yaml::from_str(&yaml).unwrap();
+            assert_eq!(&back, v);
+        }
     }
 
     #[test]

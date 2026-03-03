@@ -1,6 +1,7 @@
 mod camera_controller;
 mod gizmo;
 mod panels;
+mod physics_player;
 #[cfg(not(target_os = "macos"))]
 mod title_bar;
 
@@ -8,8 +9,8 @@ use gg_engine::egui;
 use gg_engine::prelude::*;
 use transform_gizmo_egui::Gizmo;
 
-use camera_controller::CameraController;
 use gizmo::GizmoOperation;
+use physics_player::PhysicsPlayer;
 use panels::content_browser::{render_dnd_ghost, ASSETS_DIR};
 use panels::{EditorTabViewer, Tab};
 
@@ -77,39 +78,103 @@ impl Application for GGEditor {
         // Viewport takes 80% right of the top-left area; Settings stays left (20%).
         surface.split_right(top_left, 0.20, vec![Tab::Viewport]);
 
-        // Create scene.
+        // Create scene — scripting + physics demo.
         let mut scene = Scene::new();
 
-        // Three squares for perspective vs orthographic testing.
-        let left_square = scene.create_entity_with_tag("Left Square");
+        // -- Camera (static — editor camera handles view in edit/simulate,
+        //    scene camera stays fixed in play mode) --
+        let ortho_cam = scene.create_entity_with_tag("Camera");
+        scene.add_component(ortho_cam, CameraComponent::default());
+
+        // -- Native Physics Player (green, left side) --
+        // Demonstrates the Rust NativeScript physics API: apply_impulse,
+        // get/set_linear_velocity, has_component check.
+        let native_player = scene.create_entity_with_tag("Native Player");
         scene.add_component(
-            left_square,
+            native_player,
             SpriteRendererComponent::new(Vec4::new(0.2, 0.8, 0.3, 1.0)),
         );
-        if let Some(mut t) = scene.get_component_mut::<TransformComponent>(left_square) {
-            t.translation = Vec3::new(-2.0, 0.0, 0.0);
+        if let Some(mut t) = scene.get_component_mut::<TransformComponent>(native_player) {
+            t.translation = Vec3::new(-3.0, 0.0, 0.0);
         }
+        scene.add_component(native_player, RigidBody2DComponent::default());
+        scene.add_component(native_player, BoxCollider2DComponent::default());
+        scene.add_component(native_player, NativeScriptComponent::bind::<PhysicsPlayer>());
 
-        let middle_square = scene.create_entity_with_tag("Middle Square");
+        // -- Lua Physics Player (blue, right side) --
+        // Demonstrates the Lua physics API: apply_impulse, get/set_linear_velocity,
+        // has_component. Equivalent to the native player above.
+        let lua_player = scene.create_entity_with_tag("Lua Player");
         scene.add_component(
-            middle_square,
-            SpriteRendererComponent::new(Vec4::new(0.8, 0.2, 0.2, 1.0)),
-        );
-        if let Some(mut t) = scene.get_component_mut::<TransformComponent>(middle_square) {
-            t.translation = Vec3::new(0.0, 0.0, -5.0);
-            t.scale = Vec3::new(3.0, 3.0, 1.0);
-        }
-
-        let right_square = scene.create_entity_with_tag("Right Square");
-        scene.add_component(
-            right_square,
+            lua_player,
             SpriteRendererComponent::new(Vec4::new(0.2, 0.3, 0.8, 1.0)),
         );
-        if let Some(mut t) = scene.get_component_mut::<TransformComponent>(right_square) {
-            t.translation = Vec3::new(2.0, 0.0, 0.0);
+        if let Some(mut t) = scene.get_component_mut::<TransformComponent>(lua_player) {
+            t.translation = Vec3::new(3.0, 0.0, 0.0);
         }
+        scene.add_component(lua_player, RigidBody2DComponent::default());
+        scene.add_component(lua_player, BoxCollider2DComponent::default());
+        #[cfg(feature = "lua-scripting")]
+        scene.add_component(
+            lua_player,
+            LuaScriptComponent::new("assets/scripts/physics_player.lua"),
+        );
 
-        // Ground — static body with collider.
+        // -- Force Block (red, center) --
+        // Demonstrates: apply_force, apply_impulse_at_point, get/set_angular_velocity,
+        // get/set_scale. Controlled by force_block.lua.
+        let force_block = scene.create_entity_with_tag("Force Block");
+        scene.add_component(
+            force_block,
+            SpriteRendererComponent::new(Vec4::new(0.8, 0.2, 0.2, 1.0)),
+        );
+        if let Some(mut t) = scene.get_component_mut::<TransformComponent>(force_block) {
+            t.translation = Vec3::new(0.0, 0.0, 0.0);
+        }
+        scene.add_component(force_block, RigidBody2DComponent::default());
+        scene.add_component(force_block, BoxCollider2DComponent::default());
+        #[cfg(feature = "lua-scripting")]
+        scene.add_component(
+            force_block,
+            LuaScriptComponent::new("assets/scripts/force_block.lua"),
+        );
+
+        // -- Spinner (sprite, top-center) --
+        // Demonstrates: get_rotation, set_rotation. No physics, pure script rotation.
+        // Uses a sprite (not a circle) so rotation is visually apparent.
+        let spinner = scene.create_entity_with_tag("Spinner");
+        scene.add_component(
+            spinner,
+            SpriteRendererComponent::new(Vec4::new(0.9, 0.6, 0.1, 1.0)),
+        );
+        if let Some(mut t) = scene.get_component_mut::<TransformComponent>(spinner) {
+            t.translation = Vec3::new(0.0, 3.0, 0.0);
+            t.scale = Vec3::new(1.5, 0.3, 1.0); // Flat bar — rotation clearly visible
+        }
+        #[cfg(feature = "lua-scripting")]
+        scene.add_component(
+            spinner,
+            LuaScriptComponent::new("assets/scripts/spinner.lua"),
+        );
+
+        // -- Bouncy Ball (orange circle, dynamic + high restitution) --
+        let bouncy_ball = scene.create_entity_with_tag("Bouncy Ball");
+        scene.add_component(
+            bouncy_ball,
+            CircleRendererComponent::new(Vec4::new(1.0, 0.5, 0.0, 1.0)),
+        );
+        if let Some(mut t) = scene.get_component_mut::<TransformComponent>(bouncy_ball) {
+            t.translation = Vec3::new(-1.0, 3.0, 0.0);
+            t.scale = Vec3::new(0.6, 0.6, 1.0);
+        }
+        scene.add_component(bouncy_ball, RigidBody2DComponent::default());
+        scene.add_component(bouncy_ball, {
+            let mut cc = CircleCollider2DComponent::default();
+            cc.restitution = 0.9;
+            cc
+        });
+
+        // -- Ground (static platform) --
         let ground = scene.create_entity_with_tag("Ground");
         scene.add_component(
             ground,
@@ -117,7 +182,7 @@ impl Application for GGEditor {
         );
         if let Some(mut t) = scene.get_component_mut::<TransformComponent>(ground) {
             t.translation = Vec3::new(0.0, -3.0, 0.0);
-            t.scale = Vec3::new(10.0, 0.5, 1.0);
+            t.scale = Vec3::new(20.0, 0.5, 1.0);
         }
         scene.add_component(
             ground,
@@ -125,28 +190,37 @@ impl Application for GGEditor {
         );
         scene.add_component(ground, BoxCollider2DComponent::default());
 
-        // Add physics to Left Square — dynamic body.
-        scene.add_component(left_square, RigidBody2DComponent::default());
-        scene.add_component(left_square, BoxCollider2DComponent::default());
-
-        // Add physics to Right Square — dynamic body.
-        scene.add_component(right_square, RigidBody2DComponent::default());
-        scene.add_component(right_square, BoxCollider2DComponent::default());
-
-        // Orthographic Camera — primary, default ortho (size 10).
-        let ortho_cam = scene.create_entity_with_tag("Orthographic Camera");
-        scene.add_component(ortho_cam, CameraComponent::default());
-        scene.add_component(ortho_cam, NativeScriptComponent::bind::<CameraController>());
-
-        // Perspective Camera — secondary, pulled back on Z so all squares are visible.
-        let persp_cam = scene.create_entity_with_tag("Perspective Camera");
-        let mut persp_scene_camera = SceneCamera::default();
-        persp_scene_camera.set_perspective(45.0_f32.to_radians(), 0.01, 1000.0);
-        scene.add_component(persp_cam, CameraComponent::new(persp_scene_camera, false));
-        if let Some(mut t) = scene.get_component_mut::<TransformComponent>(persp_cam) {
-            t.translation = Vec3::new(0.0, 0.0, -5.0);
+        // -- Left Wall --
+        let left_wall = scene.create_entity_with_tag("Left Wall");
+        scene.add_component(
+            left_wall,
+            SpriteRendererComponent::new(Vec4::new(0.35, 0.35, 0.35, 1.0)),
+        );
+        if let Some(mut t) = scene.get_component_mut::<TransformComponent>(left_wall) {
+            t.translation = Vec3::new(-8.0, 1.0, 0.0);
+            t.scale = Vec3::new(0.5, 8.0, 1.0);
         }
-        scene.add_component(persp_cam, NativeScriptComponent::bind::<CameraController>());
+        scene.add_component(
+            left_wall,
+            RigidBody2DComponent::new(RigidBody2DType::Static),
+        );
+        scene.add_component(left_wall, BoxCollider2DComponent::default());
+
+        // -- Right Wall --
+        let right_wall = scene.create_entity_with_tag("Right Wall");
+        scene.add_component(
+            right_wall,
+            SpriteRendererComponent::new(Vec4::new(0.35, 0.35, 0.35, 1.0)),
+        );
+        if let Some(mut t) = scene.get_component_mut::<TransformComponent>(right_wall) {
+            t.translation = Vec3::new(8.0, 1.0, 0.0);
+            t.scale = Vec3::new(0.5, 8.0, 1.0);
+        }
+        scene.add_component(
+            right_wall,
+            RigidBody2DComponent::new(RigidBody2DType::Static),
+        );
+        scene.add_component(right_wall, BoxCollider2DComponent::default());
 
         GGEditor {
             scene_state: SceneState::Edit,

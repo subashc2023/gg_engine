@@ -3,15 +3,45 @@ use gg_engine::prelude::*;
 
 use super::content_browser::ContentBrowserPayload;
 
+#[cfg(feature = "lua-scripting")]
+use std::cell::RefCell;
+#[cfg(feature = "lua-scripting")]
+use std::collections::HashMap;
+
+// Cache for discovered script fields (avoids re-executing scripts every frame).
+// Keyed by script path -> field list. Invalidated when script path changes.
+#[cfg(feature = "lua-scripting")]
+thread_local! {
+    static FIELD_CACHE: RefCell<HashMap<String, Vec<(String, ScriptFieldValue)>>> =
+        RefCell::new(HashMap::new());
+}
+
+#[cfg(feature = "lua-scripting")]
+fn get_cached_fields(script_path: &str) -> Vec<(String, ScriptFieldValue)> {
+    if script_path.is_empty() {
+        return Vec::new();
+    }
+    FIELD_CACHE.with(|cache| {
+        let mut cache = cache.borrow_mut();
+        if let Some(fields) = cache.get(script_path) {
+            return fields.clone();
+        }
+        let fields = ScriptEngine::discover_fields(script_path);
+        cache.insert(script_path.to_string(), fields.clone());
+        fields
+    })
+}
+
 pub(crate) fn properties_ui(
     ui: &mut egui::Ui,
     scene: &mut Scene,
     selection_context: &mut Option<Entity>,
     pending_texture_loads: &mut Vec<(Entity, std::path::PathBuf)>,
+    is_playing: bool,
 ) {
     if let Some(entity) = *selection_context {
         if scene.is_alive(entity) {
-            draw_components(ui, scene, entity, pending_texture_loads);
+            draw_components(ui, scene, entity, pending_texture_loads, is_playing);
         } else {
             *selection_context = None;
         }
@@ -170,6 +200,7 @@ fn draw_components(
     scene: &mut Scene,
     entity: Entity,
     pending_texture_loads: &mut Vec<(Entity, std::path::PathBuf)>,
+    is_playing: bool,
 ) {
     let bold_family = egui::FontFamily::Name(BOLD_FONT.into());
 
@@ -1086,10 +1117,12 @@ fn draw_components(
             .id_salt(("lua_script", entity.id()))
             .default_open(true)
             .show(ui, |ui| {
-                let script_path = scene
+                let (script_path, field_overrides) = scene
                     .get_component::<LuaScriptComponent>(entity)
-                    .map(|lsc| lsc.script_path.clone())
+                    .map(|lsc| (lsc.script_path.clone(), lsc.field_overrides.clone()))
                     .unwrap_or_default();
+
+                let mut new_script_path = None;
 
                 ui.horizontal(|ui| {
                     ui.label("Script");
@@ -1113,11 +1146,7 @@ fn draw_components(
                         if let Some(path) =
                             FileDialogs::open_file_in("Lua scripts", &["lua"], "assets/scripts")
                         {
-                            if let Some(mut lsc) =
-                                scene.get_component_mut::<LuaScriptComponent>(entity)
-                            {
-                                lsc.script_path = path;
-                            }
+                            new_script_path = Some(path);
                         }
                     }
 
@@ -1133,12 +1162,8 @@ fn draw_components(
                                 .unwrap_or("")
                                 .to_lowercase();
                             if ext == "lua" {
-                                if let Some(mut lsc) =
-                                    scene.get_component_mut::<LuaScriptComponent>(entity)
-                                {
-                                    lsc.script_path =
-                                        payload.path.to_string_lossy().to_string();
-                                }
+                                new_script_path =
+                                    Some(payload.path.to_string_lossy().to_string());
                             }
                         }
                     }
@@ -1159,6 +1184,134 @@ fn draw_components(
                         );
                     }
                 });
+
+                // Apply script path change (clears overrides and cache).
+                if let Some(path) = new_script_path {
+                    FIELD_CACHE.with(|c| c.borrow_mut().remove(&path));
+                    if let Some(mut lsc) =
+                        scene.get_component_mut::<LuaScriptComponent>(entity)
+                    {
+                        if lsc.script_path != path {
+                            lsc.field_overrides.clear();
+                        }
+                        lsc.script_path = path;
+                    }
+                }
+
+                // ----- Script Fields -----
+                if !script_path.is_empty() {
+                    // Get entity UUID for runtime field access.
+                    let entity_uuid = scene
+                        .get_component::<IdComponent>(entity)
+                        .map(|id| id.id.raw())
+                        .unwrap_or(0);
+
+                    // Determine fields to display.
+                    // In play mode: read live values from the running Lua env.
+                    // In edit mode: use discovery cache + stored overrides.
+                    let fields: Vec<(String, ScriptFieldValue)> = if is_playing {
+                        scene
+                            .script_engine()
+                            .and_then(|eng| eng.get_entity_fields(entity_uuid))
+                            .unwrap_or_else(|| get_cached_fields(&script_path))
+                    } else {
+                        get_cached_fields(&script_path)
+                    };
+
+                    if !fields.is_empty() {
+                        ui.separator();
+                    }
+
+                    for (name, default_value) in &fields {
+                        // Determine display value: override > default.
+                        let current = if is_playing {
+                            default_value.clone() // Already live from get_entity_fields.
+                        } else {
+                            field_overrides
+                                .get(name)
+                                .cloned()
+                                .unwrap_or_else(|| default_value.clone())
+                        };
+
+                        ui.horizontal(|ui| {
+                            ui.label(name);
+
+                            match current {
+                                ScriptFieldValue::Float(mut v) => {
+                                    if ui
+                                        .add(
+                                            egui::DragValue::new(&mut v)
+                                                .speed(0.1),
+                                        )
+                                        .changed()
+                                    {
+                                        let new_val = ScriptFieldValue::Float(v);
+                                        if is_playing {
+                                            // Write directly to Lua env.
+                                            if let Some(eng) = scene.script_engine() {
+                                                eng.set_entity_field(
+                                                    entity_uuid,
+                                                    name,
+                                                    &new_val,
+                                                );
+                                            }
+                                        }
+                                        // Always store override.
+                                        if let Some(mut lsc) = scene
+                                            .get_component_mut::<LuaScriptComponent>(entity)
+                                        {
+                                            lsc.field_overrides
+                                                .insert(name.clone(), new_val);
+                                        }
+                                    }
+                                }
+                                ScriptFieldValue::Bool(mut v) => {
+                                    if ui.checkbox(&mut v, "").changed() {
+                                        let new_val = ScriptFieldValue::Bool(v);
+                                        if is_playing {
+                                            if let Some(eng) = scene.script_engine() {
+                                                eng.set_entity_field(
+                                                    entity_uuid,
+                                                    name,
+                                                    &new_val,
+                                                );
+                                            }
+                                        }
+                                        if let Some(mut lsc) = scene
+                                            .get_component_mut::<LuaScriptComponent>(entity)
+                                        {
+                                            lsc.field_overrides
+                                                .insert(name.clone(), new_val);
+                                        }
+                                    }
+                                }
+                                ScriptFieldValue::String(mut v) => {
+                                    if ui
+                                        .text_edit_singleline(&mut v)
+                                        .changed()
+                                    {
+                                        let new_val = ScriptFieldValue::String(v);
+                                        if is_playing {
+                                            if let Some(eng) = scene.script_engine() {
+                                                eng.set_entity_field(
+                                                    entity_uuid,
+                                                    name,
+                                                    &new_val,
+                                                );
+                                            }
+                                        }
+                                        if let Some(mut lsc) = scene
+                                            .get_component_mut::<LuaScriptComponent>(entity)
+                                        {
+                                            lsc.field_overrides
+                                                .insert(name.clone(), new_val);
+                                        }
+                                    }
+                                }
+                            }
+                        });
+                    }
+                }
             });
 
             cr.header_response.context_menu(|ui| {

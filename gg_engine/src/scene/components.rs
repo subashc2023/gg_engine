@@ -406,9 +406,15 @@ impl Default for CircleCollider2DComponent {
 /// its [`ScriptEngine`](super::script_engine::ScriptEngine) and sets
 /// `loaded = true`. The `loaded` flag is reset on clone (same pattern as
 /// physics runtime handles).
+///
+/// `field_overrides` stores editor-set values for the script's `fields`
+/// table. These are applied after loading the script environment and
+/// before `on_create()` is called.
 #[cfg(feature = "lua-scripting")]
 pub struct LuaScriptComponent {
     pub script_path: String,
+    /// Per-field overrides set from the editor. Keyed by field name.
+    pub field_overrides: std::collections::HashMap<String, super::script_engine::ScriptFieldValue>,
     /// Runtime-only flag indicating whether the script has been loaded.
     /// Reset on clone (same pattern as physics handles).
     pub(crate) loaded: bool,
@@ -419,6 +425,7 @@ impl LuaScriptComponent {
     pub fn new(script_path: impl Into<String>) -> Self {
         Self {
             script_path: script_path.into(),
+            field_overrides: std::collections::HashMap::new(),
             loaded: false,
         }
     }
@@ -429,6 +436,7 @@ impl Clone for LuaScriptComponent {
     fn clone(&self) -> Self {
         Self {
             script_path: self.script_path.clone(),
+            field_overrides: self.field_overrides.clone(),
             loaded: false, // Runtime-only, not copied.
         }
     }
@@ -439,6 +447,7 @@ impl Default for LuaScriptComponent {
     fn default() -> Self {
         Self {
             script_path: String::new(),
+            field_overrides: std::collections::HashMap::new(),
             loaded: false,
         }
     }

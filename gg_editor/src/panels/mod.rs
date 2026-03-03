@@ -102,6 +102,7 @@ impl egui_dock::TabViewer for EditorTabViewer<'_> {
                     self.scene,
                     self.selection_context,
                     self.pending_texture_loads,
+                    self.is_playing,
                 );
             }
 

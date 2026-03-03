@@ -70,12 +70,14 @@ cargo run -p gg_sandbox --profile dist --no-default-features   # dist
 
 | Document | Description |
 |----------|-------------|
-| [Engine Core](engine-core.md) | Application trait, layer system, input, events, timestep, logging |
-| [Rendering](rendering.md) | Vulkan backend, shaders, buffers, textures, cameras, 2D batch renderer |
-| [ECS & Scene](ecs.md) | Entity Component System, scene management, serialization, native scripting |
-| [Physics](physics.md) | 2D rigid body physics with rapier2d |
-| [Editor](editor.md) | Editor application, panels, gizmos, viewport, play/stop |
-| [Build & Tools](build-and-tools.md) | Profiling, build profiles, logging, gg_tools CLI |
+| [Build & Tools](01-build-and-tools.md) | Profiling, build profiles, logging, gg_tools CLI |
+| [ECS & Scene](02-ecs.md) | Entity Component System, scene management, native scripting |
+| [Editor](03-editor.md) | Editor application, panels, gizmos, viewport, play/stop |
+| [Engine Core](04-engine-core.md) | Application trait, layer system, input, events, timestep, logging |
+| [Physics](05-physics.md) | 2D rigid body physics with rapier2d |
+| [Rendering](06-rendering.md) | Vulkan backend, shaders, buffers, textures, cameras, 2D batch renderer |
+| [Scripting](07-scripting.md) | Lua scripting with LuaJIT — Engine API, per-entity environments, lifecycle |
+| [Serialization](08-serialization.md) | YAML scene persistence, Scene::copy(), UUID system, editor file ops |
 
 ## Code Style
 
@@ -110,6 +112,7 @@ Two launch configurations using GDB with Intel disassembly syntax:
 | `serde_yaml` | 0.9 | YAML scene files |
 | `rand` | 0.9 | UUID generation |
 | `rfd` | 0.15 | Native file dialogs |
+| `mlua` | 0.10 | Lua scripting (LuaJIT, vendored; optional, `lua-scripting` feature) |
 
 ### Editor-only Dependencies
 

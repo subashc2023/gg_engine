@@ -9,14 +9,21 @@ use rand::Rng;
 /// on construction. The probability of collision is low enough for game engine
 /// use across multiple machines without a central authority.
 ///
+/// Values are masked to 53 bits so they survive lossless round-trips through
+/// Lua/JavaScript doubles (IEEE 754 `f64` has 53 bits of mantissa).
+/// 2^53 ≈ 9 quadrillion possible values — more than sufficient.
+///
 /// A value of `0` is reserved as "uninitialized" / null.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub struct Uuid(u64);
 
+/// Mask to keep values within the 53-bit exact-integer range of f64.
+const UUID_SAFE_MASK: u64 = (1u64 << 53) - 1;
+
 impl Uuid {
-    /// Generate a new random UUID.
+    /// Generate a new random UUID (53-bit safe).
     pub fn new() -> Self {
-        Self(rand::rng().random::<u64>())
+        Self(rand::rng().random::<u64>() & UUID_SAFE_MASK)
     }
 
     /// Create a UUID from a known value (e.g. deserialization).
@@ -85,5 +92,17 @@ mod tests {
     fn zero_is_valid() {
         let uuid = Uuid::from_raw(0);
         assert_eq!(uuid.raw(), 0);
+    }
+
+    #[test]
+    fn fits_in_f64_exactly() {
+        // Every generated UUID must survive a round-trip through f64
+        // without precision loss (required for Lua interop).
+        for _ in 0..10_000 {
+            let uuid = Uuid::new();
+            let as_f64 = uuid.raw() as f64;
+            let back = as_f64 as u64;
+            assert_eq!(uuid.raw(), back, "UUID {} lost precision via f64", uuid.raw());
+        }
     }
 }

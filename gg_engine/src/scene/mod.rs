@@ -19,7 +19,7 @@ pub use entity::Entity;
 pub use native_script::NativeScript;
 pub use scene_serializer::SceneSerializer;
 #[cfg(feature = "lua-scripting")]
-pub use script_engine::ScriptEngine;
+pub use script_engine::{ScriptEngine, ScriptFieldValue};
 
 use crate::input::Input;
 use crate::renderer::Renderer;
@@ -532,6 +532,121 @@ impl Scene {
     }
 
     // -----------------------------------------------------------------
+    // Physics scripting API (used by both native + Lua scripts)
+    // -----------------------------------------------------------------
+
+    /// Apply a linear impulse to the entity's rigid body.
+    ///
+    /// No-op if the physics world is inactive (edit mode) or the entity
+    /// lacks a [`RigidBody2DComponent`] with a valid runtime body.
+    pub fn apply_impulse(&mut self, entity: Entity, impulse: glam::Vec2) {
+        let body_handle = self
+            .get_component::<RigidBody2DComponent>(entity)
+            .and_then(|rb| rb.runtime_body);
+        if let (Some(handle), Some(ref mut physics)) = (body_handle, &mut self.physics_world) {
+            if let Some(body) = physics.bodies.get_mut(handle) {
+                body.apply_impulse(na::Vector2::new(impulse.x, impulse.y), true);
+            }
+        }
+    }
+
+    /// Apply a linear impulse at a world-space point on the entity's rigid body.
+    ///
+    /// This can produce both translational and rotational motion depending on
+    /// the point relative to the body's center of mass.
+    pub fn apply_impulse_at_point(
+        &mut self,
+        entity: Entity,
+        impulse: glam::Vec2,
+        point: glam::Vec2,
+    ) {
+        let body_handle = self
+            .get_component::<RigidBody2DComponent>(entity)
+            .and_then(|rb| rb.runtime_body);
+        if let (Some(handle), Some(ref mut physics)) = (body_handle, &mut self.physics_world) {
+            if let Some(body) = physics.bodies.get_mut(handle) {
+                body.apply_impulse_at_point(
+                    na::Vector2::new(impulse.x, impulse.y),
+                    na::Point2::new(point.x, point.y),
+                    true,
+                );
+            }
+        }
+    }
+
+    /// Apply a continuous force to the entity's rigid body.
+    ///
+    /// Unlike impulses, forces are accumulated and applied during the next
+    /// physics step. Call every frame for sustained acceleration.
+    pub fn apply_force(&mut self, entity: Entity, force: glam::Vec2) {
+        let body_handle = self
+            .get_component::<RigidBody2DComponent>(entity)
+            .and_then(|rb| rb.runtime_body);
+        if let (Some(handle), Some(ref mut physics)) = (body_handle, &mut self.physics_world) {
+            if let Some(body) = physics.bodies.get_mut(handle) {
+                body.add_force(na::Vector2::new(force.x, force.y), true);
+            }
+        }
+    }
+
+    /// Get the linear velocity of the entity's rigid body.
+    ///
+    /// Returns `None` if the physics world is inactive or the entity lacks
+    /// a runtime rigid body.
+    pub fn get_linear_velocity(&self, entity: Entity) -> Option<glam::Vec2> {
+        let body_handle = self
+            .get_component::<RigidBody2DComponent>(entity)
+            .and_then(|rb| rb.runtime_body);
+        if let (Some(handle), Some(ref physics)) = (body_handle, &self.physics_world) {
+            if let Some(body) = physics.bodies.get(handle) {
+                let v = body.linvel();
+                return Some(glam::Vec2::new(v.x, v.y));
+            }
+        }
+        None
+    }
+
+    /// Set the linear velocity of the entity's rigid body.
+    pub fn set_linear_velocity(&mut self, entity: Entity, vel: glam::Vec2) {
+        let body_handle = self
+            .get_component::<RigidBody2DComponent>(entity)
+            .and_then(|rb| rb.runtime_body);
+        if let (Some(handle), Some(ref mut physics)) = (body_handle, &mut self.physics_world) {
+            if let Some(body) = physics.bodies.get_mut(handle) {
+                body.set_linvel(na::Vector2::new(vel.x, vel.y), true);
+            }
+        }
+    }
+
+    /// Get the angular velocity (radians/sec) of the entity's rigid body.
+    ///
+    /// Returns `None` if the physics world is inactive or the entity lacks
+    /// a runtime rigid body.
+    pub fn get_angular_velocity(&self, entity: Entity) -> Option<f32> {
+        let body_handle = self
+            .get_component::<RigidBody2DComponent>(entity)
+            .and_then(|rb| rb.runtime_body);
+        if let (Some(handle), Some(ref physics)) = (body_handle, &self.physics_world) {
+            if let Some(body) = physics.bodies.get(handle) {
+                return Some(body.angvel());
+            }
+        }
+        None
+    }
+
+    /// Set the angular velocity (radians/sec) of the entity's rigid body.
+    pub fn set_angular_velocity(&mut self, entity: Entity, omega: f32) {
+        let body_handle = self
+            .get_component::<RigidBody2DComponent>(entity)
+            .and_then(|rb| rb.runtime_body);
+        if let (Some(handle), Some(ref mut physics)) = (body_handle, &mut self.physics_world) {
+            if let Some(body) = physics.bodies.get_mut(handle) {
+                body.set_angvel(omega, true);
+            }
+        }
+    }
+
+    // -----------------------------------------------------------------
     // Runtime lifecycle
     // -----------------------------------------------------------------
 
@@ -765,9 +880,15 @@ impl Scene {
             .map(|(handle, id, lsc)| (handle, id.id.raw(), lsc.script_path.clone()))
             .collect();
 
-        // Create per-entity environments and load scripts.
+        // Create per-entity environments, apply field overrides, and mark loaded.
         for (handle, uuid, path) in &scripts {
             if engine.create_entity_env(*uuid, path) {
+                // Apply editor field overrides before on_create.
+                if let Ok(lsc) = self.world.get::<&LuaScriptComponent>(*handle) {
+                    for (name, value) in &lsc.field_overrides {
+                        engine.set_entity_field(*uuid, name, value);
+                    }
+                }
                 if let Ok(mut lsc) = self.world.get::<&mut LuaScriptComponent>(*handle) {
                     lsc.loaded = true;
                 }
@@ -1148,5 +1269,43 @@ mod tests {
         let dup = scene.duplicate_entity(e);
         let t = scene.get_component::<TransformComponent>(dup).unwrap();
         assert_eq!(t.translation, Vec3::new(5.0, 6.0, 7.0));
+    }
+
+    // --- Physics scripting API tests ---
+
+    #[test]
+    fn apply_impulse_noop_without_physics() {
+        let mut scene = Scene::new();
+        let e = scene.create_entity();
+        scene.add_component(e, RigidBody2DComponent::default());
+        // No physics world active — should not panic.
+        scene.apply_impulse(e, glam::Vec2::new(1.0, 0.0));
+    }
+
+    #[test]
+    fn get_linear_velocity_returns_none_without_physics() {
+        let mut scene = Scene::new();
+        let e = scene.create_entity();
+        scene.add_component(e, RigidBody2DComponent::default());
+        assert!(scene.get_linear_velocity(e).is_none());
+    }
+
+    #[test]
+    fn get_linear_velocity_returns_none_without_rb() {
+        let scene = Scene::new();
+        // Entity without RigidBody2DComponent — even create_entity not called,
+        // so use a dummy entity from a fresh scene.
+        let mut s = Scene::new();
+        let e = s.create_entity();
+        assert!(s.get_linear_velocity(e).is_none());
+        let _ = scene;
+    }
+
+    #[test]
+    fn get_angular_velocity_returns_none_without_physics() {
+        let mut scene = Scene::new();
+        let e = scene.create_entity();
+        scene.add_component(e, RigidBody2DComponent::default());
+        assert!(scene.get_angular_velocity(e).is_none());
     }
 }

@@ -32,7 +32,7 @@ cargo build -p gg_sandbox
 ### Feature Flag Chain
 
 The `profiling` feature controls instrumentation:
-
+2
 ```
 gg_sandbox / gg_editor
     │  profiling = ["gg_engine/profiling"]  (default on)

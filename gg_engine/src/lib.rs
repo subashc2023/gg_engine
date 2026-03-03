@@ -46,7 +46,7 @@ pub use scene::{
     TransformComponent,
 };
 #[cfg(feature = "lua-scripting")]
-pub use scene::{LuaScriptComponent, ScriptEngine};
+pub use scene::{LuaScriptComponent, ScriptEngine, ScriptFieldValue};
 #[cfg(feature = "lua-scripting")]
 pub use mlua;
 pub use timestep::Timestep;
@@ -81,7 +81,7 @@ pub mod prelude {
         TagComponent, TransformComponent,
     };
     #[cfg(feature = "lua-scripting")]
-    pub use crate::scene::{LuaScriptComponent, ScriptEngine};
+    pub use crate::scene::{LuaScriptComponent, ScriptEngine, ScriptFieldValue};
     pub use crate::timestep::Timestep;
     pub use crate::uuid::Uuid;
     pub use crate::ui_theme::BOLD_FONT;
