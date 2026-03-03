@@ -346,3 +346,47 @@ impl Default for BoxCollider2DComponent {
         }
     }
 }
+
+/// 2D circle collider attached to an entity for collision detection.
+///
+/// Requires a [`RigidBody2DComponent`] on the same entity. The collider
+/// is created as a ball whose radius is `radius * max(scale.x, scale.y)`.
+pub struct CircleCollider2DComponent {
+    pub offset: Vec2,
+    /// Radius of the circle (default 0.5 to match a 1×1 unit sprite).
+    pub radius: f32,
+    pub density: f32,
+    pub friction: f32,
+    pub restitution: f32,
+    pub restitution_threshold: f32,
+    /// Runtime-only handle into the physics world. Not serialized.
+    pub(crate) runtime_fixture: Option<rapier2d::geometry::ColliderHandle>,
+}
+
+impl Clone for CircleCollider2DComponent {
+    fn clone(&self) -> Self {
+        Self {
+            offset: self.offset,
+            radius: self.radius,
+            density: self.density,
+            friction: self.friction,
+            restitution: self.restitution,
+            restitution_threshold: self.restitution_threshold,
+            runtime_fixture: None, // Runtime-only, not copied.
+        }
+    }
+}
+
+impl Default for CircleCollider2DComponent {
+    fn default() -> Self {
+        Self {
+            offset: Vec2::ZERO,
+            radius: 0.5,
+            density: 1.0,
+            friction: 0.5,
+            restitution: 0.0,
+            restitution_threshold: 0.5,
+            runtime_fixture: None,
+        }
+    }
+}

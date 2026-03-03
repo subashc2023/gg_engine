@@ -49,6 +49,7 @@ struct GGEditor {
     pending_texture_loads: Vec<(Entity, std::path::PathBuf)>,
     /// Old scenes awaiting GPU-safe destruction (deferred from on_egui to on_render).
     pending_drop_scenes: Vec<Scene>,
+    show_physics_colliders: bool,
     should_exit: bool,
 }
 
@@ -167,6 +168,7 @@ impl Application for GGEditor {
             pending_open_path: None,
             pending_texture_loads: Vec::new(),
             pending_drop_scenes: Vec::new(),
+            show_physics_colliders: false,
             should_exit: false,
         }
     }
@@ -353,6 +355,9 @@ impl Application for GGEditor {
                 self.scene.on_update_runtime(renderer);
             }
         }
+
+        // -- Overlay rendering (collider visualization) --
+        self.on_overlay_render(renderer);
     }
 
     fn on_egui(&mut self, ctx: &egui::Context, window: &Window) {
@@ -391,6 +396,14 @@ impl Application for GGEditor {
                         .clicked()
                     {
                         self.save_scene_as();
+                        ui.close();
+                    }
+                });
+                ui.menu_button("View", |ui| {
+                    if ui
+                        .checkbox(&mut self.show_physics_colliders, "Show Physics Colliders")
+                        .clicked()
+                    {
                         ui.close();
                     }
                 });
@@ -438,6 +451,14 @@ impl Application for GGEditor {
                             .clicked()
                         {
                             self.save_scene_as();
+                            ui.close();
+                        }
+                    });
+                    ui.menu_button("View", |ui| {
+                        if ui
+                            .checkbox(&mut self.show_physics_colliders, "Show Physics Colliders")
+                            .clicked()
+                        {
                             ui.close();
                         }
                     });
@@ -517,6 +538,85 @@ impl Application for GGEditor {
         // Handle pending scene open from content browser drag-drop.
         if let Some(path) = self.pending_open_path.take() {
             self.open_scene_from_path(&path);
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Overlay rendering (collider visualization, debug shapes)
+// ---------------------------------------------------------------------------
+
+impl GGEditor {
+    fn on_overlay_render(&self, renderer: &mut Renderer) {
+        if !self.show_physics_colliders {
+            return;
+        }
+
+        // Set the appropriate camera for the overlay pass.
+        match self.scene_state {
+            SceneState::Play => {
+                if let Some(cam_entity) = self.scene.get_primary_camera_entity() {
+                    let cam = self.scene.get_component::<CameraComponent>(cam_entity);
+                    let tc = self.scene.get_component::<TransformComponent>(cam_entity);
+                    if let (Some(cam), Some(tc)) = (cam, tc) {
+                        let vp = *cam.camera.projection() * tc.get_transform().inverse();
+                        renderer.set_view_projection(vp);
+                    }
+                }
+            }
+            SceneState::Edit => {
+                renderer.set_view_projection(self.editor_camera.view_projection());
+            }
+        }
+
+        let collider_color = Vec4::new(0.0, 1.0, 0.0, 1.0);
+
+        // Circle colliders.
+        for (transform, cc) in self
+            .scene
+            .world()
+            .query::<(&TransformComponent, &CircleCollider2DComponent)>()
+            .iter()
+        {
+            let translation = Vec3::new(
+                transform.translation.x + cc.offset.x,
+                transform.translation.y + cc.offset.y,
+                transform.translation.z - 0.001,
+            );
+            let scale = transform.scale * cc.radius * 2.0;
+            let collider_transform = Mat4::from_scale_rotation_translation(
+                Vec3::new(scale.x, scale.y, 1.0),
+                Quat::IDENTITY,
+                translation,
+            );
+
+            renderer.draw_circle(&collider_transform, collider_color, 0.01, 0.005, -1);
+        }
+
+        // Box colliders.
+        for (transform, bc) in self
+            .scene
+            .world()
+            .query::<(&TransformComponent, &BoxCollider2DComponent)>()
+            .iter()
+        {
+            let translation = Vec3::new(
+                transform.translation.x + bc.offset.x,
+                transform.translation.y + bc.offset.y,
+                transform.translation.z - 0.001,
+            );
+            let scale = Vec3::new(
+                transform.scale.x * bc.size.x * 2.0,
+                transform.scale.y * bc.size.y * 2.0,
+                1.0,
+            );
+            let collider_transform = Mat4::from_scale_rotation_translation(
+                scale,
+                Quat::from_rotation_z(transform.rotation.z),
+                translation,
+            );
+
+            renderer.draw_rect_transform(&collider_transform, collider_color, -1);
         }
     }
 }

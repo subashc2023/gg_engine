@@ -6,9 +6,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::renderer::{ProjectionType, SceneCamera};
 use crate::scene::{
-    BoxCollider2DComponent, CameraComponent, CircleRendererComponent, IdComponent,
-    RigidBody2DComponent, RigidBody2DType, Scene, SpriteRendererComponent, TagComponent,
-    TransformComponent,
+    BoxCollider2DComponent, CameraComponent, CircleCollider2DComponent, CircleRendererComponent,
+    IdComponent, RigidBody2DComponent, RigidBody2DType, Scene, SpriteRendererComponent,
+    TagComponent, TransformComponent,
 };
 use crate::uuid::Uuid;
 
@@ -57,6 +57,12 @@ struct EntityData {
         default
     )]
     box_collider_2d: Option<BoxCollider2DData>,
+    #[serde(
+        rename = "CircleCollider2DComponent",
+        skip_serializing_if = "Option::is_none",
+        default
+    )]
+    circle_collider_2d: Option<CircleCollider2DData>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -147,6 +153,22 @@ struct BoxCollider2DData {
     offset: [f32; 2],
     #[serde(rename = "Size")]
     size: [f32; 2],
+    #[serde(rename = "Density")]
+    density: f32,
+    #[serde(rename = "Friction")]
+    friction: f32,
+    #[serde(rename = "Restitution")]
+    restitution: f32,
+    #[serde(rename = "RestitutionThreshold")]
+    restitution_threshold: f32,
+}
+
+#[derive(Serialize, Deserialize)]
+struct CircleCollider2DData {
+    #[serde(rename = "Offset")]
+    offset: [f32; 2],
+    #[serde(rename = "Radius")]
+    radius: f32,
     #[serde(rename = "Density")]
     density: f32,
     #[serde(rename = "Friction")]
@@ -359,6 +381,18 @@ impl SceneSerializer {
                         restitution_threshold: bc.restitution_threshold,
                     });
 
+            let circle_collider_2d_data =
+                scene
+                    .get_component::<CircleCollider2DComponent>(entity)
+                    .map(|cc| CircleCollider2DData {
+                        offset: cc.offset.into(),
+                        radius: cc.radius,
+                        density: cc.density,
+                        friction: cc.friction,
+                        restitution: cc.restitution,
+                        restitution_threshold: cc.restitution_threshold,
+                    });
+
             let uuid = scene
                 .get_component::<IdComponent>(entity)
                 .map(|id| id.id.raw())
@@ -373,6 +407,7 @@ impl SceneSerializer {
                 circle: circle_data,
                 rigidbody_2d: rigidbody_2d_data,
                 box_collider_2d: box_collider_2d_data,
+                circle_collider_2d: circle_collider_2d_data,
             });
         }
 
@@ -478,6 +513,22 @@ impl SceneSerializer {
                         friction: bcd.friction,
                         restitution: bcd.restitution,
                         restitution_threshold: bcd.restitution_threshold,
+                        runtime_fixture: None,
+                    },
+                );
+            }
+
+            // CircleCollider2DComponent — added only if present in the file.
+            if let Some(ref ccd) = entity_data.circle_collider_2d {
+                scene.add_component(
+                    entity,
+                    CircleCollider2DComponent {
+                        offset: Vec2::from(ccd.offset),
+                        radius: ccd.radius,
+                        density: ccd.density,
+                        friction: ccd.friction,
+                        restitution: ccd.restitution,
+                        restitution_threshold: ccd.restitution_threshold,
                         runtime_fixture: None,
                     },
                 );

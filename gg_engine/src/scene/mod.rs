@@ -5,9 +5,9 @@ mod physics_2d;
 mod scene_serializer;
 
 pub use components::{
-    BoxCollider2DComponent, CameraComponent, CircleRendererComponent, IdComponent,
-    NativeScriptComponent, RigidBody2DComponent, RigidBody2DType, SpriteRendererComponent,
-    TagComponent, TransformComponent,
+    BoxCollider2DComponent, CameraComponent, CircleCollider2DComponent, CircleRendererComponent,
+    IdComponent, NativeScriptComponent, RigidBody2DComponent, RigidBody2DType,
+    SpriteRendererComponent, TagComponent, TransformComponent,
 };
 pub use entity::Entity;
 pub use native_script::NativeScript;
@@ -142,6 +142,12 @@ impl Scene {
             &mut new_scene,
             &entity_map,
         );
+        // CircleCollider2DComponent (Clone impl resets runtime_fixture to None)
+        copy_component_if_has::<CircleCollider2DComponent>(
+            &source.world,
+            &mut new_scene,
+            &entity_map,
+        );
         // NativeScriptComponent — manual copy (not Clone-able).
         for (handle, nsc) in source
             .world
@@ -206,6 +212,19 @@ impl Scene {
                     bc.friction,
                     bc.restitution,
                     bc.restitution_threshold,
+                )
+            });
+
+        let cc_data = self
+            .get_component::<CircleCollider2DComponent>(entity)
+            .map(|cc| {
+                (
+                    cc.offset,
+                    cc.radius,
+                    cc.density,
+                    cc.friction,
+                    cc.restitution,
+                    cc.restitution_threshold,
                 )
             });
 
@@ -279,6 +298,23 @@ impl Scene {
                 BoxCollider2DComponent {
                     offset,
                     size,
+                    density,
+                    friction,
+                    restitution,
+                    restitution_threshold,
+                    runtime_fixture: None,
+                },
+            );
+        }
+
+        if let Some((offset, radius, density, friction, restitution, restitution_threshold)) =
+            cc_data
+        {
+            self.add_component(
+                new_entity,
+                CircleCollider2DComponent {
+                    offset,
+                    radius,
                     density,
                     friction,
                     restitution,
@@ -550,6 +586,24 @@ impl Scene {
                         .insert_with_parent(collider, body_handle, &mut physics.bodies);
                 bc.runtime_fixture = Some(collider_handle);
             }
+
+            // If entity also has a CircleCollider2DComponent, create a collider.
+            if let Ok(mut cc) = self.world.get::<&mut CircleCollider2DComponent>(handle) {
+                let scaled_radius = cc.radius * scale.x.abs();
+
+                let collider = rapier2d::geometry::ColliderBuilder::ball(scaled_radius)
+                    .density(cc.density)
+                    .friction(cc.friction)
+                    .restitution(cc.restitution)
+                    .translation(na::Vector2::new(cc.offset.x, cc.offset.y))
+                    .build();
+
+                let collider_handle =
+                    physics
+                        .colliders
+                        .insert_with_parent(collider, body_handle, &mut physics.bodies);
+                cc.runtime_fixture = Some(collider_handle);
+            }
         }
 
         self.physics_world = Some(physics);
@@ -567,6 +621,9 @@ impl Scene {
         }
         for bc in self.world.query_mut::<&mut BoxCollider2DComponent>() {
             bc.runtime_fixture = None;
+        }
+        for cc in self.world.query_mut::<&mut CircleCollider2DComponent>() {
+            cc.runtime_fixture = None;
         }
     }
 

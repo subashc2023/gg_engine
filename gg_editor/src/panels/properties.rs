@@ -222,6 +222,11 @@ fn draw_components(
                 {
                     scene.add_component(entity, BoxCollider2DComponent::default());
                 }
+                if !scene.has_component::<CircleCollider2DComponent>(entity)
+                    && ui.button("Circle Collider 2D").clicked()
+                {
+                    scene.add_component(entity, CircleCollider2DComponent::default());
+                }
             });
         });
         ui.separator();
@@ -899,5 +904,127 @@ fn draw_components(
     }
     if remove_bc2d {
         scene.remove_component::<BoxCollider2DComponent>(entity);
+    }
+
+    // -- Circle Collider 2D Component (removable) --
+    let mut remove_cc2d = false;
+    if scene.has_component::<CircleCollider2DComponent>(entity) {
+        let cr = egui::CollapsingHeader::new(
+            egui::RichText::new("Circle Collider 2D")
+                .font(egui::FontId::new(14.0, bold_family.clone())),
+        )
+        .id_salt(("circle_collider_2d", entity.id()))
+        .default_open(true)
+        .show(ui, |ui| {
+            let (mut offset, mut radius, mut density, mut friction, mut restitution, mut restitution_threshold) = {
+                let cc = scene
+                    .get_component::<CircleCollider2DComponent>(entity)
+                    .unwrap();
+                (
+                    cc.offset,
+                    cc.radius,
+                    cc.density,
+                    cc.friction,
+                    cc.restitution,
+                    cc.restitution_threshold,
+                )
+            };
+
+            let mut changed = false;
+
+            ui.horizontal(|ui| {
+                ui.label("Offset");
+                if ui
+                    .add(egui::DragValue::new(&mut offset.x).speed(0.01).prefix("X: "))
+                    .changed()
+                {
+                    changed = true;
+                }
+                if ui
+                    .add(egui::DragValue::new(&mut offset.y).speed(0.01).prefix("Y: "))
+                    .changed()
+                {
+                    changed = true;
+                }
+            });
+
+            ui.horizontal(|ui| {
+                ui.label("Radius");
+                changed |= ui
+                    .add(
+                        egui::DragValue::new(&mut radius)
+                            .speed(0.01)
+                            .range(0.001..=f32::MAX),
+                    )
+                    .changed();
+            });
+
+            ui.horizontal(|ui| {
+                ui.label("Density");
+                changed |= ui
+                    .add(
+                        egui::DragValue::new(&mut density)
+                            .speed(0.01)
+                            .range(0.0..=f32::MAX),
+                    )
+                    .changed();
+            });
+
+            ui.horizontal(|ui| {
+                ui.label("Friction");
+                changed |= ui
+                    .add(
+                        egui::DragValue::new(&mut friction)
+                            .speed(0.01)
+                            .range(0.0..=1.0),
+                    )
+                    .changed();
+            });
+
+            ui.horizontal(|ui| {
+                ui.label("Restitution");
+                changed |= ui
+                    .add(
+                        egui::DragValue::new(&mut restitution)
+                            .speed(0.01)
+                            .range(0.0..=1.0),
+                    )
+                    .changed();
+            });
+
+            ui.horizontal(|ui| {
+                ui.label("Restitution Threshold");
+                changed |= ui
+                    .add(
+                        egui::DragValue::new(&mut restitution_threshold)
+                            .speed(0.01)
+                            .range(0.0..=f32::MAX),
+                    )
+                    .changed();
+            });
+
+            if changed {
+                if let Some(mut cc) =
+                    scene.get_component_mut::<CircleCollider2DComponent>(entity)
+                {
+                    cc.offset = offset;
+                    cc.radius = radius;
+                    cc.density = density;
+                    cc.friction = friction;
+                    cc.restitution = restitution;
+                    cc.restitution_threshold = restitution_threshold;
+                }
+            }
+        });
+
+        cr.header_response.context_menu(|ui| {
+            if ui.button("Remove Component").clicked() {
+                remove_cc2d = true;
+                ui.close();
+            }
+        });
+    }
+    if remove_cc2d {
+        scene.remove_component::<CircleCollider2DComponent>(entity);
     }
 }
