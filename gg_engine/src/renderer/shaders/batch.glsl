@@ -1,9 +1,9 @@
 #type vertex
 #version 450
 
-layout(push_constant) uniform PushConstants {
+layout(set = 0, binding = 0) uniform CameraBuffer {
     mat4 u_view_projection;
-} pc;
+} camera;
 
 layout(location = 0) in vec3 a_position;
 layout(location = 1) in vec4 a_color;
@@ -21,14 +21,14 @@ void main() {
     v_tex_coord = a_tex_coord;
     v_tex_index = a_tex_index;
     v_entity_id = a_entity_id;
-    gl_Position = pc.u_view_projection * vec4(a_position, 1.0);
+    gl_Position = camera.u_view_projection * vec4(a_position, 1.0);
 }
 
 #type fragment
 #version 450
 #extension GL_EXT_nonuniform_qualifier : require
 
-layout(set = 0, binding = 0) uniform sampler2D u_textures[];
+layout(set = 1, binding = 0) uniform sampler2D u_textures[];
 
 layout(location = 0) in vec4 v_color;
 layout(location = 1) in vec2 v_tex_coord;

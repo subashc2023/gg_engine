@@ -16,6 +16,7 @@ pub mod shaders;
 mod sub_texture;
 mod swapchain;
 mod texture;
+mod uniform_buffer;
 mod vertex_array;
 mod vulkan_context;
 

@@ -14,6 +14,7 @@ use super::renderer_api::{RendererAPI, VulkanRendererAPI};
 use super::shader::Shader;
 use super::sub_texture::SubTexture2D;
 use super::texture::Texture2D;
+use super::uniform_buffer::{CameraData, UniformBuffer};
 use super::vertex_array::VertexArray;
 use super::VulkanContext;
 
@@ -59,6 +60,11 @@ pub struct Renderer {
     descriptor_pool: vk::DescriptorPool,
     texture_descriptor_set_layout: vk::DescriptorSetLayout,
 
+    // Camera UBO (per-frame VP matrix).
+    camera_ubo: UniformBuffer,
+    camera_ubo_ds_layout: vk::DescriptorSetLayout,
+    camera_ubo_ds: [vk::DescriptorSet; 2],
+
     // Format info for framebuffer creation.
     color_format: vk::Format,
     depth_format: vk::Format,
@@ -81,14 +87,20 @@ impl Renderer {
         let device = vk_ctx.device();
         let api = RendererAPI::Vulkan(VulkanRendererAPI::new(device));
 
-        // Create descriptor pool for texture samplers.
-        let pool_size = vk::DescriptorPoolSize {
-            ty: vk::DescriptorType::COMBINED_IMAGE_SAMPLER,
-            descriptor_count: 100,
-        };
+        // Create descriptor pool for texture samplers + camera UBO sets.
+        let pool_sizes = [
+            vk::DescriptorPoolSize {
+                ty: vk::DescriptorType::COMBINED_IMAGE_SAMPLER,
+                descriptor_count: 100,
+            },
+            vk::DescriptorPoolSize {
+                ty: vk::DescriptorType::UNIFORM_BUFFER,
+                descriptor_count: 2,
+            },
+        ];
         let pool_info = vk::DescriptorPoolCreateInfo::default()
-            .pool_sizes(std::slice::from_ref(&pool_size))
-            .max_sets(100);
+            .pool_sizes(&pool_sizes)
+            .max_sets(102);
         let descriptor_pool = unsafe { device.create_descriptor_pool(&pool_info, None) }
             .expect("Failed to create descriptor pool");
 
@@ -104,6 +116,52 @@ impl Renderer {
             unsafe { device.create_descriptor_set_layout(&layout_info, None) }
                 .expect("Failed to create descriptor set layout");
 
+        // -- Camera UBO descriptor set layout: binding 0, UNIFORM_BUFFER, vertex stage --
+        let ubo_binding = vk::DescriptorSetLayoutBinding::default()
+            .binding(0)
+            .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
+            .descriptor_count(1)
+            .stage_flags(vk::ShaderStageFlags::VERTEX);
+        let ubo_layout_info = vk::DescriptorSetLayoutCreateInfo::default()
+            .bindings(std::slice::from_ref(&ubo_binding));
+        let camera_ubo_ds_layout =
+            unsafe { device.create_descriptor_set_layout(&ubo_layout_info, None) }
+                .expect("Failed to create camera UBO descriptor set layout");
+
+        // -- Camera UBO buffer (64 bytes, double-buffered) --
+        let camera_ubo = UniformBuffer::new(
+            vk_ctx.instance(),
+            vk_ctx.physical_device(),
+            device,
+            CameraData::SIZE,
+        );
+
+        // -- Allocate 2 descriptor sets for the camera UBO --
+        let ubo_layouts = [camera_ubo_ds_layout; 2];
+        let ubo_ds_alloc_info = vk::DescriptorSetAllocateInfo::default()
+            .descriptor_pool(descriptor_pool)
+            .set_layouts(&ubo_layouts);
+        let ubo_ds_vec = unsafe { device.allocate_descriptor_sets(&ubo_ds_alloc_info) }
+            .expect("Failed to allocate camera UBO descriptor sets");
+        let camera_ubo_ds = [ubo_ds_vec[0], ubo_ds_vec[1]];
+
+        // -- Write each descriptor set pointing to the UBO buffer --
+        for (i, &ds) in camera_ubo_ds.iter().enumerate() {
+            let buffer_info = vk::DescriptorBufferInfo::default()
+                .buffer(camera_ubo.buffer(i))
+                .offset(0)
+                .range(CameraData::SIZE as u64);
+            let write = vk::WriteDescriptorSet::default()
+                .dst_set(ds)
+                .dst_binding(0)
+                .dst_array_element(0)
+                .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
+                .buffer_info(std::slice::from_ref(&buffer_info));
+            unsafe {
+                device.update_descriptor_sets(&[write], &[]);
+            }
+        }
+
         Self {
             api,
             draw_context: None,
@@ -116,6 +174,9 @@ impl Renderer {
             command_pool,
             descriptor_pool,
             texture_descriptor_set_layout,
+            camera_ubo,
+            camera_ubo_ds_layout,
+            camera_ubo_ds,
             color_format,
             depth_format,
             renderer_2d: None,
@@ -166,6 +227,7 @@ impl Renderer {
             va,
             self.render_pass,
             has_material_color,
+            self.camera_ubo_ds_layout,
             &[],
             blend_enable,
         ))
@@ -181,6 +243,7 @@ impl Renderer {
             va,
             self.render_pass,
             false,
+            self.camera_ubo_ds_layout,
             &[self.texture_descriptor_set_layout],
             true,
         ))
@@ -258,7 +321,12 @@ impl Renderer {
         color_attachment_count: u32,
     ) {
         if let Some(data) = &mut self.renderer_2d {
-            data.create_offscreen_pipeline(&self.device, render_pass, color_attachment_count);
+            data.create_offscreen_pipeline(
+                &self.device,
+                render_pass,
+                self.camera_ubo_ds_layout,
+                color_attachment_count,
+            );
         }
     }
 
@@ -282,6 +350,7 @@ impl Renderer {
             self.physical_device,
             &self.device,
             self.render_pass,
+            self.camera_ubo_ds_layout,
             white_texture,
         );
         // White texture gets bindless index 0.
@@ -423,7 +492,11 @@ impl Renderer {
             .draw_context
             .expect("flush_batch called outside begin_scene/end_scene");
 
-        data.flush(ctx.cmd_buf, &self.view_projection, ctx.current_frame);
+        data.flush(
+            ctx.cmd_buf,
+            self.camera_ubo_ds[ctx.current_frame],
+            ctx.current_frame,
+        );
     }
 
     // -- Transform-based quads (raw Mat4) ------------------------------------
@@ -712,6 +785,18 @@ impl Renderer {
         self.draw_context = Some(ctx);
         RenderCommand::set_viewport(&self.api, &ctx);
 
+        // Write VP matrix to the camera UBO for this frame.
+        let camera_data = CameraData {
+            view_projection: *camera_vp,
+        };
+        let bytes = unsafe {
+            std::slice::from_raw_parts(
+                &camera_data as *const CameraData as *const u8,
+                CameraData::SIZE,
+            )
+        };
+        self.camera_ubo.update(ctx.current_frame, bytes);
+
         // Reset batch state for this frame.
         if let Some(data) = &self.renderer_2d {
             data.reset_batch();
@@ -725,6 +810,20 @@ impl Renderer {
     /// to render through the primary ECS camera entity.
     pub fn set_view_projection(&mut self, vp: Mat4) {
         self.view_projection = vp;
+
+        // Update the camera UBO if we have an active draw context.
+        if let Some(ctx) = self.draw_context {
+            let camera_data = CameraData {
+                view_projection: vp,
+            };
+            let bytes = unsafe {
+                std::slice::from_raw_parts(
+                    &camera_data as *const CameraData as *const u8,
+                    CameraData::SIZE,
+                )
+            };
+            self.camera_ubo.update(ctx.current_frame, bytes);
+        }
     }
 
     /// End the current scene — flushes any pending batch, snapshots stats,
@@ -734,7 +833,11 @@ impl Renderer {
         if let Some(data) = &self.renderer_2d {
             if data.has_pending() {
                 if let Some(ctx) = self.draw_context {
-                    data.flush(ctx.cmd_buf, &self.view_projection, ctx.current_frame);
+                    data.flush(
+                        ctx.cmd_buf,
+                        self.camera_ubo_ds[ctx.current_frame],
+                        ctx.current_frame,
+                    );
                 }
             }
             // Snapshot stats for this frame (available via stats_2d() until next end_scene).
@@ -761,7 +864,7 @@ impl Renderer {
             pipeline.pipeline(),
             pipeline.layout(),
             vertex_array,
-            &self.view_projection,
+            self.camera_ubo_ds[ctx.current_frame],
             transform,
             color.as_ref(),
             None,
@@ -786,7 +889,7 @@ impl Renderer {
             pipeline.pipeline(),
             pipeline.layout(),
             vertex_array,
-            &self.view_projection,
+            self.camera_ubo_ds[ctx.current_frame],
             transform,
             None,
             Some(texture.descriptor_set()),
@@ -801,6 +904,9 @@ impl Drop for Renderer {
                 .destroy_descriptor_pool(self.descriptor_pool, None);
             self.device
                 .destroy_descriptor_set_layout(self.texture_descriptor_set_layout, None);
+            self.device
+                .destroy_descriptor_set_layout(self.camera_ubo_ds_layout, None);
+            // camera_ubo buffers/memory cleaned up by UniformBuffer::Drop.
         }
     }
 }

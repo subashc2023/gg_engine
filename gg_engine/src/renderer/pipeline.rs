@@ -49,16 +49,19 @@ impl Drop for Pipeline {
 /// dynamic viewport/scissor, and a push constant range for the VP matrix.
 ///
 /// When `has_material_color` is true, an additional push constant range is
-/// added for a `vec4` color at offset 128 (fragment stage, 16 bytes).
+/// added for a `vec4` color at offset 64 (fragment stage, 16 bytes).
 ///
-/// `descriptor_set_layouts` is passed to the pipeline layout (e.g. for texture
-/// samplers). `blend_enable` enables standard alpha blending.
+/// `camera_ubo_ds_layout` is prepended as set 0 (camera UBO).
+/// `descriptor_set_layouts` follows as set 1+ (e.g. for texture samplers).
+/// `blend_enable` enables standard alpha blending.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn create_pipeline(
     device: &ash::Device,
     shader: &Shader,
     va: &VertexArray,
     render_pass: vk::RenderPass,
     has_material_color: bool,
+    camera_ubo_ds_layout: vk::DescriptorSetLayout,
     descriptor_set_layouts: &[vk::DescriptorSetLayout],
     blend_enable: bool,
 ) -> Pipeline {
@@ -134,17 +137,18 @@ pub(crate) fn create_pipeline(
     let color_blending =
         vk::PipelineColorBlendStateCreateInfo::default().attachments(&blend_attachments);
 
-    // Push constant range: VP matrix + transform matrix (2 × mat4 = 128 bytes).
+    // Push constant range: transform matrix only (1 × mat4 = 64 bytes).
+    // VP matrix is now in a UBO (set 0, binding 0).
     let vertex_range = vk::PushConstantRange {
         stage_flags: vk::ShaderStageFlags::VERTEX,
         offset: 0,
-        size: (std::mem::size_of::<[f32; 16]>() * 2) as u32,
+        size: std::mem::size_of::<[f32; 16]>() as u32,
     };
 
-    // Optional: material color + tiling factor (vec4 + float = 20 bytes at offset 128, fragment stage).
+    // Optional: material color + tiling factor (vec4 + float = 20 bytes at offset 64, fragment stage).
     let fragment_range = vk::PushConstantRange {
         stage_flags: vk::ShaderStageFlags::FRAGMENT,
-        offset: 128,
+        offset: 64,
         size: (std::mem::size_of::<[f32; 4]>() + std::mem::size_of::<f32>()) as u32,
     };
 
@@ -156,9 +160,14 @@ pub(crate) fn create_pipeline(
         &ranges_without
     };
 
+    // Prepend UBO layout (set 0) before caller-provided layouts.
+    let mut all_layouts = Vec::with_capacity(1 + descriptor_set_layouts.len());
+    all_layouts.push(camera_ubo_ds_layout);
+    all_layouts.extend_from_slice(descriptor_set_layouts);
+
     let layout_info = vk::PipelineLayoutCreateInfo::default()
         .push_constant_ranges(push_constant_ranges)
-        .set_layouts(descriptor_set_layouts);
+        .set_layouts(&all_layouts);
     let pipeline_layout = unsafe { device.create_pipeline_layout(&layout_info, None) }
         .expect("Failed to create pipeline layout");
 
@@ -198,6 +207,7 @@ pub(crate) fn create_batch_pipeline(
     shader: &Shader,
     vertex_layout: &BufferLayout,
     render_pass: vk::RenderPass,
+    camera_ubo_ds_layout: vk::DescriptorSetLayout,
     descriptor_set_layouts: &[vk::DescriptorSetLayout],
     color_attachment_count: u32,
 ) -> Pipeline {
@@ -277,18 +287,14 @@ pub(crate) fn create_batch_pipeline(
     let color_blending =
         vk::PipelineColorBlendStateCreateInfo::default().attachments(&blend_attachments);
 
-    // Push constant: VP matrix only (1 × mat4 = 64 bytes, vertex stage).
-    let vertex_range = vk::PushConstantRange {
-        stage_flags: vk::ShaderStageFlags::VERTEX,
-        offset: 0,
-        size: std::mem::size_of::<[f32; 16]>() as u32,
-    };
+    // No push constants — VP is in UBO (set 0), transform is baked into vertices.
 
-    let push_constant_ranges = [vertex_range];
+    // Prepend UBO layout (set 0) before caller-provided layouts (bindless at set 1).
+    let mut all_layouts = Vec::with_capacity(1 + descriptor_set_layouts.len());
+    all_layouts.push(camera_ubo_ds_layout);
+    all_layouts.extend_from_slice(descriptor_set_layouts);
 
-    let layout_info = vk::PipelineLayoutCreateInfo::default()
-        .push_constant_ranges(&push_constant_ranges)
-        .set_layouts(descriptor_set_layouts);
+    let layout_info = vk::PipelineLayoutCreateInfo::default().set_layouts(&all_layouts);
     let pipeline_layout = unsafe { device.create_pipeline_layout(&layout_info, None) }
         .expect("Failed to create batch pipeline layout");
 

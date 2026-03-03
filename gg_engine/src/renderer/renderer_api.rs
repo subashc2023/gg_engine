@@ -4,6 +4,8 @@ use glam::{Mat4, Vec4};
 use super::draw_context::DrawContext;
 use super::vertex_array::VertexArray;
 
+const MAT4_SIZE: u32 = std::mem::size_of::<Mat4>() as u32;
+
 // ---------------------------------------------------------------------------
 // VulkanRendererAPI
 // ---------------------------------------------------------------------------
@@ -55,7 +57,7 @@ impl VulkanRendererAPI {
         pipeline: vk::Pipeline,
         pipeline_layout: vk::PipelineLayout,
         vertex_array: &VertexArray,
-        vp_matrix: &Mat4,
+        camera_ubo_ds: vk::DescriptorSet,
         transform: &Mat4,
         color: Option<&Vec4>,
         descriptor_set: Option<vk::DescriptorSet>,
@@ -64,20 +66,17 @@ impl VulkanRendererAPI {
             self.device
                 .cmd_bind_pipeline(ctx.cmd_buf, vk::PipelineBindPoint::GRAPHICS, pipeline);
 
-            // Push the view-projection matrix (offset 0, 64 bytes).
-            let vp_bytes = std::slice::from_raw_parts(
-                vp_matrix as *const Mat4 as *const u8,
-                std::mem::size_of::<Mat4>(),
-            );
-            self.device.cmd_push_constants(
+            // Bind camera UBO descriptor set at set 0.
+            self.device.cmd_bind_descriptor_sets(
                 ctx.cmd_buf,
+                vk::PipelineBindPoint::GRAPHICS,
                 pipeline_layout,
-                vk::ShaderStageFlags::VERTEX,
                 0,
-                vp_bytes,
+                &[camera_ubo_ds],
+                &[],
             );
 
-            // Push the model/transform matrix (offset 64, 64 bytes).
+            // Push the model/transform matrix (offset 0, 64 bytes).
             let transform_bytes = std::slice::from_raw_parts(
                 transform as *const Mat4 as *const u8,
                 std::mem::size_of::<Mat4>(),
@@ -86,11 +85,11 @@ impl VulkanRendererAPI {
                 ctx.cmd_buf,
                 pipeline_layout,
                 vk::ShaderStageFlags::VERTEX,
-                std::mem::size_of::<Mat4>() as u32,
+                0,
                 transform_bytes,
             );
 
-            // Push material color (offset 128, 16 bytes, fragment stage).
+            // Push material color (offset 64, 16 bytes, fragment stage).
             if let Some(c) = color {
                 let color_bytes = std::slice::from_raw_parts(
                     c as *const Vec4 as *const u8,
@@ -100,18 +99,18 @@ impl VulkanRendererAPI {
                     ctx.cmd_buf,
                     pipeline_layout,
                     vk::ShaderStageFlags::FRAGMENT,
-                    128,
+                    MAT4_SIZE,
                     color_bytes,
                 );
             }
 
-            // Bind descriptor set (e.g. for texture samplers).
+            // Bind texture descriptor set at set 1 (after camera UBO at set 0).
             if let Some(ds) = descriptor_set {
                 self.device.cmd_bind_descriptor_sets(
                     ctx.cmd_buf,
                     vk::PipelineBindPoint::GRAPHICS,
                     pipeline_layout,
-                    0,
+                    1,
                     &[ds],
                     &[],
                 );
@@ -165,7 +164,7 @@ impl RendererAPI {
         pipeline: vk::Pipeline,
         pipeline_layout: vk::PipelineLayout,
         vertex_array: &VertexArray,
-        vp_matrix: &Mat4,
+        camera_ubo_ds: vk::DescriptorSet,
         transform: &Mat4,
         color: Option<&Vec4>,
         descriptor_set: Option<vk::DescriptorSet>,
@@ -176,7 +175,7 @@ impl RendererAPI {
                 pipeline,
                 pipeline_layout,
                 vertex_array,
-                vp_matrix,
+                camera_ubo_ds,
                 transform,
                 color,
                 descriptor_set,

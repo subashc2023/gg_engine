@@ -2,7 +2,6 @@ use std::cell::RefCell;
 use std::sync::Arc;
 
 use ash::vk;
-use glam::Mat4;
 
 use super::buffer::{
     BufferElement, BufferLayout, DynamicVertexBuffer, IndexBuffer, ShaderDataType,
@@ -121,6 +120,7 @@ impl Renderer2DData {
         physical_device: vk::PhysicalDevice,
         device: &ash::Device,
         render_pass: vk::RenderPass,
+        camera_ubo_ds_layout: vk::DescriptorSetLayout,
         white_texture: Texture2D,
     ) -> Self {
         let _timer = ProfileTimer::new("Renderer2D::init");
@@ -195,6 +195,7 @@ impl Renderer2DData {
             &batch_shader,
             vertex_buffers[0].layout(),
             render_pass,
+            camera_ubo_ds_layout,
             &[bindless_ds_layout],
             1,
         ));
@@ -301,7 +302,12 @@ impl Renderer2DData {
 
     /// Flush the current batch: write vertices to GPU, bind the pre-populated
     /// bindless descriptor set, and record draw commands.
-    pub(super) fn flush(&self, cmd_buf: vk::CommandBuffer, vp_matrix: &Mat4, current_frame: usize) {
+    pub(super) fn flush(
+        &self,
+        cmd_buf: vk::CommandBuffer,
+        camera_ubo_ds: vk::DescriptorSet,
+        current_frame: usize,
+    ) {
         let mut batch = self.batch.borrow_mut();
         if batch.quad_count == 0 {
             return;
@@ -335,26 +341,13 @@ impl Renderer2DData {
             self.device
                 .cmd_bind_pipeline(cmd_buf, vk::PipelineBindPoint::GRAPHICS, pipeline);
 
-            // Push VP matrix (offset 0, 64 bytes, vertex stage).
-            let vp_bytes = std::slice::from_raw_parts(
-                vp_matrix as *const Mat4 as *const u8,
-                std::mem::size_of::<Mat4>(),
-            );
-            self.device.cmd_push_constants(
-                cmd_buf,
-                layout,
-                vk::ShaderStageFlags::VERTEX,
-                0,
-                vp_bytes,
-            );
-
-            // Bind the pre-populated bindless descriptor set for this frame.
+            // Bind camera UBO (set 0) and bindless textures (set 1) together.
             self.device.cmd_bind_descriptor_sets(
                 cmd_buf,
                 vk::PipelineBindPoint::GRAPHICS,
                 layout,
                 0,
-                &[self.bindless_ds[current_frame]],
+                &[camera_ubo_ds, self.bindless_ds[current_frame]],
                 &[],
             );
 
@@ -397,15 +390,15 @@ impl Renderer2DData {
         &mut self,
         device: &ash::Device,
         render_pass: vk::RenderPass,
+        camera_ubo_ds_layout: vk::DescriptorSetLayout,
         color_attachment_count: u32,
     ) {
         self.offscreen_pipeline = Some(Arc::new(pipeline::create_batch_pipeline(
             device,
-            // Re-use the same shader — the existing batch_shader is stored as _batch_shader.
-            // We need to access it, but it's behind an Arc so we can share.
             &self._batch_shader,
             self.vertex_buffers[0].layout(),
             render_pass,
+            camera_ubo_ds_layout,
             &[self.bindless_ds_layout],
             color_attachment_count,
         )));
