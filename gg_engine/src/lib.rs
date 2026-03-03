@@ -40,9 +40,9 @@ pub use renderer::{
     ShaderDataType, ShaderLibrary, SubTexture2D, Texture2D, VertexArray, VertexBuffer,
 };
 pub use scene::{
-    BoxCollider2DComponent, CameraComponent, Entity, IdComponent, NativeScript,
-    NativeScriptComponent, RigidBody2DComponent, RigidBody2DType, Scene, SceneSerializer,
-    SpriteRendererComponent, TagComponent, TransformComponent,
+    BoxCollider2DComponent, CameraComponent, CircleRendererComponent, Entity, IdComponent,
+    NativeScript, NativeScriptComponent, RigidBody2DComponent, RigidBody2DType, Scene,
+    SceneSerializer, SpriteRendererComponent, TagComponent, TransformComponent,
 };
 pub use timestep::Timestep;
 pub use uuid::Uuid;
@@ -70,9 +70,9 @@ pub mod prelude {
         VertexBuffer,
     };
     pub use crate::scene::{
-        BoxCollider2DComponent, CameraComponent, Entity, IdComponent, NativeScript,
-        NativeScriptComponent, RigidBody2DComponent, RigidBody2DType, Scene, SceneSerializer,
-        SpriteRendererComponent, TagComponent, TransformComponent,
+        BoxCollider2DComponent, CameraComponent, CircleRendererComponent, Entity, IdComponent,
+        NativeScript, NativeScriptComponent, RigidBody2DComponent, RigidBody2DType, Scene,
+        SceneSerializer, SpriteRendererComponent, TagComponent, TransformComponent,
     };
     pub use crate::timestep::Timestep;
     pub use crate::uuid::Uuid;

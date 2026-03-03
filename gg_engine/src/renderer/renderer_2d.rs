@@ -26,7 +26,7 @@ const FRAMES_IN_FLIGHT: usize = 2;
 const MAX_BATCHES_PER_FRAME: usize = 16;
 
 // ---------------------------------------------------------------------------
-// BatchQuadVertex — per-vertex data for batch rendering
+// BatchQuadVertex — per-vertex data for quad batch rendering
 // ---------------------------------------------------------------------------
 
 #[repr(C)]
@@ -40,12 +40,39 @@ pub(super) struct BatchQuadVertex {
 }
 
 /// The canonical buffer layout for batch quad vertices.
-fn batch_vertex_layout() -> BufferLayout {
+fn batch_quad_vertex_layout() -> BufferLayout {
     BufferLayout::new(&[
         BufferElement::new(ShaderDataType::Float3, "a_position"),
         BufferElement::new(ShaderDataType::Float4, "a_color"),
         BufferElement::new(ShaderDataType::Float2, "a_tex_coord"),
         BufferElement::new(ShaderDataType::Float, "a_tex_index"),
+        BufferElement::new(ShaderDataType::Int, "a_entity_id"),
+    ])
+}
+
+// ---------------------------------------------------------------------------
+// BatchCircleVertex — per-vertex data for circle batch rendering
+// ---------------------------------------------------------------------------
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub(super) struct BatchCircleVertex {
+    pub world_position: [f32; 3],
+    pub local_position: [f32; 3],
+    pub color: [f32; 4],
+    pub thickness: f32,
+    pub fade: f32,
+    pub entity_id: i32,
+}
+
+/// The canonical buffer layout for batch circle vertices.
+fn batch_circle_vertex_layout() -> BufferLayout {
+    BufferLayout::new(&[
+        BufferElement::new(ShaderDataType::Float3, "a_world_position"),
+        BufferElement::new(ShaderDataType::Float3, "a_local_position"),
+        BufferElement::new(ShaderDataType::Float4, "a_color"),
+        BufferElement::new(ShaderDataType::Float, "a_thickness"),
+        BufferElement::new(ShaderDataType::Float, "a_fade"),
         BufferElement::new(ShaderDataType::Int, "a_entity_id"),
     ])
 }
@@ -75,7 +102,7 @@ impl Renderer2DStats {
 // BatchState — interior-mutable state for the current batch
 // ---------------------------------------------------------------------------
 
-struct BatchState {
+struct QuadBatchState {
     vertices: Vec<BatchQuadVertex>,
     quad_count: usize,
     /// Byte offset into the vertex buffer for the next flush.
@@ -83,7 +110,26 @@ struct BatchState {
     stats: Renderer2DStats,
 }
 
-impl BatchState {
+impl QuadBatchState {
+    fn new() -> Self {
+        Self {
+            vertices: Vec::with_capacity(MAX_VERTICES),
+            quad_count: 0,
+            vb_write_offset: 0,
+            stats: Renderer2DStats::default(),
+        }
+    }
+}
+
+struct CircleBatchState {
+    vertices: Vec<BatchCircleVertex>,
+    quad_count: usize,
+    /// Byte offset into the circle vertex buffer for the next flush.
+    vb_write_offset: usize,
+    stats: Renderer2DStats,
+}
+
+impl CircleBatchState {
     fn new() -> Self {
         Self {
             vertices: Vec::with_capacity(MAX_VERTICES),
@@ -99,17 +145,28 @@ impl BatchState {
 // ---------------------------------------------------------------------------
 
 pub(super) struct Renderer2DData {
+    // -- Quad batch resources --
     _batch_shader: Arc<Shader>,
     batch_pipeline: Arc<Pipeline>,
     offscreen_pipeline: Option<Arc<Pipeline>>,
     use_offscreen: bool,
     vertex_buffers: [DynamicVertexBuffer; FRAMES_IN_FLIGHT],
     index_buffer: IndexBuffer,
+    quad_batch: RefCell<QuadBatchState>,
+
+    // -- Circle batch resources --
+    _circle_shader: Arc<Shader>,
+    circle_pipeline: Arc<Pipeline>,
+    circle_offscreen_pipeline: Option<Arc<Pipeline>>,
+    circle_vertex_buffers: [DynamicVertexBuffer; FRAMES_IN_FLIGHT],
+    // Circle reuses the same index_buffer (identical quad topology).
+    circle_batch: RefCell<CircleBatchState>,
+
+    // -- Shared resources --
     bindless_pool: vk::DescriptorPool,
     bindless_ds_layout: vk::DescriptorSetLayout,
     bindless_ds: [vk::DescriptorSet; FRAMES_IN_FLIGHT],
     next_bindless_index: RefCell<u32>,
-    batch: RefCell<BatchState>,
     pub(super) white_texture: Texture2D,
     device: ash::Device,
 }
@@ -125,7 +182,7 @@ impl Renderer2DData {
     ) -> Self {
         let _timer = ProfileTimer::new("Renderer2D::init");
 
-        // -- Shaders --
+        // -- Quad Shaders --
         // Swapchain shader: 1 color output only (no entity ID).
         let batch_swapchain_shader = Arc::new(Shader::new(
             device,
@@ -141,26 +198,63 @@ impl Renderer2DData {
             shaders::BATCH_FRAG_SPV,
         ));
 
-        // -- Vertex layout --
-        let layout = batch_vertex_layout();
-        let vb_capacity =
+        // -- Circle Shaders --
+        let circle_swapchain_shader = Arc::new(Shader::new(
+            device,
+            "circle_swapchain",
+            shaders::CIRCLE_SWAPCHAIN_VERT_SPV,
+            shaders::CIRCLE_SWAPCHAIN_FRAG_SPV,
+        ));
+        let circle_shader = Arc::new(Shader::new(
+            device,
+            "circle",
+            shaders::CIRCLE_VERT_SPV,
+            shaders::CIRCLE_FRAG_SPV,
+        ));
+
+        // -- Quad Vertex layout --
+        let quad_layout = batch_quad_vertex_layout();
+        let quad_vb_capacity =
             MAX_VERTICES * MAX_BATCHES_PER_FRAME * std::mem::size_of::<BatchQuadVertex>();
 
-        // -- Per-frame-in-flight vertex buffers (persistently mapped) --
+        // -- Circle Vertex layout --
+        let circle_layout = batch_circle_vertex_layout();
+        let circle_vb_capacity =
+            MAX_VERTICES * MAX_BATCHES_PER_FRAME * std::mem::size_of::<BatchCircleVertex>();
+
+        // -- Per-frame-in-flight quad vertex buffers (persistently mapped) --
         let vertex_buffers = [
             DynamicVertexBuffer::new(
                 instance,
                 physical_device,
                 device,
-                vb_capacity,
-                layout.clone(),
+                quad_vb_capacity,
+                quad_layout.clone(),
             ),
             DynamicVertexBuffer::new(
                 instance,
                 physical_device,
                 device,
-                vb_capacity,
-                layout.clone(),
+                quad_vb_capacity,
+                quad_layout.clone(),
+            ),
+        ];
+
+        // -- Per-frame-in-flight circle vertex buffers (persistently mapped) --
+        let circle_vertex_buffers = [
+            DynamicVertexBuffer::new(
+                instance,
+                physical_device,
+                device,
+                circle_vb_capacity,
+                circle_layout.clone(),
+            ),
+            DynamicVertexBuffer::new(
+                instance,
+                physical_device,
+                device,
+                circle_vb_capacity,
+                circle_layout.clone(),
             ),
         ];
 
@@ -197,7 +291,7 @@ impl Renderer2DData {
         let bindless_ds_layout = unsafe { device.create_descriptor_set_layout(&layout_info, None) }
             .expect("Failed to create bindless descriptor set layout");
 
-        // -- Pipeline (swapchain: 1 color attachment, no entity ID output) --
+        // -- Quad Pipeline (swapchain: 1 color attachment, no entity ID output) --
         let batch_pipeline = Arc::new(pipeline::create_batch_pipeline(
             device,
             &batch_swapchain_shader,
@@ -205,6 +299,18 @@ impl Renderer2DData {
             render_pass,
             camera_ubo_ds_layout,
             &[bindless_ds_layout],
+            1,
+        ));
+
+        // -- Circle Pipeline (swapchain: 1 color attachment, no entity ID output) --
+        // Circles don't use textures, so no bindless descriptor set needed.
+        let circle_pipeline = Arc::new(pipeline::create_batch_pipeline(
+            device,
+            &circle_swapchain_shader,
+            circle_vertex_buffers[0].layout(),
+            render_pass,
+            camera_ubo_ds_layout,
+            &[],
             1,
         ));
 
@@ -236,11 +342,18 @@ impl Renderer2DData {
             use_offscreen: false,
             vertex_buffers,
             index_buffer,
+            quad_batch: RefCell::new(QuadBatchState::new()),
+
+            _circle_shader: circle_shader,
+            circle_pipeline,
+            circle_offscreen_pipeline: None,
+            circle_vertex_buffers,
+            circle_batch: RefCell::new(CircleBatchState::new()),
+
             bindless_pool,
             bindless_ds_layout,
             bindless_ds,
             next_bindless_index: RefCell::new(0),
-            batch: RefCell::new(BatchState::new()),
             white_texture,
             device: device.clone(),
         }
@@ -283,18 +396,31 @@ impl Renderer2DData {
 
     /// Reset batch state for a new frame.
     pub(super) fn reset_batch(&self) {
-        let mut batch = self.batch.borrow_mut();
-        batch.vertices.clear();
-        batch.quad_count = 0;
-        batch.vb_write_offset = 0;
-        batch.stats = Renderer2DStats::default();
+        // Reset quad batch.
+        {
+            let mut batch = self.quad_batch.borrow_mut();
+            batch.vertices.clear();
+            batch.quad_count = 0;
+            batch.vb_write_offset = 0;
+            batch.stats = Renderer2DStats::default();
+        }
+        // Reset circle batch.
+        {
+            let mut batch = self.circle_batch.borrow_mut();
+            batch.vertices.clear();
+            batch.quad_count = 0;
+            batch.vb_write_offset = 0;
+            batch.stats = Renderer2DStats::default();
+        }
     }
+
+    // -- Quad batch operations --
 
     /// Push a quad into the current batch. The 4 vertices should already be
     /// in world space (pre-transformed). Returns false if the batch was full
     /// and a flush is needed first.
     pub(super) fn push_quad(&self, vertices: [BatchQuadVertex; 4]) -> bool {
-        let mut batch = self.batch.borrow_mut();
+        let mut batch = self.quad_batch.borrow_mut();
         if batch.quad_count >= MAX_QUADS {
             return false;
         }
@@ -304,24 +430,24 @@ impl Renderer2DData {
     }
 
     /// Returns true if there are quads to flush.
-    pub(super) fn has_pending(&self) -> bool {
-        self.batch.borrow().quad_count > 0
+    pub(super) fn has_pending_quads(&self) -> bool {
+        self.quad_batch.borrow().quad_count > 0
     }
 
-    /// Flush the current batch: write vertices to GPU, bind the pre-populated
+    /// Flush the current quad batch: write vertices to GPU, bind the pre-populated
     /// bindless descriptor set, and record draw commands.
-    pub(super) fn flush(
+    pub(super) fn flush_quads(
         &self,
         cmd_buf: vk::CommandBuffer,
         camera_ubo_ds: vk::DescriptorSet,
         current_frame: usize,
     ) {
-        let mut batch = self.batch.borrow_mut();
+        let mut batch = self.quad_batch.borrow_mut();
         if batch.quad_count == 0 {
             return;
         }
 
-        let _timer = ProfileTimer::new("Renderer2D::flush");
+        let _timer = ProfileTimer::new("Renderer2D::flush_quads");
 
         // 1. Copy vertex data to the mapped VB at the current write offset.
         let vertex_data = unsafe {
@@ -387,12 +513,115 @@ impl Renderer2DData {
         batch.quad_count = 0;
     }
 
-    /// Get the accumulated statistics for this frame.
-    pub(super) fn stats(&self) -> Renderer2DStats {
-        self.batch.borrow().stats
+    // -- Circle batch operations --
+
+    /// Push a circle (rendered as a quad) into the current circle batch.
+    /// The 4 vertices should already be in world space (pre-transformed).
+    /// Returns false if the batch was full and a flush is needed first.
+    pub(super) fn push_circle(&self, vertices: [BatchCircleVertex; 4]) -> bool {
+        let mut batch = self.circle_batch.borrow_mut();
+        if batch.quad_count >= MAX_QUADS {
+            return false;
+        }
+        batch.vertices.extend_from_slice(&vertices);
+        batch.quad_count += 1;
+        true
     }
 
-    /// Create an offscreen batch pipeline compatible with a multi-attachment
+    /// Returns true if there are circles to flush.
+    pub(super) fn has_pending_circles(&self) -> bool {
+        self.circle_batch.borrow().quad_count > 0
+    }
+
+    /// Flush the current circle batch: write vertices to GPU, bind the circle
+    /// pipeline, and record draw commands.
+    pub(super) fn flush_circles(
+        &self,
+        cmd_buf: vk::CommandBuffer,
+        camera_ubo_ds: vk::DescriptorSet,
+        current_frame: usize,
+    ) {
+        let mut batch = self.circle_batch.borrow_mut();
+        if batch.quad_count == 0 {
+            return;
+        }
+
+        let _timer = ProfileTimer::new("Renderer2D::flush_circles");
+
+        // 1. Copy vertex data to the mapped VB at the current write offset.
+        let vertex_data = unsafe {
+            std::slice::from_raw_parts(
+                batch.vertices.as_ptr() as *const u8,
+                batch.vertices.len() * std::mem::size_of::<BatchCircleVertex>(),
+            )
+        };
+        let vb_offset = batch.vb_write_offset;
+        self.circle_vertex_buffers[current_frame].write_at(vb_offset, vertex_data);
+
+        // 2. Record Vulkan commands.
+        let index_count = (batch.quad_count * 6) as u32;
+        let active_pipeline = if self.use_offscreen {
+            self.circle_offscreen_pipeline
+                .as_ref()
+                .unwrap_or(&self.circle_pipeline)
+        } else {
+            &self.circle_pipeline
+        };
+        let pipeline = active_pipeline.pipeline();
+        let layout = active_pipeline.layout();
+
+        unsafe {
+            self.device
+                .cmd_bind_pipeline(cmd_buf, vk::PipelineBindPoint::GRAPHICS, pipeline);
+
+            // Bind camera UBO (set 0) only — circles don't use textures.
+            self.device.cmd_bind_descriptor_sets(
+                cmd_buf,
+                vk::PipelineBindPoint::GRAPHICS,
+                layout,
+                0,
+                &[camera_ubo_ds],
+                &[],
+            );
+
+            // Bind circle vertex buffer at this batch's offset.
+            let vb_handle = self.circle_vertex_buffers[current_frame].handle();
+            self.device
+                .cmd_bind_vertex_buffers(cmd_buf, 0, &[vb_handle], &[vb_offset as u64]);
+
+            // Bind index buffer (shared with quads — same topology).
+            self.device.cmd_bind_index_buffer(
+                cmd_buf,
+                self.index_buffer.buffer(),
+                0,
+                vk::IndexType::UINT32,
+            );
+
+            // Draw!
+            self.device
+                .cmd_draw_indexed(cmd_buf, index_count, 1, 0, 0, 0);
+        }
+
+        // 3. Update stats, advance write offset, and reset vertices for next batch.
+        batch.stats.draw_calls += 1;
+        batch.stats.quad_count += batch.quad_count as u32;
+        batch.vb_write_offset = vb_offset + vertex_data.len();
+
+        batch.vertices.clear();
+        batch.quad_count = 0;
+    }
+
+    /// Get the accumulated quad statistics for this frame.
+    pub(super) fn quad_stats(&self) -> Renderer2DStats {
+        self.quad_batch.borrow().stats
+    }
+
+    /// Get the accumulated circle statistics for this frame.
+    pub(super) fn circle_stats(&self) -> Renderer2DStats {
+        self.circle_batch.borrow().stats
+    }
+
+    /// Create offscreen batch pipelines compatible with a multi-attachment
     /// render pass (e.g. framebuffer with 2 color attachments for picking).
     pub(super) fn create_offscreen_pipeline(
         &mut self,
@@ -401,6 +630,7 @@ impl Renderer2DData {
         camera_ubo_ds_layout: vk::DescriptorSetLayout,
         color_attachment_count: u32,
     ) {
+        // Quad offscreen pipeline (with bindless textures at set 1).
         self.offscreen_pipeline = Some(Arc::new(pipeline::create_batch_pipeline(
             device,
             &self._batch_shader,
@@ -408,6 +638,17 @@ impl Renderer2DData {
             render_pass,
             camera_ubo_ds_layout,
             &[self.bindless_ds_layout],
+            color_attachment_count,
+        )));
+
+        // Circle offscreen pipeline (no textures).
+        self.circle_offscreen_pipeline = Some(Arc::new(pipeline::create_batch_pipeline(
+            device,
+            &self._circle_shader,
+            self.circle_vertex_buffers[0].layout(),
+            render_pass,
+            camera_ubo_ds_layout,
+            &[],
             color_attachment_count,
         )));
     }

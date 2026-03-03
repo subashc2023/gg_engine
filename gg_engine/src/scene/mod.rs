@@ -5,9 +5,9 @@ mod physics_2d;
 mod scene_serializer;
 
 pub use components::{
-    BoxCollider2DComponent, CameraComponent, IdComponent, NativeScriptComponent,
-    RigidBody2DComponent, RigidBody2DType, SpriteRendererComponent, TagComponent,
-    TransformComponent,
+    BoxCollider2DComponent, CameraComponent, CircleRendererComponent, IdComponent,
+    NativeScriptComponent, RigidBody2DComponent, RigidBody2DType, SpriteRendererComponent,
+    TagComponent, TransformComponent,
 };
 pub use entity::Entity;
 pub use native_script::NativeScript;
@@ -128,6 +128,12 @@ impl Scene {
             &mut new_scene,
             &entity_map,
         );
+        // CircleRendererComponent
+        copy_component_if_has::<CircleRendererComponent>(
+            &source.world,
+            &mut new_scene,
+            &entity_map,
+        );
         // RigidBody2DComponent (Clone impl resets runtime_body to None)
         copy_component_if_has::<RigidBody2DComponent>(&source.world, &mut new_scene, &entity_map);
         // BoxCollider2DComponent (Clone impl resets runtime_fixture to None)
@@ -182,6 +188,10 @@ impl Scene {
             .get_component::<SpriteRendererComponent>(entity)
             .map(|s| (s.color, s.texture.clone(), s.tiling_factor));
 
+        let circle_data = self
+            .get_component::<CircleRendererComponent>(entity)
+            .map(|c| (c.color, c.thickness, c.fade));
+
         let rb_data = self
             .get_component::<RigidBody2DComponent>(entity)
             .map(|rb| (rb.body_type, rb.fixed_rotation));
@@ -235,6 +245,17 @@ impl Scene {
                     color,
                     texture,
                     tiling_factor,
+                },
+            );
+        }
+
+        if let Some((color, thickness, fade)) = circle_data {
+            self.add_component(
+                new_entity,
+                CircleRendererComponent {
+                    color,
+                    thickness,
+                    fade,
                 },
             );
         }
@@ -674,6 +695,23 @@ impl Scene {
                     entity.id() as i32,
                 );
             }
+
+            // Draw all circle entities.
+            for (entity, transform, circle) in self
+                .world
+                .query::<(
+                    hecs::Entity,
+                    &TransformComponent,
+                    &CircleRendererComponent,
+                )>()
+                .iter()
+            {
+                renderer.draw_circle_component(
+                    &transform.get_transform(),
+                    circle,
+                    entity.id() as i32,
+                );
+            }
         }
     }
 
@@ -685,6 +723,7 @@ impl Scene {
     pub fn on_update_editor(&self, editor_camera_vp: &glam::Mat4, renderer: &mut Renderer) {
         renderer.set_view_projection(*editor_camera_vp);
 
+        // Draw sprites.
         for (entity, transform, sprite) in self
             .world
             .query::<(
@@ -697,6 +736,23 @@ impl Scene {
             renderer.draw_sprite(
                 &transform.get_transform(),
                 sprite,
+                entity.id() as i32,
+            );
+        }
+
+        // Draw circles.
+        for (entity, transform, circle) in self
+            .world
+            .query::<(
+                hecs::Entity,
+                &TransformComponent,
+                &CircleRendererComponent,
+            )>()
+            .iter()
+        {
+            renderer.draw_circle_component(
+                &transform.get_transform(),
+                circle,
                 entity.id() as i32,
             );
         }

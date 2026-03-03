@@ -9,7 +9,7 @@ use super::draw_context::DrawContext;
 use super::framebuffer::{Framebuffer, FramebufferSpec};
 use super::pipeline::{self, Pipeline};
 use super::render_command::RenderCommand;
-use super::renderer_2d::{BatchQuadVertex, Renderer2DData, Renderer2DStats};
+use super::renderer_2d::{BatchCircleVertex, BatchQuadVertex, Renderer2DData, Renderer2DStats};
 use super::renderer_api::{RendererAPI, VulkanRendererAPI};
 use super::shader::Shader;
 use super::sub_texture::SubTexture2D;
@@ -19,7 +19,7 @@ use super::vertex_array::VertexArray;
 use super::VulkanContext;
 
 use crate::profiling::ProfileTimer;
-use crate::scene::SpriteRendererComponent;
+use crate::scene::{CircleRendererComponent, SpriteRendererComponent};
 
 // ---------------------------------------------------------------------------
 // Unit quad positions and tex coords (used for CPU pre-transformation)
@@ -417,7 +417,7 @@ impl Renderer {
 
         if !data.push_quad(vertices) {
             // Batch full — flush and retry.
-            self.flush_batch();
+            self.flush_quad_batch();
             data.push_quad(vertices);
         }
     }
@@ -477,22 +477,39 @@ impl Renderer {
         ];
 
         if !data.push_quad(vertices) {
-            self.flush_batch();
+            self.flush_quad_batch();
             data.push_quad(vertices);
         }
     }
 
-    /// Flush the current 2D batch (if any quads are pending).
-    fn flush_batch(&self) {
+    /// Flush the current quad batch (if any quads are pending).
+    fn flush_quad_batch(&self) {
         let data = self
             .renderer_2d
             .as_ref()
             .expect("Renderer2D not initialized — call init_2d first");
         let ctx = self
             .draw_context
-            .expect("flush_batch called outside begin_scene/end_scene");
+            .expect("flush_quad_batch called outside begin_scene/end_scene");
 
-        data.flush(
+        data.flush_quads(
+            ctx.cmd_buf,
+            self.camera_ubo_ds[ctx.current_frame],
+            ctx.current_frame,
+        );
+    }
+
+    /// Flush the current circle batch (if any circles are pending).
+    fn flush_circle_batch(&self) {
+        let data = self
+            .renderer_2d
+            .as_ref()
+            .expect("Renderer2D not initialized — call init_2d first");
+        let ctx = self
+            .draw_context
+            .expect("flush_circle_batch called outside begin_scene/end_scene");
+
+        data.flush_circles(
             ctx.cmd_buf,
             self.camera_ubo_ds[ctx.current_frame],
             ctx.current_frame,
@@ -779,6 +796,81 @@ impl Renderer {
         );
     }
 
+    // -- Circle drawing -------------------------------------------------------
+
+    /// Internal: push a circle (quad) into the circle batch.
+    fn push_circle_to_batch(
+        &self,
+        transform: &Mat4,
+        color: Vec4,
+        thickness: f32,
+        fade: f32,
+        entity_id: i32,
+    ) {
+        let data = self
+            .renderer_2d
+            .as_ref()
+            .expect("Renderer2D not initialized — call init_2d first");
+
+        let col = [color.x, color.y, color.z, color.w];
+
+        let mut vertices = [BatchCircleVertex {
+            world_position: [0.0; 3],
+            local_position: [0.0; 3],
+            color: col,
+            thickness,
+            fade,
+            entity_id,
+        }; 4];
+
+        for (i, v) in vertices.iter_mut().enumerate() {
+            let world_pos = *transform * QUAD_POSITIONS[i];
+            v.world_position = [world_pos.x, world_pos.y, world_pos.z];
+            // Local position: quad corners * 2 → range [-1, 1].
+            v.local_position = [
+                QUAD_POSITIONS[i].x * 2.0,
+                QUAD_POSITIONS[i].y * 2.0,
+                0.0,
+            ];
+        }
+
+        if !data.push_circle(vertices) {
+            self.flush_circle_batch();
+            data.push_circle(vertices);
+        }
+    }
+
+    /// Draw a circle using a pre-built transform matrix.
+    /// `entity_id` is written to the entity ID attachment for mouse picking
+    /// (`-1` means no entity).
+    pub fn draw_circle(
+        &self,
+        transform: &Mat4,
+        color: Vec4,
+        thickness: f32,
+        fade: f32,
+        entity_id: i32,
+    ) {
+        self.push_circle_to_batch(transform, color, thickness, fade, entity_id);
+    }
+
+    /// Draw a [`CircleRendererComponent`] using a pre-built transform matrix.
+    /// Writes the entity ID to the picking attachment.
+    pub fn draw_circle_component(
+        &self,
+        transform: &Mat4,
+        circle: &CircleRendererComponent,
+        entity_id: i32,
+    ) {
+        self.push_circle_to_batch(
+            transform,
+            circle.color,
+            circle.thickness,
+            circle.fade,
+            entity_id,
+        );
+    }
+
     // -- GPU synchronization ---------------------------------------------------
 
     /// Wait for the GPU to finish all in-flight work.
@@ -854,14 +946,22 @@ impl Renderer {
         }
     }
 
-    /// End the current scene — flushes any pending batch, snapshots stats,
-    /// and clears the draw context.
+    /// End the current scene — flushes any pending batches (quads + circles),
+    /// snapshots stats, and clears the draw context.
     pub(crate) fn end_scene(&mut self) {
-        // Flush any remaining quads in the batch.
         if let Some(data) = &self.renderer_2d {
-            if data.has_pending() {
-                if let Some(ctx) = self.draw_context {
-                    data.flush(
+            if let Some(ctx) = self.draw_context {
+                // Flush any remaining quads.
+                if data.has_pending_quads() {
+                    data.flush_quads(
+                        ctx.cmd_buf,
+                        self.camera_ubo_ds[ctx.current_frame],
+                        ctx.current_frame,
+                    );
+                }
+                // Flush any remaining circles.
+                if data.has_pending_circles() {
+                    data.flush_circles(
                         ctx.cmd_buf,
                         self.camera_ubo_ds[ctx.current_frame],
                         ctx.current_frame,
@@ -869,7 +969,12 @@ impl Renderer {
                 }
             }
             // Snapshot stats for this frame (available via stats_2d() until next end_scene).
-            self.last_stats_2d = data.stats();
+            let quad_stats = data.quad_stats();
+            let circle_stats = data.circle_stats();
+            self.last_stats_2d = Renderer2DStats {
+                draw_calls: quad_stats.draw_calls + circle_stats.draw_calls,
+                quad_count: quad_stats.quad_count + circle_stats.quad_count,
+            };
         }
         self.draw_context = None;
     }

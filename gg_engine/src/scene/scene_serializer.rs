@@ -6,8 +6,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::renderer::{ProjectionType, SceneCamera};
 use crate::scene::{
-    BoxCollider2DComponent, CameraComponent, IdComponent, RigidBody2DComponent, RigidBody2DType,
-    Scene, SpriteRendererComponent, TagComponent, TransformComponent,
+    BoxCollider2DComponent, CameraComponent, CircleRendererComponent, IdComponent,
+    RigidBody2DComponent, RigidBody2DType, Scene, SpriteRendererComponent, TagComponent,
+    TransformComponent,
 };
 use crate::uuid::Uuid;
 
@@ -38,6 +39,12 @@ struct EntityData {
         skip_serializing_if = "Option::is_none"
     )]
     sprite: Option<SpriteData>,
+    #[serde(
+        rename = "CircleRendererComponent",
+        skip_serializing_if = "Option::is_none",
+        default
+    )]
+    circle: Option<CircleData>,
     #[serde(
         rename = "RigidBody2DComponent",
         skip_serializing_if = "Option::is_none",
@@ -106,6 +113,24 @@ struct SpriteData {
 
 fn default_tiling_factor() -> f32 {
     1.0
+}
+
+#[derive(Serialize, Deserialize)]
+struct CircleData {
+    #[serde(rename = "Color")]
+    color: [f32; 4],
+    #[serde(rename = "Thickness", default = "default_thickness")]
+    thickness: f32,
+    #[serde(rename = "Fade", default = "default_fade")]
+    fade: f32,
+}
+
+fn default_thickness() -> f32 {
+    1.0
+}
+
+fn default_fade() -> f32 {
+    0.005
 }
 
 #[derive(Serialize, Deserialize)]
@@ -298,6 +323,15 @@ impl SceneSerializer {
                         tiling_factor: sprite.tiling_factor,
                     });
 
+            let circle_data =
+                scene
+                    .get_component::<CircleRendererComponent>(entity)
+                    .map(|circle| CircleData {
+                        color: circle.color.into(),
+                        thickness: circle.thickness,
+                        fade: circle.fade,
+                    });
+
             let rigidbody_2d_data =
                 scene
                     .get_component::<RigidBody2DComponent>(entity)
@@ -336,6 +370,7 @@ impl SceneSerializer {
                 transform: transform_data,
                 camera: camera_data,
                 sprite: sprite_data,
+                circle: circle_data,
                 rigidbody_2d: rigidbody_2d_data,
                 box_collider_2d: box_collider_2d_data,
             });
@@ -406,6 +441,18 @@ impl SceneSerializer {
                 let mut sprite = SpriteRendererComponent::new(Vec4::from(sd.color));
                 sprite.tiling_factor = sd.tiling_factor;
                 scene.add_component(entity, sprite);
+            }
+
+            // CircleRendererComponent — added only if present in the file.
+            if let Some(ref cd) = entity_data.circle {
+                scene.add_component(
+                    entity,
+                    CircleRendererComponent {
+                        color: Vec4::from(cd.color),
+                        thickness: cd.thickness,
+                        fade: cd.fade,
+                    },
+                );
             }
 
             // RigidBody2DComponent — added only if present in the file.

@@ -207,6 +207,11 @@ fn draw_components(
                 {
                     scene.add_component(entity, SpriteRendererComponent::default());
                 }
+                if !scene.has_component::<CircleRendererComponent>(entity)
+                    && ui.button("Circle Renderer").clicked()
+                {
+                    scene.add_component(entity, CircleRendererComponent::default());
+                }
                 if !scene.has_component::<RigidBody2DComponent>(entity)
                     && ui.button("Rigidbody 2D").clicked()
                 {
@@ -584,6 +589,111 @@ fn draw_components(
     }
     if remove_sprite {
         scene.remove_component::<SpriteRendererComponent>(entity);
+    }
+
+    // -- Circle Renderer Component (removable) --
+    let mut remove_circle = false;
+    if scene.has_component::<CircleRendererComponent>(entity) {
+        let cr = egui::CollapsingHeader::new(
+            egui::RichText::new("Circle Renderer")
+                .font(egui::FontId::new(14.0, bold_family.clone())),
+        )
+        .id_salt(("circle_renderer", entity.id()))
+        .default_open(true)
+        .show(ui, |ui| {
+            let (mut color_arr, mut thickness, mut fade) = {
+                let circle = scene
+                    .get_component::<CircleRendererComponent>(entity)
+                    .unwrap();
+                (
+                    [
+                        circle.color.x,
+                        circle.color.y,
+                        circle.color.z,
+                        circle.color.w,
+                    ],
+                    circle.thickness,
+                    circle.fade,
+                )
+            };
+
+            let mut egui_color = egui::Color32::from_rgba_unmultiplied(
+                (color_arr[0] * 255.0) as u8,
+                (color_arr[1] * 255.0) as u8,
+                (color_arr[2] * 255.0) as u8,
+                (color_arr[3] * 255.0) as u8,
+            );
+
+            ui.horizontal(|ui| {
+                ui.label("Color");
+                if egui::color_picker::color_edit_button_srgba(
+                    ui,
+                    &mut egui_color,
+                    egui::color_picker::Alpha::OnlyBlend,
+                )
+                .changed()
+                {
+                    let [r, g, b, a] = egui_color.to_srgba_unmultiplied();
+                    color_arr = [
+                        r as f32 / 255.0,
+                        g as f32 / 255.0,
+                        b as f32 / 255.0,
+                        a as f32 / 255.0,
+                    ];
+                    if let Some(mut circle) =
+                        scene.get_component_mut::<CircleRendererComponent>(entity)
+                    {
+                        circle.color = Vec4::from(color_arr);
+                    }
+                }
+            });
+
+            ui.horizontal(|ui| {
+                ui.label("Thickness");
+                if ui
+                    .add(
+                        egui::DragValue::new(&mut thickness)
+                            .speed(0.025)
+                            .range(0.0..=1.0),
+                    )
+                    .changed()
+                {
+                    if let Some(mut circle) =
+                        scene.get_component_mut::<CircleRendererComponent>(entity)
+                    {
+                        circle.thickness = thickness;
+                    }
+                }
+            });
+
+            ui.horizontal(|ui| {
+                ui.label("Fade");
+                if ui
+                    .add(
+                        egui::DragValue::new(&mut fade)
+                            .speed(0.00025)
+                            .range(0.0..=1.0),
+                    )
+                    .changed()
+                {
+                    if let Some(mut circle) =
+                        scene.get_component_mut::<CircleRendererComponent>(entity)
+                    {
+                        circle.fade = fade;
+                    }
+                }
+            });
+        });
+
+        cr.header_response.context_menu(|ui| {
+            if ui.button("Remove Component").clicked() {
+                remove_circle = true;
+                ui.close();
+            }
+        });
+    }
+    if remove_circle {
+        scene.remove_component::<CircleRendererComponent>(entity);
     }
 
     // -- Rigidbody 2D Component (removable) --

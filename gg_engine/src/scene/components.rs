@@ -168,6 +168,43 @@ impl Default for SpriteRendererComponent {
     }
 }
 
+/// Circle renderer attached to an entity for 2D circle rendering.
+///
+/// Renders a circle using a fragment shader SDF approach on a quad.
+/// The circle's size is controlled by the entity's [`TransformComponent`] scale
+/// (diameter = scale). No separate radius field — use scale to control size.
+///
+/// - `thickness`: 1.0 = filled circle, lower values create a ring/outline.
+/// - `fade`: controls edge softness (higher = blurrier edges).
+#[derive(Clone)]
+pub struct CircleRendererComponent {
+    pub color: Vec4,
+    /// Thickness of the circle. 1.0 = fully filled, 0.01 = thin outline.
+    pub thickness: f32,
+    /// Edge fade/softness. Higher values = softer edges.
+    pub fade: f32,
+}
+
+impl CircleRendererComponent {
+    pub fn new(color: Vec4) -> Self {
+        Self {
+            color,
+            thickness: 1.0,
+            fade: 0.005,
+        }
+    }
+}
+
+impl Default for CircleRendererComponent {
+    fn default() -> Self {
+        Self {
+            color: Vec4::ONE,
+            thickness: 1.0,
+            fade: 0.005,
+        }
+    }
+}
+
 /// Attaches a [`NativeScript`] to an entity for per-frame behavior.
 ///
 /// Use [`bind::<T>()`](NativeScriptComponent::bind) to create an instance.
