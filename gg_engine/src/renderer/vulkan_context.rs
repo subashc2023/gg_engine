@@ -187,7 +187,8 @@ impl VulkanContext {
 
         let features10 = vk::PhysicalDeviceFeatures::default()
             .sampler_anisotropy(true)
-            .independent_blend(true);
+            .independent_blend(true)
+            .wide_lines(true);
 
         let mut features12 = vk::PhysicalDeviceVulkan12Features::default()
             .descriptor_binding_partially_bound(true)

@@ -323,3 +323,131 @@ pub(crate) fn create_batch_pipeline(
         device: device.clone(),
     }
 }
+
+/// Create a Vulkan graphics pipeline for batch **line** rendering.
+///
+/// Like [`create_batch_pipeline`] but uses `LINE_LIST` topology and adds
+/// `LINE_WIDTH` as a dynamic state so callers can set it per-draw via
+/// `vkCmdSetLineWidth`. No index buffer is needed — lines are drawn with
+/// `vkCmdDraw` (2 vertices per line segment).
+pub(crate) fn create_line_batch_pipeline(
+    device: &ash::Device,
+    shader: &Shader,
+    vertex_layout: &BufferLayout,
+    render_pass: vk::RenderPass,
+    camera_ubo_ds_layout: vk::DescriptorSetLayout,
+    color_attachment_count: u32,
+) -> Pipeline {
+    let _timer = ProfileTimer::new("Pipeline::create_line_batch");
+    let entry_point = c"main";
+
+    let vert_stage = vk::PipelineShaderStageCreateInfo::default()
+        .stage(vk::ShaderStageFlags::VERTEX)
+        .module(shader.vert_module())
+        .name(entry_point);
+
+    let frag_stage = vk::PipelineShaderStageCreateInfo::default()
+        .stage(vk::ShaderStageFlags::FRAGMENT)
+        .module(shader.frag_module())
+        .name(entry_point);
+
+    let shader_stages = [vert_stage, frag_stage];
+
+    let binding = vertex_layout.vk_binding_description(0);
+    let attributes = vertex_layout.vk_attribute_descriptions(0);
+    let bindings = [binding];
+
+    let vertex_input = vk::PipelineVertexInputStateCreateInfo::default()
+        .vertex_binding_descriptions(&bindings)
+        .vertex_attribute_descriptions(&attributes);
+
+    let input_assembly = vk::PipelineInputAssemblyStateCreateInfo::default()
+        .topology(vk::PrimitiveTopology::LINE_LIST)
+        .primitive_restart_enable(false);
+
+    // Dynamic viewport/scissor + line width.
+    let dynamic_states = [
+        vk::DynamicState::VIEWPORT,
+        vk::DynamicState::SCISSOR,
+        vk::DynamicState::LINE_WIDTH,
+    ];
+    let dynamic_state =
+        vk::PipelineDynamicStateCreateInfo::default().dynamic_states(&dynamic_states);
+
+    let viewport_state = vk::PipelineViewportStateCreateInfo::default()
+        .viewport_count(1)
+        .scissor_count(1);
+
+    let rasterizer = vk::PipelineRasterizationStateCreateInfo::default()
+        .polygon_mode(vk::PolygonMode::FILL)
+        .cull_mode(vk::CullModeFlags::NONE)
+        .front_face(vk::FrontFace::COUNTER_CLOCKWISE)
+        .line_width(1.0);
+
+    let multisampling = vk::PipelineMultisampleStateCreateInfo::default()
+        .rasterization_samples(vk::SampleCountFlags::TYPE_1);
+
+    let depth_stencil = vk::PipelineDepthStencilStateCreateInfo::default()
+        .depth_test_enable(true)
+        .depth_write_enable(true)
+        .depth_compare_op(vk::CompareOp::LESS_OR_EQUAL)
+        .depth_bounds_test_enable(false)
+        .stencil_test_enable(false);
+
+    // Attachment 0: standard alpha blending (RGBA).
+    // Attachments 1+: blend disabled, R write mask only (integer formats).
+    let mut blend_attachments = Vec::with_capacity(color_attachment_count as usize);
+    blend_attachments.push(
+        vk::PipelineColorBlendAttachmentState::default()
+            .color_write_mask(vk::ColorComponentFlags::RGBA)
+            .blend_enable(true)
+            .src_color_blend_factor(vk::BlendFactor::SRC_ALPHA)
+            .dst_color_blend_factor(vk::BlendFactor::ONE_MINUS_SRC_ALPHA)
+            .color_blend_op(vk::BlendOp::ADD)
+            .src_alpha_blend_factor(vk::BlendFactor::ONE)
+            .dst_alpha_blend_factor(vk::BlendFactor::ZERO)
+            .alpha_blend_op(vk::BlendOp::ADD),
+    );
+    for _ in 1..color_attachment_count {
+        blend_attachments.push(
+            vk::PipelineColorBlendAttachmentState::default()
+                .color_write_mask(vk::ColorComponentFlags::R)
+                .blend_enable(false),
+        );
+    }
+
+    let color_blending =
+        vk::PipelineColorBlendStateCreateInfo::default().attachments(&blend_attachments);
+
+    // No push constants — VP is in UBO (set 0), positions are baked into vertices.
+    let all_layouts = [camera_ubo_ds_layout];
+
+    let layout_info = vk::PipelineLayoutCreateInfo::default().set_layouts(&all_layouts);
+    let pipeline_layout = unsafe { device.create_pipeline_layout(&layout_info, None) }
+        .expect("Failed to create line batch pipeline layout");
+
+    let pipeline_info = vk::GraphicsPipelineCreateInfo::default()
+        .stages(&shader_stages)
+        .vertex_input_state(&vertex_input)
+        .input_assembly_state(&input_assembly)
+        .viewport_state(&viewport_state)
+        .rasterization_state(&rasterizer)
+        .multisample_state(&multisampling)
+        .depth_stencil_state(&depth_stencil)
+        .color_blend_state(&color_blending)
+        .dynamic_state(&dynamic_state)
+        .layout(pipeline_layout)
+        .render_pass(render_pass)
+        .subpass(0);
+
+    let pipeline = unsafe {
+        device.create_graphics_pipelines(vk::PipelineCache::null(), &[pipeline_info], None)
+    }
+    .expect("Failed to create line batch graphics pipeline")[0];
+
+    Pipeline {
+        pipeline,
+        layout: pipeline_layout,
+        device: device.clone(),
+    }
+}

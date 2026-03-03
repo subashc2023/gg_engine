@@ -9,7 +9,9 @@ use super::draw_context::DrawContext;
 use super::framebuffer::{Framebuffer, FramebufferSpec};
 use super::pipeline::{self, Pipeline};
 use super::render_command::RenderCommand;
-use super::renderer_2d::{BatchCircleVertex, BatchQuadVertex, Renderer2DData, Renderer2DStats};
+use super::renderer_2d::{
+    BatchCircleVertex, BatchLineVertex, BatchQuadVertex, Renderer2DData, Renderer2DStats,
+};
 use super::renderer_api::{RendererAPI, VulkanRendererAPI};
 use super::shader::Shader;
 use super::sub_texture::SubTexture2D;
@@ -71,6 +73,9 @@ pub struct Renderer {
 
     // Built-in 2D renderer resources.
     renderer_2d: Option<Renderer2DData>,
+
+    // Line rendering.
+    line_width: f32,
 
     // Stats from the previous frame (snapshotted at end_scene).
     last_stats_2d: Renderer2DStats,
@@ -180,6 +185,7 @@ impl Renderer {
             color_format,
             depth_format,
             renderer_2d: None,
+            line_width: 2.0,
             last_stats_2d: Renderer2DStats::default(),
         }
     }
@@ -871,6 +877,105 @@ impl Renderer {
         );
     }
 
+    // -- Line drawing ----------------------------------------------------------
+
+    /// Internal: push a line (2 vertices) into the line batch.
+    fn push_line_to_batch(&self, p0: Vec3, p1: Vec3, color: Vec4, entity_id: i32) {
+        let data = self
+            .renderer_2d
+            .as_ref()
+            .expect("Renderer2D not initialized — call init_2d first");
+
+        let col = [color.x, color.y, color.z, color.w];
+
+        let vertices = [
+            BatchLineVertex {
+                position: [p0.x, p0.y, p0.z],
+                color: col,
+                entity_id,
+            },
+            BatchLineVertex {
+                position: [p1.x, p1.y, p1.z],
+                color: col,
+                entity_id,
+            },
+        ];
+
+        if !data.push_line(vertices) {
+            self.flush_line_batch();
+            data.push_line(vertices);
+        }
+    }
+
+    /// Flush the current line batch (if any lines are pending).
+    fn flush_line_batch(&self) {
+        let data = self
+            .renderer_2d
+            .as_ref()
+            .expect("Renderer2D not initialized — call init_2d first");
+        let ctx = self
+            .draw_context
+            .expect("flush_line_batch called outside begin_scene/end_scene");
+
+        data.flush_lines(
+            ctx.cmd_buf,
+            self.camera_ubo_ds[ctx.current_frame],
+            ctx.current_frame,
+            self.line_width,
+        );
+    }
+
+    /// Draw a line from `p0` to `p1` in world space.
+    pub fn draw_line(&self, p0: Vec3, p1: Vec3, color: Vec4, entity_id: i32) {
+        self.push_line_to_batch(p0, p1, color, entity_id);
+    }
+
+    /// Draw a wireframe rectangle at a 3D position with the given size and color.
+    /// The rectangle lies in the XY plane at the given Z coordinate.
+    pub fn draw_rect(&self, position: &Vec3, size: &Vec2, color: Vec4) {
+        let hx = size.x * 0.5;
+        let hy = size.y * 0.5;
+        let z = position.z;
+
+        let p0 = Vec3::new(position.x - hx, position.y - hy, z); // bottom-left
+        let p1 = Vec3::new(position.x + hx, position.y - hy, z); // bottom-right
+        let p2 = Vec3::new(position.x + hx, position.y + hy, z); // top-right
+        let p3 = Vec3::new(position.x - hx, position.y + hy, z); // top-left
+
+        self.draw_line(p0, p1, color, -1);
+        self.draw_line(p1, p2, color, -1);
+        self.draw_line(p2, p3, color, -1);
+        self.draw_line(p3, p0, color, -1);
+    }
+
+    /// Draw a wireframe rectangle using a pre-built transform matrix.
+    /// Transforms the unit quad corners by the matrix and draws 4 lines.
+    pub fn draw_rect_transform(&self, transform: &Mat4, color: Vec4, entity_id: i32) {
+        // Transform the unit quad corners.
+        let mut corners = [Vec3::ZERO; 4];
+        for (i, corner) in corners.iter_mut().enumerate() {
+            let world_pos = *transform * QUAD_POSITIONS[i];
+            *corner = Vec3::new(world_pos.x, world_pos.y, world_pos.z);
+        }
+
+        // Draw 4 lines connecting the corners.
+        self.draw_line(corners[0], corners[1], color, entity_id);
+        self.draw_line(corners[1], corners[2], color, entity_id);
+        self.draw_line(corners[2], corners[3], color, entity_id);
+        self.draw_line(corners[3], corners[0], color, entity_id);
+    }
+
+    /// Get the current line width used for line rendering.
+    pub fn line_width(&self) -> f32 {
+        self.line_width
+    }
+
+    /// Set the line width used for line rendering.
+    /// Requires `wideLines` device feature for values other than 1.0.
+    pub fn set_line_width(&mut self, width: f32) {
+        self.line_width = width;
+    }
+
     // -- GPU synchronization ---------------------------------------------------
 
     /// Wait for the GPU to finish all in-flight work.
@@ -946,7 +1051,7 @@ impl Renderer {
         }
     }
 
-    /// End the current scene — flushes any pending batches (quads + circles),
+    /// End the current scene — flushes any pending batches (quads + circles + lines),
     /// snapshots stats, and clears the draw context.
     pub(crate) fn end_scene(&mut self) {
         if let Some(data) = &self.renderer_2d {
@@ -967,13 +1072,27 @@ impl Renderer {
                         ctx.current_frame,
                     );
                 }
+                // Flush any remaining lines.
+                if data.has_pending_lines() {
+                    data.flush_lines(
+                        ctx.cmd_buf,
+                        self.camera_ubo_ds[ctx.current_frame],
+                        ctx.current_frame,
+                        self.line_width,
+                    );
+                }
             }
             // Snapshot stats for this frame (available via stats_2d() until next end_scene).
             let quad_stats = data.quad_stats();
             let circle_stats = data.circle_stats();
+            let line_stats = data.line_stats();
             self.last_stats_2d = Renderer2DStats {
-                draw_calls: quad_stats.draw_calls + circle_stats.draw_calls,
-                quad_count: quad_stats.quad_count + circle_stats.quad_count,
+                draw_calls: quad_stats.draw_calls
+                    + circle_stats.draw_calls
+                    + line_stats.draw_calls,
+                quad_count: quad_stats.quad_count
+                    + circle_stats.quad_count
+                    + line_stats.quad_count,
             };
         }
         self.draw_context = None;

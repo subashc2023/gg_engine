@@ -78,6 +78,27 @@ fn batch_circle_vertex_layout() -> BufferLayout {
 }
 
 // ---------------------------------------------------------------------------
+// BatchLineVertex — per-vertex data for line batch rendering
+// ---------------------------------------------------------------------------
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub(super) struct BatchLineVertex {
+    pub position: [f32; 3],
+    pub color: [f32; 4],
+    pub entity_id: i32,
+}
+
+/// The canonical buffer layout for batch line vertices.
+fn batch_line_vertex_layout() -> BufferLayout {
+    BufferLayout::new(&[
+        BufferElement::new(ShaderDataType::Float3, "a_position"),
+        BufferElement::new(ShaderDataType::Float4, "a_color"),
+        BufferElement::new(ShaderDataType::Int, "a_entity_id"),
+    ])
+}
+
+// ---------------------------------------------------------------------------
 // Renderer2DStats
 // ---------------------------------------------------------------------------
 
@@ -140,6 +161,28 @@ impl CircleBatchState {
     }
 }
 
+const MAX_LINES: usize = 10_000;
+const MAX_LINE_VERTICES: usize = MAX_LINES * 2;
+
+struct LineBatchState {
+    vertices: Vec<BatchLineVertex>,
+    line_count: usize,
+    /// Byte offset into the line vertex buffer for the next flush.
+    vb_write_offset: usize,
+    stats: Renderer2DStats,
+}
+
+impl LineBatchState {
+    fn new() -> Self {
+        Self {
+            vertices: Vec::with_capacity(MAX_LINE_VERTICES),
+            line_count: 0,
+            vb_write_offset: 0,
+            stats: Renderer2DStats::default(),
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Renderer2DData — batch rendering resources (bindless)
 // ---------------------------------------------------------------------------
@@ -161,6 +204,14 @@ pub(super) struct Renderer2DData {
     circle_vertex_buffers: [DynamicVertexBuffer; FRAMES_IN_FLIGHT],
     // Circle reuses the same index_buffer (identical quad topology).
     circle_batch: RefCell<CircleBatchState>,
+
+    // -- Line batch resources --
+    _line_shader: Arc<Shader>,
+    line_pipeline: Arc<Pipeline>,
+    line_offscreen_pipeline: Option<Arc<Pipeline>>,
+    line_vertex_buffers: [DynamicVertexBuffer; FRAMES_IN_FLIGHT],
+    // Lines don't use an index buffer (drawn with vkCmdDraw).
+    line_batch: RefCell<LineBatchState>,
 
     // -- Shared resources --
     bindless_pool: vk::DescriptorPool,
@@ -212,6 +263,20 @@ impl Renderer2DData {
             shaders::CIRCLE_FRAG_SPV,
         ));
 
+        // -- Line Shaders --
+        let line_swapchain_shader = Arc::new(Shader::new(
+            device,
+            "line_swapchain",
+            shaders::LINE_SWAPCHAIN_VERT_SPV,
+            shaders::LINE_SWAPCHAIN_FRAG_SPV,
+        ));
+        let line_shader = Arc::new(Shader::new(
+            device,
+            "line",
+            shaders::LINE_VERT_SPV,
+            shaders::LINE_FRAG_SPV,
+        ));
+
         // -- Quad Vertex layout --
         let quad_layout = batch_quad_vertex_layout();
         let quad_vb_capacity =
@@ -255,6 +320,29 @@ impl Renderer2DData {
                 device,
                 circle_vb_capacity,
                 circle_layout.clone(),
+            ),
+        ];
+
+        // -- Line Vertex layout --
+        let line_layout = batch_line_vertex_layout();
+        let line_vb_capacity =
+            MAX_LINE_VERTICES * MAX_BATCHES_PER_FRAME * std::mem::size_of::<BatchLineVertex>();
+
+        // -- Per-frame-in-flight line vertex buffers (persistently mapped) --
+        let line_vertex_buffers = [
+            DynamicVertexBuffer::new(
+                instance,
+                physical_device,
+                device,
+                line_vb_capacity,
+                line_layout.clone(),
+            ),
+            DynamicVertexBuffer::new(
+                instance,
+                physical_device,
+                device,
+                line_vb_capacity,
+                line_layout.clone(),
             ),
         ];
 
@@ -314,6 +402,17 @@ impl Renderer2DData {
             1,
         ));
 
+        // -- Line Pipeline (swapchain: 1 color attachment, no entity ID output) --
+        // Lines don't use textures, so no bindless descriptor set needed.
+        let line_pipeline = Arc::new(pipeline::create_line_batch_pipeline(
+            device,
+            &line_swapchain_shader,
+            line_vertex_buffers[0].layout(),
+            render_pass,
+            camera_ubo_ds_layout,
+            1,
+        ));
+
         // -- Bindless descriptor pool (UPDATE_AFTER_BIND) --
         let pool_size = vk::DescriptorPoolSize {
             ty: vk::DescriptorType::COMBINED_IMAGE_SAMPLER,
@@ -349,6 +448,12 @@ impl Renderer2DData {
             circle_offscreen_pipeline: None,
             circle_vertex_buffers,
             circle_batch: RefCell::new(CircleBatchState::new()),
+
+            _line_shader: line_shader,
+            line_pipeline,
+            line_offscreen_pipeline: None,
+            line_vertex_buffers,
+            line_batch: RefCell::new(LineBatchState::new()),
 
             bindless_pool,
             bindless_ds_layout,
@@ -409,6 +514,14 @@ impl Renderer2DData {
             let mut batch = self.circle_batch.borrow_mut();
             batch.vertices.clear();
             batch.quad_count = 0;
+            batch.vb_write_offset = 0;
+            batch.stats = Renderer2DStats::default();
+        }
+        // Reset line batch.
+        {
+            let mut batch = self.line_batch.borrow_mut();
+            batch.vertices.clear();
+            batch.line_count = 0;
             batch.vb_write_offset = 0;
             batch.stats = Renderer2DStats::default();
         }
@@ -621,6 +734,103 @@ impl Renderer2DData {
         self.circle_batch.borrow().stats
     }
 
+    // -- Line batch operations --
+
+    /// Push a line (2 vertices) into the current line batch.
+    /// Returns false if the batch was full and a flush is needed first.
+    pub(super) fn push_line(&self, vertices: [BatchLineVertex; 2]) -> bool {
+        let mut batch = self.line_batch.borrow_mut();
+        if batch.line_count >= MAX_LINES {
+            return false;
+        }
+        batch.vertices.extend_from_slice(&vertices);
+        batch.line_count += 1;
+        true
+    }
+
+    /// Returns true if there are lines to flush.
+    pub(super) fn has_pending_lines(&self) -> bool {
+        self.line_batch.borrow().line_count > 0
+    }
+
+    /// Flush the current line batch: write vertices to GPU, bind the line
+    /// pipeline, set line width, and record draw commands.
+    pub(super) fn flush_lines(
+        &self,
+        cmd_buf: vk::CommandBuffer,
+        camera_ubo_ds: vk::DescriptorSet,
+        current_frame: usize,
+        line_width: f32,
+    ) {
+        let mut batch = self.line_batch.borrow_mut();
+        if batch.line_count == 0 {
+            return;
+        }
+
+        let _timer = ProfileTimer::new("Renderer2D::flush_lines");
+
+        // 1. Copy vertex data to the mapped VB at the current write offset.
+        let vertex_data = unsafe {
+            std::slice::from_raw_parts(
+                batch.vertices.as_ptr() as *const u8,
+                batch.vertices.len() * std::mem::size_of::<BatchLineVertex>(),
+            )
+        };
+        let vb_offset = batch.vb_write_offset;
+        self.line_vertex_buffers[current_frame].write_at(vb_offset, vertex_data);
+
+        // 2. Record Vulkan commands.
+        let vertex_count = (batch.line_count * 2) as u32;
+        let active_pipeline = if self.use_offscreen {
+            self.line_offscreen_pipeline
+                .as_ref()
+                .unwrap_or(&self.line_pipeline)
+        } else {
+            &self.line_pipeline
+        };
+        let pipeline = active_pipeline.pipeline();
+        let layout = active_pipeline.layout();
+
+        unsafe {
+            self.device
+                .cmd_bind_pipeline(cmd_buf, vk::PipelineBindPoint::GRAPHICS, pipeline);
+
+            // Set line width (dynamic state).
+            self.device.cmd_set_line_width(cmd_buf, line_width);
+
+            // Bind camera UBO (set 0) only — lines don't use textures.
+            self.device.cmd_bind_descriptor_sets(
+                cmd_buf,
+                vk::PipelineBindPoint::GRAPHICS,
+                layout,
+                0,
+                &[camera_ubo_ds],
+                &[],
+            );
+
+            // Bind line vertex buffer at this batch's offset.
+            let vb_handle = self.line_vertex_buffers[current_frame].handle();
+            self.device
+                .cmd_bind_vertex_buffers(cmd_buf, 0, &[vb_handle], &[vb_offset as u64]);
+
+            // Draw! Lines use cmd_draw (non-indexed).
+            self.device.cmd_draw(cmd_buf, vertex_count, 1, 0, 0);
+        }
+
+        // 3. Update stats, advance write offset, and reset vertices for next batch.
+        batch.stats.draw_calls += 1;
+        batch.stats.quad_count += batch.line_count as u32;
+        batch.vb_write_offset = vb_offset + vertex_data.len();
+
+        batch.vertices.clear();
+        batch.line_count = 0;
+    }
+
+    /// Get the accumulated line statistics for this frame.
+    pub(super) fn line_stats(&self) -> Renderer2DStats {
+        self.line_batch.borrow().stats
+    }
+
     /// Create offscreen batch pipelines compatible with a multi-attachment
     /// render pass (e.g. framebuffer with 2 color attachments for picking).
     pub(super) fn create_offscreen_pipeline(
@@ -649,6 +859,16 @@ impl Renderer2DData {
             render_pass,
             camera_ubo_ds_layout,
             &[],
+            color_attachment_count,
+        )));
+
+        // Line offscreen pipeline (no textures, LINE_LIST topology).
+        self.line_offscreen_pipeline = Some(Arc::new(pipeline::create_line_batch_pipeline(
+            device,
+            &self._line_shader,
+            self.line_vertex_buffers[0].layout(),
+            render_pass,
+            camera_ubo_ds_layout,
             color_attachment_count,
         )));
     }
