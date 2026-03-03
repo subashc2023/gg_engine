@@ -3,6 +3,7 @@ use std::path::Path;
 use ash::vk;
 
 use super::buffer::{create_staging_buffer, find_memory_type};
+use super::RendererResources;
 
 use crate::profiling::ProfileTimer;
 
@@ -27,17 +28,7 @@ pub struct Texture2D {
 
 impl Texture2D {
     /// Load a texture from an image file (PNG, JPEG, etc).
-    #[allow(clippy::too_many_arguments)]
-    pub(crate) fn from_file(
-        instance: &ash::Instance,
-        physical_device: vk::PhysicalDevice,
-        device: &ash::Device,
-        graphics_queue: vk::Queue,
-        command_pool: vk::CommandPool,
-        descriptor_pool: vk::DescriptorPool,
-        descriptor_set_layout: vk::DescriptorSetLayout,
-        path: &Path,
-    ) -> Self {
+    pub(crate) fn from_file(res: &RendererResources<'_>, path: &Path) -> Self {
         let _timer = ProfileTimer::new("Texture2D::from_file");
         let img = image::open(path)
             .unwrap_or_else(|e| panic!("Failed to load texture '{}': {e}", path.display()));
@@ -45,30 +36,12 @@ impl Texture2D {
         let (width, height) = rgba.dimensions();
         let pixels = rgba.into_raw();
 
-        Self::from_rgba8(
-            instance,
-            physical_device,
-            device,
-            graphics_queue,
-            command_pool,
-            descriptor_pool,
-            descriptor_set_layout,
-            width,
-            height,
-            &pixels,
-        )
+        Self::from_rgba8(res, width, height, &pixels)
     }
 
     /// Create a texture from raw RGBA8 pixel data.
-    #[allow(clippy::too_many_arguments)]
     pub(crate) fn from_rgba8(
-        instance: &ash::Instance,
-        physical_device: vk::PhysicalDevice,
-        device: &ash::Device,
-        graphics_queue: vk::Queue,
-        command_pool: vk::CommandPool,
-        descriptor_pool: vk::DescriptorPool,
-        descriptor_set_layout: vk::DescriptorSetLayout,
+        res: &RendererResources<'_>,
         width: u32,
         height: u32,
         pixels: &[u8],
@@ -76,6 +49,14 @@ impl Texture2D {
         let _timer = ProfileTimer::new("Texture2D::from_rgba8");
         let image_size = (width * height * 4) as vk::DeviceSize;
         assert_eq!(pixels.len() as vk::DeviceSize, image_size);
+
+        let instance = res.instance;
+        let physical_device = res.physical_device;
+        let device = res.device;
+        let graphics_queue = res.graphics_queue;
+        let command_pool = res.command_pool;
+        let descriptor_pool = res.descriptor_pool;
+        let descriptor_set_layout = res.texture_ds_layout;
 
         // 1. Create staging buffer with pixel data.
         let (staging_buffer, staging_memory) =

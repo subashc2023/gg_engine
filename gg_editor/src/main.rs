@@ -57,6 +57,7 @@ struct GGEditor {
     /// Old scenes awaiting GPU-safe destruction (deferred from on_egui to on_render).
     pending_drop_scenes: Vec<Scene>,
     show_physics_colliders: bool,
+    scene_dirty: bool,
     is_paused: bool,
     step_frames: i32,
     should_exit: bool,
@@ -186,6 +187,7 @@ impl Application for GGEditor {
             pending_texture_loads: Vec::new(),
             pending_drop_scenes: Vec::new(),
             show_physics_colliders: false,
+            scene_dirty: false,
             is_paused: false,
             step_frames: 0,
             should_exit: false,
@@ -302,6 +304,20 @@ impl Application for GGEditor {
                 #[cfg(feature = "lua-scripting")]
                 KeyCode::R if ctrl && !shift => {
                     self.scene.reload_lua_scripts();
+                }
+
+                // Delete selected entity — edit mode only.
+                KeyCode::Delete if !ctrl && !shift && self.scene_state == SceneState::Edit => {
+                    if let Some(entity) = self.selection_context.take() {
+                        if self.scene.destroy_entity(entity).is_ok() {
+                            self.scene_dirty = true;
+                        }
+                    }
+                }
+
+                // Escape — clear selection (edit mode only).
+                KeyCode::Escape if !ctrl && !shift && self.scene_state == SceneState::Edit => {
+                    self.selection_context = None;
                 }
 
                 // Gizmo shortcuts (Q/W/E/R) — edit mode only, no modifiers.
@@ -440,6 +456,7 @@ impl Application for GGEditor {
 
     fn on_egui(&mut self, ctx: &egui::Context, window: &Window) {
         // Sync window title with active scene/project name.
+        let dirty_marker = if self.scene_dirty { " *" } else { "" };
         let title = {
             let project_prefix = match &self.project {
                 Some(proj) => format!("GGEditor - {}", proj.name()),
@@ -451,9 +468,9 @@ impl Application for GGEditor {
                         .file_name()
                         .map(|n| n.to_string_lossy().to_string())
                         .unwrap_or_default();
-                    format!("{} - {}", project_prefix, scene_name)
+                    format!("{} - {}{}", project_prefix, scene_name, dirty_marker)
                 }
-                None => project_prefix,
+                None => format!("{}{}", project_prefix, dirty_marker),
             }
         };
         window.set_title(&title);
@@ -548,6 +565,16 @@ impl Application for GGEditor {
                         .checkbox(&mut self.show_physics_colliders, "Show Physics Colliders")
                         .clicked()
                     {
+                        ui.close();
+                    }
+                });
+                #[cfg(feature = "lua-scripting")]
+                ui.menu_button("Script", |ui| {
+                    if ui
+                        .add(egui::Button::new("Reload Scripts").shortcut_text("Ctrl+R"))
+                        .clicked()
+                    {
+                        self.scene.reload_lua_scripts();
                         ui.close();
                     }
                 });
@@ -710,7 +737,7 @@ impl Application for GGEditor {
                 vsync: &mut self.vsync,
                 frame_time_ms: self.frame_time_ms,
                 gizmo: &mut self.gizmo,
-                gizmo_operation: self.gizmo_operation,
+                gizmo_operation: &mut self.gizmo_operation,
                 editor_camera: &self.editor_camera,
                 scene_fb: &mut self.scene_fb,
                 hovered_entity: self.hovered_entity,
@@ -718,6 +745,7 @@ impl Application for GGEditor {
                 pending_open_path: &mut self.pending_open_path,
                 pending_texture_loads: &mut self.pending_texture_loads,
                 is_playing: self.scene_state == SceneState::Play,  // Simulate still uses editor camera + gizmos
+                scene_dirty: &mut self.scene_dirty,
                 assets_root: &self.assets_root,
                 project_name: self.project.as_ref().map(|p| p.name()),
                 editor_scene_path: self.editor_scene_path.as_deref(),
@@ -1065,6 +1093,7 @@ impl GGEditor {
         self.pending_drop_scenes.push(old);
         self.selection_context = None;
         self.editor_scene_path = None;
+        self.scene_dirty = false;
 
         // Ensure cameras get the correct viewport on the next frame.
         let (w, h) = self.viewport_size;
@@ -1081,6 +1110,7 @@ impl GGEditor {
                 self.pending_drop_scenes.push(old);
                 self.selection_context = None;
                 self.editor_scene_path = Some(path);
+                self.scene_dirty = false;
 
                 let (w, h) = self.viewport_size;
                 if w > 0 && h > 0 {
@@ -1094,6 +1124,7 @@ impl GGEditor {
     fn save_scene(&mut self) {
         if let Some(ref path) = self.editor_scene_path {
             SceneSerializer::serialize(&self.scene, path);
+            self.scene_dirty = false;
         } else {
             self.save_scene_as();
         }
@@ -1103,6 +1134,7 @@ impl GGEditor {
         if let Some(path) = FileDialogs::save_file("GGScene files", &["ggscene"]) {
             SceneSerializer::serialize(&self.scene, &path);
             self.editor_scene_path = Some(path);
+            self.scene_dirty = false;
         }
     }
 
@@ -1110,11 +1142,13 @@ impl GGEditor {
         if let Some(selected) = self.selection_context {
             if self.scene.is_alive(selected) {
                 self.scene.duplicate_entity(selected);
+                self.scene_dirty = true;
             }
         }
     }
 
     fn open_scene_from_path(&mut self, path: &std::path::Path) {
+        self.scene_dirty = false;
         let path_str = path.to_string_lossy().to_string();
         let mut new_scene = Scene::new();
         if SceneSerializer::deserialize(&mut new_scene, &path_str) {

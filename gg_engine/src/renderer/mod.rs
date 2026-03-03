@@ -42,6 +42,27 @@ pub use vertex_array::VertexArray;
 pub use vulkan_context::{VulkanContext, VulkanInitError};
 
 // ---------------------------------------------------------------------------
+// RendererResources — lightweight view of Renderer-owned Vulkan state
+// ---------------------------------------------------------------------------
+
+/// Borrows the Vulkan handles needed by internal factory functions
+/// (textures, framebuffers). Avoids passing 7-8 individual parameters
+/// through internal APIs.
+pub(crate) struct RendererResources<'a> {
+    pub instance: &'a ash::Instance,
+    pub physical_device: vk::PhysicalDevice,
+    pub device: &'a ash::Device,
+    pub graphics_queue: vk::Queue,
+    pub command_pool: vk::CommandPool,
+    pub descriptor_pool: vk::DescriptorPool,
+    pub texture_ds_layout: vk::DescriptorSetLayout,
+    pub color_format: vk::Format,
+    pub depth_format: vk::Format,
+}
+
+use ash::vk;
+
+// ---------------------------------------------------------------------------
 // PresentMode
 // ---------------------------------------------------------------------------
 

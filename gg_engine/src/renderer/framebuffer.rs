@@ -1,6 +1,7 @@
 use ash::vk;
 
 use super::buffer::find_memory_type;
+use super::RendererResources;
 
 // ---------------------------------------------------------------------------
 // Attachment format types
@@ -128,17 +129,14 @@ pub struct Framebuffer {
 }
 
 impl Framebuffer {
-    #[allow(clippy::too_many_arguments)]
-    pub(crate) fn new(
-        instance: &ash::Instance,
-        physical_device: vk::PhysicalDevice,
-        device: &ash::Device,
-        descriptor_pool: vk::DescriptorPool,
-        descriptor_set_layout: vk::DescriptorSetLayout,
-        color_format: vk::Format,
-        depth_format: vk::Format,
-        spec: FramebufferSpec,
-    ) -> Self {
+    pub(crate) fn new(res: &RendererResources<'_>, spec: FramebufferSpec) -> Self {
+        let instance = res.instance;
+        let physical_device = res.physical_device;
+        let device = res.device;
+        let descriptor_pool = res.descriptor_pool;
+        let descriptor_set_layout = res.texture_ds_layout;
+        let color_format = res.color_format;
+        let depth_format = res.depth_format;
         debug_assert!(
             spec.width > 0
                 && spec.height > 0

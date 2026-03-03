@@ -257,16 +257,7 @@ impl Renderer {
 
     /// Load a texture from an image file.
     pub fn create_texture_from_file(&self, path: &Path) -> Texture2D {
-        let mut texture = Texture2D::from_file(
-            &self.instance,
-            self.physical_device,
-            &self.device,
-            self.graphics_queue,
-            self.command_pool,
-            self.descriptor_pool,
-            self.texture_descriptor_set_layout,
-            path,
-        );
+        let mut texture = Texture2D::from_file(&self.resources(), path);
         if let Some(data) = &self.renderer_2d {
             let index = data.register_texture(&texture);
             texture.set_bindless_index(index);
@@ -276,18 +267,7 @@ impl Renderer {
 
     /// Create a texture from raw RGBA8 pixel data.
     pub fn create_texture_from_rgba8(&self, width: u32, height: u32, pixels: &[u8]) -> Texture2D {
-        let mut texture = Texture2D::from_rgba8(
-            &self.instance,
-            self.physical_device,
-            &self.device,
-            self.graphics_queue,
-            self.command_pool,
-            self.descriptor_pool,
-            self.texture_descriptor_set_layout,
-            width,
-            height,
-            pixels,
-        );
+        let mut texture = Texture2D::from_rgba8(&self.resources(), width, height, pixels);
         if let Some(data) = &self.renderer_2d {
             let index = data.register_texture(&texture);
             texture.set_bindless_index(index);
@@ -302,16 +282,23 @@ impl Renderer {
 
     /// Create an offscreen framebuffer for rendering to a texture.
     pub fn create_framebuffer(&self, spec: FramebufferSpec) -> Framebuffer {
-        Framebuffer::new(
-            &self.instance,
-            self.physical_device,
-            &self.device,
-            self.descriptor_pool,
-            self.texture_descriptor_set_layout,
-            self.color_format,
-            self.depth_format,
-            spec,
-        )
+        Framebuffer::new(&self.resources(), spec)
+    }
+
+    /// Bundle Renderer-owned Vulkan state into a lightweight view for internal
+    /// factory functions, avoiding 7-8 individual parameter lists.
+    fn resources(&self) -> super::RendererResources<'_> {
+        super::RendererResources {
+            instance: &self.instance,
+            physical_device: self.physical_device,
+            device: &self.device,
+            graphics_queue: self.graphics_queue,
+            command_pool: self.command_pool,
+            descriptor_pool: self.descriptor_pool,
+            texture_ds_layout: self.texture_descriptor_set_layout,
+            color_format: self.color_format,
+            depth_format: self.depth_format,
+        }
     }
 
     /// Update the stored render pass handle (e.g. after swapchain recreation).

@@ -39,7 +39,7 @@ pub(crate) struct EditorTabViewer<'a> {
     pub(crate) vsync: &'a mut bool,
     pub(crate) frame_time_ms: f32,
     pub(crate) gizmo: &'a mut Gizmo,
-    pub(crate) gizmo_operation: GizmoOperation,
+    pub(crate) gizmo_operation: &'a mut GizmoOperation,
     pub(crate) editor_camera: &'a EditorCamera,
     pub(crate) scene_fb: &'a mut Option<Framebuffer>,
     pub(crate) hovered_entity: i32,
@@ -47,6 +47,7 @@ pub(crate) struct EditorTabViewer<'a> {
     pub(crate) pending_open_path: &'a mut Option<std::path::PathBuf>,
     pub(crate) pending_texture_loads: &'a mut Vec<(Entity, std::path::PathBuf)>,
     pub(crate) is_playing: bool,
+    pub(crate) scene_dirty: &'a mut bool,
     pub(crate) assets_root: &'a std::path::Path,
     pub(crate) project_name: Option<&'a str>,
     pub(crate) editor_scene_path: Option<&'a str>,
@@ -79,7 +80,7 @@ impl egui_dock::TabViewer for EditorTabViewer<'_> {
         match tab {
             Tab::SceneHierarchy => {
                 self.unfocus_viewport_on_click(ui);
-                scene_hierarchy::scene_hierarchy_ui(ui, self.scene, self.selection_context);
+                scene_hierarchy::scene_hierarchy_ui(ui, self.scene, self.selection_context, self.scene_dirty);
             }
 
             Tab::Viewport => {
@@ -98,6 +99,7 @@ impl egui_dock::TabViewer for EditorTabViewer<'_> {
                     self.hovered_entity,
                     self.pending_open_path,
                     self.is_playing,
+                    self.scene_dirty,
                 );
             }
 
@@ -110,6 +112,7 @@ impl egui_dock::TabViewer for EditorTabViewer<'_> {
                     self.pending_texture_loads,
                     self.is_playing,
                     self.assets_root,
+                    self.scene_dirty,
                 );
             }
 

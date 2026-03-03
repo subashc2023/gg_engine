@@ -17,12 +17,13 @@ pub(crate) fn viewport_ui(
     viewport_hovered: &mut bool,
     fb_tex_id: Option<egui::TextureId>,
     gizmo: &mut Gizmo,
-    gizmo_operation: GizmoOperation,
+    gizmo_operation: &mut GizmoOperation,
     editor_camera: &EditorCamera,
     scene_fb: &mut Option<Framebuffer>,
     hovered_entity: i32,
     pending_open_path: &mut Option<std::path::PathBuf>,
     is_playing: bool,
+    scene_dirty: &mut bool,
 ) {
     let available = ui.available_size();
     if available.x > 0.0 && available.y > 0.0 {
@@ -115,11 +116,70 @@ pub(crate) fn viewport_ui(
         }
     }
 
+    // -- Gizmo mode toolbar (edit mode only) --
+    if !is_playing {
+        if let Some(viewport_rect) = viewport_rect {
+            let btn_size = egui::vec2(24.0, 24.0);
+            let padding = 6.0;
+            let spacing = 2.0;
+            let toolbar_x = viewport_rect.min.x + padding;
+            let toolbar_y = viewport_rect.min.y + padding;
+
+            let operations = [
+                (GizmoOperation::None, "Q", "Select (Q)"),
+                (GizmoOperation::Translate, "W", "Translate (W)"),
+                (GizmoOperation::Rotate, "E", "Rotate (E)"),
+                (GizmoOperation::Scale, "R", "Scale (R)"),
+            ];
+
+            let active_bg = egui::Color32::from_rgb(0x00, 0x7A, 0xCC);
+            let inactive_bg = egui::Color32::from_rgba_premultiplied(0x30, 0x30, 0x30, 0xCC);
+            let hover_bg = egui::Color32::from_rgb(0x50, 0x50, 0x50);
+
+            for (i, (op, label, tooltip)) in operations.iter().enumerate() {
+                let btn_rect = egui::Rect::from_min_size(
+                    egui::pos2(toolbar_x + i as f32 * (btn_size.x + spacing), toolbar_y),
+                    btn_size,
+                );
+                let resp = ui.allocate_rect(btn_rect, egui::Sense::click());
+                let is_active = *gizmo_operation == *op;
+
+                let bg = if is_active {
+                    active_bg
+                } else if resp.hovered() {
+                    hover_bg
+                } else {
+                    inactive_bg
+                };
+
+                ui.painter()
+                    .rect_filled(btn_rect, egui::CornerRadius::same(3), bg);
+                let text_color = if is_active {
+                    egui::Color32::WHITE
+                } else {
+                    egui::Color32::from_rgb(0xCC, 0xCC, 0xCC)
+                };
+                ui.painter().text(
+                    btn_rect.center(),
+                    egui::Align2::CENTER_CENTER,
+                    label,
+                    egui::FontId::new(12.0, egui::FontFamily::Monospace),
+                    text_color,
+                );
+
+                if resp.clicked() {
+                    *gizmo_operation = *op;
+                }
+                resp.on_hover_text(*tooltip);
+            }
+        }
+    }
+
     // -- Gizmos (edit mode only) --
     if let Some(viewport_rect) = viewport_rect {
         if !is_playing {
         if let Some(entity) = *selection_context {
-            if scene.is_alive(entity) && gizmo_operation != GizmoOperation::None {
+            if scene.is_alive(entity) && *gizmo_operation != GizmoOperation::None {
                 // Use the editor camera for gizmo view/projection.
                 let camera_view = *editor_camera.view_matrix();
                 // Undo Vulkan Y-flip for the gizmo library.
@@ -150,7 +210,7 @@ pub(crate) fn viewport_ui(
                         view_matrix: mat4_to_f64(&camera_view).into(),
                         projection_matrix: mat4_to_f64(&camera_projection).into(),
                         viewport: viewport_rect,
-                        modes: gizmo_modes_for(gizmo_operation),
+                        modes: gizmo_modes_for(*gizmo_operation),
                         orientation: GizmoOrientation::Local,
                         snapping,
                         snap_angle: std::f32::consts::FRAC_PI_4, // 45 degrees
@@ -212,6 +272,7 @@ pub(crate) fn viewport_ui(
                                 tc.translation = new_translation;
                                 tc.rotation = new_rotation;
                                 tc.scale = new_scale;
+                                *scene_dirty = true;
                             }
                         }
                     }

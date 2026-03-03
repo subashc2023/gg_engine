@@ -5,6 +5,7 @@ pub(crate) fn scene_hierarchy_ui(
     ui: &mut egui::Ui,
     scene: &mut Scene,
     selection_context: &mut Option<Entity>,
+    scene_dirty: &mut bool,
 ) {
     let entities = scene.each_entity_with_tag();
     let mut entity_to_delete = None;
@@ -19,6 +20,7 @@ pub(crate) fn scene_hierarchy_ui(
         response.context_menu(|ui| {
             if ui.button("Delete Entity").clicked() {
                 entity_to_delete = Some(*entity);
+                *scene_dirty = true;
                 ui.close();
             }
         });
@@ -40,6 +42,7 @@ pub(crate) fn scene_hierarchy_ui(
         response.context_menu(|ui| {
             if ui.button("Create Empty Entity").clicked() {
                 scene.create_entity_with_tag("Empty Entity");
+                *scene_dirty = true;
                 ui.close();
             }
         });

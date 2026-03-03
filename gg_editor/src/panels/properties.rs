@@ -39,10 +39,11 @@ pub(crate) fn properties_ui(
     pending_texture_loads: &mut Vec<(Entity, std::path::PathBuf)>,
     is_playing: bool,
     assets_root: &std::path::Path,
+    scene_dirty: &mut bool,
 ) {
     if let Some(entity) = *selection_context {
         if scene.is_alive(entity) {
-            draw_components(ui, scene, entity, pending_texture_loads, is_playing, assets_root);
+            draw_components(ui, scene, entity, pending_texture_loads, is_playing, assets_root, scene_dirty);
         } else {
             *selection_context = None;
         }
@@ -203,6 +204,7 @@ fn draw_components(
     pending_texture_loads: &mut Vec<(Entity, std::path::PathBuf)>,
     is_playing: bool,
     assets_root: &std::path::Path,
+    scene_dirty: &mut bool,
 ) {
     let bold_family = egui::FontFamily::Name(BOLD_FONT.into());
 
@@ -217,6 +219,7 @@ fn draw_components(
             if ui.text_edit_singleline(&mut tag).changed() {
                 if let Some(mut tc) = scene.get_component_mut::<TagComponent>(entity) {
                     tc.tag = tag;
+                    *scene_dirty = true;
                 }
             }
 
@@ -234,37 +237,44 @@ fn draw_components(
                 if !scene.has_component::<CameraComponent>(entity) && ui.button("Camera").clicked()
                 {
                     scene.add_component(entity, CameraComponent::default());
+                    *scene_dirty = true;
                 }
                 if !scene.has_component::<SpriteRendererComponent>(entity)
                     && ui.button("Sprite Renderer").clicked()
                 {
                     scene.add_component(entity, SpriteRendererComponent::default());
+                    *scene_dirty = true;
                 }
                 if !scene.has_component::<CircleRendererComponent>(entity)
                     && ui.button("Circle Renderer").clicked()
                 {
                     scene.add_component(entity, CircleRendererComponent::default());
+                    *scene_dirty = true;
                 }
                 if !scene.has_component::<RigidBody2DComponent>(entity)
                     && ui.button("Rigidbody 2D").clicked()
                 {
                     scene.add_component(entity, RigidBody2DComponent::default());
+                    *scene_dirty = true;
                 }
                 if !scene.has_component::<BoxCollider2DComponent>(entity)
                     && ui.button("Box Collider 2D").clicked()
                 {
                     scene.add_component(entity, BoxCollider2DComponent::default());
+                    *scene_dirty = true;
                 }
                 if !scene.has_component::<CircleCollider2DComponent>(entity)
                     && ui.button("Circle Collider 2D").clicked()
                 {
                     scene.add_component(entity, CircleCollider2DComponent::default());
+                    *scene_dirty = true;
                 }
                 #[cfg(feature = "lua-scripting")]
                 if !scene.has_component::<LuaScriptComponent>(entity)
                     && ui.button("Lua Script").clicked()
                 {
                     scene.add_component(entity, LuaScriptComponent::default());
+                    *scene_dirty = true;
                 }
             });
         });
@@ -306,6 +316,7 @@ fn draw_components(
                         rotation_deg.z.to_radians(),
                     );
                     tc.scale = scale;
+                    *scene_dirty = true;
                 }
             }
         });
