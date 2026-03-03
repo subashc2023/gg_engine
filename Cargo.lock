@@ -1096,6 +1096,7 @@ dependencies = [
  "hecs",
  "image",
  "log",
+ "rand",
  "rapier2d",
  "raw-window-handle",
  "rfd",

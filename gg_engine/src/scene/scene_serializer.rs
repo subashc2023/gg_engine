@@ -6,9 +6,10 @@ use serde::{Deserialize, Serialize};
 
 use crate::renderer::{ProjectionType, SceneCamera};
 use crate::scene::{
-    BoxCollider2DComponent, CameraComponent, RigidBody2DComponent, RigidBody2DType, Scene,
-    SpriteRendererComponent, TagComponent, TransformComponent,
+    BoxCollider2DComponent, CameraComponent, IdComponent, RigidBody2DComponent, RigidBody2DType,
+    Scene, SpriteRendererComponent, TagComponent, TransformComponent,
 };
+use crate::uuid::Uuid;
 
 // ---------------------------------------------------------------------------
 // Serialization data types (intermediate representation)
@@ -25,7 +26,7 @@ struct SceneData {
 #[derive(Serialize, Deserialize)]
 struct EntityData {
     #[serde(rename = "Entity")]
-    id: u64, // TODO: UUID
+    id: u64,
     #[serde(rename = "TagComponent", skip_serializing_if = "Option::is_none")]
     tag: Option<TagData>,
     #[serde(rename = "TransformComponent", skip_serializing_if = "Option::is_none")]
@@ -324,8 +325,13 @@ impl SceneSerializer {
                         restitution_threshold: bc.restitution_threshold,
                     });
 
+            let uuid = scene
+                .get_component::<IdComponent>(entity)
+                .map(|id| id.id.raw())
+                .unwrap_or(0);
+
             entities_data.push(EntityData {
-                id: entity.id() as u64, // TODO: UUID
+                id: uuid,
                 tag: tag_data,
                 transform: transform_data,
                 camera: camera_data,
@@ -349,7 +355,8 @@ impl SceneSerializer {
                 .map(|t| t.tag.as_str())
                 .unwrap_or("Entity");
 
-            let entity = scene.create_entity_with_tag(name);
+            let uuid = Uuid::from_raw(entity_data.id);
+            let entity = scene.create_entity_with_uuid(uuid, name);
 
             // TransformComponent — always present on newly created entities,
             // so we just update the values.

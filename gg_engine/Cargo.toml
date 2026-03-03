@@ -23,4 +23,5 @@ hecs = "0.11"
 serde = { version = "1", features = ["derive"] }
 serde_yaml = "0.9"
 rfd = "0.15"
+rand = "0.9"
 rapier2d = { version = "0.22", features = ["simd-stable"] }

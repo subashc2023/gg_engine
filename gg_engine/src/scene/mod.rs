@@ -5,8 +5,9 @@ mod physics_2d;
 mod scene_serializer;
 
 pub use components::{
-    BoxCollider2DComponent, CameraComponent, NativeScriptComponent, RigidBody2DComponent,
-    RigidBody2DType, SpriteRendererComponent, TagComponent, TransformComponent,
+    BoxCollider2DComponent, CameraComponent, IdComponent, NativeScriptComponent,
+    RigidBody2DComponent, RigidBody2DType, SpriteRendererComponent, TagComponent,
+    TransformComponent,
 };
 pub use entity::Entity;
 pub use native_script::NativeScript;
@@ -15,6 +16,7 @@ pub use scene_serializer::SceneSerializer;
 use crate::input::Input;
 use crate::renderer::Renderer;
 use crate::timestep::Timestep;
+use crate::uuid::Uuid;
 
 use physics_2d::PhysicsWorld2D;
 use rapier2d::na;
@@ -48,16 +50,25 @@ impl Scene {
 
     /// Create a new entity with a default [`TagComponent`] (`"Entity"`)
     /// and a default [`TransformComponent`] (identity matrix).
+    /// A random [`Uuid`] is generated automatically.
     pub fn create_entity(&mut self) -> Entity {
-        self.create_entity_with_tag("Entity")
+        self.create_entity_with_uuid(Uuid::new(), "Entity")
     }
 
     /// Create a new entity with the given tag name and a default
     /// [`TransformComponent`] (identity matrix).
+    /// A random [`Uuid`] is generated automatically.
     pub fn create_entity_with_tag(&mut self, name: &str) -> Entity {
-        let handle = self
-            .world
-            .spawn((TagComponent::new(name), TransformComponent::default()));
+        self.create_entity_with_uuid(Uuid::new(), name)
+    }
+
+    /// Create a new entity with a specific [`Uuid`] (e.g. from deserialization).
+    pub fn create_entity_with_uuid(&mut self, uuid: Uuid, name: &str) -> Entity {
+        let handle = self.world.spawn((
+            IdComponent::new(uuid),
+            TagComponent::new(name),
+            TransformComponent::default(),
+        ));
         Entity::new(handle)
     }
 

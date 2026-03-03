@@ -11,6 +11,7 @@ pub mod renderer;
 pub mod scene;
 mod timestep;
 pub mod ui_theme;
+pub mod uuid;
 
 /// Shared-ownership smart pointer for rendering resources.
 /// Wraps `Arc<T>` for thread-safe reference counting.
@@ -39,11 +40,12 @@ pub use renderer::{
     ShaderDataType, ShaderLibrary, SubTexture2D, Texture2D, VertexArray, VertexBuffer,
 };
 pub use scene::{
-    BoxCollider2DComponent, CameraComponent, Entity, NativeScript, NativeScriptComponent,
-    RigidBody2DComponent, RigidBody2DType, Scene, SceneSerializer, SpriteRendererComponent,
-    TagComponent, TransformComponent,
+    BoxCollider2DComponent, CameraComponent, Entity, IdComponent, NativeScript,
+    NativeScriptComponent, RigidBody2DComponent, RigidBody2DType, Scene, SceneSerializer,
+    SpriteRendererComponent, TagComponent, TransformComponent,
 };
 pub use timestep::Timestep;
+pub use uuid::Uuid;
 
 pub fn engine_version() -> &'static str {
     env!("CARGO_PKG_VERSION")
@@ -68,11 +70,12 @@ pub mod prelude {
         VertexBuffer,
     };
     pub use crate::scene::{
-        BoxCollider2DComponent, CameraComponent, Entity, NativeScript, NativeScriptComponent,
-        RigidBody2DComponent, RigidBody2DType, Scene, SceneSerializer, SpriteRendererComponent,
-        TagComponent, TransformComponent,
+        BoxCollider2DComponent, CameraComponent, Entity, IdComponent, NativeScript,
+        NativeScriptComponent, RigidBody2DComponent, RigidBody2DType, Scene, SceneSerializer,
+        SpriteRendererComponent, TagComponent, TransformComponent,
     };
     pub use crate::timestep::Timestep;
+    pub use crate::uuid::Uuid;
     pub use crate::ui_theme::BOLD_FONT;
     pub use crate::{profile_scope, run, Application, Ref, Scope, WindowConfig};
     pub use glam::{Mat3, Mat4, Quat, Vec2, Vec3, Vec4};

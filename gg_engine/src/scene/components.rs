@@ -3,7 +3,22 @@ use glam::{Mat4, Vec2, Vec3, Vec4};
 use crate::renderer::SceneCamera;
 use crate::renderer::Texture2D;
 use crate::scene::native_script::NativeScript;
+use crate::uuid::Uuid;
 use crate::Ref;
+
+/// Globally unique identifier for an entity, persisted across
+/// save/load and scene copies. Every entity receives an `IdComponent`
+/// automatically on creation.
+#[derive(Default)]
+pub struct IdComponent {
+    pub id: Uuid,
+}
+
+impl IdComponent {
+    pub fn new(id: Uuid) -> Self {
+        Self { id }
+    }
+}
 
 /// Human-readable name for an entity. Every entity created via
 /// [`Scene::create_entity`](super::Scene::create_entity) receives a
