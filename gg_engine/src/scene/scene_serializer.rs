@@ -65,6 +65,7 @@ struct EntityData {
         default
     )]
     circle_collider_2d: Option<CircleCollider2DData>,
+    #[cfg(feature = "lua-scripting")]
     #[serde(
         rename = "LuaScriptComponent",
         skip_serializing_if = "Option::is_none",
@@ -189,6 +190,7 @@ struct CircleCollider2DData {
     restitution_threshold: f32,
 }
 
+#[cfg(feature = "lua-scripting")]
 #[derive(Serialize, Deserialize)]
 struct LuaScriptData {
     #[serde(rename = "ScriptPath")]
@@ -427,9 +429,6 @@ impl SceneSerializer {
                             fields,
                         }
                     });
-            #[cfg(not(feature = "lua-scripting"))]
-            let lua_script_data: Option<LuaScriptData> = None;
-
             let uuid = scene
                 .get_component::<IdComponent>(entity)
                 .map(|id| id.id.raw())
@@ -445,6 +444,7 @@ impl SceneSerializer {
                 rigidbody_2d: rigidbody_2d_data,
                 box_collider_2d: box_collider_2d_data,
                 circle_collider_2d: circle_collider_2d_data,
+                #[cfg(feature = "lua-scripting")]
                 lua_script: lua_script_data,
             });
         }

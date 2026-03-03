@@ -2,7 +2,7 @@
 
 **Files:** `scene/script_engine.rs`, `scene/script_glue.rs`
 
-Feature-gated (`lua-scripting`, default on). Uses `mlua 0.10` with vendored LuaJIT backend. Disabled in dist builds via `--no-default-features`.
+Feature-gated (`lua-scripting`, default on). Uses `mlua 0.10` with vendored LuaJIT backend. Kept enabled in dist builds (`--features lua-scripting`).
 
 ## Architecture
 

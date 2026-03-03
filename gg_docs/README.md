@@ -55,16 +55,16 @@ cargo test
 ```sh
 cargo build                                                    # dev
 cargo build --release                                          # release
-cargo build --profile dist --no-default-features               # dist (shipping)
+cargo build --profile dist --no-default-features --features lua-scripting  # dist (shipping)
 
 cargo run -p gg_sandbox                                        # dev
 cargo run -p gg_sandbox --release                              # release
-cargo run -p gg_sandbox --profile dist --no-default-features   # dist
+cargo run -p gg_sandbox --profile dist --no-default-features --features lua-scripting  # dist
 ```
 
 - **dev** — Fast iteration. Full debug info, Vulkan validation layers, profiling enabled.
 - **release** — Optimized with profiling still available. Validation layers off.
-- **dist** — Shipping build. Profiling compiled out via `--no-default-features`. Zero runtime overhead.
+- **dist** — Shipping build. Profiling compiled out, Lua scripting kept. Zero runtime overhead.
 
 ## Documentation Index
 

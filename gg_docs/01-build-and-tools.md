@@ -16,12 +16,12 @@ Three Cargo profiles are configured in the workspace `Cargo.toml`:
 # Build
 cargo build                                                    # dev
 cargo build --release                                          # release
-cargo build --profile dist --no-default-features               # dist
+cargo build --profile dist --no-default-features --features lua-scripting  # dist
 
 # Run
 cargo run -p gg_sandbox                                        # dev
 cargo run -p gg_sandbox --release                              # release
-cargo run -p gg_sandbox --profile dist --no-default-features   # dist
+cargo run -p gg_sandbox --profile dist --no-default-features --features lua-scripting  # dist
 
 # Build specific crates
 cargo build -p gg_engine
@@ -42,7 +42,8 @@ gg_engine
     profiling feature (default on)
 ```
 
-Dist builds pass `--no-default-features` to disable the entire chain.
+Dist builds pass `--no-default-features --features lua-scripting` to strip
+profiling while keeping Lua scripting enabled.
 
 ## Profiling / Instrumentation
 

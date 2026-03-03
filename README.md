@@ -21,7 +21,7 @@ A Rust game engine built on Vulkan. Early stage (v0.1.0).
 ```sh
 cargo build                                       # dev (debug, Vulkan validation layers)
 cargo build --release                             # release (optimized, profiling on)
-cargo build --profile dist --no-default-features  # dist (optimized, profiling stripped)
+cargo build --profile dist --no-default-features --features lua-scripting  # dist (optimized, profiling stripped)
 ```
 
 ## Running

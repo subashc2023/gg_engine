@@ -53,7 +53,19 @@ struct GGEditor {
     /// Old scenes awaiting GPU-safe destruction (deferred from on_egui to on_render).
     pending_drop_scenes: Vec<Scene>,
     show_physics_colliders: bool,
+    is_paused: bool,
+    step_frames: i32,
     should_exit: bool,
+    /// File watcher that monitors `assets/scripts/` for `.lua` changes.
+    /// Kept alive so the OS keeps notifying us; the actual data flows
+    /// through `script_reload_pending`.
+    #[cfg(feature = "lua-scripting")]
+    _script_watcher: Option<notify::RecommendedWatcher>,
+    /// Atomic flag set by the file-watcher thread when a `.lua` file is
+    /// modified on disk.  Checked each frame in `on_update` to trigger
+    /// an automatic [`Scene::reload_lua_scripts`] call.
+    #[cfg(feature = "lua-scripting")]
+    script_reload_pending: std::sync::Arc<std::sync::atomic::AtomicBool>,
 }
 
 impl Application for GGEditor {
@@ -223,6 +235,60 @@ impl Application for GGEditor {
         );
         scene.add_component(right_wall, BoxCollider2DComponent::default());
 
+        // --- File watcher for automatic Lua script reloading ---------------
+        #[cfg(feature = "lua-scripting")]
+        let script_reload_pending =
+            std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+
+        #[cfg(feature = "lua-scripting")]
+        let _script_watcher = {
+            use notify::{RecursiveMode, Watcher};
+
+            let pending = script_reload_pending.clone();
+            let scripts_dir = std::path::Path::new("assets/scripts");
+            if scripts_dir.is_dir() {
+                match notify::recommended_watcher(move |res: Result<notify::Event, notify::Error>| {
+                    if let Ok(event) = res {
+                        if matches!(
+                            event.kind,
+                            notify::EventKind::Modify(_) | notify::EventKind::Create(_)
+                        ) && event
+                            .paths
+                            .iter()
+                            .any(|p| p.extension().map_or(false, |e| e == "lua"))
+                        {
+                            pending.store(true, std::sync::atomic::Ordering::Relaxed);
+                        }
+                    }
+                }) {
+                    Ok(mut watcher) => {
+                        if let Err(e) =
+                            watcher.watch(scripts_dir, RecursiveMode::Recursive)
+                        {
+                            warn!("Failed to watch scripts directory: {e}");
+                            None
+                        } else {
+                            info!(
+                                "Watching {} for script changes",
+                                scripts_dir.display()
+                            );
+                            Some(watcher)
+                        }
+                    }
+                    Err(e) => {
+                        warn!("Failed to create script file watcher: {e}");
+                        None
+                    }
+                }
+            } else {
+                info!(
+                    "Scripts directory '{}' not found — file watcher disabled",
+                    scripts_dir.display()
+                );
+                None
+            }
+        };
+
         GGEditor {
             scene_state: SceneState::Edit,
             editor_scene: None,
@@ -245,7 +311,13 @@ impl Application for GGEditor {
             pending_texture_loads: Vec::new(),
             pending_drop_scenes: Vec::new(),
             show_physics_colliders: false,
+            is_paused: false,
+            step_frames: 0,
             should_exit: false,
+            #[cfg(feature = "lua-scripting")]
+            _script_watcher,
+            #[cfg(feature = "lua-scripting")]
+            script_reload_pending,
         }
     }
 
@@ -379,6 +451,15 @@ impl Application for GGEditor {
         // Exponential moving average for stable frame time display.
         self.frame_time_ms = self.frame_time_ms * 0.95 + dt.millis() * 0.05;
 
+        // Auto-reload Lua scripts when the file watcher detects changes.
+        #[cfg(feature = "lua-scripting")]
+        if self
+            .script_reload_pending
+            .swap(false, std::sync::atomic::Ordering::Relaxed)
+        {
+            self.scene.reload_lua_scripts();
+        }
+
         // Notify scene cameras of viewport resize.
         let (w, h) = self.viewport_size;
         if w > 0 && h > 0 {
@@ -395,17 +476,28 @@ impl Application for GGEditor {
                 // Update editor camera — simulation renders from the editor
                 // camera, not the scene camera.
                 self.editor_camera.on_update(dt, input);
-                // Step physics (no scripts).
-                self.scene.on_update_physics(dt);
+                // Step physics (no scripts) — skip when paused unless stepping.
+                if !self.is_paused || self.step_frames > 0 {
+                    self.scene.on_update_physics(dt);
+                    if self.step_frames > 0 {
+                        self.step_frames -= 1;
+                    }
+                }
             }
             SceneState::Play => {
-                // Step physics first so transforms reflect this frame's positions.
-                self.scene.on_update_physics(dt);
-                // Run native scripts (e.g. CameraController) with up-to-date transforms.
-                self.scene.on_update_scripts(dt, input);
-                // Run Lua scripts.
-                #[cfg(feature = "lua-scripting")]
-                self.scene.on_update_lua_scripts(dt, input);
+                // Skip updates when paused unless stepping.
+                if !self.is_paused || self.step_frames > 0 {
+                    // Step physics first so transforms reflect this frame's positions.
+                    self.scene.on_update_physics(dt);
+                    // Run native scripts (e.g. CameraController) with up-to-date transforms.
+                    self.scene.on_update_scripts(dt, input);
+                    // Run Lua scripts.
+                    #[cfg(feature = "lua-scripting")]
+                    self.scene.on_update_lua_scripts(dt, input);
+                    if self.step_frames > 0 {
+                        self.step_frames -= 1;
+                    }
+                }
             }
         }
 
@@ -479,7 +571,7 @@ impl Application for GGEditor {
                 SceneState::Play => title_bar::PlayState::Play,
                 SceneState::Simulate => title_bar::PlayState::Simulate,
             };
-            let response = title_bar::title_bar_ui(ctx, window, play_state, |ui| {
+            let response = title_bar::title_bar_ui(ctx, window, play_state, self.is_paused, |ui| {
                 ui.menu_button("File", |ui| {
                     if ui
                         .add(egui::Button::new("New").shortcut_text("Ctrl+N"))
@@ -553,6 +645,12 @@ impl Application for GGEditor {
                     }
                     SceneState::Simulate => self.on_scene_stop(),
                 }
+            }
+            if response.pause_toggled {
+                self.on_scene_pause();
+            }
+            if response.step_pressed {
+                self.on_scene_step();
             }
         }
 
@@ -818,113 +916,99 @@ impl GGEditor {
                     |ui| {
                         ui.add_space(3.0);
 
+                        let is_edit = self.scene_state == SceneState::Edit;
+                        let has_play_button = is_edit;
+                        let has_simulate_button = is_edit;
+                        let has_stop_button = !is_edit;
+                        let has_pause_button = !is_edit;
+                        let has_step_button = !is_edit && self.is_paused;
+
                         let btn_size = egui::vec2(28.0, 28.0);
                         let spacing = 4.0;
-                        let total_width = btn_size.x * 2.0 + spacing;
+                        let button_count = [has_play_button, has_simulate_button, has_stop_button, has_pause_button, has_step_button]
+                            .iter()
+                            .filter(|&&b| b)
+                            .count() as f32;
+                        let total_width = btn_size.x * button_count + spacing * (button_count - 1.0).max(0.0);
                         let avail = ui.available_width();
                         ui.add_space((avail - total_width) / 2.0);
 
-                        // Play/Stop button.
-                        let (play_rect, play_resp) = ui.allocate_exact_size(
-                            btn_size,
-                            egui::Sense::click(),
-                        );
-                        ui.add_space(spacing);
-                        // Simulate button.
-                        let (sim_rect, sim_resp) = ui.allocate_exact_size(
-                            btn_size,
-                            egui::Sense::click(),
-                        );
+                        let hover_bg = egui::Color32::from_rgb(0x40, 0x40, 0x40);
+                        let pause_active_bg = egui::Color32::from_rgb(0x2A, 0x50, 0x70);
 
-                        // Paint play button.
-                        if play_resp.hovered() {
-                            ui.painter().rect_filled(
-                                play_rect,
-                                egui::CornerRadius::same(3),
-                                egui::Color32::from_rgb(0x40, 0x40, 0x40),
-                            );
+                        // Allocate buttons in order.
+                        let play_alloc = has_play_button.then(|| {
+                            let a = ui.allocate_exact_size(btn_size, egui::Sense::click());
+                            ui.add_space(spacing);
+                            a
+                        });
+                        let sim_alloc = has_simulate_button.then(|| {
+                            ui.allocate_exact_size(btn_size, egui::Sense::click())
+                        });
+                        let stop_alloc = has_stop_button.then(|| {
+                            let a = ui.allocate_exact_size(btn_size, egui::Sense::click());
+                            ui.add_space(spacing);
+                            a
+                        });
+                        let pause_alloc = has_pause_button.then(|| {
+                            let a = ui.allocate_exact_size(btn_size, egui::Sense::click());
+                            if has_step_button { ui.add_space(spacing); }
+                            a
+                        });
+                        let step_alloc = has_step_button.then(|| {
+                            ui.allocate_exact_size(btn_size, egui::Sense::click())
+                        });
+
+                        // Paint icons.
+                        if let Some((rect, ref resp)) = play_alloc {
+                            if resp.hovered() {
+                                ui.painter().rect_filled(rect, egui::CornerRadius::same(3), hover_bg);
+                            }
+                            paint_play_triangle(ui.painter(), rect.center());
+                        }
+                        if let Some((rect, ref resp)) = sim_alloc {
+                            if resp.hovered() {
+                                ui.painter().rect_filled(rect, egui::CornerRadius::same(3), hover_bg);
+                            }
+                            paint_gear_icon(ui.painter(), rect.center(), 8.0);
+                        }
+                        if let Some((rect, ref resp)) = stop_alloc {
+                            if resp.hovered() {
+                                ui.painter().rect_filled(rect, egui::CornerRadius::same(3), hover_bg);
+                            }
+                            paint_stop_square(ui.painter(), rect.center());
+                        }
+                        if let Some((rect, ref resp)) = pause_alloc {
+                            if self.is_paused {
+                                ui.painter().rect_filled(rect, egui::CornerRadius::same(3), pause_active_bg);
+                            }
+                            if resp.hovered() {
+                                ui.painter().rect_filled(rect, egui::CornerRadius::same(3), hover_bg);
+                            }
+                            paint_pause_icon(ui.painter(), rect.center());
+                        }
+                        if let Some((rect, ref resp)) = step_alloc {
+                            if resp.hovered() {
+                                ui.painter().rect_filled(rect, egui::CornerRadius::same(3), hover_bg);
+                            }
+                            paint_step_icon(ui.painter(), rect.center());
                         }
 
-                        let play_center = play_rect.center();
-                        match self.scene_state {
-                            SceneState::Edit | SceneState::Simulate => {
-                                // Green play triangle.
-                                let half = 7.0;
-                                let points = vec![
-                                    egui::pos2(play_center.x - half * 0.7, play_center.y - half),
-                                    egui::pos2(play_center.x + half, play_center.y),
-                                    egui::pos2(play_center.x - half * 0.7, play_center.y + half),
-                                ];
-                                ui.painter().add(egui::Shape::convex_polygon(
-                                    points,
-                                    egui::Color32::from_rgb(0x4E, 0xC9, 0x4E),
-                                    egui::Stroke::NONE,
-                                ));
-                            }
-                            SceneState::Play => {
-                                // Blue stop square.
-                                let half = 6.0;
-                                let stop_rect = egui::Rect::from_center_size(
-                                    play_center,
-                                    egui::vec2(half * 2.0, half * 2.0),
-                                );
-                                ui.painter().rect_filled(
-                                    stop_rect,
-                                    egui::CornerRadius::same(2),
-                                    egui::Color32::from_rgb(0x3B, 0x9C, 0xE9),
-                                );
-                            }
+                        // Handle clicks.
+                        if let Some((_, ref resp)) = play_alloc {
+                            if resp.clicked() { self.on_scene_play(); }
                         }
-
-                        // Paint simulate button.
-                        if sim_resp.hovered() {
-                            ui.painter().rect_filled(
-                                sim_rect,
-                                egui::CornerRadius::same(3),
-                                egui::Color32::from_rgb(0x40, 0x40, 0x40),
-                            );
+                        if let Some((_, ref resp)) = sim_alloc {
+                            if resp.clicked() { self.on_scene_simulate(); }
                         }
-
-                        let sim_center = sim_rect.center();
-                        match self.scene_state {
-                            SceneState::Simulate => {
-                                // Blue stop square.
-                                let half = 6.0;
-                                let stop_rect = egui::Rect::from_center_size(
-                                    sim_center,
-                                    egui::vec2(half * 2.0, half * 2.0),
-                                );
-                                ui.painter().rect_filled(
-                                    stop_rect,
-                                    egui::CornerRadius::same(2),
-                                    egui::Color32::from_rgb(0x3B, 0x9C, 0xE9),
-                                );
-                            }
-                            _ => {
-                                // Gear icon.
-                                paint_gear_icon(ui.painter(), sim_center, 8.0);
-                            }
+                        if let Some((_, ref resp)) = stop_alloc {
+                            if resp.clicked() { self.on_scene_stop(); }
                         }
-
-                        if play_resp.clicked() {
-                            match self.scene_state {
-                                SceneState::Edit => self.on_scene_play(),
-                                SceneState::Simulate => {
-                                    self.on_scene_stop();
-                                    self.on_scene_play();
-                                }
-                                SceneState::Play => self.on_scene_stop(),
-                            }
+                        if let Some((_, ref resp)) = pause_alloc {
+                            if resp.clicked() { self.on_scene_pause(); }
                         }
-                        if sim_resp.clicked() {
-                            match self.scene_state {
-                                SceneState::Edit => self.on_scene_simulate(),
-                                SceneState::Play => {
-                                    self.on_scene_stop();
-                                    self.on_scene_simulate();
-                                }
-                                SceneState::Simulate => self.on_scene_stop(),
-                            }
+                        if let Some((_, ref resp)) = step_alloc {
+                            if resp.clicked() { self.on_scene_step(); }
                         }
                     },
                 );
@@ -961,6 +1045,8 @@ impl GGEditor {
         }
 
         self.scene_state = SceneState::Edit;
+        self.is_paused = false;
+        self.step_frames = 0;
 
         if let Some(editor_scene) = self.editor_scene.take() {
             let old = std::mem::replace(&mut self.scene, editor_scene);
@@ -972,6 +1058,23 @@ impl GGEditor {
                 self.scene.on_viewport_resize(w, h);
             }
         }
+    }
+
+    fn on_scene_pause(&mut self) {
+        if self.scene_state == SceneState::Edit {
+            return;
+        }
+        self.is_paused = !self.is_paused;
+        if !self.is_paused {
+            self.step_frames = 0;
+        }
+    }
+
+    fn on_scene_step(&mut self) {
+        if !self.is_paused {
+            return;
+        }
+        self.step_frames = 1;
     }
 
     /// Attach known native scripts to entities by tag name.
@@ -1104,6 +1207,86 @@ impl GGEditor {
             }
         }
     }
+}
+
+/// Procedural play triangle icon (macOS toolbar).
+#[cfg(target_os = "macos")]
+fn paint_play_triangle(painter: &egui::Painter, center: egui::Pos2) {
+    let half = 7.0;
+    let points = vec![
+        egui::pos2(center.x - half * 0.7, center.y - half),
+        egui::pos2(center.x + half, center.y),
+        egui::pos2(center.x - half * 0.7, center.y + half),
+    ];
+    painter.add(egui::Shape::convex_polygon(
+        points,
+        egui::Color32::from_rgb(0x4E, 0xC9, 0x4E),
+        egui::Stroke::NONE,
+    ));
+}
+
+/// Procedural stop square icon (macOS toolbar).
+#[cfg(target_os = "macos")]
+fn paint_stop_square(painter: &egui::Painter, center: egui::Pos2) {
+    let half = 6.0;
+    let stop_rect = egui::Rect::from_center_size(center, egui::vec2(half * 2.0, half * 2.0));
+    painter.rect_filled(
+        stop_rect,
+        egui::CornerRadius::same(2),
+        egui::Color32::from_rgb(0x3B, 0x9C, 0xE9),
+    );
+}
+
+/// Procedural pause icon — two vertical bars (macOS toolbar).
+#[cfg(target_os = "macos")]
+fn paint_pause_icon(painter: &egui::Painter, center: egui::Pos2) {
+    let bar_w = 3.0;
+    let bar_h = 12.0;
+    let gap = 2.5;
+    let color = egui::Color32::from_rgb(0xCC, 0xCC, 0xCC);
+    painter.rect_filled(
+        egui::Rect::from_center_size(
+            egui::pos2(center.x - gap, center.y),
+            egui::vec2(bar_w, bar_h),
+        ),
+        0.0,
+        color,
+    );
+    painter.rect_filled(
+        egui::Rect::from_center_size(
+            egui::pos2(center.x + gap, center.y),
+            egui::vec2(bar_w, bar_h),
+        ),
+        0.0,
+        color,
+    );
+}
+
+/// Procedural step-forward icon — play triangle + vertical bar (macOS toolbar).
+#[cfg(target_os = "macos")]
+fn paint_step_icon(painter: &egui::Painter, center: egui::Pos2) {
+    let color = egui::Color32::from_rgb(0xCC, 0xCC, 0xCC);
+    let half = 5.0;
+    let offset_x = -2.0;
+    let points = vec![
+        egui::pos2(center.x + offset_x - half * 0.6, center.y - half),
+        egui::pos2(center.x + offset_x + half * 0.7, center.y),
+        egui::pos2(center.x + offset_x - half * 0.6, center.y + half),
+    ];
+    painter.add(egui::Shape::convex_polygon(
+        points,
+        color,
+        egui::Stroke::NONE,
+    ));
+    let bar_x = center.x + half * 0.7;
+    painter.rect_filled(
+        egui::Rect::from_center_size(
+            egui::pos2(bar_x, center.y),
+            egui::vec2(2.5, half * 2.0),
+        ),
+        0.0,
+        color,
+    );
 }
 
 /// Procedural gear icon for the simulate button (macOS toolbar).

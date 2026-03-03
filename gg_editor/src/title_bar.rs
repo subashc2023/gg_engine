@@ -21,17 +21,22 @@ pub struct TitleBarResponse {
     pub close_requested: bool,
     pub play_toggled: bool,
     pub simulate_toggled: bool,
+    pub pause_toggled: bool,
+    pub step_pressed: bool,
 }
 
 pub fn title_bar_ui(
     ctx: &egui::Context,
     window: &Window,
     play_state: PlayState,
+    is_paused: bool,
     menu_contents: impl FnOnce(&mut egui::Ui),
 ) -> TitleBarResponse {
     let mut close_requested = false;
     let mut play_toggled = false;
     let mut simulate_toggled = false;
+    let mut pause_toggled = false;
+    let mut step_pressed = false;
     let is_maximized = window.is_maximized();
 
     egui::TopBottomPanel::top("title_bar")
@@ -91,111 +96,134 @@ pub fn title_bar_ui(
                 menu_contents(ui);
             });
 
-            // -- 4. Play/Stop + Simulate buttons (centered) --
+            // -- 4. Centered toolbar buttons --
+            // Layout depends on scene state:
+            //   Edit:                     [Play] [Simulate]
+            //   Play/Simulate:            [Stop] [Pause]
+            //   Play/Simulate + paused:   [Stop] [Pause*] [Step]
+            let is_edit = play_state == PlayState::Edit;
+            let has_play_button = is_edit;
+            let has_simulate_button = is_edit;
+            let has_stop_button = !is_edit;
+            let has_pause_button = !is_edit;
+            let has_step_button = !is_edit && is_paused;
+
             let btn_size = egui::vec2(28.0, 22.0);
             let spacing = 4.0;
-            let total_width = btn_size.x * 2.0 + spacing;
+            let button_count = [has_play_button, has_simulate_button, has_stop_button, has_pause_button, has_step_button]
+                .iter()
+                .filter(|&&b| b)
+                .count() as f32;
+            let total_width = btn_size.x * button_count + spacing * (button_count - 1.0).max(0.0);
             let center_x = title_bar_rect.center().x;
             let center_y = title_bar_rect.center().y;
+            let start_x = center_x - total_width / 2.0 + btn_size.x / 2.0;
 
-            // Play button (left of center pair).
-            let play_rect = egui::Rect::from_center_size(
-                egui::pos2(center_x - (total_width / 2.0 - btn_size.x / 2.0), center_y),
-                btn_size,
-            );
-            let play_resp = ui.allocate_rect(play_rect, egui::Sense::click());
+            // Allocate button rects left-to-right.
+            let mut btn_idx = 0;
+            let mut next_rect = || -> egui::Rect {
+                let rect = egui::Rect::from_center_size(
+                    egui::pos2(start_x + btn_idx as f32 * (btn_size.x + spacing), center_y),
+                    btn_size,
+                );
+                btn_idx += 1;
+                rect
+            };
 
-            // Simulate button (right of center pair).
-            let sim_rect = egui::Rect::from_center_size(
-                egui::pos2(center_x + (total_width / 2.0 - btn_size.x / 2.0), center_y),
-                btn_size,
-            );
-            let sim_resp = ui.allocate_rect(sim_rect, egui::Sense::click());
+            let play_rect_resp = has_play_button.then(|| {
+                let r = next_rect();
+                (r, ui.allocate_rect(r, egui::Sense::click()))
+            });
+            let sim_rect_resp = has_simulate_button.then(|| {
+                let r = next_rect();
+                (r, ui.allocate_rect(r, egui::Sense::click()))
+            });
+            let stop_rect_resp = has_stop_button.then(|| {
+                let r = next_rect();
+                (r, ui.allocate_rect(r, egui::Sense::click()))
+            });
+            let pause_rect_resp = has_pause_button.then(|| {
+                let r = next_rect();
+                (r, ui.allocate_rect(r, egui::Sense::click()))
+            });
+            let step_rect_resp = has_step_button.then(|| {
+                let r = next_rect();
+                (r, ui.allocate_rect(r, egui::Sense::click()))
+            });
 
             // -- 5. Paint everything (immutable borrows only) --
             let painter = ui.painter();
 
-            // Play/stop button hover.
-            if play_resp.hovered() {
-                painter.rect_filled(
-                    play_rect,
-                    egui::CornerRadius::same(3),
-                    BUTTON_HOVER_BG,
-                );
+            // Play button (green triangle).
+            if let Some((rect, ref resp)) = play_rect_resp {
+                if resp.hovered() {
+                    painter.rect_filled(rect, egui::CornerRadius::same(3), BUTTON_HOVER_BG);
+                }
+                paint_play_triangle(painter, rect.center());
             }
 
-            // Play/stop icon.
-            let play_center = play_rect.center();
-            let has_active_scene = true; // always true since we always have a scene now
-            let play_icon = match play_state {
-                PlayState::Edit | PlayState::Simulate => true,  // show play triangle
-                PlayState::Play => false,                        // show stop square
-            };
-            if has_active_scene {
-                if play_icon {
-                    // Green play triangle.
-                    let half = 6.0;
-                    let points = vec![
-                        egui::pos2(play_center.x - half * 0.7, play_center.y - half),
-                        egui::pos2(play_center.x + half, play_center.y),
-                        egui::pos2(play_center.x - half * 0.7, play_center.y + half),
-                    ];
-                    painter.add(egui::Shape::convex_polygon(
-                        points,
-                        egui::Color32::from_rgb(0x4E, 0xC9, 0x4E),
-                        egui::Stroke::NONE,
-                    ));
-                } else {
-                    // Blue stop square.
-                    let half = 5.0;
-                    let stop_rect = egui::Rect::from_center_size(
-                        play_center,
-                        egui::vec2(half * 2.0, half * 2.0),
-                    );
+            // Simulate button (gear icon).
+            if let Some((rect, ref resp)) = sim_rect_resp {
+                if resp.hovered() {
+                    painter.rect_filled(rect, egui::CornerRadius::same(3), BUTTON_HOVER_BG);
+                }
+                paint_gear_icon(painter, rect.center(), 7.0);
+            }
+
+            // Stop button (blue square).
+            if let Some((rect, ref resp)) = stop_rect_resp {
+                if resp.hovered() {
+                    painter.rect_filled(rect, egui::CornerRadius::same(3), BUTTON_HOVER_BG);
+                }
+                paint_stop_square(painter, rect.center());
+            }
+
+            // Pause button (two vertical bars, highlighted when paused).
+            if let Some((rect, ref resp)) = pause_rect_resp {
+                if is_paused {
+                    // Highlight background to indicate active pause.
                     painter.rect_filled(
-                        stop_rect,
-                        egui::CornerRadius::same(2),
-                        egui::Color32::from_rgb(0x3B, 0x9C, 0xE9),
+                        rect,
+                        egui::CornerRadius::same(3),
+                        egui::Color32::from_rgb(0x2A, 0x50, 0x70),
                     );
                 }
-            }
-
-            // Simulate button hover.
-            if sim_resp.hovered() {
-                painter.rect_filled(
-                    sim_rect,
-                    egui::CornerRadius::same(3),
-                    BUTTON_HOVER_BG,
-                );
-            }
-
-            // Simulate icon: gear shape (or stop square when simulating).
-            let sim_center = sim_rect.center();
-            match play_state {
-                PlayState::Simulate => {
-                    // Blue stop square (same as play stop).
-                    let half = 5.0;
-                    let stop_rect = egui::Rect::from_center_size(
-                        sim_center,
-                        egui::vec2(half * 2.0, half * 2.0),
-                    );
-                    painter.rect_filled(
-                        stop_rect,
-                        egui::CornerRadius::same(2),
-                        egui::Color32::from_rgb(0x3B, 0x9C, 0xE9),
-                    );
+                if resp.hovered() {
+                    painter.rect_filled(rect, egui::CornerRadius::same(3), BUTTON_HOVER_BG);
                 }
-                _ => {
-                    // Gear icon for simulate.
-                    paint_gear_icon(painter, sim_center, 7.0);
-                }
+                paint_pause_icon(painter, rect.center());
             }
 
-            if play_resp.clicked() {
-                play_toggled = true;
+            // Step button (play triangle + vertical bar).
+            if let Some((rect, ref resp)) = step_rect_resp {
+                if resp.hovered() {
+                    painter.rect_filled(rect, egui::CornerRadius::same(3), BUTTON_HOVER_BG);
+                }
+                paint_step_icon(painter, rect.center());
             }
-            if sim_resp.clicked() {
-                simulate_toggled = true;
+
+            // Handle clicks.
+            if let Some((_, ref resp)) = play_rect_resp {
+                if resp.clicked() { play_toggled = true; }
+            }
+            if let Some((_, ref resp)) = sim_rect_resp {
+                if resp.clicked() { simulate_toggled = true; }
+            }
+            if let Some((_, ref resp)) = stop_rect_resp {
+                if resp.clicked() {
+                    // Stop returns to edit — reuse the appropriate toggle.
+                    match play_state {
+                        PlayState::Play => play_toggled = true,
+                        PlayState::Simulate => simulate_toggled = true,
+                        _ => {}
+                    }
+                }
+            }
+            if let Some((_, ref resp)) = pause_rect_resp {
+                if resp.clicked() { pause_toggled = true; }
+            }
+            if let Some((_, ref resp)) = step_rect_resp {
+                if resp.clicked() { step_pressed = true; }
             }
 
             // Button icons
@@ -229,6 +257,8 @@ pub fn title_bar_ui(
         close_requested,
         play_toggled,
         simulate_toggled,
+        pause_toggled,
+        step_pressed,
     }
 }
 
@@ -360,6 +390,82 @@ fn paint_gear_icon(painter: &egui::Painter, center: egui::Pos2, radius: f32) {
     // Center hole.
     let hole_r = radius * 0.25;
     painter.circle_filled(center, hole_r, BAR_BG);
+}
+
+fn paint_play_triangle(painter: &egui::Painter, center: egui::Pos2) {
+    let half = 6.0;
+    let points = vec![
+        egui::pos2(center.x - half * 0.7, center.y - half),
+        egui::pos2(center.x + half, center.y),
+        egui::pos2(center.x - half * 0.7, center.y + half),
+    ];
+    painter.add(egui::Shape::convex_polygon(
+        points,
+        egui::Color32::from_rgb(0x4E, 0xC9, 0x4E),
+        egui::Stroke::NONE,
+    ));
+}
+
+fn paint_stop_square(painter: &egui::Painter, center: egui::Pos2) {
+    let half = 5.0;
+    let stop_rect = egui::Rect::from_center_size(center, egui::vec2(half * 2.0, half * 2.0));
+    painter.rect_filled(
+        stop_rect,
+        egui::CornerRadius::same(2),
+        egui::Color32::from_rgb(0x3B, 0x9C, 0xE9),
+    );
+}
+
+fn paint_pause_icon(painter: &egui::Painter, center: egui::Pos2) {
+    let bar_w = 3.0;
+    let bar_h = 10.0;
+    let gap = 2.5;
+    let color = BUTTON_ICON_COLOR;
+    // Left bar.
+    painter.rect_filled(
+        egui::Rect::from_center_size(
+            egui::pos2(center.x - gap, center.y),
+            egui::vec2(bar_w, bar_h),
+        ),
+        0.0,
+        color,
+    );
+    // Right bar.
+    painter.rect_filled(
+        egui::Rect::from_center_size(
+            egui::pos2(center.x + gap, center.y),
+            egui::vec2(bar_w, bar_h),
+        ),
+        0.0,
+        color,
+    );
+}
+
+fn paint_step_icon(painter: &egui::Painter, center: egui::Pos2) {
+    let color = BUTTON_ICON_COLOR;
+    // Small play triangle (left half).
+    let half = 4.5;
+    let offset_x = -2.0;
+    let points = vec![
+        egui::pos2(center.x + offset_x - half * 0.6, center.y - half),
+        egui::pos2(center.x + offset_x + half * 0.7, center.y),
+        egui::pos2(center.x + offset_x - half * 0.6, center.y + half),
+    ];
+    painter.add(egui::Shape::convex_polygon(
+        points,
+        color,
+        egui::Stroke::NONE,
+    ));
+    // Vertical bar (right half).
+    let bar_x = center.x + half * 0.7;
+    painter.rect_filled(
+        egui::Rect::from_center_size(
+            egui::pos2(bar_x, center.y),
+            egui::vec2(2.5, half * 2.0),
+        ),
+        0.0,
+        color,
+    );
 }
 
 fn paint_close_icon(painter: &egui::Painter, resp: &egui::Response, rect: egui::Rect) {
