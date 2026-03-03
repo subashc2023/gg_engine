@@ -1,14 +1,17 @@
 use gg_engine::egui;
 use gg_engine::prelude::*;
 
+use super::content_browser::ContentBrowserPayload;
+
 pub(crate) fn properties_ui(
     ui: &mut egui::Ui,
     scene: &mut Scene,
     selection_context: &mut Option<Entity>,
+    pending_texture_loads: &mut Vec<(Entity, std::path::PathBuf)>,
 ) {
     if let Some(entity) = *selection_context {
         if scene.is_alive(entity) {
-            draw_components(ui, scene, entity);
+            draw_components(ui, scene, entity, pending_texture_loads);
         } else {
             *selection_context = None;
         }
@@ -162,7 +165,12 @@ fn draw_vec3_control(
 // Component inspector
 // ---------------------------------------------------------------------------
 
-fn draw_components(ui: &mut egui::Ui, scene: &mut Scene, entity: Entity) {
+fn draw_components(
+    ui: &mut egui::Ui,
+    scene: &mut Scene,
+    entity: Entity,
+    pending_texture_loads: &mut Vec<(Entity, std::path::PathBuf)>,
+) {
     let bold_family = egui::FontFamily::Name(BOLD_FONT.into());
 
     // -- Tag Component + Add Component button (inline) --
@@ -456,16 +464,20 @@ fn draw_components(ui: &mut egui::Ui, scene: &mut Scene, entity: Entity) {
         .id_salt(("sprite_renderer", entity.id()))
         .default_open(true)
         .show(ui, |ui| {
-            let mut color_arr = {
+            let (mut color_arr, _has_texture, mut tiling_factor) = {
                 let sprite = scene
                     .get_component::<SpriteRendererComponent>(entity)
                     .unwrap();
-                [
-                    sprite.color.x,
-                    sprite.color.y,
-                    sprite.color.z,
-                    sprite.color.w,
-                ]
+                (
+                    [
+                        sprite.color.x,
+                        sprite.color.y,
+                        sprite.color.z,
+                        sprite.color.w,
+                    ],
+                    sprite.texture.is_some(),
+                    sprite.tiling_factor,
+                )
             };
 
             let mut egui_color = egui::Color32::from_rgba_unmultiplied(
@@ -495,6 +507,58 @@ fn draw_components(ui: &mut egui::Ui, scene: &mut Scene, entity: Entity) {
                         scene.get_component_mut::<SpriteRendererComponent>(entity)
                     {
                         sprite.color = Vec4::from(color_arr);
+                    }
+                }
+            });
+
+            // Texture drop target.
+            let btn_resp = ui.add_sized(
+                [100.0, 0.0],
+                egui::Button::new("Texture"),
+            );
+
+            // Accept texture drag-and-drop from the content browser.
+            if let Some(payload) =
+                btn_resp.dnd_release_payload::<ContentBrowserPayload>()
+            {
+                if !payload.is_directory {
+                    let ext = payload
+                        .path
+                        .extension()
+                        .and_then(|e| e.to_str())
+                        .unwrap_or("")
+                        .to_lowercase();
+                    if matches!(ext.as_str(), "png" | "jpg" | "jpeg") {
+                        pending_texture_loads.push((entity, payload.path.clone()));
+                    }
+                }
+            }
+
+            // Visual feedback when dragging over the button.
+            if btn_resp.dnd_hover_payload::<ContentBrowserPayload>().is_some() {
+                ui.painter().rect_stroke(
+                    btn_resp.rect,
+                    egui::CornerRadius::same(2),
+                    egui::Stroke::new(2.0, egui::Color32::from_rgb(0x56, 0x9C, 0xD6)),
+                    egui::StrokeKind::Inside,
+                );
+            }
+
+            // Tiling factor.
+            ui.horizontal(|ui| {
+                ui.label("Tiling Factor");
+                if ui
+                    .add(
+                        egui::DragValue::new(&mut tiling_factor)
+                            .speed(0.1)
+                            .range(0.0..=100.0),
+                    )
+                    .changed()
+                {
+                    if let Some(mut sprite) =
+                        scene.get_component_mut::<SpriteRendererComponent>(entity)
+                    {
+                        sprite.tiling_factor = tiling_factor;
                     }
                 }
             });

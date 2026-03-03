@@ -1,7 +1,9 @@
 use glam::{Mat4, Vec3, Vec4};
 
 use crate::renderer::SceneCamera;
+use crate::renderer::Texture2D;
 use crate::scene::native_script::NativeScript;
+use crate::Ref;
 
 /// Human-readable name for an entity. Every entity created via
 /// [`Scene::create_entity`](super::Scene::create_entity) receives a
@@ -107,30 +109,44 @@ impl Default for CameraComponent {
     }
 }
 
-/// RGBA color attached to an entity for 2D rendering.
+/// Sprite attached to an entity for 2D rendering.
 ///
 /// Used by [`Scene::on_update`](super::Scene::on_update) together with
-/// [`TransformComponent`] to submit flat-colored quad draw calls.
+/// [`TransformComponent`] to submit quad draw calls. When `texture` is
+/// `Some`, the texture is sampled and multiplied by `color` (tint). When
+/// `None`, a white texture is used and the quad is flat-colored.
 pub struct SpriteRendererComponent {
     pub color: Vec4,
+    pub texture: Option<Ref<Texture2D>>,
+    pub tiling_factor: f32,
 }
 
 impl SpriteRendererComponent {
     pub fn new(color: Vec4) -> Self {
-        Self { color }
+        Self {
+            color,
+            texture: None,
+            tiling_factor: 1.0,
+        }
     }
 
     /// Convenience: opaque RGB color (alpha = 1.0).
     pub fn from_rgb(r: f32, g: f32, b: f32) -> Self {
         Self {
             color: Vec4::new(r, g, b, 1.0),
+            texture: None,
+            tiling_factor: 1.0,
         }
     }
 }
 
 impl Default for SpriteRendererComponent {
     fn default() -> Self {
-        Self { color: Vec4::ONE }
+        Self {
+            color: Vec4::ONE,
+            texture: None,
+            tiling_factor: 1.0,
+        }
     }
 }
 

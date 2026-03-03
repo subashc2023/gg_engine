@@ -86,6 +86,12 @@ struct CameraData {
 struct SpriteData {
     #[serde(rename = "Color")]
     color: [f32; 4],
+    #[serde(rename = "TilingFactor", default = "default_tiling_factor")]
+    tiling_factor: f32,
+}
+
+fn default_tiling_factor() -> f32 {
+    1.0
 }
 
 // ---------------------------------------------------------------------------
@@ -156,6 +162,7 @@ impl SceneSerializer {
                     .get_component::<SpriteRendererComponent>(entity)
                     .map(|sprite| SpriteData {
                         color: sprite.color.into(),
+                        tiling_factor: sprite.tiling_factor,
                     });
 
             entities_data.push(EntityData {
@@ -283,7 +290,9 @@ impl SceneSerializer {
 
             // SpriteRendererComponent — added only if present in the file.
             if let Some(ref sd) = entity_data.sprite {
-                scene.add_component(entity, SpriteRendererComponent::new(Vec4::from(sd.color)));
+                let mut sprite = SpriteRendererComponent::new(Vec4::from(sd.color));
+                sprite.tiling_factor = sd.tiling_factor;
+                scene.add_component(entity, sprite);
             }
         }
 

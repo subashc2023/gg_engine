@@ -528,13 +528,29 @@ impl Renderer {
     /// Draw a sprite (entity with a [`SpriteRendererComponent`]) using a
     /// pre-built transform matrix. Writes the entity ID to the picking
     /// attachment so it can be read back for mouse picking.
+    ///
+    /// If the sprite has a texture, it is sampled and multiplied by the
+    /// sprite's color (acting as a tint). The `tiling_factor` controls
+    /// texture coordinate scaling. If no texture is set, the white default
+    /// texture is used (flat-colored quad).
     pub fn draw_sprite(
         &self,
         transform: &Mat4,
         sprite: &SpriteRendererComponent,
         entity_id: i32,
     ) {
-        self.push_quad_to_batch(transform, sprite.color, 0.0, 1.0, entity_id);
+        let tex_index = sprite
+            .texture
+            .as_ref()
+            .map(|t| t.bindless_index() as f32)
+            .unwrap_or(0.0); // 0 = white texture
+        self.push_quad_to_batch(
+            transform,
+            sprite.color,
+            tex_index,
+            sprite.tiling_factor,
+            entity_id,
+        );
     }
 
     // -- Axis-aligned quads (no rotation) ------------------------------------

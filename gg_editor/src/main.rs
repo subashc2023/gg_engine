@@ -31,6 +31,7 @@ struct GGEditor {
     hovered_entity: i32,
     current_directory: std::path::PathBuf,
     pending_open_path: Option<std::path::PathBuf>,
+    pending_texture_loads: Vec<(Entity, std::path::PathBuf)>,
 }
 
 impl Application for GGEditor {
@@ -119,6 +120,7 @@ impl Application for GGEditor {
             hovered_entity: -1,
             current_directory: std::path::PathBuf::from(ASSETS_DIR),
             pending_open_path: None,
+            pending_texture_loads: Vec::new(),
         }
     }
 
@@ -234,6 +236,18 @@ impl Application for GGEditor {
     }
 
     fn on_render(&mut self, renderer: &mut Renderer) {
+        // Process deferred texture loads from the properties panel.
+        for (entity, path) in self.pending_texture_loads.drain(..) {
+            if self.scene.is_alive(entity) {
+                let texture = Ref::new(renderer.create_texture_from_file(&path));
+                if let Some(mut sprite) =
+                    self.scene.get_component_mut::<SpriteRendererComponent>(entity)
+                {
+                    sprite.texture = Some(texture);
+                }
+            }
+        }
+
         self.scene
             .on_update_editor(&self.editor_camera.view_projection(), renderer);
     }
@@ -322,6 +336,7 @@ impl Application for GGEditor {
                 hovered_entity: self.hovered_entity,
                 current_directory: &mut self.current_directory,
                 pending_open_path: &mut self.pending_open_path,
+                pending_texture_loads: &mut self.pending_texture_loads,
             };
 
             egui_dock::DockArea::new(&mut self.dock_state)
