@@ -9,15 +9,19 @@ use mlua::prelude::*;
 use crate::events::KeyCode;
 use crate::input::Input;
 use super::Scene;
+use super::script_engine::ScriptEngine;
 
 /// Runtime context set as Lua `app_data` during script execution.
 ///
 /// Raw pointers are used to sidestep Rust borrow rules (take-modify-replace
 /// pattern ensures safety — the scene is exclusively borrowed while scripts
 /// run). `input` is null during `on_create` / `on_destroy`.
+/// `script_engine` provides access to other entities' Lua environments for
+/// cross-entity field reads/writes.
 pub(crate) struct SceneScriptContext {
     pub scene: *mut Scene,
     pub input: *const Input,
+    pub script_engine: *const ScriptEngine,
 }
 
 unsafe impl Send for SceneScriptContext {}
@@ -48,6 +52,11 @@ pub fn register_all(lua: &Lua) -> LuaResult<()> {
 
     // Component queries
     engine.set("has_component", lua.create_function(has_component)?)?;
+
+    // Entity lookup / cross-entity scripting
+    engine.set("find_entity_by_name", lua.create_function(find_entity_by_name)?)?;
+    engine.set("get_script_field", lua.create_function(get_script_field)?)?;
+    engine.set("set_script_field", lua.create_function(set_script_field)?)?;
 
     // Physics
     engine.set("apply_impulse", lua.create_function(lua_apply_impulse)?)?;
@@ -333,6 +342,69 @@ fn has_component(lua: &Lua, (entity_id, name): (u64, String)) -> LuaResult<bool>
 }
 
 // ---------------------------------------------------------------------------
+// Entity lookup / cross-entity scripting
+// ---------------------------------------------------------------------------
+
+/// `Engine.find_entity_by_name(name)` — returns the UUID of the first entity
+/// with the given tag name, or `nil` if not found.
+fn find_entity_by_name(lua: &Lua, name: String) -> LuaResult<LuaValue> {
+    let ctx = match lua.app_data_ref::<SceneScriptContext>() {
+        Some(ctx) => ctx,
+        None => return Ok(LuaValue::Nil),
+    };
+
+    let scene = unsafe { &*ctx.scene };
+    match scene.find_entity_by_name(&name) {
+        Some((_entity, uuid)) => Ok(LuaValue::Integer(uuid as i64)),
+        None => Ok(LuaValue::Nil),
+    }
+}
+
+/// `Engine.get_script_field(entity_id, field_name)` — read a field from
+/// another entity's running Lua script. Returns the value or `nil`.
+fn get_script_field(lua: &Lua, (entity_id, field_name): (u64, String)) -> LuaResult<LuaValue> {
+    let ctx = match lua.app_data_ref::<SceneScriptContext>() {
+        Some(ctx) => ctx,
+        None => return Ok(LuaValue::Nil),
+    };
+
+    if ctx.script_engine.is_null() {
+        return Ok(LuaValue::Nil);
+    }
+
+    let engine = unsafe { &*ctx.script_engine };
+    match engine.get_entity_field(entity_id, &field_name) {
+        Some(value) => value.to_lua(lua).map(Into::into),
+        None => Ok(LuaValue::Nil),
+    }
+}
+
+/// `Engine.set_script_field(entity_id, field_name, value)` — write a field on
+/// another entity's running Lua script.
+fn set_script_field(lua: &Lua, (entity_id, field_name, value): (u64, String, LuaValue)) -> LuaResult<()> {
+    let ctx = match lua.app_data_ref::<SceneScriptContext>() {
+        Some(ctx) => ctx,
+        None => return Ok(()),
+    };
+
+    if ctx.script_engine.is_null() {
+        return Ok(());
+    }
+
+    let engine = unsafe { &*ctx.script_engine };
+    if let Some(sfv) = super::script_engine::ScriptFieldValue::from_lua_value(&value) {
+        engine.set_entity_field(entity_id, &field_name, &sfv);
+    } else {
+        log::warn!(
+            "ScriptGlue: set_script_field unsupported value type for field '{}'",
+            field_name
+        );
+    }
+
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
 // Physics bindings (delegate to Scene methods)
 // ---------------------------------------------------------------------------
 
@@ -528,6 +600,10 @@ mod tests {
         assert!(engine.get::<LuaFunction>("is_key_down").is_ok());
         // Component queries
         assert!(engine.get::<LuaFunction>("has_component").is_ok());
+        // Entity lookup / cross-entity scripting
+        assert!(engine.get::<LuaFunction>("find_entity_by_name").is_ok());
+        assert!(engine.get::<LuaFunction>("get_script_field").is_ok());
+        assert!(engine.get::<LuaFunction>("set_script_field").is_ok());
         // Physics
         assert!(engine.get::<LuaFunction>("apply_impulse").is_ok());
         assert!(engine.get::<LuaFunction>("apply_impulse_at_point").is_ok());
@@ -634,6 +710,34 @@ mod tests {
             .unwrap();
         let result: bool = lua.globals().get("key_result").unwrap();
         assert!(!result);
+    }
+
+    #[test]
+    fn find_entity_by_name_no_context_returns_nil() {
+        let lua = setup();
+        lua.load(r#"result = Engine.find_entity_by_name("Player")"#)
+            .exec()
+            .unwrap();
+        let result: LuaValue = lua.globals().get("result").unwrap();
+        assert!(result.is_nil());
+    }
+
+    #[test]
+    fn get_script_field_no_context_returns_nil() {
+        let lua = setup();
+        lua.load(r#"result = Engine.get_script_field(12345, "speed")"#)
+            .exec()
+            .unwrap();
+        let result: LuaValue = lua.globals().get("result").unwrap();
+        assert!(result.is_nil());
+    }
+
+    #[test]
+    fn set_script_field_no_context_no_error() {
+        let lua = setup();
+        lua.load(r#"Engine.set_script_field(12345, "speed", 5.0)"#)
+            .exec()
+            .unwrap();
     }
 
     #[test]

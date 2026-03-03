@@ -9,6 +9,7 @@ use gg_engine::egui;
 use gg_engine::prelude::*;
 use transform_gizmo_egui::Gizmo;
 
+use camera_controller::NativeCameraFollow;
 use gizmo::GizmoOperation;
 use physics_player::PhysicsPlayer;
 use panels::content_browser::{render_dnd_ghost, ASSETS_DIR};
@@ -295,7 +296,7 @@ impl Application for GGEditor {
     }
 
     fn block_events(&self) -> bool {
-        !(self.viewport_focused && self.viewport_hovered)
+        !self.viewport_hovered
     }
 
     fn should_exit(&self) -> bool {
@@ -392,13 +393,13 @@ impl Application for GGEditor {
                 self.scene.on_update_physics(dt);
             }
             SceneState::Play => {
-                // Run native scripts (e.g. CameraController).
+                // Step physics first so transforms reflect this frame's positions.
+                self.scene.on_update_physics(dt);
+                // Run native scripts (e.g. CameraController) with up-to-date transforms.
                 self.scene.on_update_scripts(dt, input);
                 // Run Lua scripts.
                 #[cfg(feature = "lua-scripting")]
                 self.scene.on_update_lua_scripts(dt, input);
-                // Step physics simulation.
-                self.scene.on_update_physics(dt);
             }
         }
 
@@ -919,6 +920,12 @@ impl GGEditor {
         let runtime_scene = Scene::copy(&self.scene);
         let editor_scene = std::mem::replace(&mut self.scene, runtime_scene);
         self.editor_scene = Some(editor_scene);
+
+        // Attach native scripts to known entities by tag name.
+        // NativeScriptComponent is runtime-only (not serialized), so we bind
+        // them here on the runtime copy before starting.
+        self.attach_native_scripts();
+
         self.scene.on_runtime_start();
     }
 
@@ -947,6 +954,43 @@ impl GGEditor {
             let (w, h) = self.viewport_size;
             if w > 0 && h > 0 {
                 self.scene.on_viewport_resize(w, h);
+            }
+        }
+    }
+
+    /// Attach known native scripts to entities by tag name.
+    ///
+    /// Since `NativeScriptComponent` is runtime-only (not serialized to
+    /// `.ggscene` files), we bind them here on the runtime scene copy.
+    /// This lets `.ggscene` files work with native scripts — the editor
+    /// recognizes entity names and attaches the correct script.
+    fn attach_native_scripts(&mut self) {
+        // Bind PhysicsPlayer (WASD+Space) to "Player" or "Native Player"
+        // if they don't already have a script.
+        for name in &["Player", "Native Player"] {
+            if let Some((entity, _)) = self.scene.find_entity_by_name(name) {
+                let has_lua = {
+                    #[cfg(feature = "lua-scripting")]
+                    { self.scene.has_component::<LuaScriptComponent>(entity) }
+                    #[cfg(not(feature = "lua-scripting"))]
+                    { false }
+                };
+                if !has_lua && !self.scene.has_component::<NativeScriptComponent>(entity) {
+                    self.scene.add_component(entity, NativeScriptComponent::bind::<PhysicsPlayer>());
+                }
+            }
+        }
+
+        // Bind NativeCameraFollow to "Camera" if it doesn't have a Lua script.
+        if let Some((camera, _)) = self.scene.find_entity_by_name("Camera") {
+            let has_lua = {
+                #[cfg(feature = "lua-scripting")]
+                { self.scene.has_component::<LuaScriptComponent>(camera) }
+                #[cfg(not(feature = "lua-scripting"))]
+                { false }
+            };
+            if !has_lua && !self.scene.has_component::<NativeScriptComponent>(camera) {
+                self.scene.add_component(camera, NativeScriptComponent::bind::<NativeCameraFollow>());
             }
         }
     }

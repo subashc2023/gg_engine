@@ -19,7 +19,7 @@ pub enum ScriptFieldValue {
 
 impl ScriptFieldValue {
     /// Convert a Lua value into a `ScriptFieldValue`, if supported.
-    fn from_lua_value(value: &LuaValue) -> Option<Self> {
+    pub(crate) fn from_lua_value(value: &LuaValue) -> Option<Self> {
         match value {
             LuaValue::Boolean(b) => Some(Self::Bool(*b)),
             LuaValue::Integer(n) => Some(Self::Float(*n as f64)),
@@ -30,7 +30,7 @@ impl ScriptFieldValue {
     }
 
     /// Push this value into Lua.
-    fn to_lua(&self, lua: &Lua) -> LuaResult<LuaValue> {
+    pub(crate) fn to_lua(&self, lua: &Lua) -> LuaResult<LuaValue> {
         match self {
             Self::Bool(b) => Ok(LuaValue::Boolean(*b)),
             Self::Float(n) => Ok(LuaValue::Number(*n)),

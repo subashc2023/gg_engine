@@ -342,6 +342,23 @@ impl Scene {
         None
     }
 
+    /// Find the first entity whose [`TagComponent`] name matches `name`.
+    ///
+    /// O(n) scan — intended for one-off lookups (e.g. `on_create`), not
+    /// per-frame use in hot loops. Returns the entity and its UUID.
+    pub fn find_entity_by_name(&self, name: &str) -> Option<(Entity, u64)> {
+        for (handle, tag, id) in self
+            .world
+            .query::<(hecs::Entity, &TagComponent, &IdComponent)>()
+            .iter()
+        {
+            if tag.tag == name {
+                return Some((Entity::new(handle), id.id.raw()));
+            }
+        }
+        None
+    }
+
     /// Find an entity by its UUID (from [`IdComponent`]).
     ///
     /// O(n) scan — sufficient for script callbacks; optimize with a cache
@@ -689,10 +706,11 @@ impl Scene {
 
     /// Step the physics simulation and write body transforms back to entities.
     ///
-    /// Call this each frame during play mode, after `on_update_scripts`.
-    pub fn on_update_physics(&mut self, _dt: Timestep) {
+    /// Call this each frame during play mode, **before** scripts so that
+    /// scripts (e.g. camera follow) read up-to-date physics positions.
+    pub fn on_update_physics(&mut self, dt: Timestep) {
         if let Some(ref mut physics) = self.physics_world {
-            physics.step();
+            physics.step(dt.seconds());
 
             // Write physics body positions back to transforms.
             for (transform, rb) in self
@@ -904,6 +922,7 @@ impl Scene {
         let ctx = SceneScriptContext {
             scene: self as *mut Scene,
             input: std::ptr::null(),
+            script_engine: &engine as *const ScriptEngine,
         };
         engine.lua().set_app_data(ctx);
 
@@ -929,6 +948,7 @@ impl Scene {
             let ctx = SceneScriptContext {
                 scene: self as *mut Scene,
                 input: std::ptr::null(),
+                script_engine: &engine as *const ScriptEngine,
             };
             engine.lua().set_app_data(ctx);
 
@@ -979,6 +999,7 @@ impl Scene {
         let ctx = SceneScriptContext {
             scene: self as *mut Scene,
             input: input as *const Input,
+            script_engine: &engine as *const ScriptEngine,
         };
         engine.lua().set_app_data(ctx);
 
