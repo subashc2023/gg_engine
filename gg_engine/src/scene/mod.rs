@@ -710,19 +710,21 @@ impl Scene {
     /// scripts (e.g. camera follow) read up-to-date physics positions.
     pub fn on_update_physics(&mut self, dt: Timestep) {
         if let Some(ref mut physics) = self.physics_world {
-            physics.step(dt.seconds());
+            let stepped = physics.step(dt.seconds());
 
-            // Write physics body positions back to transforms.
-            for (transform, rb) in self
-                .world
-                .query_mut::<(&mut TransformComponent, &RigidBody2DComponent)>()
-            {
-                if let Some(body_handle) = rb.runtime_body {
-                    if let Some(body) = physics.bodies.get(body_handle) {
-                        let pos = body.translation();
-                        transform.translation.x = pos.x;
-                        transform.translation.y = pos.y;
-                        transform.rotation.z = body.rotation().angle();
+            // Only write back when the simulation actually advanced.
+            if stepped {
+                for (transform, rb) in self
+                    .world
+                    .query_mut::<(&mut TransformComponent, &RigidBody2DComponent)>()
+                {
+                    if let Some(body_handle) = rb.runtime_body {
+                        if let Some(body) = physics.bodies.get(body_handle) {
+                            let pos = body.translation();
+                            transform.translation.x = pos.x;
+                            transform.translation.y = pos.y;
+                            transform.rotation.z = body.rotation().angle();
+                        }
                     }
                 }
             }
