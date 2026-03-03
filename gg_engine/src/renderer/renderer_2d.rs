@@ -125,7 +125,15 @@ impl Renderer2DData {
     ) -> Self {
         let _timer = ProfileTimer::new("Renderer2D::init");
 
-        // -- Shader --
+        // -- Shaders --
+        // Swapchain shader: 1 color output only (no entity ID).
+        let batch_swapchain_shader = Arc::new(Shader::new(
+            device,
+            "batch_swapchain",
+            shaders::BATCH_SWAPCHAIN_VERT_SPV,
+            shaders::BATCH_SWAPCHAIN_FRAG_SPV,
+        ));
+        // Offscreen shader: 2 outputs (color + entity ID for picking).
         let batch_shader = Arc::new(Shader::new(
             device,
             "batch",
@@ -189,10 +197,10 @@ impl Renderer2DData {
         let bindless_ds_layout = unsafe { device.create_descriptor_set_layout(&layout_info, None) }
             .expect("Failed to create bindless descriptor set layout");
 
-        // -- Pipeline --
+        // -- Pipeline (swapchain: 1 color attachment, no entity ID output) --
         let batch_pipeline = Arc::new(pipeline::create_batch_pipeline(
             device,
-            &batch_shader,
+            &batch_swapchain_shader,
             vertex_buffers[0].layout(),
             render_pass,
             camera_ubo_ds_layout,

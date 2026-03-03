@@ -122,62 +122,7 @@ impl SceneSerializer {
     /// Creates parent directories if they don't exist. Returns `true` on
     /// success, `false` on failure (errors are logged).
     pub fn serialize(scene: &Scene, file_path: &str) -> bool {
-        let mut entities_data = Vec::new();
-
-        for (entity, _name) in scene.each_entity_with_tag() {
-            let tag_data = scene
-                .get_component::<TagComponent>(entity)
-                .map(|tag| TagData {
-                    tag: tag.tag.clone(),
-                });
-
-            let transform_data =
-                scene
-                    .get_component::<TransformComponent>(entity)
-                    .map(|tc| TransformData {
-                        translation: tc.translation.into(),
-                        rotation: tc.rotation.into(),
-                        scale: tc.scale.into(),
-                    });
-
-            let camera_data =
-                scene
-                    .get_component::<CameraComponent>(entity)
-                    .map(|cam| CameraData {
-                        camera: SceneCameraData {
-                            projection_type: cam.camera.projection_type() as u32,
-                            perspective_fov: cam.camera.perspective_vertical_fov(),
-                            perspective_near: cam.camera.perspective_near(),
-                            perspective_far: cam.camera.perspective_far(),
-                            orthographic_size: cam.camera.orthographic_size(),
-                            orthographic_near: cam.camera.orthographic_near(),
-                            orthographic_far: cam.camera.orthographic_far(),
-                        },
-                        primary: cam.primary,
-                        fixed_aspect_ratio: cam.fixed_aspect_ratio,
-                    });
-
-            let sprite_data =
-                scene
-                    .get_component::<SpriteRendererComponent>(entity)
-                    .map(|sprite| SpriteData {
-                        color: sprite.color.into(),
-                        tiling_factor: sprite.tiling_factor,
-                    });
-
-            entities_data.push(EntityData {
-                id: entity.id() as u64, // TODO: UUID
-                tag: tag_data,
-                transform: transform_data,
-                camera: camera_data,
-                sprite: sprite_data,
-            });
-        }
-
-        let scene_data = SceneData {
-            name: "Untitled".to_string(),
-            entities: entities_data,
-        };
+        let scene_data = Self::scene_to_data(scene);
 
         // Ensure parent directories exist.
         if let Some(parent) = Path::new(file_path).parent() {
@@ -236,6 +181,101 @@ impl SceneSerializer {
             scene_data.entities.len()
         );
 
+        Self::data_to_scene(scene, &scene_data);
+        true
+    }
+
+    /// Serialize a scene to a YAML string (in-memory snapshot).
+    pub fn serialize_to_string(scene: &Scene) -> Option<String> {
+        let scene_data = Self::scene_to_data(scene);
+        match serde_yaml::to_string(&scene_data) {
+            Ok(yaml) => Some(yaml),
+            Err(e) => {
+                log::error!("Failed to serialize scene to string: {}", e);
+                None
+            }
+        }
+    }
+
+    /// Deserialize a scene from a YAML string (in-memory snapshot restore).
+    ///
+    /// Entities are created in the provided `scene`. Callers should provide
+    /// a fresh scene if a clean restore is desired.
+    pub fn deserialize_from_string(scene: &mut Scene, yaml: &str) -> bool {
+        let scene_data: SceneData = match serde_yaml::from_str(yaml) {
+            Ok(d) => d,
+            Err(e) => {
+                log::error!("Failed to parse scene from string: {}", e);
+                return false;
+            }
+        };
+
+        Self::data_to_scene(scene, &scene_data);
+        true
+    }
+
+    // -- Shared helpers -------------------------------------------------------
+
+    fn scene_to_data(scene: &Scene) -> SceneData {
+        let mut entities_data = Vec::new();
+
+        for (entity, _name) in scene.each_entity_with_tag() {
+            let tag_data = scene
+                .get_component::<TagComponent>(entity)
+                .map(|tag| TagData {
+                    tag: tag.tag.clone(),
+                });
+
+            let transform_data =
+                scene
+                    .get_component::<TransformComponent>(entity)
+                    .map(|tc| TransformData {
+                        translation: tc.translation.into(),
+                        rotation: tc.rotation.into(),
+                        scale: tc.scale.into(),
+                    });
+
+            let camera_data =
+                scene
+                    .get_component::<CameraComponent>(entity)
+                    .map(|cam| CameraData {
+                        camera: SceneCameraData {
+                            projection_type: cam.camera.projection_type() as u32,
+                            perspective_fov: cam.camera.perspective_vertical_fov(),
+                            perspective_near: cam.camera.perspective_near(),
+                            perspective_far: cam.camera.perspective_far(),
+                            orthographic_size: cam.camera.orthographic_size(),
+                            orthographic_near: cam.camera.orthographic_near(),
+                            orthographic_far: cam.camera.orthographic_far(),
+                        },
+                        primary: cam.primary,
+                        fixed_aspect_ratio: cam.fixed_aspect_ratio,
+                    });
+
+            let sprite_data =
+                scene
+                    .get_component::<SpriteRendererComponent>(entity)
+                    .map(|sprite| SpriteData {
+                        color: sprite.color.into(),
+                        tiling_factor: sprite.tiling_factor,
+                    });
+
+            entities_data.push(EntityData {
+                id: entity.id() as u64, // TODO: UUID
+                tag: tag_data,
+                transform: transform_data,
+                camera: camera_data,
+                sprite: sprite_data,
+            });
+        }
+
+        SceneData {
+            name: "Untitled".to_string(),
+            entities: entities_data,
+        }
+    }
+
+    fn data_to_scene(scene: &mut Scene, scene_data: &SceneData) {
         for entity_data in &scene_data.entities {
             let name = entity_data
                 .tag
@@ -295,8 +335,6 @@ impl SceneSerializer {
                 scene.add_component(entity, sprite);
             }
         }
-
-        true
     }
 }
 

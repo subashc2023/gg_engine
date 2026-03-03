@@ -299,7 +299,7 @@ impl Application for ExampleApp {
         }
     }
 
-    fn on_egui(&mut self, ctx: &gg_engine::egui::Context) {
+    fn on_egui(&mut self, ctx: &gg_engine::egui::Context, _window: &gg_engine::winit::window::Window) {
         gg_engine::egui::Window::new("Settings").show(ctx, |ui| {
             ui.checkbox(&mut self.vsync, "VSync");
             let fps = if self.frame_time_ms > 0.0 {

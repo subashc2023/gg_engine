@@ -1,6 +1,8 @@
 mod camera_controller;
 mod gizmo;
 mod panels;
+#[cfg(not(target_os = "macos"))]
+mod title_bar;
 
 use gg_engine::egui;
 use gg_engine::prelude::*;
@@ -12,10 +14,22 @@ use panels::content_browser::{render_dnd_ghost, ASSETS_DIR};
 use panels::{EditorTabViewer, Tab};
 
 // ---------------------------------------------------------------------------
+// Scene state (edit vs play mode)
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum SceneState {
+    Edit,
+    Play,
+}
+
+// ---------------------------------------------------------------------------
 // GGEditor
 // ---------------------------------------------------------------------------
 
 struct GGEditor {
+    scene_state: SceneState,
+    scene_snapshot: Option<String>,
     dock_state: egui_dock::DockState<Tab>,
     scene_fb: Option<Framebuffer>,
     viewport_size: (u32, u32),
@@ -32,6 +46,9 @@ struct GGEditor {
     current_directory: std::path::PathBuf,
     pending_open_path: Option<std::path::PathBuf>,
     pending_texture_loads: Vec<(Entity, std::path::PathBuf)>,
+    /// Old scenes awaiting GPU-safe destruction (deferred from on_egui to on_render).
+    pending_drop_scenes: Vec<Scene>,
+    should_exit: bool,
 }
 
 impl Application for GGEditor {
@@ -105,6 +122,8 @@ impl Application for GGEditor {
         scene.add_component(persp_cam, NativeScriptComponent::bind::<CameraController>());
 
         GGEditor {
+            scene_state: SceneState::Edit,
+            scene_snapshot: None,
             dock_state,
             scene_fb: None,
             viewport_size: (0, 0),
@@ -121,6 +140,8 @@ impl Application for GGEditor {
             current_directory: std::path::PathBuf::from(ASSETS_DIR),
             pending_open_path: None,
             pending_texture_loads: Vec::new(),
+            pending_drop_scenes: Vec::new(),
+            should_exit: false,
         }
     }
 
@@ -129,6 +150,7 @@ impl Application for GGEditor {
             title: "GGEditor".into(),
             width: 1600,
             height: 900,
+            decorations: cfg!(target_os = "macos"),
         }
     }
 
@@ -173,8 +195,15 @@ impl Application for GGEditor {
         !(self.viewport_focused && self.viewport_hovered)
     }
 
+    fn should_exit(&self) -> bool {
+        self.should_exit
+    }
+
     fn on_event(&mut self, event: &Event, input: &Input) {
-        self.editor_camera.on_event(event);
+        // Editor camera only responds in edit mode.
+        if self.scene_state == SceneState::Edit {
+            self.editor_camera.on_event(event);
+        }
 
         if let Event::Key(KeyEvent::Pressed {
             key_code,
@@ -187,22 +216,37 @@ impl Application for GGEditor {
                 || input.is_key_pressed(KeyCode::RightShift);
 
             match key_code {
-                // File commands.
-                KeyCode::N if ctrl => self.new_scene(),
-                KeyCode::O if ctrl => self.open_scene(),
-                KeyCode::S if ctrl && shift => self.save_scene_as(),
+                // File commands — always available; stop playback first.
+                KeyCode::N if ctrl => {
+                    if self.scene_state == SceneState::Play {
+                        self.on_scene_stop();
+                    }
+                    self.new_scene();
+                }
+                KeyCode::O if ctrl => {
+                    if self.scene_state == SceneState::Play {
+                        self.on_scene_stop();
+                    }
+                    self.open_scene();
+                }
+                KeyCode::S if ctrl && shift => {
+                    if self.scene_state == SceneState::Play {
+                        self.on_scene_stop();
+                    }
+                    self.save_scene_as();
+                }
 
-                // Gizmo shortcuts (Q/W/E/R) — only when no modifier is held.
-                KeyCode::Q if !ctrl && !shift => {
+                // Gizmo shortcuts (Q/W/E/R) — edit mode only, no modifiers.
+                KeyCode::Q if !ctrl && !shift && self.scene_state == SceneState::Edit => {
                     self.gizmo_operation = GizmoOperation::None;
                 }
-                KeyCode::W if !ctrl && !shift => {
+                KeyCode::W if !ctrl && !shift && self.scene_state == SceneState::Edit => {
                     self.gizmo_operation = GizmoOperation::Translate;
                 }
-                KeyCode::E if !ctrl && !shift => {
+                KeyCode::E if !ctrl && !shift && self.scene_state == SceneState::Edit => {
                     self.gizmo_operation = GizmoOperation::Rotate;
                 }
-                KeyCode::R if !ctrl && !shift => {
+                KeyCode::R if !ctrl && !shift && self.scene_state == SceneState::Edit => {
                     self.gizmo_operation = GizmoOperation::Scale;
                 }
                 _ => {}
@@ -221,11 +265,16 @@ impl Application for GGEditor {
             self.editor_camera.set_viewport_size(w as f32, h as f32);
         }
 
-        // Update editor camera (orbit/pan/zoom via Alt+mouse).
-        self.editor_camera.on_update(dt, input);
-
-        // Run native scripts (e.g. CameraController on Camera A).
-        self.scene.on_update_scripts(dt, input);
+        match self.scene_state {
+            SceneState::Edit => {
+                // Update editor camera (orbit/pan/zoom via Alt+mouse).
+                self.editor_camera.on_update(dt, input);
+            }
+            SceneState::Play => {
+                // Run native scripts (e.g. CameraController).
+                self.scene.on_update_scripts(dt, input);
+            }
+        }
 
         // Read latest pixel readback result.
         self.hovered_entity = self
@@ -236,6 +285,14 @@ impl Application for GGEditor {
     }
 
     fn on_render(&mut self, renderer: &mut Renderer) {
+        // Drop old scenes that may hold GPU resources (textures). We must
+        // wait for all in-flight GPU work to finish before destroying them,
+        // since previous frames' command buffers may still reference them.
+        if !self.pending_drop_scenes.is_empty() {
+            renderer.wait_gpu_idle();
+            self.pending_drop_scenes.clear();
+        }
+
         // Process deferred texture loads from the properties panel.
         for (entity, path) in self.pending_texture_loads.drain(..) {
             if self.scene.is_alive(entity) {
@@ -248,14 +305,22 @@ impl Application for GGEditor {
             }
         }
 
-        self.scene
-            .on_update_editor(&self.editor_camera.view_projection(), renderer);
+        match self.scene_state {
+            SceneState::Edit => {
+                self.scene
+                    .on_update_editor(&self.editor_camera.view_projection(), renderer);
+            }
+            SceneState::Play => {
+                self.scene.on_update_runtime(renderer);
+            }
+        }
     }
 
-    fn on_egui(&mut self, ctx: &egui::Context) {
-        // -- Menu bar --
-        egui::TopBottomPanel::top("menu_bar").show(ctx, |ui| {
-            egui::MenuBar::new().ui(ui, |ui| {
+    fn on_egui(&mut self, ctx: &egui::Context, window: &Window) {
+        // -- Title bar / Menu bar --
+        #[cfg(not(target_os = "macos"))]
+        {
+            let response = title_bar::title_bar_ui(ctx, window, "GGEditor", |ui| {
                 ui.menu_button("File", |ui| {
                     if ui
                         .add(egui::Button::new("New").shortcut_text("Ctrl+N"))
@@ -280,7 +345,45 @@ impl Application for GGEditor {
                     }
                 });
             });
-        });
+            if response.close_requested {
+                self.should_exit = true;
+            }
+        }
+
+        #[cfg(target_os = "macos")]
+        {
+            let _ = window;
+            egui::TopBottomPanel::top("menu_bar").show(ctx, |ui| {
+                egui::MenuBar::new().ui(ui, |ui| {
+                    ui.menu_button("File", |ui| {
+                        if ui
+                            .add(egui::Button::new("New").shortcut_text("Ctrl+N"))
+                            .clicked()
+                        {
+                            self.new_scene();
+                            ui.close();
+                        }
+                        if ui
+                            .add(egui::Button::new("Open...").shortcut_text("Ctrl+O"))
+                            .clicked()
+                        {
+                            self.open_scene();
+                            ui.close();
+                        }
+                        if ui
+                            .add(egui::Button::new("Save As...").shortcut_text("Ctrl+Shift+S"))
+                            .clicked()
+                        {
+                            self.save_scene_as();
+                            ui.close();
+                        }
+                    });
+                });
+            });
+        }
+
+        // -- Toolbar (Play / Stop) --
+        self.toolbar_ui(ctx);
 
         let fb_tex_id = self.scene_fb.as_ref().and_then(|fb| fb.egui_texture_id());
 
@@ -337,6 +440,7 @@ impl Application for GGEditor {
                 current_directory: &mut self.current_directory,
                 pending_open_path: &mut self.pending_open_path,
                 pending_texture_loads: &mut self.pending_texture_loads,
+                is_playing: self.scene_state == SceneState::Play,
             };
 
             egui_dock::DockArea::new(&mut self.dock_state)
@@ -356,12 +460,123 @@ impl Application for GGEditor {
 }
 
 // ---------------------------------------------------------------------------
+// Play / Stop
+// ---------------------------------------------------------------------------
+
+impl GGEditor {
+    fn toolbar_ui(&mut self, ctx: &egui::Context) {
+        egui::TopBottomPanel::top("toolbar")
+            .exact_height(34.0)
+            .frame(
+                egui::Frame::NONE
+                    .fill(egui::Color32::from_rgb(0x25, 0x25, 0x26))
+                    .inner_margin(egui::Margin::ZERO),
+            )
+            .show(ctx, |ui| {
+                // 1px bottom border line.
+                let rect = ui.max_rect();
+                ui.painter().line_segment(
+                    [
+                        egui::pos2(rect.min.x, rect.max.y),
+                        egui::pos2(rect.max.x, rect.max.y),
+                    ],
+                    egui::Stroke::new(1.0, egui::Color32::from_rgb(0x3C, 0x3C, 0x3C)),
+                );
+
+                ui.with_layout(
+                    egui::Layout::top_down(egui::Align::Center),
+                    |ui| {
+                        ui.add_space(3.0);
+
+                        let btn_size = egui::vec2(28.0, 28.0);
+                        let (rect, response) = ui.allocate_exact_size(
+                            btn_size,
+                            egui::Sense::click(),
+                        );
+
+                        // Hover highlight.
+                        if response.hovered() {
+                            ui.painter().rect_filled(
+                                rect,
+                                egui::CornerRadius::same(3),
+                                egui::Color32::from_rgb(0x40, 0x40, 0x40),
+                            );
+                        }
+
+                        let center = rect.center();
+                        match self.scene_state {
+                            SceneState::Edit => {
+                                // Green play triangle.
+                                let half = 7.0;
+                                let points = vec![
+                                    egui::pos2(center.x - half * 0.7, center.y - half),
+                                    egui::pos2(center.x + half, center.y),
+                                    egui::pos2(center.x - half * 0.7, center.y + half),
+                                ];
+                                ui.painter().add(egui::Shape::convex_polygon(
+                                    points,
+                                    egui::Color32::from_rgb(0x4E, 0xC9, 0x4E),
+                                    egui::Stroke::NONE,
+                                ));
+                            }
+                            SceneState::Play => {
+                                // Blue stop square.
+                                let half = 6.0;
+                                let stop_rect = egui::Rect::from_center_size(
+                                    center,
+                                    egui::vec2(half * 2.0, half * 2.0),
+                                );
+                                ui.painter().rect_filled(
+                                    stop_rect,
+                                    egui::CornerRadius::same(2),
+                                    egui::Color32::from_rgb(0x3B, 0x9C, 0xE9),
+                                );
+                            }
+                        }
+
+                        if response.clicked() {
+                            match self.scene_state {
+                                SceneState::Edit => self.on_scene_play(),
+                                SceneState::Play => self.on_scene_stop(),
+                            }
+                        }
+                    },
+                );
+            });
+    }
+
+    fn on_scene_play(&mut self) {
+        self.scene_state = SceneState::Play;
+        self.scene_snapshot = SceneSerializer::serialize_to_string(&self.scene);
+    }
+
+    fn on_scene_stop(&mut self) {
+        self.scene_state = SceneState::Edit;
+
+        if let Some(snapshot) = self.scene_snapshot.take() {
+            let mut restored = Scene::new();
+            if SceneSerializer::deserialize_from_string(&mut restored, &snapshot) {
+                let old = std::mem::replace(&mut self.scene, restored);
+                self.pending_drop_scenes.push(old);
+                self.selection_context = None;
+
+                let (w, h) = self.viewport_size;
+                if w > 0 && h > 0 {
+                    self.scene.on_viewport_resize(w, h);
+                }
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // File commands (New / Open / Save As)
 // ---------------------------------------------------------------------------
 
 impl GGEditor {
     fn new_scene(&mut self) {
-        self.scene = Scene::new();
+        let old = std::mem::replace(&mut self.scene, Scene::new());
+        self.pending_drop_scenes.push(old);
         self.selection_context = None;
 
         // Ensure cameras get the correct viewport on the next frame.
@@ -375,7 +590,8 @@ impl GGEditor {
         if let Some(path) = FileDialogs::open_file("GGScene files", &["ggscene"]) {
             let mut new_scene = Scene::new();
             if SceneSerializer::deserialize(&mut new_scene, &path) {
-                self.scene = new_scene;
+                let old = std::mem::replace(&mut self.scene, new_scene);
+                self.pending_drop_scenes.push(old);
                 self.selection_context = None;
 
                 let (w, h) = self.viewport_size;
@@ -396,7 +612,8 @@ impl GGEditor {
         let path_str = path.to_string_lossy();
         let mut new_scene = Scene::new();
         if SceneSerializer::deserialize(&mut new_scene, &path_str) {
-            self.scene = new_scene;
+            let old = std::mem::replace(&mut self.scene, new_scene);
+            self.pending_drop_scenes.push(old);
             self.selection_context = None;
             let (w, h) = self.viewport_size;
             if w > 0 && h > 0 {

@@ -779,6 +779,18 @@ impl Renderer {
         );
     }
 
+    // -- GPU synchronization ---------------------------------------------------
+
+    /// Wait for the GPU to finish all in-flight work.
+    ///
+    /// Call this before destroying resources that may still be referenced by
+    /// pending command buffers (e.g. textures owned by a scene being replaced).
+    pub fn wait_gpu_idle(&self) {
+        unsafe {
+            let _ = self.device.device_wait_idle();
+        }
+    }
+
     // -- Clear color ----------------------------------------------------------
 
     /// Set the clear color used at the start of each render pass.

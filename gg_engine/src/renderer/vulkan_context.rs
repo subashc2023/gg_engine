@@ -185,7 +185,9 @@ impl VulkanContext {
 
         let device_extensions = [ash::khr::swapchain::NAME.as_ptr()];
 
-        let features10 = vk::PhysicalDeviceFeatures::default().sampler_anisotropy(true);
+        let features10 = vk::PhysicalDeviceFeatures::default()
+            .sampler_anisotropy(true)
+            .independent_blend(true);
 
         let mut features12 = vk::PhysicalDeviceVulkan12Features::default()
             .descriptor_binding_partially_bound(true)

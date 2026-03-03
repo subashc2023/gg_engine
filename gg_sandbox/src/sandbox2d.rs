@@ -182,7 +182,7 @@ impl Application for Sandbox2D {
         self.particle_system.on_render(renderer);
     }
 
-    fn on_egui(&mut self, ctx: &gg_engine::egui::Context) {
+    fn on_egui(&mut self, ctx: &gg_engine::egui::Context, _window: &gg_engine::winit::window::Window) {
         let dt_ms = self.last_dt * 1000.0;
         let fps = if self.last_dt > 0.0 {
             1.0 / self.last_dt

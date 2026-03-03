@@ -44,6 +44,7 @@ pub(crate) struct EditorTabViewer<'a> {
     pub(crate) current_directory: &'a mut std::path::PathBuf,
     pub(crate) pending_open_path: &'a mut Option<std::path::PathBuf>,
     pub(crate) pending_texture_loads: &'a mut Vec<(Entity, std::path::PathBuf)>,
+    pub(crate) is_playing: bool,
 }
 
 impl EditorTabViewer<'_> {
@@ -90,6 +91,7 @@ impl egui_dock::TabViewer for EditorTabViewer<'_> {
                     self.scene_fb,
                     self.hovered_entity,
                     self.pending_open_path,
+                    self.is_playing,
                 );
             }
 

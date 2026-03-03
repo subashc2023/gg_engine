@@ -23,6 +23,7 @@ pub use application::{run, Application, WindowConfig};
 pub use egui;
 pub use glam;
 pub use hecs;
+pub use winit;
 pub use input::Input;
 pub use layer::{Layer, LayerStack};
 pub use log;
@@ -74,6 +75,7 @@ pub mod prelude {
     pub use crate::{profile_scope, run, Application, Ref, Scope, WindowConfig};
     pub use glam::{Mat3, Mat4, Quat, Vec2, Vec3, Vec4};
     pub use log::{debug, error, info, trace, warn};
+    pub use winit::window::Window;
 }
 
 #[cfg(test)]

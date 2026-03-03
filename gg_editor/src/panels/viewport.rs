@@ -22,6 +22,7 @@ pub(crate) fn viewport_ui(
     scene_fb: &mut Option<Framebuffer>,
     hovered_entity: i32,
     pending_open_path: &mut Option<std::path::PathBuf>,
+    is_playing: bool,
 ) {
     let available = ui.available_size();
     if available.x > 0.0 && available.y > 0.0 {
@@ -37,16 +38,19 @@ pub(crate) fn viewport_ui(
     if clicked && *viewport_hovered {
         *viewport_focused = true;
 
-        // Mouse picking — select entity on left click.
-        let left_click = ui.input(|i| i.pointer.button_pressed(egui::PointerButton::Primary));
-        let alt_held = ui.input(|i| i.modifiers.alt);
-        if left_click && !gizmo.is_focused() && !alt_held {
-            if hovered_entity >= 0 {
-                *selection_context = scene
-                    .find_entity_by_id(hovered_entity as u32)
-                    .filter(|e| scene.is_alive(*e));
-            } else {
-                *selection_context = None;
+        // Mouse picking — select entity on left click (edit mode only).
+        if !is_playing {
+            let left_click =
+                ui.input(|i| i.pointer.button_pressed(egui::PointerButton::Primary));
+            let alt_held = ui.input(|i| i.modifiers.alt);
+            if left_click && !gizmo.is_focused() && !alt_held {
+                if hovered_entity >= 0 {
+                    *selection_context = scene
+                        .find_entity_by_id(hovered_entity as u32)
+                        .filter(|e| scene.is_alive(*e));
+                } else {
+                    *selection_context = None;
+                }
             }
         }
     }
@@ -90,8 +94,8 @@ pub(crate) fn viewport_ui(
         None
     };
 
-    // -- Mouse picking: schedule pixel readback --
-    if *viewport_hovered {
+    // -- Mouse picking: schedule pixel readback (edit mode only) --
+    if *viewport_hovered && !is_playing {
         if let Some(viewport_rect) = viewport_rect {
             if let Some(pos) = ui.ctx().input(|i| i.pointer.latest_pos()) {
                 let ppp = ui.ctx().pixels_per_point();
@@ -111,8 +115,9 @@ pub(crate) fn viewport_ui(
         }
     }
 
-    // -- Gizmos --
+    // -- Gizmos (edit mode only) --
     if let Some(viewport_rect) = viewport_rect {
+        if !is_playing {
         if let Some(entity) = *selection_context {
             if scene.is_alive(entity) && gizmo_operation != GizmoOperation::None {
                 // Use the editor camera for gizmo view/projection.
@@ -212,6 +217,7 @@ pub(crate) fn viewport_ui(
                     }
                 }
             }
+        }
         }
     }
 }

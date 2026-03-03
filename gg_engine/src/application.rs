@@ -26,6 +26,7 @@ pub struct WindowConfig {
     pub title: String,
     pub width: u32,
     pub height: u32,
+    pub decorations: bool,
 }
 
 impl Default for WindowConfig {
@@ -34,6 +35,7 @@ impl Default for WindowConfig {
             title: "GGEngine".into(),
             width: 1280,
             height: 720,
+            decorations: true,
         }
     }
 }
@@ -65,7 +67,15 @@ pub trait Application {
     fn on_render(&mut self, _renderer: &mut Renderer) {}
 
     /// Build immediate-mode UI each frame. Called inside `egui::Context::run`.
-    fn on_egui(&mut self, _ctx: &egui::Context) {}
+    /// The `window` handle is provided for custom title bar controls
+    /// (drag, minimize, maximize, close).
+    fn on_egui(&mut self, _ctx: &egui::Context, _window: &Window) {}
+
+    /// Whether the application has requested an exit (e.g. custom close button).
+    /// Polled each frame after `on_egui`. Default: `false`.
+    fn should_exit(&self) -> bool {
+        false
+    }
 
     /// Clear color for the render pass. Polled each frame.
     fn clear_color(&self) -> [f32; 4] {
@@ -180,7 +190,8 @@ impl<T: Application> ApplicationHandler for EngineRunner<T> {
             winit::dpi::LogicalSize::new(self.window_config.width, self.window_config.height);
         let attrs = WindowAttributes::default()
             .with_title(&self.window_config.title)
-            .with_inner_size(size);
+            .with_inner_size(size)
+            .with_decorations(self.window_config.decorations);
 
         match event_loop.create_window(attrs) {
             Ok(window) => {
@@ -350,7 +361,14 @@ impl<T: Application> ApplicationHandler for EngineRunner<T> {
 
         // Handle resize for swapchain recreation and camera projection update.
         if let winit::event::WindowEvent::Resized(size) = &event {
-            if size.width == 0 || size.height == 0 {
+            // Borderless windows report non-zero size when minimized (e.g. 199x34
+            // on Windows). Check `is_minimized()` in addition to zero-size.
+            let is_minimized = self
+                .window
+                .as_ref()
+                .and_then(|w| w.is_minimized())
+                .unwrap_or(false);
+            if size.width == 0 || size.height == 0 || is_minimized {
                 self.minimized = true;
             } else {
                 self.minimized = false;
@@ -379,7 +397,7 @@ impl<T: Application> ApplicationHandler for EngineRunner<T> {
         }
     }
 
-    fn about_to_wait(&mut self, _event_loop: &ActiveEventLoop) {
+    fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
         let _run_loop = ProfileTimer::new("Run loop");
         let now = Instant::now();
         let dt = Timestep::from_seconds(now.duration_since(self.last_frame_time).as_secs_f32());
@@ -414,9 +432,10 @@ impl<T: Application> ApplicationHandler for EngineRunner<T> {
                 break 'render;
             };
 
-            // Skip rendering when minimized.
+            // Skip rendering when minimized or window is too small (borderless
+            // windows report non-zero sizes like 199x34 when minimized on Windows).
             let extent = swapchain.extent();
-            if extent.width == 0 || extent.height == 0 {
+            if extent.width < 100 || extent.height < 100 {
                 break 'render;
             }
 
@@ -426,10 +445,16 @@ impl<T: Application> ApplicationHandler for EngineRunner<T> {
             // Split borrows so the application can build egui UI.
             let egui_ctx = &self.egui_ctx;
             let app = &mut self.app;
+            let window_ref = Arc::clone(window);
             let full_output = egui_ctx.run(raw_input, |ctx| {
                 let _timer = ProfileTimer::new("Application::on_egui");
-                app.on_egui(ctx);
+                app.on_egui(ctx, &window_ref);
             });
+
+            // Check if the application requested an exit (e.g. custom close button).
+            if self.app.should_exit() {
+                event_loop.exit();
+            }
 
             // Handle platform output (cursor, clipboard, etc).
             egui_state.handle_platform_output(window, full_output.platform_output);
