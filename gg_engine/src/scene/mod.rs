@@ -520,14 +520,14 @@ impl Scene {
     }
 
     // -----------------------------------------------------------------
-    // Physics (runtime lifecycle)
+    // Physics (shared helpers)
     // -----------------------------------------------------------------
 
-    /// Initialize the physics world and create rigid bodies / colliders
+    /// Create the physics world and populate it with rigid bodies / colliders
     /// from all entities that have physics components.
     ///
-    /// Call this when entering play mode (before the first physics step).
-    pub fn on_runtime_start(&mut self) {
+    /// Shared by both runtime and simulation start paths.
+    fn on_physics_2d_start(&mut self) {
         let mut physics = PhysicsWorld2D::new(0.0, -9.81);
 
         // Snapshot entities with RigidBody2DComponent to avoid borrow conflicts.
@@ -611,8 +611,8 @@ impl Scene {
 
     /// Tear down the physics world and clear all runtime handles.
     ///
-    /// Call this when exiting play mode (before restoring the snapshot).
-    pub fn on_runtime_stop(&mut self) {
+    /// Shared by both runtime and simulation stop paths.
+    fn on_physics_2d_stop(&mut self) {
         self.physics_world = None;
 
         // Clear runtime handles on all physics components.
@@ -625,6 +625,43 @@ impl Scene {
         for cc in self.world.query_mut::<&mut CircleCollider2DComponent>() {
             cc.runtime_fixture = None;
         }
+    }
+
+    // -----------------------------------------------------------------
+    // Runtime lifecycle
+    // -----------------------------------------------------------------
+
+    /// Initialize physics for runtime (play mode).
+    ///
+    /// Call this when entering play mode (before the first physics step).
+    pub fn on_runtime_start(&mut self) {
+        self.on_physics_2d_start();
+    }
+
+    /// Tear down physics for runtime (play mode).
+    ///
+    /// Call this when exiting play mode (before restoring the snapshot).
+    pub fn on_runtime_stop(&mut self) {
+        self.on_physics_2d_stop();
+    }
+
+    // -----------------------------------------------------------------
+    // Simulation lifecycle
+    // -----------------------------------------------------------------
+
+    /// Initialize physics for simulation mode.
+    ///
+    /// Call this when entering simulate mode. Sets up the physics world
+    /// without initializing scripts — physics only.
+    pub fn on_simulation_start(&mut self) {
+        self.on_physics_2d_start();
+    }
+
+    /// Tear down physics for simulation mode.
+    ///
+    /// Call this when exiting simulate mode.
+    pub fn on_simulation_stop(&mut self) {
+        self.on_physics_2d_stop();
     }
 
     /// Step the physics simulation and write body transforms back to entities.
@@ -708,78 +745,12 @@ impl Scene {
         }
     }
 
-    /// Find the primary camera, set the view-projection matrix on the
-    /// renderer, and draw all entities with sprites.
+    /// Draw all sprite and circle entities.
     ///
-    /// If no entity has a [`CameraComponent`] with `primary = true`, nothing
-    /// is rendered.
-    ///
-    /// Use this for **runtime** rendering where the scene's own ECS camera
-    /// drives the view. For editor rendering with an external camera, use
-    /// [`on_update_editor`](Self::on_update_editor).
-    pub fn on_update_runtime(&self, renderer: &mut Renderer) {
-        // Find the primary camera entity.
-        let mut main_camera_vp: Option<glam::Mat4> = None;
-        for (transform, camera) in self
-            .world
-            .query::<(&TransformComponent, &CameraComponent)>()
-            .iter()
-        {
-            if camera.primary {
-                // VP = projection * inverse(camera_transform)
-                main_camera_vp =
-                    Some(*camera.camera.projection() * transform.get_transform().inverse());
-                break;
-            }
-        }
-
-        if let Some(vp) = main_camera_vp {
-            renderer.set_view_projection(vp);
-
-            // Draw all sprite entities.
-            for (entity, transform, sprite) in self
-                .world
-                .query::<(
-                    hecs::Entity,
-                    &TransformComponent,
-                    &SpriteRendererComponent,
-                )>()
-                .iter()
-            {
-                renderer.draw_sprite(
-                    &transform.get_transform(),
-                    sprite,
-                    entity.id() as i32,
-                );
-            }
-
-            // Draw all circle entities.
-            for (entity, transform, circle) in self
-                .world
-                .query::<(
-                    hecs::Entity,
-                    &TransformComponent,
-                    &CircleRendererComponent,
-                )>()
-                .iter()
-            {
-                renderer.draw_circle_component(
-                    &transform.get_transform(),
-                    circle,
-                    entity.id() as i32,
-                );
-            }
-        }
-    }
-
-    /// Render all sprite entities using an externally provided view-projection
-    /// matrix (e.g. from an [`EditorCamera`](crate::renderer::EditorCamera)).
-    ///
-    /// Unlike [`on_update_runtime`](Self::on_update_runtime), this does **not**
-    /// look for a primary camera entity — it always renders.
-    pub fn on_update_editor(&self, editor_camera_vp: &glam::Mat4, renderer: &mut Renderer) {
-        renderer.set_view_projection(*editor_camera_vp);
-
+    /// Shared rendering code used by editor, simulation, and runtime paths.
+    /// The caller is responsible for setting the view-projection matrix on
+    /// the renderer before calling this.
+    fn render_scene(&self, renderer: &mut Renderer) {
         // Draw sprites.
         for (entity, transform, sprite) in self
             .world
@@ -813,6 +784,56 @@ impl Scene {
                 entity.id() as i32,
             );
         }
+    }
+
+    /// Find the primary camera, set the view-projection matrix on the
+    /// renderer, and draw all entities with sprites.
+    ///
+    /// If no entity has a [`CameraComponent`] with `primary = true`, nothing
+    /// is rendered.
+    ///
+    /// Use this for **runtime** rendering where the scene's own ECS camera
+    /// drives the view. For editor rendering with an external camera, use
+    /// [`on_update_editor`](Self::on_update_editor).
+    pub fn on_update_runtime(&self, renderer: &mut Renderer) {
+        // Find the primary camera entity.
+        let mut main_camera_vp: Option<glam::Mat4> = None;
+        for (transform, camera) in self
+            .world
+            .query::<(&TransformComponent, &CameraComponent)>()
+            .iter()
+        {
+            if camera.primary {
+                // VP = projection * inverse(camera_transform)
+                main_camera_vp =
+                    Some(*camera.camera.projection() * transform.get_transform().inverse());
+                break;
+            }
+        }
+
+        if let Some(vp) = main_camera_vp {
+            renderer.set_view_projection(vp);
+            self.render_scene(renderer);
+        }
+    }
+
+    /// Render all entities using an externally provided view-projection
+    /// matrix (e.g. from an [`EditorCamera`](crate::renderer::EditorCamera)).
+    ///
+    /// Unlike [`on_update_runtime`](Self::on_update_runtime), this does **not**
+    /// look for a primary camera entity — it always renders.
+    pub fn on_update_editor(&self, editor_camera_vp: &glam::Mat4, renderer: &mut Renderer) {
+        renderer.set_view_projection(*editor_camera_vp);
+        self.render_scene(renderer);
+    }
+
+    /// Render the scene from the editor camera for simulation mode.
+    ///
+    /// Like [`on_update_editor`], this uses an external camera matrix.
+    /// The physics stepping is handled separately in `on_update_physics`.
+    pub fn on_update_simulation(&self, editor_camera_vp: &glam::Mat4, renderer: &mut Renderer) {
+        renderer.set_view_projection(*editor_camera_vp);
+        self.render_scene(renderer);
     }
 }
 

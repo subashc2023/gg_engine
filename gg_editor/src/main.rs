@@ -21,6 +21,7 @@ use panels::{EditorTabViewer, Tab};
 enum SceneState {
     Edit,
     Play,
+    Simulate,
 }
 
 // ---------------------------------------------------------------------------
@@ -228,8 +229,8 @@ impl Application for GGEditor {
     }
 
     fn on_event(&mut self, event: &Event, input: &Input) {
-        // Editor camera only responds in edit mode.
-        if self.scene_state == SceneState::Edit {
+        // Editor camera responds in edit and simulate modes.
+        if self.scene_state != SceneState::Play {
             self.editor_camera.on_event(event);
         }
 
@@ -244,27 +245,27 @@ impl Application for GGEditor {
                 || input.is_key_pressed(KeyCode::RightShift);
 
             match key_code {
-                // File commands — always available; stop playback first.
+                // File commands — always available; stop playback/simulation first.
                 KeyCode::N if ctrl => {
-                    if self.scene_state == SceneState::Play {
+                    if self.scene_state != SceneState::Edit {
                         self.on_scene_stop();
                     }
                     self.new_scene();
                 }
                 KeyCode::O if ctrl => {
-                    if self.scene_state == SceneState::Play {
+                    if self.scene_state != SceneState::Edit {
                         self.on_scene_stop();
                     }
                     self.open_scene();
                 }
                 KeyCode::S if ctrl && shift => {
-                    if self.scene_state == SceneState::Play {
+                    if self.scene_state != SceneState::Edit {
                         self.on_scene_stop();
                     }
                     self.save_scene_as();
                 }
                 KeyCode::S if ctrl && !shift => {
-                    if self.scene_state == SceneState::Play {
+                    if self.scene_state != SceneState::Edit {
                         self.on_scene_stop();
                     }
                     self.save_scene();
@@ -309,6 +310,13 @@ impl Application for GGEditor {
                 // Update editor camera (orbit/pan/zoom via Alt+mouse).
                 self.editor_camera.on_update(dt, input);
             }
+            SceneState::Simulate => {
+                // Update editor camera — simulation renders from the editor
+                // camera, not the scene camera.
+                self.editor_camera.on_update(dt, input);
+                // Step physics (no scripts).
+                self.scene.on_update_physics(dt);
+            }
             SceneState::Play => {
                 // Run native scripts (e.g. CameraController).
                 self.scene.on_update_scripts(dt, input);
@@ -351,6 +359,10 @@ impl Application for GGEditor {
                 self.scene
                     .on_update_editor(&self.editor_camera.view_projection(), renderer);
             }
+            SceneState::Simulate => {
+                self.scene
+                    .on_update_simulation(&self.editor_camera.view_projection(), renderer);
+            }
             SceneState::Play => {
                 self.scene.on_update_runtime(renderer);
             }
@@ -367,6 +379,7 @@ impl Application for GGEditor {
             let play_state = match self.scene_state {
                 SceneState::Edit => title_bar::PlayState::Edit,
                 SceneState::Play => title_bar::PlayState::Play,
+                SceneState::Simulate => title_bar::PlayState::Simulate,
             };
             let response = title_bar::title_bar_ui(ctx, window, play_state, |ui| {
                 ui.menu_button("File", |ui| {
@@ -414,7 +427,21 @@ impl Application for GGEditor {
             if response.play_toggled {
                 match self.scene_state {
                     SceneState::Edit => self.on_scene_play(),
+                    SceneState::Simulate => {
+                        self.on_scene_stop();
+                        self.on_scene_play();
+                    }
                     SceneState::Play => self.on_scene_stop(),
+                }
+            }
+            if response.simulate_toggled {
+                match self.scene_state {
+                    SceneState::Edit => self.on_scene_simulate(),
+                    SceneState::Play => {
+                        self.on_scene_stop();
+                        self.on_scene_simulate();
+                    }
+                    SceneState::Simulate => self.on_scene_stop(),
                 }
             }
         }
@@ -523,7 +550,7 @@ impl Application for GGEditor {
                 current_directory: &mut self.current_directory,
                 pending_open_path: &mut self.pending_open_path,
                 pending_texture_loads: &mut self.pending_texture_loads,
-                is_playing: self.scene_state == SceneState::Play,
+                is_playing: self.scene_state == SceneState::Play,  // Simulate still uses editor camera + gizmos
             };
 
             egui_dock::DockArea::new(&mut self.dock_state)
@@ -564,7 +591,7 @@ impl GGEditor {
                     }
                 }
             }
-            SceneState::Edit => {
+            SceneState::Edit | SceneState::Simulate => {
                 renderer.set_view_projection(self.editor_camera.view_projection());
             }
         }
@@ -647,34 +674,47 @@ impl GGEditor {
                 );
 
                 ui.with_layout(
-                    egui::Layout::top_down(egui::Align::Center),
+                    egui::Layout::left_to_right(egui::Align::Center)
+                        .with_main_justify(true),
                     |ui| {
                         ui.add_space(3.0);
 
                         let btn_size = egui::vec2(28.0, 28.0);
-                        let (rect, response) = ui.allocate_exact_size(
+                        let spacing = 4.0;
+                        let total_width = btn_size.x * 2.0 + spacing;
+                        let avail = ui.available_width();
+                        ui.add_space((avail - total_width) / 2.0);
+
+                        // Play/Stop button.
+                        let (play_rect, play_resp) = ui.allocate_exact_size(
+                            btn_size,
+                            egui::Sense::click(),
+                        );
+                        ui.add_space(spacing);
+                        // Simulate button.
+                        let (sim_rect, sim_resp) = ui.allocate_exact_size(
                             btn_size,
                             egui::Sense::click(),
                         );
 
-                        // Hover highlight.
-                        if response.hovered() {
+                        // Paint play button.
+                        if play_resp.hovered() {
                             ui.painter().rect_filled(
-                                rect,
+                                play_rect,
                                 egui::CornerRadius::same(3),
                                 egui::Color32::from_rgb(0x40, 0x40, 0x40),
                             );
                         }
 
-                        let center = rect.center();
+                        let play_center = play_rect.center();
                         match self.scene_state {
-                            SceneState::Edit => {
+                            SceneState::Edit | SceneState::Simulate => {
                                 // Green play triangle.
                                 let half = 7.0;
                                 let points = vec![
-                                    egui::pos2(center.x - half * 0.7, center.y - half),
-                                    egui::pos2(center.x + half, center.y),
-                                    egui::pos2(center.x - half * 0.7, center.y + half),
+                                    egui::pos2(play_center.x - half * 0.7, play_center.y - half),
+                                    egui::pos2(play_center.x + half, play_center.y),
+                                    egui::pos2(play_center.x - half * 0.7, play_center.y + half),
                                 ];
                                 ui.painter().add(egui::Shape::convex_polygon(
                                     points,
@@ -686,7 +726,7 @@ impl GGEditor {
                                 // Blue stop square.
                                 let half = 6.0;
                                 let stop_rect = egui::Rect::from_center_size(
-                                    center,
+                                    play_center,
                                     egui::vec2(half * 2.0, half * 2.0),
                                 );
                                 ui.painter().rect_filled(
@@ -697,10 +737,54 @@ impl GGEditor {
                             }
                         }
 
-                        if response.clicked() {
+                        // Paint simulate button.
+                        if sim_resp.hovered() {
+                            ui.painter().rect_filled(
+                                sim_rect,
+                                egui::CornerRadius::same(3),
+                                egui::Color32::from_rgb(0x40, 0x40, 0x40),
+                            );
+                        }
+
+                        let sim_center = sim_rect.center();
+                        match self.scene_state {
+                            SceneState::Simulate => {
+                                // Blue stop square.
+                                let half = 6.0;
+                                let stop_rect = egui::Rect::from_center_size(
+                                    sim_center,
+                                    egui::vec2(half * 2.0, half * 2.0),
+                                );
+                                ui.painter().rect_filled(
+                                    stop_rect,
+                                    egui::CornerRadius::same(2),
+                                    egui::Color32::from_rgb(0x3B, 0x9C, 0xE9),
+                                );
+                            }
+                            _ => {
+                                // Gear icon.
+                                paint_gear_icon(ui.painter(), sim_center, 8.0);
+                            }
+                        }
+
+                        if play_resp.clicked() {
                             match self.scene_state {
                                 SceneState::Edit => self.on_scene_play(),
+                                SceneState::Simulate => {
+                                    self.on_scene_stop();
+                                    self.on_scene_play();
+                                }
                                 SceneState::Play => self.on_scene_stop(),
+                            }
+                        }
+                        if sim_resp.clicked() {
+                            match self.scene_state {
+                                SceneState::Edit => self.on_scene_simulate(),
+                                SceneState::Play => {
+                                    self.on_scene_stop();
+                                    self.on_scene_simulate();
+                                }
+                                SceneState::Simulate => self.on_scene_stop(),
                             }
                         }
                     },
@@ -716,9 +800,22 @@ impl GGEditor {
         self.scene.on_runtime_start();
     }
 
+    fn on_scene_simulate(&mut self) {
+        self.scene_state = SceneState::Simulate;
+        let sim_scene = Scene::copy(&self.scene);
+        let editor_scene = std::mem::replace(&mut self.scene, sim_scene);
+        self.editor_scene = Some(editor_scene);
+        self.scene.on_simulation_start();
+    }
+
     fn on_scene_stop(&mut self) {
+        match self.scene_state {
+            SceneState::Play => self.scene.on_runtime_stop(),
+            SceneState::Simulate => self.scene.on_simulation_stop(),
+            SceneState::Edit => return,
+        }
+
         self.scene_state = SceneState::Edit;
-        self.scene.on_runtime_stop();
 
         if let Some(editor_scene) = self.editor_scene.take() {
             let old = std::mem::replace(&mut self.scene, editor_scene);
@@ -805,6 +902,49 @@ impl GGEditor {
             }
         }
     }
+}
+
+/// Procedural gear icon for the simulate button (macOS toolbar).
+#[cfg(target_os = "macos")]
+fn paint_gear_icon(painter: &egui::Painter, center: egui::Pos2, radius: f32) {
+    let color = egui::Color32::from_rgb(0xCC, 0xCC, 0xCC);
+    let bg = egui::Color32::from_rgb(0x25, 0x25, 0x26);
+    let teeth = 6;
+    let inner_r = radius * 0.55;
+    let outer_r = radius;
+    let tooth_width = std::f32::consts::PI / (teeth as f32 * 2.0);
+
+    let mut points = Vec::new();
+    for i in 0..teeth {
+        let angle = (i as f32 / teeth as f32) * std::f32::consts::TAU;
+        let a1 = angle - tooth_width * 1.5;
+        points.push(egui::pos2(
+            center.x + inner_r * a1.cos(),
+            center.y + inner_r * a1.sin(),
+        ));
+        let a2 = angle - tooth_width * 0.7;
+        points.push(egui::pos2(
+            center.x + outer_r * a2.cos(),
+            center.y + outer_r * a2.sin(),
+        ));
+        let a3 = angle + tooth_width * 0.7;
+        points.push(egui::pos2(
+            center.x + outer_r * a3.cos(),
+            center.y + outer_r * a3.sin(),
+        ));
+        let a4 = angle + tooth_width * 1.5;
+        points.push(egui::pos2(
+            center.x + inner_r * a4.cos(),
+            center.y + inner_r * a4.sin(),
+        ));
+    }
+
+    painter.add(egui::Shape::convex_polygon(
+        points,
+        color,
+        egui::Stroke::NONE,
+    ));
+    painter.circle_filled(center, radius * 0.25, bg);
 }
 
 fn main() {

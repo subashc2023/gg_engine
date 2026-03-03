@@ -14,11 +14,13 @@ const CLOSE_HOVER_BG: egui::Color32 = egui::Color32::from_rgb(0xE8, 0x11, 0x23);
 pub enum PlayState {
     Edit,
     Play,
+    Simulate,
 }
 
 pub struct TitleBarResponse {
     pub close_requested: bool,
     pub play_toggled: bool,
+    pub simulate_toggled: bool,
 }
 
 pub fn title_bar_ui(
@@ -29,6 +31,7 @@ pub fn title_bar_ui(
 ) -> TitleBarResponse {
     let mut close_requested = false;
     let mut play_toggled = false;
+    let mut simulate_toggled = false;
     let is_maximized = window.is_maximized();
 
     egui::TopBottomPanel::top("title_bar")
@@ -88,18 +91,31 @@ pub fn title_bar_ui(
                 menu_contents(ui);
             });
 
-            // -- 4. Play/Stop button (centered) --
+            // -- 4. Play/Stop + Simulate buttons (centered) --
             let btn_size = egui::vec2(28.0, 22.0);
+            let spacing = 4.0;
+            let total_width = btn_size.x * 2.0 + spacing;
+            let center_x = title_bar_rect.center().x;
+            let center_y = title_bar_rect.center().y;
+
+            // Play button (left of center pair).
             let play_rect = egui::Rect::from_center_size(
-                title_bar_rect.center(),
+                egui::pos2(center_x - (total_width / 2.0 - btn_size.x / 2.0), center_y),
                 btn_size,
             );
             let play_resp = ui.allocate_rect(play_rect, egui::Sense::click());
 
+            // Simulate button (right of center pair).
+            let sim_rect = egui::Rect::from_center_size(
+                egui::pos2(center_x + (total_width / 2.0 - btn_size.x / 2.0), center_y),
+                btn_size,
+            );
+            let sim_resp = ui.allocate_rect(sim_rect, egui::Sense::click());
+
             // -- 5. Paint everything (immutable borrows only) --
             let painter = ui.painter();
 
-            // Play/stop button
+            // Play/stop button hover.
             if play_resp.hovered() {
                 painter.rect_filled(
                     play_rect,
@@ -108,27 +124,32 @@ pub fn title_bar_ui(
                 );
             }
 
-            let center = play_rect.center();
-            match play_state {
-                PlayState::Edit => {
+            // Play/stop icon.
+            let play_center = play_rect.center();
+            let has_active_scene = true; // always true since we always have a scene now
+            let play_icon = match play_state {
+                PlayState::Edit | PlayState::Simulate => true,  // show play triangle
+                PlayState::Play => false,                        // show stop square
+            };
+            if has_active_scene {
+                if play_icon {
                     // Green play triangle.
                     let half = 6.0;
                     let points = vec![
-                        egui::pos2(center.x - half * 0.7, center.y - half),
-                        egui::pos2(center.x + half, center.y),
-                        egui::pos2(center.x - half * 0.7, center.y + half),
+                        egui::pos2(play_center.x - half * 0.7, play_center.y - half),
+                        egui::pos2(play_center.x + half, play_center.y),
+                        egui::pos2(play_center.x - half * 0.7, play_center.y + half),
                     ];
                     painter.add(egui::Shape::convex_polygon(
                         points,
                         egui::Color32::from_rgb(0x4E, 0xC9, 0x4E),
                         egui::Stroke::NONE,
                     ));
-                }
-                PlayState::Play => {
+                } else {
                     // Blue stop square.
                     let half = 5.0;
                     let stop_rect = egui::Rect::from_center_size(
-                        center,
+                        play_center,
                         egui::vec2(half * 2.0, half * 2.0),
                     );
                     painter.rect_filled(
@@ -139,8 +160,42 @@ pub fn title_bar_ui(
                 }
             }
 
+            // Simulate button hover.
+            if sim_resp.hovered() {
+                painter.rect_filled(
+                    sim_rect,
+                    egui::CornerRadius::same(3),
+                    BUTTON_HOVER_BG,
+                );
+            }
+
+            // Simulate icon: gear shape (or stop square when simulating).
+            let sim_center = sim_rect.center();
+            match play_state {
+                PlayState::Simulate => {
+                    // Blue stop square (same as play stop).
+                    let half = 5.0;
+                    let stop_rect = egui::Rect::from_center_size(
+                        sim_center,
+                        egui::vec2(half * 2.0, half * 2.0),
+                    );
+                    painter.rect_filled(
+                        stop_rect,
+                        egui::CornerRadius::same(2),
+                        egui::Color32::from_rgb(0x3B, 0x9C, 0xE9),
+                    );
+                }
+                _ => {
+                    // Gear icon for simulate.
+                    paint_gear_icon(painter, sim_center, 7.0);
+                }
+            }
+
             if play_resp.clicked() {
                 play_toggled = true;
+            }
+            if sim_resp.clicked() {
+                simulate_toggled = true;
             }
 
             // Button icons
@@ -173,6 +228,7 @@ pub fn title_bar_ui(
     TitleBarResponse {
         close_requested,
         play_toggled,
+        simulate_toggled,
     }
 }
 
@@ -255,6 +311,55 @@ fn paint_restore_icon(painter: &egui::Painter, resp: &egui::Response, rect: egui
         egui::Stroke::new(1.0, color),
         egui::StrokeKind::Inside,
     );
+}
+
+fn paint_gear_icon(painter: &egui::Painter, center: egui::Pos2, radius: f32) {
+    let color = egui::Color32::from_rgb(0xCC, 0xCC, 0xCC);
+    let teeth = 6;
+    let inner_r = radius * 0.55;
+    let outer_r = radius;
+    let tooth_width = std::f32::consts::PI / (teeth as f32 * 2.0);
+
+    // Build gear outline as a polygon.
+    let mut points = Vec::new();
+    for i in 0..teeth {
+        let angle = (i as f32 / teeth as f32) * std::f32::consts::TAU;
+
+        // Inner edge leading.
+        let a1 = angle - tooth_width * 1.5;
+        points.push(egui::pos2(
+            center.x + inner_r * a1.cos(),
+            center.y + inner_r * a1.sin(),
+        ));
+        // Outer edge leading.
+        let a2 = angle - tooth_width * 0.7;
+        points.push(egui::pos2(
+            center.x + outer_r * a2.cos(),
+            center.y + outer_r * a2.sin(),
+        ));
+        // Outer edge trailing.
+        let a3 = angle + tooth_width * 0.7;
+        points.push(egui::pos2(
+            center.x + outer_r * a3.cos(),
+            center.y + outer_r * a3.sin(),
+        ));
+        // Inner edge trailing.
+        let a4 = angle + tooth_width * 1.5;
+        points.push(egui::pos2(
+            center.x + inner_r * a4.cos(),
+            center.y + inner_r * a4.sin(),
+        ));
+    }
+
+    painter.add(egui::Shape::convex_polygon(
+        points,
+        color,
+        egui::Stroke::NONE,
+    ));
+
+    // Center hole.
+    let hole_r = radius * 0.25;
+    painter.circle_filled(center, hole_r, BAR_BG);
 }
 
 fn paint_close_icon(painter: &egui::Painter, resp: &egui::Response, rect: egui::Rect) {
