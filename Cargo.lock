@@ -1210,6 +1210,8 @@ dependencies = [
  "egui_dock",
  "gg_engine",
  "notify",
+ "serde",
+ "serde_yaml",
  "transform-gizmo-egui",
 ]
 

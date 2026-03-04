@@ -1,5 +1,7 @@
 mod camera_controller;
+mod editor_settings;
 mod gizmo;
+mod hub;
 mod panels;
 mod physics_player;
 #[cfg(not(target_os = "macos"))]
@@ -14,6 +16,7 @@ use gg_engine::prelude::*;
 use transform_gizmo_egui::Gizmo;
 
 use camera_controller::NativeCameraFollow;
+use editor_settings::EditorSettings;
 use gizmo::GizmoOperation;
 use physics_player::PhysicsPlayer;
 use panels::content_browser::{render_dnd_ghost, ASSETS_DIR};
@@ -28,6 +31,12 @@ enum SceneState {
     Edit,
     Play,
     Simulate,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum EditorMode {
+    Hub,
+    Editor,
 }
 
 // ---------------------------------------------------------------------------
@@ -85,6 +94,8 @@ impl TilemapPaintState {
 // ---------------------------------------------------------------------------
 
 struct GGEditor {
+    editor_mode: EditorMode,
+    editor_settings: EditorSettings,
     project: Option<Project>,
     scene_state: SceneState,
     editor_scene: Option<Scene>,
@@ -121,6 +132,8 @@ struct GGEditor {
     is_paused: bool,
     step_frames: i32,
     should_exit: bool,
+    /// When `Some`, the "New Scene" modal is open with the current name text.
+    new_scene_modal: Option<String>,
     /// File watcher that monitors `assets/scripts/` for `.lua` changes.
     /// Kept alive so the OS keeps notifying us; the actual data flows
     /// through `script_reload_pending`.
@@ -200,7 +213,16 @@ impl Application for GGEditor {
             None
         };
 
-        // Load scene: from project start scene, or create demo scene as fallback.
+        // Load editor settings (recent projects, etc.).
+        let mut editor_settings = EditorSettings::load();
+
+        let editor_mode = if project.is_some() {
+            EditorMode::Editor
+        } else {
+            EditorMode::Hub
+        };
+
+        // Load scene: from project start scene, or empty scene for hub mode.
         let (scene, editor_scene_path) = if let Some(ref proj) = project {
             let start_path = proj.start_scene_path();
             if start_path.exists() {
@@ -218,8 +240,17 @@ impl Application for GGEditor {
                 (Scene::new(), None)
             }
         } else {
-            (create_demo_scene(), None)
+            (Scene::new(), None)
         };
+
+        // Record CLI-loaded project in recent projects.
+        if let Some(ref proj) = project {
+            if let Some(arg) = std::env::args().nth(1) {
+                let abs_path = std::fs::canonicalize(&arg)
+                    .unwrap_or_else(|_| PathBuf::from(&arg));
+                editor_settings.add_recent_project(proj.name(), &abs_path.to_string_lossy());
+            }
+        }
 
         // --- File watcher for automatic Lua script reloading ---------------
         #[cfg(feature = "lua-scripting")]
@@ -233,6 +264,8 @@ impl Application for GGEditor {
         );
 
         GGEditor {
+            editor_mode,
+            editor_settings,
             project,
             scene_state: SceneState::Edit,
             editor_scene: None,
@@ -267,6 +300,7 @@ impl Application for GGEditor {
             is_paused: false,
             step_frames: 0,
             should_exit: false,
+            new_scene_modal: None,
             #[cfg(feature = "lua-scripting")]
             _script_watcher,
             #[cfg(feature = "lua-scripting")]
@@ -329,6 +363,10 @@ impl Application for GGEditor {
     }
 
     fn on_event(&mut self, event: &Event, input: &Input) {
+        if self.editor_mode == EditorMode::Hub {
+            return;
+        }
+
         // Editor camera responds in edit and simulate modes.
         if self.scene_state != SceneState::Play {
             self.editor_camera.on_event(event);
@@ -440,6 +478,10 @@ impl Application for GGEditor {
         // Exponential moving average for stable frame time display.
         self.frame_time_ms = self.frame_time_ms * 0.95 + dt.millis() * 0.05;
 
+        if self.editor_mode == EditorMode::Hub {
+            return;
+        }
+
         // Auto-reload Lua scripts when the file watcher detects changes.
         #[cfg(feature = "lua-scripting")]
         if self
@@ -524,6 +566,10 @@ impl Application for GGEditor {
             self.pending_drop_scenes.clear();
         }
 
+        if self.editor_mode == EditorMode::Hub {
+            return;
+        }
+
         // Resolve any pending texture/audio handles via the asset manager.
         if let Some(ref mut am) = self.asset_manager {
             self.scene.resolve_texture_handles(am, renderer);
@@ -591,6 +637,30 @@ impl Application for GGEditor {
     }
 
     fn on_egui(&mut self, ctx: &egui::Context, window: &Window) {
+        // -- Hub mode --
+        if self.editor_mode == EditorMode::Hub {
+            window.set_title("GGEngine");
+
+            #[cfg(not(target_os = "macos"))]
+            {
+                if title_bar::hub_title_bar_ui(ctx, window) {
+                    self.should_exit = true;
+                }
+            }
+
+            let hub_response = hub::hub_ui(ctx, &mut self.editor_settings);
+
+            if let Some(path) = hub_response.open_project_path {
+                self.load_project_from_path(&path);
+            }
+            if hub_response.new_project_requested {
+                self.handle_new_project_from_hub();
+            }
+            return;
+        }
+
+        // -- Editor mode --
+
         // Sync window title with active scene/project name.
         let dirty_marker = if self.scene_dirty { " *" } else { "" };
         let title = {
@@ -925,6 +995,9 @@ impl Application for GGEditor {
                 self.tilemap_paint.clear_brush();
             }
         }
+
+        // "New Scene" naming modal.
+        self.new_scene_modal_ui(ctx);
 
         // DnD ghost overlay — painted on a tooltip layer so it floats above
         // all panels and follows the cursor.
@@ -1316,6 +1389,16 @@ impl GGEditor {
 
 impl GGEditor {
     fn new_scene(&mut self) {
+        if self.project.is_some() {
+            // Show naming modal — scene will be created on confirm.
+            self.new_scene_modal = Some("New Scene".into());
+        } else {
+            // No project — just create an empty unnamed scene.
+            self.create_empty_scene();
+        }
+    }
+
+    fn create_empty_scene(&mut self) {
         let old = std::mem::replace(&mut self.scene, Scene::new());
         self.pending_drop_scenes.push(old);
         self.selection_context = None;
@@ -1323,11 +1406,113 @@ impl GGEditor {
         self.scene_dirty = false;
         self.undo_system.clear();
 
-        // Ensure cameras get the correct viewport on the next frame.
         let (w, h) = self.viewport_size;
         if w > 0 && h > 0 {
             self.scene.on_viewport_resize(w, h);
         }
+    }
+
+    fn new_scene_modal_ui(&mut self, ctx: &egui::Context) {
+        let Some(ref mut scene_name) = self.new_scene_modal else {
+            return;
+        };
+
+        let mut confirmed = false;
+        let mut cancelled = false;
+
+        // Dim background.
+        let screen_rect = ctx.input(|i| i.viewport_rect());
+        egui::Area::new(egui::Id::new("new_scene_modal_bg"))
+            .fixed_pos(screen_rect.left_top())
+            .show(ctx, |ui| {
+                ui.allocate_response(screen_rect.size(), egui::Sense::click());
+                ui.painter().rect_filled(
+                    screen_rect,
+                    0.0,
+                    egui::Color32::from_black_alpha(128),
+                );
+            });
+
+        egui::Window::new("New Scene")
+            .collapsible(false)
+            .resizable(false)
+            .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
+            .fixed_size(egui::vec2(300.0, 0.0))
+            .show(ctx, |ui| {
+                ui.label("Scene name:");
+                let text_edit = ui.text_edit_singleline(scene_name);
+
+                // Auto-focus the text field on first frame.
+                if text_edit.gained_focus() || !text_edit.has_focus() {
+                    text_edit.request_focus();
+                }
+
+                // Enter confirms.
+                if text_edit.lost_focus()
+                    && ui.input(|i| i.key_pressed(egui::Key::Enter))
+                {
+                    confirmed = true;
+                }
+
+                // Escape cancels.
+                if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+                    cancelled = true;
+                }
+
+                ui.add_space(8.0);
+
+                ui.horizontal(|ui| {
+                    let name_valid = !scene_name.trim().is_empty();
+                    if ui
+                        .add_enabled(name_valid, egui::Button::new("Create"))
+                        .clicked()
+                    {
+                        confirmed = true;
+                    }
+                    if ui.button("Cancel").clicked() {
+                        cancelled = true;
+                    }
+                });
+            });
+
+        if confirmed {
+            let name = self.new_scene_modal.take().unwrap_or_default();
+            let name = name.trim().to_string();
+            if !name.is_empty() {
+                self.create_named_scene(&name);
+            }
+        } else if cancelled {
+            self.new_scene_modal = None;
+        }
+    }
+
+    fn create_named_scene(&mut self, name: &str) {
+        let scene = Scene::new();
+
+        // Build path: assets_root/scenes/<name>.ggscene
+        let scenes_dir = self.assets_root.join("scenes");
+        let _ = std::fs::create_dir_all(&scenes_dir);
+        let file_name = format!("{}.ggscene", name);
+        let scene_path = scenes_dir.join(&file_name);
+        let path_str = scene_path.to_string_lossy().to_string();
+
+        // Serialize the empty scene to disk immediately.
+        SceneSerializer::serialize(&scene, &path_str);
+
+        // Swap in the new scene.
+        let old = std::mem::replace(&mut self.scene, scene);
+        self.pending_drop_scenes.push(old);
+        self.selection_context = None;
+        self.editor_scene_path = Some(path_str);
+        self.scene_dirty = false;
+        self.undo_system.clear();
+
+        let (w, h) = self.viewport_size;
+        if w > 0 && h > 0 {
+            self.scene.on_viewport_resize(w, h);
+        }
+
+        panels::project::invalidate_scene_cache();
     }
 
     fn open_scene(&mut self) {
@@ -1451,70 +1636,93 @@ impl GGEditor {
         }
     }
 
+    fn load_project_from_path(&mut self, project_path: &std::path::Path) {
+        let abs_path = std::fs::canonicalize(project_path)
+            .unwrap_or_else(|_| project_path.to_path_buf());
+        let Some(project) = Project::load(&abs_path.to_string_lossy()) else {
+            warn!("Failed to load project: {}", abs_path.display());
+            return;
+        };
+
+        // Stop playback if active.
+        if self.scene_state != SceneState::Edit {
+            self.on_scene_stop();
+        }
+
+        // Set CWD to the project directory.
+        if let Err(e) = std::env::set_current_dir(project.project_directory()) {
+            warn!(
+                "Failed to set CWD to project directory '{}': {}",
+                project.project_directory().display(),
+                e
+            );
+        }
+
+        // Update assets root.
+        self.assets_root = project.asset_directory_path();
+        self.current_directory = self.assets_root.clone();
+
+        // Create and load asset manager for the new project.
+        let mut am = EditorAssetManager::new(&self.assets_root);
+        am.load_registry();
+        self.asset_manager = Some(am);
+
+        // Load start scene.
+        let start_path = project.start_scene_path();
+        if start_path.exists() {
+            let path_str = start_path.to_string_lossy().to_string();
+            let mut new_scene = Scene::new();
+            if SceneSerializer::deserialize(&mut new_scene, &path_str) {
+                let old = std::mem::replace(&mut self.scene, new_scene);
+                self.pending_drop_scenes.push(old);
+                self.editor_scene_path = Some(path_str);
+                self.queue_font_loads_from_scene();
+            }
+        } else {
+            let old = std::mem::replace(&mut self.scene, Scene::new());
+            self.pending_drop_scenes.push(old);
+            self.editor_scene_path = None;
+        }
+
+        // Restart script watcher for the new project's scripts directory.
+        #[cfg(feature = "lua-scripting")]
+        {
+            self._script_watcher = create_script_watcher(
+                &self.assets_root.join("scripts"),
+                &self.script_reload_pending,
+            );
+        }
+
+        // Resize viewport for the new scene.
+        let (w, h) = self.viewport_size;
+        if w > 0 && h > 0 {
+            self.scene.on_viewport_resize(w, h);
+        }
+
+        // Update recent projects and editor state.
+        self.editor_settings.add_recent_project(project.name(), &abs_path.to_string_lossy());
+        self.project = Some(project);
+        self.selection_context = None;
+        self.scene_dirty = false;
+        self.undo_system.clear();
+        self.editor_mode = EditorMode::Editor;
+    }
+
     fn open_project(&mut self) {
         if let Some(path) = FileDialogs::open_file("GGProject files", &["ggproject"]) {
-            // Canonicalize the path so project_directory is absolute.
-            let abs_path = std::fs::canonicalize(&path)
-                .unwrap_or_else(|_| PathBuf::from(&path));
-            if let Some(project) = Project::load(&abs_path.to_string_lossy()) {
-                // Stop playback if active.
-                if self.scene_state != SceneState::Edit {
-                    self.on_scene_stop();
-                }
+            self.load_project_from_path(&PathBuf::from(&path));
+        }
+    }
 
-                // Set CWD to the project directory.
-                if let Err(e) = std::env::set_current_dir(project.project_directory()) {
-                    warn!(
-                        "Failed to set CWD to project directory '{}': {}",
-                        project.project_directory().display(),
-                        e
-                    );
-                }
+    fn handle_new_project_from_hub(&mut self) {
+        if let Some(path) = FileDialogs::save_file("GGProject files", &["ggproject"]) {
+            let name = std::path::Path::new(&path)
+                .file_stem()
+                .map(|s| s.to_string_lossy().to_string())
+                .unwrap_or_else(|| "Untitled".into());
 
-                // Update assets root.
-                self.assets_root = project.asset_directory_path();
-                self.current_directory = self.assets_root.clone();
-
-                // Create and load asset manager for the new project.
-                let mut am = EditorAssetManager::new(&self.assets_root);
-                am.load_registry();
-                self.asset_manager = Some(am);
-
-                // Load start scene.
-                let start_path = project.start_scene_path();
-                if start_path.exists() {
-                    let path_str = start_path.to_string_lossy().to_string();
-                    let mut new_scene = Scene::new();
-                    if SceneSerializer::deserialize(&mut new_scene, &path_str) {
-                        let old = std::mem::replace(&mut self.scene, new_scene);
-                        self.pending_drop_scenes.push(old);
-                        self.selection_context = None;
-                        self.editor_scene_path = Some(path_str);
-                        self.queue_font_loads_from_scene();
-                    }
-                } else {
-                    let old = std::mem::replace(&mut self.scene, Scene::new());
-                    self.pending_drop_scenes.push(old);
-                    self.selection_context = None;
-                    self.editor_scene_path = None;
-                }
-
-                // Restart script watcher for the new project's scripts directory.
-                #[cfg(feature = "lua-scripting")]
-                {
-                    self._script_watcher = create_script_watcher(
-                        &self.assets_root.join("scripts"),
-                        &self.script_reload_pending,
-                    );
-                }
-
-                // Resize viewport for the new scene.
-                let (w, h) = self.viewport_size;
-                if w > 0 && h > 0 {
-                    self.scene.on_viewport_resize(w, h);
-                }
-
-                self.project = Some(project);
+            if Project::new(&path, &name).is_some() {
+                self.load_project_from_path(&PathBuf::from(&path));
             }
         }
     }
@@ -1641,149 +1849,6 @@ fn paint_gear_icon(painter: &egui::Painter, center: egui::Pos2, radius: f32) {
         egui::Stroke::NONE,
     ));
     painter.circle_filled(center, radius * 0.25, bg);
-}
-
-// ---------------------------------------------------------------------------
-// Demo scene (fallback when no project is loaded)
-// ---------------------------------------------------------------------------
-
-fn create_demo_scene() -> Scene {
-    let mut scene = Scene::new();
-
-    // -- Camera (static — editor camera handles view in edit/simulate,
-    //    scene camera stays fixed in play mode) --
-    let ortho_cam = scene.create_entity_with_tag("Camera");
-    scene.add_component(ortho_cam, CameraComponent::default());
-
-    // -- Native Physics Player (green, left side) --
-    let native_player = scene.create_entity_with_tag("Native Player");
-    scene.add_component(
-        native_player,
-        SpriteRendererComponent::new(Vec4::new(0.2, 0.8, 0.3, 1.0)),
-    );
-    if let Some(mut t) = scene.get_component_mut::<TransformComponent>(native_player) {
-        t.translation = Vec3::new(-3.0, 0.0, 0.0);
-    }
-    scene.add_component(native_player, RigidBody2DComponent::default());
-    scene.add_component(native_player, BoxCollider2DComponent::default());
-    scene.add_component(native_player, NativeScriptComponent::bind::<PhysicsPlayer>());
-
-    // -- Lua Physics Player (blue, right side) --
-    let lua_player = scene.create_entity_with_tag("Lua Player");
-    scene.add_component(
-        lua_player,
-        SpriteRendererComponent::new(Vec4::new(0.2, 0.3, 0.8, 1.0)),
-    );
-    if let Some(mut t) = scene.get_component_mut::<TransformComponent>(lua_player) {
-        t.translation = Vec3::new(3.0, 0.0, 0.0);
-    }
-    scene.add_component(lua_player, RigidBody2DComponent::default());
-    scene.add_component(lua_player, BoxCollider2DComponent::default());
-    #[cfg(feature = "lua-scripting")]
-    scene.add_component(
-        lua_player,
-        LuaScriptComponent::new("assets/scripts/physics_player.lua"),
-    );
-
-    // -- Force Block (red, center) --
-    let force_block = scene.create_entity_with_tag("Force Block");
-    scene.add_component(
-        force_block,
-        SpriteRendererComponent::new(Vec4::new(0.8, 0.2, 0.2, 1.0)),
-    );
-    if let Some(mut t) = scene.get_component_mut::<TransformComponent>(force_block) {
-        t.translation = Vec3::new(0.0, 0.0, 0.0);
-    }
-    scene.add_component(force_block, RigidBody2DComponent::default());
-    scene.add_component(force_block, BoxCollider2DComponent::default());
-    #[cfg(feature = "lua-scripting")]
-    scene.add_component(
-        force_block,
-        LuaScriptComponent::new("assets/scripts/force_block.lua"),
-    );
-
-    // -- Spinner (sprite, top-center) --
-    let spinner = scene.create_entity_with_tag("Spinner");
-    scene.add_component(
-        spinner,
-        SpriteRendererComponent::new(Vec4::new(0.9, 0.6, 0.1, 1.0)),
-    );
-    if let Some(mut t) = scene.get_component_mut::<TransformComponent>(spinner) {
-        t.translation = Vec3::new(0.0, 3.0, 0.0);
-        t.scale = Vec3::new(1.5, 0.3, 1.0);
-    }
-    #[cfg(feature = "lua-scripting")]
-    scene.add_component(
-        spinner,
-        LuaScriptComponent::new("assets/scripts/spinner.lua"),
-    );
-
-    // -- Bouncy Ball (orange circle, dynamic + high restitution) --
-    let bouncy_ball = scene.create_entity_with_tag("Bouncy Ball");
-    scene.add_component(
-        bouncy_ball,
-        CircleRendererComponent::new(Vec4::new(1.0, 0.5, 0.0, 1.0)),
-    );
-    if let Some(mut t) = scene.get_component_mut::<TransformComponent>(bouncy_ball) {
-        t.translation = Vec3::new(-1.0, 3.0, 0.0);
-        t.scale = Vec3::new(0.6, 0.6, 1.0);
-    }
-    scene.add_component(bouncy_ball, RigidBody2DComponent::default());
-    scene.add_component(bouncy_ball, {
-        let mut cc = CircleCollider2DComponent::default();
-        cc.restitution = 0.9;
-        cc
-    });
-
-    // -- Ground (static platform) --
-    let ground = scene.create_entity_with_tag("Ground");
-    scene.add_component(
-        ground,
-        SpriteRendererComponent::new(Vec4::new(0.4, 0.4, 0.4, 1.0)),
-    );
-    if let Some(mut t) = scene.get_component_mut::<TransformComponent>(ground) {
-        t.translation = Vec3::new(0.0, -3.0, 0.0);
-        t.scale = Vec3::new(20.0, 0.5, 1.0);
-    }
-    scene.add_component(
-        ground,
-        RigidBody2DComponent::new(RigidBody2DType::Static),
-    );
-    scene.add_component(ground, BoxCollider2DComponent::default());
-
-    // -- Left Wall --
-    let left_wall = scene.create_entity_with_tag("Left Wall");
-    scene.add_component(
-        left_wall,
-        SpriteRendererComponent::new(Vec4::new(0.35, 0.35, 0.35, 1.0)),
-    );
-    if let Some(mut t) = scene.get_component_mut::<TransformComponent>(left_wall) {
-        t.translation = Vec3::new(-8.0, 1.0, 0.0);
-        t.scale = Vec3::new(0.5, 8.0, 1.0);
-    }
-    scene.add_component(
-        left_wall,
-        RigidBody2DComponent::new(RigidBody2DType::Static),
-    );
-    scene.add_component(left_wall, BoxCollider2DComponent::default());
-
-    // -- Right Wall --
-    let right_wall = scene.create_entity_with_tag("Right Wall");
-    scene.add_component(
-        right_wall,
-        SpriteRendererComponent::new(Vec4::new(0.35, 0.35, 0.35, 1.0)),
-    );
-    if let Some(mut t) = scene.get_component_mut::<TransformComponent>(right_wall) {
-        t.translation = Vec3::new(8.0, 1.0, 0.0);
-        t.scale = Vec3::new(0.5, 8.0, 1.0);
-    }
-    scene.add_component(
-        right_wall,
-        RigidBody2DComponent::new(RigidBody2DType::Static),
-    );
-    scene.add_component(right_wall, BoxCollider2DComponent::default());
-
-    scene
 }
 
 // ---------------------------------------------------------------------------

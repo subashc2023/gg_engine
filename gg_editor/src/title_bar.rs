@@ -336,6 +336,100 @@ pub fn title_bar_ui(
     }
 }
 
+pub fn hub_title_bar_ui(ctx: &egui::Context, window: &Window) -> bool {
+    handle_resize_borders(ctx, window);
+
+    let mut close_requested = false;
+    let is_maximized = window.is_maximized();
+
+    egui::TopBottomPanel::top("title_bar")
+        .exact_height(TITLE_BAR_HEIGHT)
+        .frame(
+            egui::Frame::new()
+                .fill(BAR_BG)
+                .inner_margin(egui::Margin::ZERO),
+        )
+        .show(ctx, |ui| {
+            let title_bar_rect = ui.max_rect();
+
+            if !title_bar_rect.is_finite()
+                || title_bar_rect.width() < BUTTON_WIDTH * 3.0 + 50.0
+                || title_bar_rect.height() < 1.0
+            {
+                return;
+            }
+
+            let buttons_x = title_bar_rect.right() - BUTTON_WIDTH * 3.0;
+
+            // Window control buttons (right side).
+            let min_rect = egui::Rect::from_min_size(
+                egui::pos2(buttons_x, title_bar_rect.top()),
+                egui::vec2(BUTTON_WIDTH, TITLE_BAR_HEIGHT),
+            );
+            let min_resp = ui.allocate_rect(min_rect, egui::Sense::click());
+
+            let max_rect = min_rect.translate(egui::vec2(BUTTON_WIDTH, 0.0));
+            let max_resp = ui.allocate_rect(max_rect, egui::Sense::click());
+
+            let close_rect = max_rect.translate(egui::vec2(BUTTON_WIDTH, 0.0));
+            let close_resp = ui.allocate_rect(close_rect, egui::Sense::click());
+
+            // Drag region.
+            let drag_rect = egui::Rect::from_min_max(
+                title_bar_rect.left_top(),
+                egui::pos2(buttons_x, title_bar_rect.bottom()),
+            );
+            let drag_resp = ui.allocate_rect(drag_rect, egui::Sense::click_and_drag());
+
+            // Centered "GGEngine" title.
+            let title_font = egui::FontId::new(12.0, egui::FontFamily::Proportional);
+            let title_galley = ui.painter().layout_no_wrap(
+                "GGEngine".to_string(),
+                title_font,
+                egui::Color32::from_rgb(0x88, 0x88, 0x88),
+            );
+            let center = title_bar_rect.center();
+            let title_pos = egui::pos2(
+                center.x - title_galley.size().x / 2.0,
+                center.y - title_galley.size().y / 2.0,
+            );
+            ui.painter().galley(
+                title_pos,
+                title_galley,
+                egui::Color32::from_rgb(0x88, 0x88, 0x88),
+            );
+
+            // Paint window chrome.
+            let painter = ui.painter();
+            paint_minimize_icon(painter, &min_resp, min_rect);
+            if is_maximized {
+                paint_restore_icon(painter, &max_resp, max_rect);
+            } else {
+                paint_maximize_icon(painter, &max_resp, max_rect);
+            }
+            paint_close_icon(painter, &close_resp, close_rect);
+
+            // Handle interactions.
+            if min_resp.clicked() {
+                window.set_minimized(true);
+            }
+            if max_resp.clicked() {
+                window.set_maximized(!is_maximized);
+            }
+            if close_resp.clicked() {
+                close_requested = true;
+            }
+            if drag_resp.drag_started() {
+                let _ = window.drag_window();
+            }
+            if drag_resp.double_clicked() {
+                window.set_maximized(!is_maximized);
+            }
+        });
+
+    close_requested
+}
+
 // ---------------------------------------------------------------------------
 // Procedural icon painting
 // ---------------------------------------------------------------------------

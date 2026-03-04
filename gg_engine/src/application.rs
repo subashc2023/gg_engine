@@ -152,6 +152,11 @@ enum FrameResult {
     RecreateSwapchain,
 }
 
+/// How long to wait after the last resize event before applying the resize.
+/// This prevents repeated swapchain recreations when dragging between monitors
+/// with different DPI scaling.
+const RESIZE_DEBOUNCE: std::time::Duration = std::time::Duration::from_millis(100);
+
 struct EngineRunner<T: Application> {
     app: T,
     layers: LayerStack,
@@ -161,6 +166,10 @@ struct EngineRunner<T: Application> {
     default_camera: OrthographicCamera,
     last_frame_time: Instant,
     minimized: bool,
+
+    /// Pending resize: `(width, height, timestamp_of_last_resize_event)`.
+    /// Applied once no new resize arrives within [`RESIZE_DEBOUNCE`].
+    pending_resize: Option<(u32, u32, Instant)>,
 
     // egui state — dropped before Vulkan resources.
     egui_ctx: egui::Context,
@@ -389,7 +398,8 @@ impl<T: Application> ApplicationHandler for EngineRunner<T> {
             _ => {}
         }
 
-        // Handle resize for swapchain recreation and camera projection update.
+        // Handle resize: debounce to avoid repeated swapchain recreations when
+        // dragging between monitors with different DPI scaling.
         if let winit::event::WindowEvent::Resized(size) = &event {
             // Borderless windows report non-zero size when minimized (e.g. 199x34
             // on Windows). Check `is_minimized()` in addition to zero-size.
@@ -400,23 +410,20 @@ impl<T: Application> ApplicationHandler for EngineRunner<T> {
                 .unwrap_or(false);
             if size.width == 0 || size.height == 0 || is_minimized {
                 self.minimized = true;
+                self.pending_resize = None;
             } else {
                 self.minimized = false;
-                if let (Some(vk_ctx), Some(sc)) = (&self.vulkan_context, &mut self.swapchain) {
-                    sc.recreate(vk_ctx, size.width, size.height, None);
-                    if let Some(renderer) = &mut self.renderer {
-                        renderer.update_render_pass(sc.render_pass());
-                    }
-                }
-                let aspect = size.width as f32 / size.height as f32;
-                self.default_camera
-                    .set_projection(-aspect, aspect, -1.0, 1.0);
+                self.pending_resize = Some((size.width, size.height, Instant::now()));
             }
         }
 
         // Map to engine event(s) and dispatch through layer stack.
+        // Resize events are deferred (debounced) and dispatched from about_to_wait.
         let (primary, secondary) = map_window_event(&event);
         for engine_event in primary.into_iter().chain(secondary) {
+            if matches!(engine_event, Event::Window(WindowEvent::Resize { .. })) {
+                continue;
+            }
             if !self.layers.dispatch_event(&engine_event, &self.input) {
                 self.app.on_event(&engine_event, &self.input);
             }
@@ -432,6 +439,31 @@ impl<T: Application> ApplicationHandler for EngineRunner<T> {
         let now = Instant::now();
         let dt = Timestep::from_seconds(now.duration_since(self.last_frame_time).as_secs_f32());
         self.last_frame_time = now;
+
+        // Apply debounced resize once events have settled.
+        if let Some((w, h, stamp)) = self.pending_resize {
+            if now.duration_since(stamp) >= RESIZE_DEBOUNCE {
+                self.pending_resize = None;
+                if let (Some(vk_ctx), Some(sc)) = (&self.vulkan_context, &mut self.swapchain) {
+                    sc.recreate(vk_ctx, w, h, None);
+                    if let Some(renderer) = &mut self.renderer {
+                        renderer.update_render_pass(sc.render_pass());
+                    }
+                }
+                let aspect = w as f32 / h as f32;
+                self.default_camera
+                    .set_projection(-aspect, aspect, -1.0, 1.0);
+
+                // Dispatch the resize event so the app/layers can react.
+                let resize_event = Event::Window(WindowEvent::Resize {
+                    width: w,
+                    height: h,
+                });
+                if !self.layers.dispatch_event(&resize_event, &self.input) {
+                    self.app.on_event(&resize_event, &self.input);
+                }
+            }
+        }
 
         if !self.minimized {
             {
@@ -1088,6 +1120,7 @@ pub fn run<T: Application>() {
         default_camera,
         last_frame_time: Instant::now(),
         minimized: false,
+        pending_resize: None,
         egui_ctx: {
             let ctx = egui::Context::default();
             crate::ui_theme::apply_engine_theme(&ctx);
