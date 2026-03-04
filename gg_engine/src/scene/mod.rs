@@ -45,6 +45,8 @@ pub struct Scene {
     physics_world: Option<PhysicsWorld2D>,
     #[cfg(feature = "lua-scripting")]
     script_engine: Option<ScriptEngine>,
+    /// O(1) UUID → hecs::Entity lookup cache, maintained on create/destroy.
+    uuid_cache: HashMap<u64, hecs::Entity>,
 }
 
 /// Invokes `$callback!` with every cloneable component type.
@@ -77,6 +79,7 @@ impl Scene {
             physics_world: None,
             #[cfg(feature = "lua-scripting")]
             script_engine: None,
+            uuid_cache: HashMap::new(),
         }
     }
 
@@ -105,11 +108,16 @@ impl Scene {
             TagComponent::new(name),
             TransformComponent::default(),
         ));
+        self.uuid_cache.insert(uuid.raw(), handle);
         Entity::new(handle)
     }
 
     /// Remove an entity and all its components from the scene.
     pub fn destroy_entity(&mut self, entity: Entity) -> Result<(), hecs::NoSuchEntity> {
+        // Remove from UUID cache before despawning.
+        if let Ok(id) = self.world.get::<&IdComponent>(entity.handle()) {
+            self.uuid_cache.remove(&id.id.raw());
+        }
         self.world.despawn(entity.handle())
     }
 
@@ -364,19 +372,12 @@ impl Scene {
 
     /// Find an entity by its UUID (from [`IdComponent`]).
     ///
-    /// O(n) scan — sufficient for script callbacks; optimize with a cache
-    /// if this becomes a bottleneck.
+    /// O(1) lookup via internal cache maintained on entity create/destroy.
     pub fn find_entity_by_uuid(&self, uuid: u64) -> Option<Entity> {
-        for (handle, id) in self
-            .world
-            .query::<(hecs::Entity, &IdComponent)>()
-            .iter()
-        {
-            if id.id.raw() == uuid {
-                return Some(Entity::new(handle));
-            }
-        }
-        None
+        self.uuid_cache
+            .get(&uuid)
+            .copied()
+            .map(Entity::new)
     }
 
     /// Number of living entities in the scene.
@@ -766,9 +767,41 @@ impl Scene {
     /// Call this when exiting play mode (before restoring the snapshot).
     pub fn on_runtime_stop(&mut self) {
         let _timer = crate::profiling::ProfileTimer::new("Scene::on_runtime_stop");
+        self.on_native_scripting_stop();
         #[cfg(feature = "lua-scripting")]
         self.on_lua_scripting_stop();
         self.on_physics_2d_stop();
+    }
+
+    /// Call `on_destroy` on all active NativeScript instances and reset them.
+    fn on_native_scripting_stop(&mut self) {
+        // Collect handles for all entities with a NativeScriptComponent that has an active instance.
+        let script_entities: Vec<hecs::Entity> = self
+            .world
+            .query::<(hecs::Entity, &NativeScriptComponent)>()
+            .iter()
+            .filter(|(_, nsc)| nsc.instance.is_some())
+            .map(|(handle, _)| handle)
+            .collect();
+
+        for handle in script_entities {
+            let entity = Entity::new(handle);
+            // Take the instance out so on_destroy can access &mut self.
+            let instance = {
+                let Ok(mut nsc) = self.world.get::<&mut NativeScriptComponent>(handle) else {
+                    continue;
+                };
+                let Some(inst) = nsc.instance.take() else {
+                    continue;
+                };
+                nsc.created = false;
+                inst
+            };
+
+            let mut instance = instance;
+            instance.on_destroy(entity, self);
+            // Instance is dropped here — not put back.
+        }
     }
 
     // -----------------------------------------------------------------

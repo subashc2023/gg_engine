@@ -1,5 +1,5 @@
 pub(crate) mod content_browser;
-mod project;
+pub(crate) mod project;
 mod properties;
 mod scene_hierarchy;
 mod settings;

@@ -531,7 +531,7 @@ fn eval_cubic_second_deriv(p0: Vec2, p1: Vec2, p2: Vec2, p3: Vec2, t: f64) -> Ve
 // Edge coloring (Chlumsky's "simple" algorithm)
 // ---------------------------------------------------------------------------
 
-const CORNER_ANGLE_THRESHOLD: f64 = 3.0; // degrees — angles sharper than this are corners
+const CORNER_ANGLE_THRESHOLD: f64 = 30.0; // degrees — angles sharper than this are corners
 
 fn edge_coloring_simple(shape: &mut Shape, angle_threshold_deg: f64) {
     let threshold_cos = (angle_threshold_deg * PI / 180.0).cos();
@@ -851,15 +851,15 @@ pub(super) fn autoframe(
         return None;
     }
 
-    // Independent X/Y scale so the glyph fills the entire bitmap.
-    // This ensures UVs spanning the full cell correctly map to the quad.
-    let scale_x = avail_w / shape_w;
-    let scale_y = avail_h / shape_h;
-    let scale = Vec2::new(scale_x, scale_y);
+    // Uniform scale to preserve glyph aspect ratio.
+    let scale_val = (avail_w / shape_w).min(avail_h / shape_h);
+    let scale = Vec2::new(scale_val, scale_val);
 
-    // Position the shape so it's centered in the bitmap.
-    let tx = px_range - min_x * scale_x;
-    let ty = px_range - min_y * scale_y;
+    // Center the glyph in the available area.
+    let used_w = shape_w * scale_val;
+    let used_h = shape_h * scale_val;
+    let tx = px_range + (avail_w - used_w) * 0.5 - min_x * scale_val;
+    let ty = px_range + (avail_h - used_h) * 0.5 - min_y * scale_val;
     let translate = Vec2::new(tx, ty);
 
     Some((scale, translate))

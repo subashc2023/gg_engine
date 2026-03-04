@@ -1,15 +1,16 @@
 # GGEngine Documentation
 
-GGEngine is a Rust game engine organized as a Cargo workspace (edition 2021, resolver v2). Currently at version 0.1.0 (early stage).
+GGEngine is a Rust 2D game engine organized as a Cargo workspace (edition 2021, resolver v2). ~22,600 lines of Rust across 5 crates.
 
 ## Workspace Structure
 
 ```
 GGEngine/
-├── gg_engine/    Core engine library crate (foundation for both apps)
-├── gg_editor/    Editor binary (depends on gg_engine)
-├── gg_sandbox/   Sandbox/test binary (depends on gg_engine)
-├── gg_tools/     Offline CLI for analyzing Chrome Tracing JSON profiles (standalone)
+├── gg_engine/    Core engine library (~16,900 LOC)
+├── gg_editor/    Editor binary (~5,000 LOC, depends on gg_engine)
+├── gg_player/    Standalone game player (~186 LOC, depends on gg_engine)
+├── gg_sandbox/   Sandbox/test binary (~292 LOC, depends on gg_engine)
+├── gg_tools/     Offline profile analyzer (~195 LOC, standalone)
 └── gg_docs/      This documentation
 ```
 
@@ -18,6 +19,7 @@ GGEngine/
 ```
 gg_editor ──┐
             ├──► gg_engine
+gg_player ──┤
 gg_sandbox ─┘
 
 gg_tools (standalone, no engine dependency)
@@ -113,6 +115,7 @@ Two launch configurations using GDB with Intel disassembly syntax:
 | `rand` | 0.9 | UUID generation |
 | `rfd` | 0.15 | Native file dialogs |
 | `mlua` | 0.10 | Lua scripting (LuaJIT, vendored; optional, `lua-scripting` feature) |
+| `ttf-parser` | 0.25 | TTF font parsing (MSDF text rendering) |
 
 ### Editor-only Dependencies
 
@@ -120,3 +123,4 @@ Two launch configurations using GDB with Intel disassembly syntax:
 |-------|---------|---------|
 | `egui_dock` | 0.18 | Dockable tab panels |
 | `transform-gizmo-egui` | 0.8 | 3D manipulation gizmos (uses glam 0.30 internally) |
+| `notify` | 7 | File system watcher for Lua hot reload (optional, with `lua-scripting`) |

@@ -99,6 +99,8 @@ use gg_engine::shaders::{FLAT_COLOR_VERT_SPV, FLAT_COLOR_FRAG_SPV};
 | `circle_swapchain.glsl` | SDF circle rendering (swapchain, 1 output) |
 | `line.glsl` | Line rendering (offscreen, 2 outputs) |
 | `line_swapchain.glsl` | Line rendering (swapchain, 1 output) |
+| `text.glsl` | MSDF text rendering (offscreen, 2 outputs) |
+| `text_swapchain.glsl` | MSDF text rendering (swapchain, 1 output) |
 | `flat_color.glsl` | Flat color rendering |
 | `texture.glsl` | Textured rendering |
 | `triangle.glsl` | Basic triangle (legacy) |
@@ -203,11 +205,26 @@ let tex = renderer.create_texture_from_file("path/to/image.png");
 let tex = renderer.create_texture_from_rgba8(width, height, &pixels);
 ```
 
+### TextureSpecification
+
+```rust
+struct TextureSpecification {
+    pub format: ImageFormat,    // Rgba8Srgb (color) or Rgba8Unorm (data/MSDF)
+    pub filter: Filter,         // NEAREST (default) or LINEAR
+    pub address_mode: SamplerAddressMode,  // REPEAT default
+    pub anisotropy: bool,       // default true
+    pub max_anisotropy: f32,    // default 16.0
+}
+```
+
+Factory method `TextureSpecification::font_atlas()` creates LINEAR + UNORM spec for MSDF atlas textures.
+
 ### Internals
 
 - Device-local memory with staging buffer upload
 - One-shot command buffer for layout transitions: UNDEFINED → TRANSFER_DST → SHADER_READ_ONLY
-- Sampler: NEAREST filtering, REPEAT addressing, 16x anisotropic filtering
+- Default sampler: NEAREST filtering, REPEAT addressing, 16x anisotropic filtering
+- `ImageFormat::Rgba8Srgb` for color textures, `ImageFormat::Rgba8Unorm` for data textures (MSDF atlases)
 - Each texture gets a `bindless_index: u32` on creation
 - Destroyed on drop (sampler, image view, image, memory)
 
@@ -365,6 +382,44 @@ Debug rendering primitive — **not** an ECS component, purely a renderer API.
 | `draw_line(p0, p1, color, entity_id)` | Single line segment |
 | `draw_rect(position, size, color, entity_id)` | Wireframe XY rectangle (4 lines) |
 | `draw_rect_transform(transform, color, entity_id)` | Wireframe rect via transform |
+
+## MSDF Text Rendering
+
+**Files:** `renderer/font.rs`, `renderer/msdf.rs`
+
+Pure-Rust MSDF (Multi-channel Signed Distance Field) text rendering — no C library dependency.
+
+### Font
+
+`Font` loads a TTF file via `ttf-parser 0.25` and generates an MSDF atlas texture.
+
+- **Atlas generation**: 48px glyph cells, 2px padding, 4px SDF range
+- **Glyph metrics**: advance width, bearing, bounding box per glyph
+- **Kerning table**: extracted from TTF, applied during text layout
+- **Atlas texture**: `Rgba8Unorm` format, LINEAR filtering (via `TextureSpecification::font_atlas()`)
+
+### MSDF Generator
+
+`msdf.rs` (866 lines) implements the full Chlumsky MSDF algorithm:
+
+1. **Edge extraction** from TTF glyph outlines (linear, quadratic, cubic Bezier segments)
+2. **Edge coloring** — assigns R/G/B channels to edges for multi-channel distance fields
+3. **SDF evaluation** — per-pixel signed distance to each edge type
+4. **Winding number** for sign correction (inside/outside determination)
+5. **Autoframe** — automatically positions glyphs within atlas cells
+
+### Text Pipeline
+
+- Batch text vertices: position, color, tex_coord, entity_id (similar to quad batches)
+- `text.glsl` / `text_swapchain.glsl` shaders
+- Fragment shader: takes median of R/G/B channels from MSDF atlas, applies `smoothstep` with `fwidth` for screen-space antialiasing
+- Font atlas bound at set 1 (bindless texture array)
+- `Renderer::draw_text(text, transform, text_component, font, entity_id)` — high-level API
+
+### Scene Integration
+
+- `Scene::load_fonts(renderer)` loads all fonts referenced by `TextComponent` entities, caches on Scene
+- Text rendered alongside sprites and circles in scene render loops
 
 ## Framebuffer (Offscreen Rendering)
 

@@ -13,11 +13,23 @@ enum ContentBrowserMode {
     Asset,
 }
 
-// Thread-local state for the content browser mode toggle.
+// Thread-local state for the content browser mode toggle and directory cache.
 // (Stored here because the panel function is stateless otherwise.)
 thread_local! {
     static BROWSER_MODE: std::cell::Cell<ContentBrowserMode> =
         const { std::cell::Cell::new(ContentBrowserMode::FileSystem) };
+    /// Cached directory listing: (cached_path, directories, files).
+    static DIR_CACHE: std::cell::RefCell<Option<(
+        std::path::PathBuf,
+        Vec<(String, std::path::PathBuf)>,
+        Vec<(String, std::path::PathBuf)>,
+    )>> = const { std::cell::RefCell::new(None) };
+}
+
+/// Invalidate the cached directory listing (call on file changes).
+#[allow(dead_code)]
+pub(crate) fn invalidate_dir_cache() {
+    DIR_CACHE.with(|c| *c.borrow_mut() = None);
 }
 
 // ---------------------------------------------------------------------------
@@ -98,31 +110,38 @@ fn file_browser_ui(
         ui.add_space(2.0);
     }
 
-    // Collect and sort directory entries.
-    let mut directories = Vec::new();
-    let mut files = Vec::new();
-
-    if let Ok(entries) = std::fs::read_dir(&*current_directory) {
-        for entry in entries.flatten() {
-            let path = entry.path();
-            let name = path
-                .file_name()
-                .unwrap_or_default()
-                .to_string_lossy()
-                .to_string();
-            if path.is_dir() {
-                directories.push((name, path));
-            } else {
-                files.push((name, path));
+    // Collect and sort directory entries (cached, invalidated on directory change).
+    let (directories, files) = DIR_CACHE.with(|cache| {
+        let mut cache = cache.borrow_mut();
+        let needs_refresh = match &*cache {
+            Some((cached_path, _, _)) => *cached_path != *current_directory,
+            None => true,
+        };
+        if needs_refresh {
+            let mut dirs = Vec::new();
+            let mut fls = Vec::new();
+            if let Ok(entries) = std::fs::read_dir(&*current_directory) {
+                for entry in entries.flatten() {
+                    let path = entry.path();
+                    let name = path
+                        .file_name()
+                        .unwrap_or_default()
+                        .to_string_lossy()
+                        .to_string();
+                    if path.is_dir() {
+                        dirs.push((name, path));
+                    } else {
+                        fls.push((name, path));
+                    }
+                }
             }
+            dirs.sort_by(|a, b| a.0.cmp(&b.0));
+            fls.sort_by(|a, b| a.0.cmp(&b.0));
+            *cache = Some((current_directory.clone(), dirs, fls));
         }
-    } else {
-        // Directory unreadable — reset to root.
-        *current_directory = assets_root;
-    }
-
-    directories.sort_by(|a, b| a.0.cmp(&b.0));
-    files.sort_by(|a, b| a.0.cmp(&b.0));
+        let (_, dirs, fls) = cache.as_ref().unwrap();
+        (dirs.clone(), fls.clone())
+    });
 
     let padding = 16.0;
     let button_size = 64.0;

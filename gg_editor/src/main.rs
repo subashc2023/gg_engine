@@ -1183,6 +1183,7 @@ impl GGEditor {
             SceneSerializer::serialize(&self.scene, &path);
             self.editor_scene_path = Some(path);
             self.scene_dirty = false;
+            panels::project::invalidate_scene_cache();
         }
     }
 

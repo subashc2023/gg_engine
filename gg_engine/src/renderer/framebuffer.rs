@@ -261,6 +261,11 @@ impl Framebuffer {
             attachments: Vec::new(), // attachments list not needed after initial parse
         };
 
+        // Ensure GPU is idle before destroying resources it may still reference.
+        unsafe {
+            self.device.device_wait_idle().expect("Failed to wait for device idle during framebuffer resize");
+        }
+
         // Destroy old framebuffer, attachment resources, and readback buffer
         // (keep render pass, sampler, descriptor set).
         unsafe {

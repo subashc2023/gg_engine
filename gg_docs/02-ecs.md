@@ -67,7 +67,7 @@ scene.on_update_editor(&editor_camera.view_projection(), &mut renderer);
 scene.on_update_runtime(&mut renderer);
 ```
 
-Both iterate `SpriteRendererComponent` and `CircleRendererComponent` entities and submit draw calls.
+Both iterate `SpriteRendererComponent`, `CircleRendererComponent`, and `TextComponent` entities and submit draw calls.
 
 ### Physics Lifecycle
 
@@ -134,13 +134,15 @@ struct TransformComponent {
 ```rust
 struct SpriteRendererComponent {
     pub color: Vec4,
-    pub texture: Option<Ref<Texture2D>>,
+    pub texture_handle: Uuid,              // Asset handle (0 = none)
+    pub texture: Option<Ref<Texture2D>>,   // Runtime GPU texture
     pub tiling_factor: f32,
 }
 ```
 
 - `new(color)`, `from_rgb(r, g, b)`, `Default` (white)
 - Clone via `Arc` sharing for textures
+- `texture_handle` links to the asset registry; resolved to `texture` at runtime via `Scene::resolve_texture_handles()`
 
 ### CircleRendererComponent
 
@@ -193,6 +195,37 @@ struct BoxCollider2DComponent {
 ```
 
 Manual `Clone` resets `runtime_fixture` to `None`.
+
+### CircleCollider2DComponent
+
+```rust
+struct CircleCollider2DComponent {
+    pub offset: Vec2,
+    pub radius: f32,
+    pub density: f32,
+    pub friction: f32,
+    pub restitution: f32,
+    pub restitution_threshold: f32,
+    pub runtime_fixture: Option<ColliderHandle>,
+}
+```
+
+Manual `Clone` resets `runtime_fixture` to `None`.
+
+### TextComponent
+
+```rust
+struct TextComponent {
+    pub text: String,
+    pub font_path: String,
+    pub font_size: f32,
+    pub color: Vec4,
+    pub line_spacing: f32,
+    pub kerning: f32,
+}
+```
+
+MSDF text rendered via the batch text pipeline. Fonts loaded via `Scene::load_fonts(renderer)` and cached on the Scene. Serialized to `.ggscene`.
 
 ## Native Scripting
 

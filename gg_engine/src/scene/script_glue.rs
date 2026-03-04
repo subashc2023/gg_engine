@@ -561,10 +561,10 @@ fn vector_cross(
     Ok((c.x, c.y, c.z))
 }
 
-/// `Engine.vector_normalize(x, y, z)` — returns normalized (x, y, z).
+/// `Engine.vector_normalize(x, y, z)` — returns normalized (x, y, z), or (0,0,0) for zero vectors.
 fn vector_normalize(_lua: &Lua, (x, y, z): (f32, f32, f32)) -> LuaResult<(f32, f32, f32)> {
     let v = glam::Vec3::new(x, y, z);
-    let n = v.normalize();
+    let n = v.try_normalize().unwrap_or(glam::Vec3::ZERO);
     Ok((n.x, n.y, n.z))
 }
 

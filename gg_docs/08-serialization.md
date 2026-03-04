@@ -48,7 +48,7 @@ Entities:
   SpriteRendererComponent:
     Color: [0.2, 0.3, 0.8, 1.0]       # RGBA
     TilingFactor: 1.0
-    TexturePath: assets/textures/player.png  # optional
+    TextureHandle: 12345678901234       # Asset UUID (0 = none)
   CircleRendererComponent:
     Color: [1.0, 0.5, 0.0, 1.0]
     Thickness: 1.0                     # 1.0 = filled, <1.0 = ring
@@ -70,6 +70,13 @@ Entities:
     Friction: 0.5
     Restitution: 0.0
     RestitutionThreshold: 0.5
+  TextComponent:
+    Text: Hello World
+    FontPath: assets/fonts/JetBrainsMono-Regular.ttf
+    FontSize: 1.0
+    Color: [1.0, 1.0, 1.0, 1.0]
+    LineSpacing: 0.0
+    Kerning: 0.0
   LuaScriptComponent:
     ScriptPath: assets/scripts/camera_controller.lua
 ```
@@ -86,11 +93,12 @@ Optional components are omitted from YAML when not present (`skip_serializing_if
 | `TransformData` | `TransformComponent` | `translation: [f32;3]`, `rotation: [f32;3]`, `scale: [f32;3]` |
 | `CameraData` | `CameraComponent` | `camera: SceneCameraData`, `primary: bool`, `fixed_aspect_ratio: bool` |
 | `SceneCameraData` | `Camera` | `projection_type: u32`, perspective FOV/near/far, orthographic size/near/far |
-| `SpriteData` | `SpriteRendererComponent` | `color: [f32;4]`, `tiling_factor: f32` (default 1.0), `texture_path: Option<String>` |
+| `SpriteData` | `SpriteRendererComponent` | `color: [f32;4]`, `tiling_factor: f32` (default 1.0), `texture_handle: u64` (asset UUID, 0 = none) |
 | `CircleData` | `CircleRendererComponent` | `color: [f32;4]`, `thickness: f32` (default 1.0), `fade: f32` (default 0.005) |
 | `RigidBody2DData` | `RigidBody2DComponent` | `body_type: String`, `fixed_rotation: bool` |
 | `BoxCollider2DData` | `BoxCollider2DComponent` | `offset: [f32;2]`, `size: [f32;2]`, density/friction/restitution/threshold |
 | `CircleCollider2DData` | `CircleCollider2DComponent` | `offset: [f32;2]`, `radius: f32`, density/friction/restitution/threshold |
+| `TextData` | `TextComponent` | `text: String`, `font_path: String`, `font_size: f32`, `color: [f32;4]`, `line_spacing: f32`, `kerning: f32` |
 | `LuaScriptData` | `LuaScriptComponent` | `script_path: String` |
 
 All field names use PascalCase in YAML via `#[serde(rename)]`.
@@ -103,11 +111,12 @@ All field names use PascalCase in YAML via `#[serde(rename)]`.
 | `TagComponent` | tag | — |
 | `TransformComponent` | translation, rotation, scale | — |
 | `CameraComponent` | all projection params, primary, fixed_aspect_ratio | — |
-| `SpriteRendererComponent` | color, tiling_factor, texture_path | `texture: Option<Arc<Texture2D>>` (loaded at runtime) |
+| `SpriteRendererComponent` | color, tiling_factor, texture_handle (UUID) | `texture: Option<Arc<Texture2D>>` (resolved at runtime via asset manager) |
 | `CircleRendererComponent` | color, thickness, fade | — |
 | `RigidBody2DComponent` | body_type, fixed_rotation | `runtime_body: Option<RigidBodyHandle>` |
 | `BoxCollider2DComponent` | offset, size, density, friction, restitution, threshold | `runtime_fixture: Option<ColliderHandle>` |
 | `CircleCollider2DComponent` | offset, radius, density, friction, restitution, threshold | `runtime_fixture: Option<ColliderHandle>` |
+| `TextComponent` | text, font_path, font_size, color, line_spacing, kerning | Font GPU resources (cached on Scene) |
 | `LuaScriptComponent` | script_path | `loaded: bool` |
 | `NativeScriptComponent` | **NOT serialized** (code-defined) | `instance`, `instantiate_fn`, `created` |
 
@@ -130,7 +139,7 @@ For each EntityData:
     3. Update TransformComponent with deserialized values
     4. Add optional components if present in YAML:
        - CameraComponent (reconstructs SceneCamera, sets projection type)
-       - SpriteRendererComponent (color, tiling, texture_path — texture loaded later)
+       - SpriteRendererComponent (color, tiling, texture_handle — resolved later via asset manager)
        - CircleRendererComponent
        - RigidBody2DComponent (runtime_body = None)
        - BoxCollider2DComponent (runtime_fixture = None)

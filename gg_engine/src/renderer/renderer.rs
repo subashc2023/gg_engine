@@ -287,6 +287,16 @@ impl Renderer {
         font
     }
 
+    /// Return a texture's bindless slot to the free-list for reuse.
+    ///
+    /// Call this before dropping a texture to avoid exhausting the 4096 slot limit.
+    /// The slot will be recycled by the next `create_texture_*` call.
+    pub fn unregister_texture(&self, texture: &Texture2D) {
+        if let Some(data) = &self.renderer_2d {
+            data.unregister_texture(texture.bindless_index());
+        }
+    }
+
     /// The descriptor set layout used for texture pipelines.
     pub fn texture_descriptor_set_layout(&self) -> vk::DescriptorSetLayout {
         self.texture_descriptor_set_layout

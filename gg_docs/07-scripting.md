@@ -62,13 +62,19 @@ function on_update(dt)
     -- Input IS available here
 end
 
+function on_fixed_update(dt)
+    -- Called at physics timestep (deterministic rate)
+    -- Use for physics code (apply_impulse, set_velocity, etc.)
+    -- Input IS available here
+end
+
 function on_destroy()
     -- Called once when play mode stops
     -- Input is NOT available here
 end
 ```
 
-All three are optional. `entity_id` is always available as a local variable set during environment creation.
+All four are optional. `entity_id` is always available as a local variable set during environment creation. `on_fixed_update` runs at the physics timestep rate, interleaved with physics steps — use it for deterministic physics interactions.
 
 ### Integration with Scene
 
@@ -137,11 +143,12 @@ All functions are registered under the global `Engine` table. Scripts call them 
 |----------|-----------|---------|
 | `is_key_down` | `(key_name)` | `bool` |
 
-### Component Queries
+### Entity Queries
 
 | Function | Signature | Returns |
 |----------|-----------|---------|
 | `has_component` | `(entity_id, component_name)` | `bool` |
+| `find_entity_by_name` | `(name)` | entity UUID (u64) or `nil` |
 
 ### Physics
 
@@ -236,8 +243,9 @@ Example scripts in `assets/scripts/`:
 
 | Script | Description |
 |--------|-------------|
-| `physics_player.lua` | WASD impulse movement + space to jump (needs RigidBody2D + BoxCollider2D) |
+| `physics_player.lua` | WASD velocity movement + space to jump via `on_fixed_update` (needs RigidBody2D + BoxCollider2D) |
 | `camera_controller.lua` | Arrow key camera panning |
+| `camera_follow.lua` | Smooth camera follow using `find_entity_by_name` to track another entity |
 | `spinner.lua` | Continuous Z-axis rotation at 2.0 rad/s |
 | `force_block.lua` | Sustained force (F), torque via impulse-at-point (Q/E), scale (Z/X) |
 

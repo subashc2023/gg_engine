@@ -528,6 +528,7 @@ fn draw_components(
     }
     if remove_camera {
         scene.remove_component::<CameraComponent>(entity);
+        *scene_dirty = true;
     }
 
     // -- Sprite Renderer Component (removable) --
@@ -725,6 +726,7 @@ fn draw_components(
     }
     if remove_sprite {
         scene.remove_component::<SpriteRendererComponent>(entity);
+        *scene_dirty = true;
     }
 
     // -- Circle Renderer Component (removable) --
@@ -830,6 +832,7 @@ fn draw_components(
     }
     if remove_circle {
         scene.remove_component::<CircleRendererComponent>(entity);
+        *scene_dirty = true;
     }
 
     // -- Text Component (removable) --
@@ -987,6 +990,7 @@ fn draw_components(
     }
     if remove_text {
         scene.remove_component::<TextComponent>(entity);
+        *scene_dirty = true;
     }
 
     // -- Rigidbody 2D Component (removable) --
@@ -1055,6 +1059,7 @@ fn draw_components(
     }
     if remove_rb2d {
         scene.remove_component::<RigidBody2DComponent>(entity);
+        *scene_dirty = true;
     }
 
     // -- Box Collider 2D Component (removable) --
@@ -1192,6 +1197,7 @@ fn draw_components(
     }
     if remove_bc2d {
         scene.remove_component::<BoxCollider2DComponent>(entity);
+        *scene_dirty = true;
     }
 
     // -- Circle Collider 2D Component (removable) --
@@ -1314,6 +1320,7 @@ fn draw_components(
     }
     if remove_cc2d {
         scene.remove_component::<CircleCollider2DComponent>(entity);
+        *scene_dirty = true;
     }
 
     // -- Native Script Component (removable, read-only display) --
@@ -1345,6 +1352,7 @@ fn draw_components(
     }
     if remove_native_script {
         scene.remove_component::<NativeScriptComponent>(entity);
+        *scene_dirty = true;
     }
 
     // -- Lua Script Component (removable) --
@@ -1567,6 +1575,7 @@ fn draw_components(
         }
         if remove_lua_script {
             scene.remove_component::<LuaScriptComponent>(entity);
+            *scene_dirty = true;
         }
     }
 }

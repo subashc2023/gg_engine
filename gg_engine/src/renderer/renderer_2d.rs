@@ -248,6 +248,9 @@ pub(super) struct Renderer2DData {
     bindless_pool: vk::DescriptorPool,
     bindless_ds_layout: vk::DescriptorSetLayout,
     bindless_ds: [vk::DescriptorSet; FRAMES_IN_FLIGHT],
+    /// Free-list allocator for bindless texture slots. Slots are returned via
+    /// `unregister_texture` and reused on the next `register_texture` call.
+    bindless_free_list: RefCell<Vec<u32>>,
     next_bindless_index: RefCell<u32>,
     pub(super) white_texture: Texture2D,
     device: ash::Device,
@@ -539,6 +542,7 @@ impl Renderer2DData {
             bindless_pool,
             bindless_ds_layout,
             bindless_ds,
+            bindless_free_list: RefCell::new(Vec::new()),
             next_bindless_index: RefCell::new(0),
             white_texture,
             device: device.clone(),
@@ -548,15 +552,23 @@ impl Renderer2DData {
     /// Register a texture in the bindless descriptor array. Writes its
     /// image_view + sampler into both per-frame descriptor sets at the
     /// assigned index. Returns the global bindless index.
+    ///
+    /// Recycles slots returned by [`unregister_texture`] before allocating new ones.
     pub(super) fn register_texture(&self, texture: &Texture2D) -> u32 {
-        let mut next = self.next_bindless_index.borrow_mut();
-        let index = *next;
-        assert!(
-            index < MAX_BINDLESS_TEXTURES,
-            "Exceeded max bindless textures ({})",
-            MAX_BINDLESS_TEXTURES
-        );
-        *next = index + 1;
+        // Try to reuse a freed slot first.
+        let index = if let Some(recycled) = self.bindless_free_list.borrow_mut().pop() {
+            recycled
+        } else {
+            let mut next = self.next_bindless_index.borrow_mut();
+            let index = *next;
+            assert!(
+                index < MAX_BINDLESS_TEXTURES,
+                "Exceeded max bindless textures ({})",
+                MAX_BINDLESS_TEXTURES
+            );
+            *next = index + 1;
+            index
+        };
 
         let image_info = vk::DescriptorImageInfo::default()
             .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
@@ -578,6 +590,18 @@ impl Renderer2DData {
         }
 
         index
+    }
+
+    /// Return a bindless texture slot to the free-list for reuse.
+    ///
+    /// The descriptor array entry is not cleared — it will be overwritten
+    /// on the next `register_texture` call that recycles this slot.
+    /// Slot 0 (white texture) should never be unregistered.
+    pub(super) fn unregister_texture(&self, index: u32) {
+        if index == 0 {
+            return; // Never free the white texture slot.
+        }
+        self.bindless_free_list.borrow_mut().push(index);
     }
 
     /// Reset batch state for a new frame.
