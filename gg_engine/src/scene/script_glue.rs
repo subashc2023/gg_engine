@@ -67,6 +67,12 @@ pub fn register_all(lua: &Lua) -> LuaResult<()> {
     engine.set("destroy_entity", lua.create_function(lua_destroy_entity)?)?;
     engine.set("get_entity_name", lua.create_function(lua_get_entity_name)?)?;
 
+    // Hierarchy
+    engine.set("set_parent", lua.create_function(lua_set_parent)?)?;
+    engine.set("detach_from_parent", lua.create_function(lua_detach_from_parent)?)?;
+    engine.set("get_parent", lua.create_function(lua_get_parent)?)?;
+    engine.set("get_children", lua.create_function(lua_get_children)?)?;
+
     // Animation
     engine.set("play_animation", lua.create_function(lua_play_animation)?)?;
     engine.set("stop_animation", lua.create_function(lua_stop_animation)?)?;
@@ -571,6 +577,85 @@ fn lua_get_entity_name(lua: &Lua, uuid: u64) -> LuaResult<LuaValue> {
 }
 
 // ---------------------------------------------------------------------------
+// Hierarchy (parent-child relationships)
+// ---------------------------------------------------------------------------
+
+/// `Engine.set_parent(child_id, parent_id)` — reparent an entity, preserving world transform.
+/// Returns `true` on success, `false` if either entity not found or cycle detected.
+fn lua_set_parent(lua: &Lua, (child_id, parent_id): (u64, u64)) -> LuaResult<bool> {
+    let ctx = match lua.app_data_ref::<SceneScriptContext>() {
+        Some(ctx) => ctx,
+        None => return Ok(false),
+    };
+
+    let scene = unsafe { &mut *ctx.scene };
+    let child = match scene.find_entity_by_uuid(child_id) {
+        Some(e) => e,
+        None => return Ok(false),
+    };
+    let parent = match scene.find_entity_by_uuid(parent_id) {
+        Some(e) => e,
+        None => return Ok(false),
+    };
+
+    Ok(scene.set_parent(child, parent, true))
+}
+
+/// `Engine.detach_from_parent(entity_id)` — make an entity a root entity, preserving world transform.
+fn lua_detach_from_parent(lua: &Lua, entity_id: u64) -> LuaResult<()> {
+    let ctx = match lua.app_data_ref::<SceneScriptContext>() {
+        Some(ctx) => ctx,
+        None => return Ok(()),
+    };
+
+    let scene = unsafe { &mut *ctx.scene };
+    if let Some(entity) = scene.find_entity_by_uuid(entity_id) {
+        scene.detach_from_parent(entity, true);
+    }
+
+    Ok(())
+}
+
+/// `Engine.get_parent(entity_id)` — returns parent UUID as integer, or `nil` if root entity.
+fn lua_get_parent(lua: &Lua, entity_id: u64) -> LuaResult<LuaValue> {
+    let ctx = match lua.app_data_ref::<SceneScriptContext>() {
+        Some(ctx) => ctx,
+        None => return Ok(LuaValue::Nil),
+    };
+
+    let scene = unsafe { &*ctx.scene };
+    if let Some(entity) = scene.find_entity_by_uuid(entity_id) {
+        match scene.get_parent(entity) {
+            Some(parent_uuid) => Ok(LuaValue::Integer(parent_uuid as i64)),
+            None => Ok(LuaValue::Nil),
+        }
+    } else {
+        Ok(LuaValue::Nil)
+    }
+}
+
+/// `Engine.get_children(entity_id)` — returns a Lua table (1-indexed array) of child UUIDs.
+fn lua_get_children(lua: &Lua, entity_id: u64) -> LuaResult<LuaValue> {
+    let ctx = match lua.app_data_ref::<SceneScriptContext>() {
+        Some(ctx) => ctx,
+        None => {
+            let empty = lua.create_table()?;
+            return Ok(LuaValue::Table(empty));
+        }
+    };
+
+    let scene = unsafe { &*ctx.scene };
+    let table = lua.create_table()?;
+    if let Some(entity) = scene.find_entity_by_uuid(entity_id) {
+        let children = scene.get_children(entity);
+        for (i, uuid) in children.iter().enumerate() {
+            table.set(i + 1, *uuid as i64)?;
+        }
+    }
+    Ok(LuaValue::Table(table))
+}
+
+// ---------------------------------------------------------------------------
 // Animation bindings
 // ---------------------------------------------------------------------------
 
@@ -917,6 +1002,11 @@ mod tests {
         assert!(engine.get::<LuaFunction>("find_entity_by_name").is_ok());
         assert!(engine.get::<LuaFunction>("get_script_field").is_ok());
         assert!(engine.get::<LuaFunction>("set_script_field").is_ok());
+        // Hierarchy
+        assert!(engine.get::<LuaFunction>("set_parent").is_ok());
+        assert!(engine.get::<LuaFunction>("detach_from_parent").is_ok());
+        assert!(engine.get::<LuaFunction>("get_parent").is_ok());
+        assert!(engine.get::<LuaFunction>("get_children").is_ok());
         // Animation
         assert!(engine.get::<LuaFunction>("play_animation").is_ok());
         assert!(engine.get::<LuaFunction>("stop_animation").is_ok());
@@ -1255,5 +1345,43 @@ mod tests {
         lua.load("Engine.set_volume(12345, 0.5)")
             .exec()
             .expect("set_volume should not error without context");
+    }
+
+    #[test]
+    fn set_parent_no_context_returns_false() {
+        let lua = setup();
+        lua.load("result = Engine.set_parent(111, 222)")
+            .exec()
+            .unwrap();
+        let result: bool = lua.globals().get("result").unwrap();
+        assert!(!result);
+    }
+
+    #[test]
+    fn detach_from_parent_no_context_no_error() {
+        let lua = setup();
+        lua.load("Engine.detach_from_parent(12345)")
+            .exec()
+            .unwrap();
+    }
+
+    #[test]
+    fn get_parent_no_context_returns_nil() {
+        let lua = setup();
+        lua.load("result = Engine.get_parent(12345)")
+            .exec()
+            .unwrap();
+        let result: LuaValue = lua.globals().get("result").unwrap();
+        assert!(result.is_nil());
+    }
+
+    #[test]
+    fn get_children_no_context_returns_empty_table() {
+        let lua = setup();
+        lua.load("result = Engine.get_children(12345)")
+            .exec()
+            .unwrap();
+        let result: LuaTable = lua.globals().get("result").unwrap();
+        assert_eq!(result.len().unwrap(), 0);
     }
 }

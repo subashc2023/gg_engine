@@ -1,0 +1,179 @@
+Scene: Tilemap Test
+Entities:
+- Entity: 100
+  TagComponent:
+    Tag: Camera
+  TransformComponent:
+    Translation:
+    - 0.0
+    - 0.0
+    - 0.0
+    Rotation:
+    - 0.0
+    - 0.0
+    - 0.0
+    Scale:
+    - 1.0
+    - 1.0
+    - 1.0
+  CameraComponent:
+    Camera:
+      ProjectionType: 1
+      PerspectiveFOV: 0.7853982
+      PerspectiveNear: 0.01
+      PerspectiveFar: 1000.0
+      OrthographicSize: 10.0
+      OrthographicNear: -1.0
+      OrthographicFar: 1.0
+    Primary: true
+    FixedAspectRatio: false
+- Entity: 200
+  TagComponent:
+    Tag: Background
+  TransformComponent:
+    Translation:
+    - 0.0
+    - 0.0
+    - 0.0
+    Rotation:
+    - 0.0
+    - 0.0
+    - 0.0
+    Scale:
+    - 1.0
+    - 1.0
+    - 1.0
+  SpriteRendererComponent:
+    Color:
+    - 0.2
+    - 0.2
+    - 0.3
+    - 1.0
+- Entity: 300
+  TagComponent:
+    Tag: Tilemap
+  TransformComponent:
+    Translation:
+    - 0.0
+    - 0.0
+    - 0.0
+    Rotation:
+    - 0.0
+    - 0.0
+    - 0.0
+    Scale:
+    - 1.0
+    - 1.0
+    - 1.0
+  TilemapComponent:
+    Width: 10
+    Height: 10
+    TileSize:
+    - 1.0
+    - 1.0
+    TextureHandle: 2001
+    TilesetColumns: 4
+    CellSize:
+    - 16.0
+    - 16.0
+    Tiles:
+    - 0
+    - 1
+    - 2
+    - 3
+    - 0
+    - 1
+    - 2
+    - 3
+    - 0
+    - 1
+    - 0
+    - 1
+    - 2
+    - 3
+    - 0
+    - 1
+    - 2
+    - 3
+    - 0
+    - 1
+    - 0
+    - 1
+    - 2
+    - 3
+    - 0
+    - 1
+    - 2
+    - 3
+    - 0
+    - 1
+    - 0
+    - 1
+    - 2
+    - 3
+    - 0
+    - 1
+    - 2
+    - 3
+    - 0
+    - 1
+    - 0
+    - 1
+    - 2
+    - 3
+    - 0
+    - 1
+    - 2
+    - 3
+    - 0
+    - 1
+    - 0
+    - 1
+    - 2
+    - 3
+    - 0
+    - 1
+    - 2
+    - 3
+    - 0
+    - 1
+    - 0
+    - 1
+    - 2
+    - 3
+    - 0
+    - 1
+    - 2
+    - 3
+    - 0
+    - 1
+    - 0
+    - 1
+    - 2
+    - 3
+    - 0
+    - 1
+    - 2
+    - 3
+    - 0
+    - 1
+    - 0
+    - 1
+    - 2
+    - 3
+    - 0
+    - 1
+    - 2
+    - 3
+    - 0
+    - 1
+    - 0
+    - 1
+    - 2
+    - 3
+    - 0
+    - 1
+    - 2
+    - 3
+    - 0
+    - 1

@@ -766,6 +766,29 @@ impl Application for GGEditor {
                         ui.close();
                     }
                 });
+                let in_edit_mode = self.scene_state == SceneState::Edit;
+                ui.menu_button("Edit", |ui| {
+                    if ui
+                        .add_enabled(
+                            in_edit_mode && self.undo_system.can_undo(),
+                            egui::Button::new("Undo").shortcut_text("Ctrl+Z"),
+                        )
+                        .clicked()
+                    {
+                        self.perform_undo();
+                        ui.close();
+                    }
+                    if ui
+                        .add_enabled(
+                            in_edit_mode && self.undo_system.can_redo(),
+                            egui::Button::new("Redo").shortcut_text("Ctrl+Y"),
+                        )
+                        .clicked()
+                    {
+                        self.perform_redo();
+                        ui.close();
+                    }
+                });
                 ui.menu_button("View", |ui| {
                     if ui
                         .checkbox(&mut self.show_physics_colliders, "Show Physics Colliders")
@@ -868,6 +891,29 @@ impl Application for GGEditor {
                             .clicked()
                         {
                             self.open_project();
+                            ui.close();
+                        }
+                    });
+                    let in_edit_mode = self.scene_state == SceneState::Edit;
+                    ui.menu_button("Edit", |ui| {
+                        if ui
+                            .add_enabled(
+                                in_edit_mode && self.undo_system.can_undo(),
+                                egui::Button::new("Undo").shortcut_text("Ctrl+Z"),
+                            )
+                            .clicked()
+                        {
+                            self.perform_undo();
+                            ui.close();
+                        }
+                        if ui
+                            .add_enabled(
+                                in_edit_mode && self.undo_system.can_redo(),
+                                egui::Button::new("Redo").shortcut_text("Ctrl+Y"),
+                            )
+                            .clicked()
+                        {
+                            self.perform_redo();
                             ui.close();
                         }
                     });
