@@ -1,5 +1,6 @@
 use gg_engine::egui;
 use gg_engine::prelude::*;
+use gg_engine::scene::SceneSerializer;
 
 pub(crate) const ASSETS_DIR: &str = "assets";
 
@@ -18,7 +19,7 @@ enum ContentBrowserMode {
 thread_local! {
     static BROWSER_MODE: std::cell::Cell<ContentBrowserMode> =
         const { std::cell::Cell::new(ContentBrowserMode::FileSystem) };
-    /// Cached directory listing: (cached_path, directories, files).
+    // Cached directory listing: (cached_path, directories, files).
     static DIR_CACHE: std::cell::RefCell<Option<(
         std::path::PathBuf,
         Vec<(String, std::path::PathBuf)>,
@@ -26,8 +27,15 @@ thread_local! {
     )>> = const { std::cell::RefCell::new(None) };
 }
 
+// Rename state: (original_path, current_edit_string, whether we just entered rename mode).
+thread_local! {
+    static RENAME_STATE: std::cell::RefCell<Option<(std::path::PathBuf, String, bool)>> =
+        const { std::cell::RefCell::new(None) };
+    static DELETE_CONFIRM: std::cell::RefCell<Option<std::path::PathBuf>> =
+        const { std::cell::RefCell::new(None) };
+}
+
 /// Invalidate the cached directory listing (call on file changes).
-#[allow(dead_code)]
 pub(crate) fn invalidate_dir_cache() {
     DIR_CACHE.with(|c| *c.borrow_mut() = None);
 }
@@ -149,6 +157,15 @@ fn file_browser_ui(
 
     ui.add_space(4.0);
 
+    // Deferred file operations (collected during iteration, applied after).
+    let mut deferred_rename: Option<(std::path::PathBuf, String)> = None;
+    let mut deferred_create: Option<(String, &str)> = None; // (filename, template content)
+    let mut deferred_mkdir: Option<String> = None;
+
+    // Check if we're currently in rename mode for any item.
+    let rename_path =
+        RENAME_STATE.with(|s| s.borrow().as_ref().map(|(p, _, _)| p.clone()));
+
     egui::ScrollArea::vertical().show(ui, |ui| {
         let available_width = ui.available_width();
         let columns = ((available_width / cell_size) as usize).max(1);
@@ -163,6 +180,8 @@ fn file_browser_ui(
 
             // -- Directories --
             for (name, path) in &directories {
+                let is_renaming = rename_path.as_ref() == Some(path);
+
                 let response = ui.allocate_ui_with_layout(
                     egui::vec2(cell_size, cell_size + 14.0),
                     egui::Layout::top_down(egui::Align::Center),
@@ -170,16 +189,20 @@ fn file_browser_ui(
                         let btn = icon_button(ui, button_size, |painter, rect| {
                             paint_folder_icon(painter, rect);
                         });
-                        ui.add(
-                            egui::Label::new(
-                                egui::RichText::new(name).font(label_font.clone()),
-                            )
-                            .truncate(),
-                        );
+                        if is_renaming {
+                            render_rename_field(ui, path, &mut deferred_rename);
+                        } else {
+                            ui.add(
+                                egui::Label::new(
+                                    egui::RichText::new(name).font(label_font.clone()),
+                                )
+                                .truncate(),
+                            );
+                        }
                         btn
                     },
                 );
-                if response.inner.double_clicked() {
+                if !is_renaming && response.inner.double_clicked() {
                     navigate_to = Some(path.clone());
                 }
 
@@ -195,6 +218,29 @@ fn file_browser_ui(
                     );
                 }
 
+                // Right-click context menu for directories.
+                if !is_renaming {
+                    response.inner.context_menu(|ui| {
+                        if ui.button("Open").clicked() {
+                            navigate_to = Some(path.clone());
+                            ui.close();
+                        }
+                        ui.separator();
+                        if ui.button("Rename").clicked() {
+                            RENAME_STATE.with(|s| {
+                                *s.borrow_mut() = Some((path.clone(), name.clone(), true));
+                            });
+                            ui.close();
+                        }
+                        if ui.button("Delete").clicked() {
+                            DELETE_CONFIRM.with(|d| {
+                                *d.borrow_mut() = Some(path.clone());
+                            });
+                            ui.close();
+                        }
+                    });
+                }
+
                 col += 1;
                 if col >= columns {
                     col = 0;
@@ -203,6 +249,8 @@ fn file_browser_ui(
 
             // -- Files --
             for (name, path) in &files {
+                let is_renaming = rename_path.as_ref() == Some(path);
+
                 let response = ui.allocate_ui_with_layout(
                     egui::vec2(cell_size, cell_size + 14.0),
                     egui::Layout::top_down(egui::Align::Center),
@@ -210,12 +258,16 @@ fn file_browser_ui(
                         let btn = icon_button(ui, button_size, |painter, rect| {
                             paint_file_icon(painter, rect);
                         });
-                        ui.add(
-                            egui::Label::new(
-                                egui::RichText::new(name).font(label_font.clone()),
-                            )
-                            .truncate(),
-                        );
+                        if is_renaming {
+                            render_rename_field(ui, path, &mut deferred_rename);
+                        } else {
+                            ui.add(
+                                egui::Label::new(
+                                    egui::RichText::new(name).font(label_font.clone()),
+                                )
+                                .truncate(),
+                            );
+                        }
                         btn
                     },
                 );
@@ -232,25 +284,38 @@ fn file_browser_ui(
                     );
                 }
 
-                // Right-click context menu: Import into asset registry.
-                response.inner.context_menu(|ui| {
-                    if let Some(am) = asset_manager.as_mut() {
-                        let rel_path = path
-                            .strip_prefix(am.asset_directory())
-                            .map(|p| p.to_string_lossy().to_string())
-                            .unwrap_or_else(|_| path.to_string_lossy().to_string());
-                        let already_imported = am.is_imported(&rel_path);
-                        if already_imported {
-                            ui.label("Already imported");
-                        } else if ui.button("Import").clicked() {
-                            am.import_asset(&rel_path);
-                            am.save_registry();
+                // Right-click context menu for files.
+                if !is_renaming {
+                    response.inner.context_menu(|ui| {
+                        if let Some(am) = asset_manager.as_mut() {
+                            let rel_path = path
+                                .strip_prefix(am.asset_directory())
+                                .map(|p| p.to_string_lossy().to_string())
+                                .unwrap_or_else(|_| path.to_string_lossy().to_string());
+                            let already_imported = am.is_imported(&rel_path);
+                            if already_imported {
+                                ui.label("Already imported");
+                            } else if ui.button("Import").clicked() {
+                                am.import_asset(&rel_path);
+                                am.save_registry();
+                                ui.close();
+                            }
+                        }
+                        ui.separator();
+                        if ui.button("Rename").clicked() {
+                            RENAME_STATE.with(|s| {
+                                *s.borrow_mut() = Some((path.clone(), name.clone(), true));
+                            });
                             ui.close();
                         }
-                    } else {
-                        ui.label("No project loaded");
-                    }
-                });
+                        if ui.button("Delete").clicked() {
+                            DELETE_CONFIRM.with(|d| {
+                                *d.borrow_mut() = Some(path.clone());
+                            });
+                            ui.close();
+                        }
+                    });
+                }
 
                 col += 1;
                 if col >= columns {
@@ -259,10 +324,110 @@ fn file_browser_ui(
             }
         });
 
+        // Blank space context menu — create new files/folders.
+        let remaining = ui.available_rect_before_wrap();
+        let bg_response =
+            ui.allocate_rect(remaining, egui::Sense::click());
+        bg_response.context_menu(|ui| {
+            if ui.button("New Folder").clicked() {
+                deferred_mkdir = Some("New Folder".to_string());
+                ui.close();
+            }
+            if ui.button("New Lua Script").clicked() {
+                deferred_create = Some((
+                    "new_script.lua".to_string(),
+                    "function on_create()\nend\n\nfunction on_update(dt)\nend\n",
+                ));
+                ui.close();
+            }
+            if ui.button("New Scene").clicked() {
+                deferred_create = Some(("New Scene.ggscene".to_string(), ""));
+                ui.close();
+            }
+        });
+
         if let Some(path) = navigate_to {
             *current_directory = path;
         }
     });
+
+    // -- Apply deferred file operations --
+
+    if let Some((old_path, new_name)) = deferred_rename {
+        let new_path = old_path.parent().unwrap().join(&new_name);
+        if new_path != old_path {
+            let _ = std::fs::rename(&old_path, &new_path);
+        }
+        RENAME_STATE.with(|s| *s.borrow_mut() = None);
+        invalidate_dir_cache();
+    }
+
+    if let Some(name) = deferred_mkdir {
+        let new_dir = current_directory.join(&name);
+        let _ = std::fs::create_dir_all(&new_dir);
+        RENAME_STATE.with(|s| {
+            *s.borrow_mut() = Some((new_dir, name, true));
+        });
+        invalidate_dir_cache();
+    }
+
+    if let Some((filename, template)) = deferred_create {
+        let new_path = current_directory.join(&filename);
+        if filename.ends_with(".ggscene") {
+            let scene = gg_engine::scene::Scene::new();
+            let name = std::path::Path::new(&filename)
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or("Untitled");
+            SceneSerializer::serialize(&scene, &new_path.to_string_lossy(), Some(name));
+        } else {
+            let _ = std::fs::write(&new_path, template);
+        }
+        RENAME_STATE.with(|s| {
+            *s.borrow_mut() = Some((new_path, filename, true));
+        });
+        invalidate_dir_cache();
+    }
+
+    // Delete confirmation window.
+    let delete_path = DELETE_CONFIRM.with(|d| d.borrow().clone());
+    if let Some(ref path) = delete_path {
+        let name = path
+            .file_name()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .to_string();
+        let mut open = true;
+        egui::Window::new("Confirm Delete")
+            .collapsible(false)
+            .resizable(false)
+            .open(&mut open)
+            .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+            .show(ui.ctx(), |ui| {
+                ui.label(format!("Delete \"{}\"?", name));
+                if path.is_dir() {
+                    ui.label("This will delete the folder and all its contents.");
+                }
+                ui.add_space(8.0);
+                ui.horizontal(|ui| {
+                    if ui.button("Delete").clicked() {
+                        if path.is_dir() {
+                            let _ = std::fs::remove_dir_all(path);
+                        } else {
+                            let _ = std::fs::remove_file(path);
+                        }
+                        DELETE_CONFIRM.with(|d| *d.borrow_mut() = None);
+                        invalidate_dir_cache();
+                    }
+                    if ui.button("Cancel").clicked() {
+                        DELETE_CONFIRM.with(|d| *d.borrow_mut() = None);
+                    }
+                });
+            });
+        if !open {
+            DELETE_CONFIRM.with(|d| *d.borrow_mut() = None);
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -333,6 +498,51 @@ fn asset_browser_ui(
         am.registry_mut().remove(&handle);
         am.save_registry();
     }
+}
+
+// ---------------------------------------------------------------------------
+// Inline rename text field
+// ---------------------------------------------------------------------------
+
+fn render_rename_field(
+    ui: &mut egui::Ui,
+    path: &std::path::Path,
+    deferred_rename: &mut Option<(std::path::PathBuf, String)>,
+) {
+    RENAME_STATE.with(|state| {
+        let mut s = state.borrow_mut();
+        let Some((ref rename_path, ref mut edit_text, ref mut first_frame)) = *s else {
+            return;
+        };
+        if rename_path != path {
+            return;
+        }
+
+        let te = egui::TextEdit::singleline(edit_text)
+            .desired_width(60.0)
+            .font(egui::FontId::new(11.0, egui::FontFamily::Proportional));
+        let response = ui.add(te);
+
+        // Auto-focus and select-all on the first frame.
+        if *first_frame {
+            response.request_focus();
+            *first_frame = false;
+        }
+
+        // Commit on Enter or when focus is lost.
+        if response.lost_focus() {
+            let committed = ui.input(|i| i.key_pressed(egui::Key::Enter))
+                || !ui.input(|i| i.key_pressed(egui::Key::Escape));
+            if committed && !edit_text.is_empty() {
+                *deferred_rename = Some((path.to_path_buf(), edit_text.clone()));
+            } else {
+                // Cancelled — clear rename state.
+                *deferred_rename = None;
+                drop(s);
+                state.borrow_mut().take();
+            }
+        }
+    });
 }
 
 // ---------------------------------------------------------------------------

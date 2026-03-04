@@ -1,8 +1,9 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
+use super::asset_loader::{AssetLoader, LoadResult};
 use super::{asset_type_from_extension, AssetHandle, AssetMetadata, AssetRegistry, AssetType};
-use crate::renderer::{Renderer, Texture2D};
+use crate::renderer::{Renderer, Texture2D, TextureSpecification};
 use crate::uuid::Uuid;
 use crate::Ref;
 
@@ -18,6 +19,7 @@ pub struct EditorAssetManager {
     registry: AssetRegistry,
     loaded_assets: HashMap<AssetHandle, AssetData>,
     asset_directory: PathBuf,
+    loader: AssetLoader,
 }
 
 const REGISTRY_FILENAME: &str = "AssetRegistry.ggregistry";
@@ -29,6 +31,7 @@ impl EditorAssetManager {
             registry: AssetRegistry::new(),
             loaded_assets: HashMap::new(),
             asset_directory: asset_directory.into(),
+            loader: AssetLoader::new(),
         }
     }
 
@@ -195,5 +198,68 @@ impl EditorAssetManager {
     /// The root asset directory.
     pub fn asset_directory(&self) -> &Path {
         &self.asset_directory
+    }
+
+    // -------------------------------------------------------------------
+    // Async loading API (used by editor)
+    // -------------------------------------------------------------------
+
+    /// Request async texture loading for an asset handle.
+    /// Looks up the path from the registry and enqueues the work.
+    pub fn request_load(&mut self, handle: &AssetHandle) {
+        if self.loaded_assets.contains_key(handle) {
+            return;
+        }
+
+        let metadata = match self.registry.get(handle) {
+            Some(m) => m.clone(),
+            None => return,
+        };
+
+        if metadata.asset_type != AssetType::Texture2D {
+            return;
+        }
+
+        let abs_path = self.asset_directory.join(&metadata.file_path);
+        if !abs_path.exists() {
+            log::warn!("Texture file not found: {}", abs_path.display());
+            return;
+        }
+
+        self.loader.request_texture(*handle, abs_path, TextureSpecification::default());
+    }
+
+    /// Poll completed async loads, perform GPU upload for textures,
+    /// and store them in `loaded_assets`. Returns any font results for
+    /// the caller to process.
+    pub fn poll_loaded(&mut self, renderer: &Renderer) -> Vec<LoadResult> {
+        let results = self.loader.poll_results();
+        let mut font_results = Vec::new();
+
+        for result in results {
+            match result {
+                LoadResult::Texture { handle, data } => {
+                    match data {
+                        Ok(cpu_data) => {
+                            let texture = Ref::new(renderer.upload_texture(&cpu_data));
+                            self.loaded_assets.insert(handle, AssetData::Texture(texture));
+                        }
+                        Err(e) => {
+                            log::warn!("Async texture load failed: {e}");
+                        }
+                    }
+                }
+                font_result @ LoadResult::Font { .. } => {
+                    font_results.push(font_result);
+                }
+            }
+        }
+
+        font_results
+    }
+
+    /// Access the underlying asset loader (e.g., for font loading from editor).
+    pub fn loader(&mut self) -> &mut AssetLoader {
+        &mut self.loader
     }
 }

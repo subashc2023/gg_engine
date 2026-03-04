@@ -1,6 +1,8 @@
+use std::sync::{Arc, Mutex};
+
 use ash::vk;
 
-use super::buffer::find_memory_type;
+use super::gpu_allocation::{GpuAllocation, GpuAllocator, MemoryLocation};
 use super::RendererResources;
 
 // ---------------------------------------------------------------------------
@@ -68,14 +70,14 @@ pub struct FramebufferSpec {
 
 struct ColorAttachment {
     image: vk::Image,
-    memory: vk::DeviceMemory,
+    _allocation: GpuAllocation,
     view: vk::ImageView,
     format: FramebufferTextureFormat,
 }
 
 struct DepthAttachment {
     image: vk::Image,
-    memory: vk::DeviceMemory,
+    _allocation: GpuAllocation,
     view: vk::ImageView,
 }
 
@@ -113,8 +115,7 @@ pub struct Framebuffer {
 
     // Pixel readback (per-frame-in-flight staging buffer, persistently mapped).
     readback_buffer: vk::Buffer,
-    readback_memory: vk::DeviceMemory,
-    readback_mapping: *mut i32, // persistent map, 2 × i32 (one per frame slot)
+    readback_allocation: GpuAllocation,
 
     // Pending readback request for current frame.
     pending_readback: Option<(usize, i32, i32)>, // (attachment_index, x, y)
@@ -122,16 +123,17 @@ pub struct Framebuffer {
     // Last successfully read pixel value.
     last_readback: i32,
 
-    // Vulkan handles needed for resize/cleanup.
-    instance: ash::Instance,
-    physical_device: vk::PhysicalDevice,
+    // GPU allocator for resize.
+    allocator: Arc<Mutex<GpuAllocator>>,
     device: ash::Device,
 }
 
 impl Framebuffer {
-    pub(crate) fn new(res: &RendererResources<'_>, spec: FramebufferSpec) -> Self {
-        let instance = res.instance;
-        let physical_device = res.physical_device;
+    pub(crate) fn new(
+        res: &RendererResources<'_>,
+        allocator: &Arc<Mutex<GpuAllocator>>,
+        spec: FramebufferSpec,
+    ) -> Self {
         let device = res.device;
         let descriptor_pool = res.descriptor_pool;
         let descriptor_set_layout = res.texture_ds_layout;
@@ -177,26 +179,13 @@ impl Framebuffer {
             .iter()
             .map(|cs| {
                 let vk_fmt = resolve_vk_format(cs.format, color_format, depth_format);
-                let (image, memory, view) =
-                    create_color_resources(instance, physical_device, device, &spec, vk_fmt);
-                ColorAttachment {
-                    image,
-                    memory,
-                    view,
-                    format: cs.format,
-                }
+                create_color_attachment(allocator, device, &spec, vk_fmt, cs.format)
             })
             .collect();
 
         let depth_attachment = depth_spec.map(|ds| {
             let vk_fmt = resolve_vk_format(ds.format, color_format, depth_format);
-            let (image, memory, view) =
-                create_depth_resources(instance, physical_device, device, &spec, vk_fmt);
-            DepthAttachment {
-                image,
-                memory,
-                view,
-            }
+            create_depth_attachment(allocator, device, &spec, vk_fmt)
         });
 
         let color_views: Vec<vk::ImageView> = color_attachments.iter().map(|a| a.view).collect();
@@ -208,8 +197,8 @@ impl Framebuffer {
             allocate_descriptor_set(device, descriptor_pool, descriptor_set_layout);
         write_descriptor_set(device, descriptor_set, color_attachments[0].view, sampler);
 
-        let (readback_buffer, readback_memory, readback_mapping) =
-            create_readback_staging_buffer(instance, physical_device, device);
+        let (readback_buffer, readback_allocation) =
+            create_readback_staging_buffer(allocator, device);
 
         Self {
             color_attachments,
@@ -225,12 +214,10 @@ impl Framebuffer {
             color_format,
             depth_format,
             readback_buffer,
-            readback_memory,
-            readback_mapping,
+            readback_allocation,
             pending_readback: None,
             last_readback: -1,
-            instance: instance.clone(),
-            physical_device,
+            allocator: allocator.clone(),
             device: device.clone(),
         }
     }
@@ -266,27 +253,35 @@ impl Framebuffer {
             self.device.device_wait_idle().expect("Failed to wait for device idle during framebuffer resize");
         }
 
-        // Destroy old framebuffer, attachment resources, and readback buffer
-        // (keep render pass, sampler, descriptor set).
+        // Destroy old framebuffer (keep render pass, sampler, descriptor set).
         unsafe {
             self.device.destroy_framebuffer(self.framebuffer, None);
+        }
 
-            for ca in &self.color_attachments {
+        // Destroy old color attachment Vulkan objects (allocations auto-free on drop).
+        for ca in &self.color_attachments {
+            unsafe {
                 self.device.destroy_image_view(ca.view, None);
                 self.device.destroy_image(ca.image, None);
-                self.device.free_memory(ca.memory, None);
             }
+        }
+        // Drop old color attachments (frees allocations).
+        self.color_attachments.clear();
 
-            if let Some(da) = &self.depth_attachment {
+        // Destroy old depth attachment.
+        if let Some(da) = self.depth_attachment.take() {
+            unsafe {
                 self.device.destroy_image_view(da.view, None);
                 self.device.destroy_image(da.image, None);
-                self.device.free_memory(da.memory, None);
             }
-
-            self.device.unmap_memory(self.readback_memory);
-            self.device.destroy_buffer(self.readback_buffer, None);
-            self.device.free_memory(self.readback_memory, None);
+            // da.allocation auto-frees on drop
         }
+
+        // Destroy old readback buffer.
+        unsafe {
+            self.device.destroy_buffer(self.readback_buffer, None);
+        }
+        // Replace allocation to free old one.
 
         // Recreate color attachments at new size.
         self.color_attachments = self
@@ -294,37 +289,14 @@ impl Framebuffer {
             .iter()
             .map(|cs| {
                 let vk_fmt = resolve_vk_format(cs.format, self.color_format, self.depth_format);
-                let (image, memory, view) = create_color_resources(
-                    &self.instance,
-                    self.physical_device,
-                    &self.device,
-                    &self.spec,
-                    vk_fmt,
-                );
-                ColorAttachment {
-                    image,
-                    memory,
-                    view,
-                    format: cs.format,
-                }
+                create_color_attachment(&self.allocator, &self.device, &self.spec, vk_fmt, cs.format)
             })
             .collect();
 
         // Recreate depth attachment at new size if present.
         self.depth_attachment = self.depth_attachment_spec.map(|ds| {
             let vk_fmt = resolve_vk_format(ds.format, self.color_format, self.depth_format);
-            let (image, memory, view) = create_depth_resources(
-                &self.instance,
-                self.physical_device,
-                &self.device,
-                &self.spec,
-                vk_fmt,
-            );
-            DepthAttachment {
-                image,
-                memory,
-                view,
-            }
+            create_depth_attachment(&self.allocator, &self.device, &self.spec, vk_fmt)
         });
 
         let color_views: Vec<vk::ImageView> =
@@ -339,11 +311,12 @@ impl Framebuffer {
         );
 
         // Recreate readback staging buffer.
-        let (rb_buf, rb_mem, rb_map) =
-            create_readback_staging_buffer(&self.instance, self.physical_device, &self.device);
+        let (rb_buf, rb_alloc) =
+            create_readback_staging_buffer(&self.allocator, &self.device);
+        // Drop old readback allocation (the buffer was already destroyed above).
+        let old_readback_alloc = std::mem::replace(&mut self.readback_allocation, rb_alloc);
+        drop(old_readback_alloc);
         self.readback_buffer = rb_buf;
-        self.readback_memory = rb_mem;
-        self.readback_mapping = rb_map;
         self.pending_readback = None;
         self.last_readback = -1;
 
@@ -442,8 +415,12 @@ impl Framebuffer {
     /// Read the staging buffer for the given frame slot (data from 2 frames ago).
     /// Called after waiting on the frame's fence.
     pub(crate) fn read_pixel_result(&mut self, current_frame: usize) {
+        let ptr = self
+            .readback_allocation
+            .mapped_ptr()
+            .expect("Readback buffer must be mapped") as *const i32;
         unsafe {
-            self.last_readback = *self.readback_mapping.add(current_frame);
+            self.last_readback = *ptr.add(current_frame);
         }
     }
 
@@ -481,22 +458,19 @@ impl Drop for Framebuffer {
             for ca in &self.color_attachments {
                 self.device.destroy_image_view(ca.view, None);
                 self.device.destroy_image(ca.image, None);
-                self.device.free_memory(ca.memory, None);
             }
 
             if let Some(da) = &self.depth_attachment {
                 self.device.destroy_image_view(da.view, None);
                 self.device.destroy_image(da.image, None);
-                self.device.free_memory(da.memory, None);
             }
 
-            self.device.unmap_memory(self.readback_memory);
             self.device.destroy_buffer(self.readback_buffer, None);
-            self.device.free_memory(self.readback_memory, None);
-
             self.device.destroy_render_pass(self.render_pass, None);
             // Descriptor set is freed when the pool is destroyed.
         }
+        // GpuAllocations in color_attachments, depth_attachment, readback_allocation
+        // auto-free on drop.
     }
 }
 
@@ -562,11 +536,6 @@ fn create_offscreen_render_pass(
         subpass = subpass.depth_stencil_attachment(depth_ref);
     }
 
-    // Single dependency matching the swapchain render pass structure
-    // (1 dependency: EXTERNAL→0) for pipeline compatibility.
-    // The exit sync (color write → shader read) is handled by an explicit
-    // pipeline barrier between the offscreen and swapchain render passes
-    // in the command buffer recording (see application.rs).
     let dependency = vk::SubpassDependency::default()
         .src_subpass(vk::SUBPASS_EXTERNAL)
         .dst_subpass(0)
@@ -593,13 +562,13 @@ fn create_offscreen_render_pass(
         .expect("Failed to create offscreen render pass")
 }
 
-fn create_color_resources(
-    instance: &ash::Instance,
-    physical_device: vk::PhysicalDevice,
+fn create_color_attachment(
+    allocator: &Arc<Mutex<GpuAllocator>>,
     device: &ash::Device,
     spec: &FramebufferSpec,
     vk_format: vk::Format,
-) -> (vk::Image, vk::DeviceMemory, vk::ImageView) {
+    fb_format: FramebufferTextureFormat,
+) -> ColorAttachment {
     let image_info = vk::ImageCreateInfo::default()
         .image_type(vk::ImageType::TYPE_2D)
         .extent(vk::Extent3D {
@@ -623,22 +592,8 @@ fn create_color_resources(
     let image =
         unsafe { device.create_image(&image_info, None) }.expect("Failed to create color image");
 
-    let mem_req = unsafe { device.get_image_memory_requirements(image) };
-    let mem_type_index = find_memory_type(
-        instance,
-        physical_device,
-        mem_req.memory_type_bits,
-        vk::MemoryPropertyFlags::DEVICE_LOCAL,
-    );
-
-    let alloc_info = vk::MemoryAllocateInfo::default()
-        .allocation_size(mem_req.size)
-        .memory_type_index(mem_type_index);
-
-    let memory = unsafe { device.allocate_memory(&alloc_info, None) }
-        .expect("Failed to allocate color image memory");
-    unsafe { device.bind_image_memory(image, memory, 0) }
-        .expect("Failed to bind color image memory");
+    let allocation =
+        GpuAllocator::allocate_for_image(allocator, device, image, "FB_Color", MemoryLocation::GpuOnly);
 
     let view_info = vk::ImageViewCreateInfo::default()
         .image(image)
@@ -655,16 +610,20 @@ fn create_color_resources(
     let view = unsafe { device.create_image_view(&view_info, None) }
         .expect("Failed to create color image view");
 
-    (image, memory, view)
+    ColorAttachment {
+        image,
+        _allocation: allocation,
+        view,
+        format: fb_format,
+    }
 }
 
-fn create_depth_resources(
-    instance: &ash::Instance,
-    physical_device: vk::PhysicalDevice,
+fn create_depth_attachment(
+    allocator: &Arc<Mutex<GpuAllocator>>,
     device: &ash::Device,
     spec: &FramebufferSpec,
     vk_format: vk::Format,
-) -> (vk::Image, vk::DeviceMemory, vk::ImageView) {
+) -> DepthAttachment {
     let image_info = vk::ImageCreateInfo::default()
         .image_type(vk::ImageType::TYPE_2D)
         .extent(vk::Extent3D {
@@ -684,22 +643,8 @@ fn create_depth_resources(
     let image =
         unsafe { device.create_image(&image_info, None) }.expect("Failed to create depth image");
 
-    let mem_req = unsafe { device.get_image_memory_requirements(image) };
-    let mem_type_index = find_memory_type(
-        instance,
-        physical_device,
-        mem_req.memory_type_bits,
-        vk::MemoryPropertyFlags::DEVICE_LOCAL,
-    );
-
-    let alloc_info = vk::MemoryAllocateInfo::default()
-        .allocation_size(mem_req.size)
-        .memory_type_index(mem_type_index);
-
-    let memory = unsafe { device.allocate_memory(&alloc_info, None) }
-        .expect("Failed to allocate depth image memory");
-    unsafe { device.bind_image_memory(image, memory, 0) }
-        .expect("Failed to bind depth image memory");
+    let allocation =
+        GpuAllocator::allocate_for_image(allocator, device, image, "FB_Depth", MemoryLocation::GpuOnly);
 
     let view_info = vk::ImageViewCreateInfo::default()
         .image(image)
@@ -716,7 +661,11 @@ fn create_depth_resources(
     let view = unsafe { device.create_image_view(&view_info, None) }
         .expect("Failed to create depth image view");
 
-    (image, memory, view)
+    DepthAttachment {
+        image,
+        _allocation: allocation,
+        view,
+    }
 }
 
 fn create_sampler(device: &ash::Device) -> vk::Sampler {
@@ -776,12 +725,11 @@ fn allocate_descriptor_set(
 }
 
 /// Create a small HOST_VISIBLE staging buffer for pixel readback (2 × i32,
-/// one per frame-in-flight slot). Returns (buffer, memory, persistent_map).
+/// one per frame-in-flight slot). Returns (buffer, allocation).
 fn create_readback_staging_buffer(
-    instance: &ash::Instance,
-    physical_device: vk::PhysicalDevice,
+    allocator: &Arc<Mutex<GpuAllocator>>,
     device: &ash::Device,
-) -> (vk::Buffer, vk::DeviceMemory, *mut i32) {
+) -> (vk::Buffer, GpuAllocation) {
     let size = (2 * std::mem::size_of::<i32>()) as u64;
 
     let buf_info = vk::BufferCreateInfo::default()
@@ -792,33 +740,19 @@ fn create_readback_staging_buffer(
     let buffer =
         unsafe { device.create_buffer(&buf_info, None) }.expect("Failed to create readback buffer");
 
-    let mem_req = unsafe { device.get_buffer_memory_requirements(buffer) };
-    let mem_type = find_memory_type(
-        instance,
-        physical_device,
-        mem_req.memory_type_bits,
-        vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
-    );
-
-    let alloc_info = vk::MemoryAllocateInfo::default()
-        .allocation_size(mem_req.size)
-        .memory_type_index(mem_type);
-
-    let memory = unsafe { device.allocate_memory(&alloc_info, None) }
-        .expect("Failed to allocate readback memory");
-    unsafe { device.bind_buffer_memory(buffer, memory, 0) }
-        .expect("Failed to bind readback buffer memory");
-
-    let mapping = unsafe { device.map_memory(memory, 0, size, vk::MemoryMapFlags::empty()) }
-        .expect("Failed to map readback buffer") as *mut i32;
+    let allocation =
+        GpuAllocator::allocate_for_buffer(allocator, device, buffer, "ReadbackBuffer", MemoryLocation::GpuToCpu);
 
     // Initialize both slots to -1.
+    let mapping = allocation
+        .mapped_ptr()
+        .expect("Readback buffer must be mapped") as *mut i32;
     unsafe {
         *mapping = -1;
         *mapping.add(1) = -1;
     }
 
-    (buffer, memory, mapping)
+    (buffer, allocation)
 }
 
 fn write_descriptor_set(

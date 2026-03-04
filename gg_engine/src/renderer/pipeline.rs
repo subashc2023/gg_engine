@@ -64,6 +64,7 @@ pub(crate) fn create_pipeline(
     camera_ubo_ds_layout: vk::DescriptorSetLayout,
     descriptor_set_layouts: &[vk::DescriptorSetLayout],
     blend_enable: bool,
+    pipeline_cache: vk::PipelineCache,
 ) -> Pipeline {
     let _timer = ProfileTimer::new("Pipeline::create");
     let entry_point = c"main";
@@ -186,7 +187,7 @@ pub(crate) fn create_pipeline(
         .subpass(0);
 
     let pipeline = unsafe {
-        device.create_graphics_pipelines(vk::PipelineCache::null(), &[pipeline_info], None)
+        device.create_graphics_pipelines(pipeline_cache, &[pipeline_info], None)
     }
     .expect("Failed to create graphics pipeline")[0];
 
@@ -210,6 +211,7 @@ pub(crate) fn create_batch_pipeline(
     camera_ubo_ds_layout: vk::DescriptorSetLayout,
     descriptor_set_layouts: &[vk::DescriptorSetLayout],
     color_attachment_count: u32,
+    pipeline_cache: vk::PipelineCache,
 ) -> Pipeline {
     let _timer = ProfileTimer::new("Pipeline::create_batch");
     let entry_point = c"main";
@@ -313,7 +315,7 @@ pub(crate) fn create_batch_pipeline(
         .subpass(0);
 
     let pipeline = unsafe {
-        device.create_graphics_pipelines(vk::PipelineCache::null(), &[pipeline_info], None)
+        device.create_graphics_pipelines(pipeline_cache, &[pipeline_info], None)
     }
     .expect("Failed to create batch graphics pipeline")[0];
 
@@ -337,6 +339,7 @@ pub(crate) fn create_line_batch_pipeline(
     render_pass: vk::RenderPass,
     camera_ubo_ds_layout: vk::DescriptorSetLayout,
     color_attachment_count: u32,
+    pipeline_cache: vk::PipelineCache,
 ) -> Pipeline {
     let _timer = ProfileTimer::new("Pipeline::create_line_batch");
     let entry_point = c"main";
@@ -441,7 +444,7 @@ pub(crate) fn create_line_batch_pipeline(
         .subpass(0);
 
     let pipeline = unsafe {
-        device.create_graphics_pipelines(vk::PipelineCache::null(), &[pipeline_info], None)
+        device.create_graphics_pipelines(pipeline_cache, &[pipeline_info], None)
     }
     .expect("Failed to create line batch graphics pipeline")[0];
 

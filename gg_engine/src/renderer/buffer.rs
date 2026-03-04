@@ -1,5 +1,8 @@
+use std::sync::{Arc, Mutex};
+
 use ash::vk;
 
+use super::gpu_allocation::{GpuAllocation, GpuAllocator, MemoryLocation};
 use crate::profiling::ProfileTimer;
 
 // ---------------------------------------------------------------------------
@@ -200,40 +203,34 @@ impl BufferLayout {
 /// GPU vertex buffer. Created via [`Renderer::create_vertex_buffer`](super::Renderer::create_vertex_buffer).
 pub struct VertexBuffer {
     buffer: vk::Buffer,
-    memory: vk::DeviceMemory,
+    _allocation: GpuAllocation,
     layout: Option<BufferLayout>,
     device: ash::Device,
 }
 
 impl VertexBuffer {
     pub(crate) fn new(
-        instance: &ash::Instance,
-        physical_device: vk::PhysicalDevice,
+        allocator: &Arc<Mutex<GpuAllocator>>,
         device: &ash::Device,
         data: &[u8],
     ) -> Self {
         let _timer = ProfileTimer::new("VertexBuffer::new");
         let size = data.len() as vk::DeviceSize;
 
-        let (buffer, memory) = create_buffer_and_memory(
-            instance,
-            physical_device,
-            device,
-            size,
-            vk::BufferUsageFlags::VERTEX_BUFFER,
-        );
+        let (buffer, allocation) =
+            create_buffer_with_allocation(allocator, device, size, vk::BufferUsageFlags::VERTEX_BUFFER, "VertexBuffer");
 
+        // Copy data via mapped pointer.
+        let ptr = allocation
+            .mapped_ptr()
+            .expect("VertexBuffer allocation must be host-visible");
         unsafe {
-            let ptr = device
-                .map_memory(memory, 0, size, vk::MemoryMapFlags::empty())
-                .expect("Failed to map vertex buffer memory");
-            std::ptr::copy_nonoverlapping(data.as_ptr(), ptr as *mut u8, data.len());
-            device.unmap_memory(memory);
+            std::ptr::copy_nonoverlapping(data.as_ptr(), ptr, data.len());
         }
 
         Self {
             buffer,
-            memory,
+            _allocation: allocation,
             layout: None,
             device: device.clone(),
         }
@@ -255,9 +252,9 @@ impl VertexBuffer {
 impl Drop for VertexBuffer {
     fn drop(&mut self) {
         unsafe {
-            self.device.free_memory(self.memory, None);
             self.device.destroy_buffer(self.buffer, None);
         }
+        // GpuAllocation auto-frees memory on drop.
     }
 }
 
@@ -268,40 +265,38 @@ impl Drop for VertexBuffer {
 /// GPU index buffer. Created via [`Renderer::create_index_buffer`](super::Renderer::create_index_buffer).
 pub struct IndexBuffer {
     buffer: vk::Buffer,
-    memory: vk::DeviceMemory,
+    _allocation: GpuAllocation,
     count: u32,
     device: ash::Device,
 }
 
 impl IndexBuffer {
     pub(crate) fn new(
-        instance: &ash::Instance,
-        physical_device: vk::PhysicalDevice,
+        allocator: &Arc<Mutex<GpuAllocator>>,
         device: &ash::Device,
         indices: &[u32],
     ) -> Self {
         let _timer = ProfileTimer::new("IndexBuffer::new");
         let size = std::mem::size_of_val(indices) as vk::DeviceSize;
 
-        let (buffer, memory) = create_buffer_and_memory(
-            instance,
-            physical_device,
-            device,
-            size,
-            vk::BufferUsageFlags::INDEX_BUFFER,
-        );
+        let (buffer, allocation) =
+            create_buffer_with_allocation(allocator, device, size, vk::BufferUsageFlags::INDEX_BUFFER, "IndexBuffer");
 
+        // Copy data via mapped pointer.
+        let ptr = allocation
+            .mapped_ptr()
+            .expect("IndexBuffer allocation must be host-visible");
         unsafe {
-            let ptr = device
-                .map_memory(memory, 0, size, vk::MemoryMapFlags::empty())
-                .expect("Failed to map index buffer memory") as *mut u32;
-            ptr.copy_from_nonoverlapping(indices.as_ptr(), indices.len());
-            device.unmap_memory(memory);
+            std::ptr::copy_nonoverlapping(
+                indices.as_ptr() as *const u8,
+                ptr,
+                std::mem::size_of_val(indices),
+            );
         }
 
         Self {
             buffer,
-            memory,
+            _allocation: allocation,
             count: indices.len() as u32,
             device: device.clone(),
         }
@@ -325,7 +320,6 @@ impl IndexBuffer {
 impl Drop for IndexBuffer {
     fn drop(&mut self) {
         unsafe {
-            self.device.free_memory(self.memory, None);
             self.device.destroy_buffer(self.buffer, None);
         }
     }
@@ -341,49 +335,30 @@ impl Drop for IndexBuffer {
 /// the lifetime of the buffer. Use `write()` to copy vertex data each frame.
 pub(crate) struct DynamicVertexBuffer {
     buffer: vk::Buffer,
-    memory: vk::DeviceMemory,
-    mapped_ptr: *mut u8,
+    allocation: GpuAllocation,
     capacity: usize,
     layout: BufferLayout,
     device: ash::Device,
 }
 
-// Safety: The mapped_ptr is only written to by one frame at a time (guarded
-// by frame-in-flight fencing), and reads are on the GPU side via Vulkan sync.
-unsafe impl Send for DynamicVertexBuffer {}
-unsafe impl Sync for DynamicVertexBuffer {}
-
 impl DynamicVertexBuffer {
     pub fn new(
-        instance: &ash::Instance,
-        physical_device: vk::PhysicalDevice,
+        allocator: &Arc<Mutex<GpuAllocator>>,
         device: &ash::Device,
         capacity: usize,
         layout: BufferLayout,
     ) -> Self {
-        let (buffer, memory) = create_buffer_and_memory(
-            instance,
-            physical_device,
+        let (buffer, allocation) = create_buffer_with_allocation(
+            allocator,
             device,
             capacity as vk::DeviceSize,
             vk::BufferUsageFlags::VERTEX_BUFFER,
+            "DynamicVertexBuffer",
         );
-
-        let mapped_ptr = unsafe {
-            device
-                .map_memory(
-                    memory,
-                    0,
-                    capacity as vk::DeviceSize,
-                    vk::MemoryMapFlags::empty(),
-                )
-                .expect("Failed to map dynamic vertex buffer memory") as *mut u8
-        };
 
         Self {
             buffer,
-            memory,
-            mapped_ptr,
+            allocation,
             capacity,
             layout,
             device: device.clone(),
@@ -402,8 +377,12 @@ impl DynamicVertexBuffer {
             data.len(),
             self.capacity
         );
+        let base_ptr = self
+            .allocation
+            .mapped_ptr()
+            .expect("DynamicVertexBuffer must be persistently mapped");
         unsafe {
-            std::ptr::copy_nonoverlapping(data.as_ptr(), self.mapped_ptr.add(offset), data.len());
+            std::ptr::copy_nonoverlapping(data.as_ptr(), base_ptr.add(offset), data.len());
         }
     }
 
@@ -419,10 +398,9 @@ impl DynamicVertexBuffer {
 impl Drop for DynamicVertexBuffer {
     fn drop(&mut self) {
         unsafe {
-            self.device.unmap_memory(self.memory);
-            self.device.free_memory(self.memory, None);
             self.device.destroy_buffer(self.buffer, None);
         }
+        // GpuAllocation auto-frees and auto-unmaps on drop.
     }
 }
 
@@ -430,13 +408,14 @@ impl Drop for DynamicVertexBuffer {
 // Helpers
 // ---------------------------------------------------------------------------
 
-pub(super) fn create_buffer_and_memory(
-    instance: &ash::Instance,
-    physical_device: vk::PhysicalDevice,
+/// Create a buffer and allocate host-visible memory for it via the sub-allocator.
+pub(super) fn create_buffer_with_allocation(
+    allocator: &Arc<Mutex<GpuAllocator>>,
     device: &ash::Device,
     size: vk::DeviceSize,
     usage: vk::BufferUsageFlags,
-) -> (vk::Buffer, vk::DeviceMemory) {
+    name: &str,
+) -> (vk::Buffer, GpuAllocation) {
     let buffer_info = vk::BufferCreateInfo::default()
         .size(size)
         .usage(usage)
@@ -445,71 +424,34 @@ pub(super) fn create_buffer_and_memory(
     let buffer =
         unsafe { device.create_buffer(&buffer_info, None) }.expect("Failed to create buffer");
 
-    let mem_req = unsafe { device.get_buffer_memory_requirements(buffer) };
-    let mem_type_index = find_memory_type(
-        instance,
-        physical_device,
-        mem_req.memory_type_bits,
-        vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
-    );
+    let allocation =
+        GpuAllocator::allocate_for_buffer(allocator, device, buffer, name, MemoryLocation::CpuToGpu);
 
-    let alloc_info = vk::MemoryAllocateInfo::default()
-        .allocation_size(mem_req.size)
-        .memory_type_index(mem_type_index);
-
-    let memory =
-        unsafe { device.allocate_memory(&alloc_info, None) }.expect("Failed to allocate memory");
-
-    unsafe { device.bind_buffer_memory(buffer, memory, 0) }.expect("Failed to bind buffer memory");
-
-    (buffer, memory)
+    (buffer, allocation)
 }
 
-pub(super) fn find_memory_type(
-    instance: &ash::Instance,
-    physical_device: vk::PhysicalDevice,
-    type_filter: u32,
-    properties: vk::MemoryPropertyFlags,
-) -> u32 {
-    let mem_props = unsafe { instance.get_physical_device_memory_properties(physical_device) };
-
-    for i in 0..mem_props.memory_type_count {
-        let type_matches = (type_filter & (1 << i)) != 0;
-        let props_match = mem_props.memory_types[i as usize]
-            .property_flags
-            .contains(properties);
-        if type_matches && props_match {
-            return i;
-        }
-    }
-
-    panic!("Failed to find suitable memory type");
-}
-
-/// Create a staging buffer (TRANSFER_SRC, HOST_VISIBLE | HOST_COHERENT) and copy data into it.
+/// Create a staging buffer (TRANSFER_SRC, host-visible) and copy data into it.
 pub(super) fn create_staging_buffer(
-    instance: &ash::Instance,
-    physical_device: vk::PhysicalDevice,
+    allocator: &Arc<Mutex<GpuAllocator>>,
     device: &ash::Device,
     data: &[u8],
-) -> (vk::Buffer, vk::DeviceMemory) {
+) -> (vk::Buffer, GpuAllocation) {
     let size = data.len() as vk::DeviceSize;
 
-    let (buffer, memory) = create_buffer_and_memory(
-        instance,
-        physical_device,
+    let (buffer, allocation) = create_buffer_with_allocation(
+        allocator,
         device,
         size,
         vk::BufferUsageFlags::TRANSFER_SRC,
+        "StagingBuffer",
     );
 
+    let ptr = allocation
+        .mapped_ptr()
+        .expect("Staging buffer must be host-visible");
     unsafe {
-        let ptr = device
-            .map_memory(memory, 0, size, vk::MemoryMapFlags::empty())
-            .expect("Failed to map staging buffer memory");
-        std::ptr::copy_nonoverlapping(data.as_ptr(), ptr as *mut u8, data.len());
-        device.unmap_memory(memory);
+        std::ptr::copy_nonoverlapping(data.as_ptr(), ptr, data.len());
     }
 
-    (buffer, memory)
+    (buffer, allocation)
 }

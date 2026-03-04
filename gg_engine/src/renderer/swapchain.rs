@@ -1,7 +1,9 @@
+use std::sync::{Arc, Mutex};
+
 use ash::khr;
 use ash::vk;
 
-use super::buffer::find_memory_type;
+use super::gpu_allocation::{GpuAllocation, GpuAllocator, MemoryLocation};
 use super::{PresentMode, VulkanContext};
 
 // ---------------------------------------------------------------------------
@@ -80,8 +82,10 @@ pub struct Swapchain {
     // Depth buffer resources.
     depth_format: vk::Format,
     depth_image: vk::Image,
-    depth_image_memory: vk::DeviceMemory,
+    depth_allocation: Option<GpuAllocation>,
     depth_image_view: vk::ImageView,
+    // GPU allocator for depth buffer recreation on resize.
+    allocator: Arc<Mutex<GpuAllocator>>,
     device: ash::Device,
 }
 
@@ -91,6 +95,7 @@ impl Swapchain {
         width: u32,
         height: u32,
         desired_present_mode: PresentMode,
+        allocator: &Arc<Mutex<GpuAllocator>>,
     ) -> Result<Self, SwapchainError> {
         let device = vk_ctx.device().clone();
         let swapchain_loader = khr::swapchain::Device::new(vk_ctx.instance(), vk_ctx.device());
@@ -204,9 +209,8 @@ impl Swapchain {
         let render_pass = create_render_pass(&device, format.format, depth_format)?;
 
         // Create depth buffer resources.
-        let (depth_image, depth_image_memory, depth_image_view) = create_depth_resources(
-            vk_ctx.instance(),
-            vk_ctx.physical_device(),
+        let (depth_image, depth_allocation, depth_image_view) = create_depth_resources(
+            allocator,
             &device,
             extent,
             depth_format,
@@ -280,8 +284,9 @@ impl Swapchain {
             current_frame: 0,
             depth_format,
             depth_image,
-            depth_image_memory,
+            depth_allocation: Some(depth_allocation),
             depth_image_view,
+            allocator: allocator.clone(),
             device,
         })
     }
@@ -307,12 +312,12 @@ impl Swapchain {
         for &view in &self.image_views {
             unsafe { self.device.destroy_image_view(view, None) };
         }
-        destroy_depth_resources(
-            &self.device,
-            self.depth_image,
-            self.depth_image_memory,
-            self.depth_image_view,
-        );
+        // Destroy old depth resources.
+        unsafe {
+            self.device.destroy_image_view(self.depth_image_view, None);
+            self.device.destroy_image(self.depth_image, None);
+        }
+        self.depth_allocation.take(); // frees memory via GpuAllocation drop
 
         // Destroy old per-swapchain-image render_finished semaphores
         // (image count may change after recreation).
@@ -414,16 +419,15 @@ impl Swapchain {
         self.render_pass = create_render_pass(&self.device, self.format.format, self.depth_format)
             .expect("Failed to recreate render pass during resize");
 
-        let (depth_image, depth_image_memory, depth_image_view) = create_depth_resources(
-            vk_ctx.instance(),
-            vk_ctx.physical_device(),
+        let (depth_image, depth_allocation, depth_image_view) = create_depth_resources(
+            &self.allocator,
             &self.device,
             extent,
             self.depth_format,
         )
         .expect("Failed to recreate depth resources during resize");
         self.depth_image = depth_image;
-        self.depth_image_memory = depth_image_memory;
+        self.depth_allocation = Some(depth_allocation);
         self.depth_image_view = depth_image_view;
 
         self.framebuffers = create_framebuffers(
@@ -546,14 +550,13 @@ fn find_depth_format(instance: &ash::Instance, physical_device: vk::PhysicalDevi
     panic!("No supported depth format found");
 }
 
-/// Create the depth image, allocate memory, create the image view.
+/// Create the depth image, allocate memory via sub-allocator, create the image view.
 fn create_depth_resources(
-    instance: &ash::Instance,
-    physical_device: vk::PhysicalDevice,
+    allocator: &Arc<Mutex<GpuAllocator>>,
     device: &ash::Device,
     extent: vk::Extent2D,
     depth_format: vk::Format,
-) -> Result<(vk::Image, vk::DeviceMemory, vk::ImageView), SwapchainError> {
+) -> Result<(vk::Image, GpuAllocation, vk::ImageView), SwapchainError> {
     let image_info = vk::ImageCreateInfo::default()
         .image_type(vk::ImageType::TYPE_2D)
         .extent(vk::Extent3D {
@@ -573,23 +576,13 @@ fn create_depth_resources(
     let depth_image = unsafe { device.create_image(&image_info, None) }
         .map_err(SwapchainError::DepthImageCreation)?;
 
-    let mem_requirements = unsafe { device.get_image_memory_requirements(depth_image) };
-    let mem_type_index = find_memory_type(
-        instance,
-        physical_device,
-        mem_requirements.memory_type_bits,
-        vk::MemoryPropertyFlags::DEVICE_LOCAL,
+    let allocation = GpuAllocator::allocate_for_image(
+        allocator,
+        device,
+        depth_image,
+        "SwapchainDepth",
+        MemoryLocation::GpuOnly,
     );
-
-    let alloc_info = vk::MemoryAllocateInfo::default()
-        .allocation_size(mem_requirements.size)
-        .memory_type_index(mem_type_index);
-
-    let depth_image_memory = unsafe { device.allocate_memory(&alloc_info, None) }
-        .map_err(SwapchainError::DepthMemoryAllocation)?;
-
-    unsafe { device.bind_image_memory(depth_image, depth_image_memory, 0) }
-        .map_err(SwapchainError::DepthMemoryAllocation)?;
 
     let view_info = vk::ImageViewCreateInfo::default()
         .image(depth_image)
@@ -606,22 +599,9 @@ fn create_depth_resources(
     let depth_image_view = unsafe { device.create_image_view(&view_info, None) }
         .map_err(SwapchainError::ImageViewCreation)?;
 
-    Ok((depth_image, depth_image_memory, depth_image_view))
+    Ok((depth_image, allocation, depth_image_view))
 }
 
-/// Destroy depth image, memory, and view.
-fn destroy_depth_resources(
-    device: &ash::Device,
-    image: vk::Image,
-    memory: vk::DeviceMemory,
-    view: vk::ImageView,
-) {
-    unsafe {
-        device.destroy_image_view(view, None);
-        device.destroy_image(image, None);
-        device.free_memory(memory, None);
-    }
-}
 
 // ---------------------------------------------------------------------------
 // Render pass helper
@@ -778,13 +758,12 @@ impl Drop for Swapchain {
             for &fb in &self.framebuffers {
                 self.device.destroy_framebuffer(fb, None);
             }
+            // Destroy depth Vulkan objects.
+            self.device.destroy_image_view(self.depth_image_view, None);
+            self.device.destroy_image(self.depth_image, None);
         }
-        destroy_depth_resources(
-            &self.device,
-            self.depth_image,
-            self.depth_image_memory,
-            self.depth_image_view,
-        );
+        // Free depth allocation via GpuAllocation drop.
+        self.depth_allocation.take();
         unsafe {
             self.device.destroy_render_pass(self.render_pass, None);
             for &view in &self.image_views {

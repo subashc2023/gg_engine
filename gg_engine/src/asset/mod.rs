@@ -1,6 +1,8 @@
+mod asset_loader;
 mod asset_manager;
 mod asset_registry;
 
+pub use asset_loader::{AssetLoader, LoadResult};
 pub use asset_manager::EditorAssetManager;
 pub use asset_registry::AssetRegistry;
 

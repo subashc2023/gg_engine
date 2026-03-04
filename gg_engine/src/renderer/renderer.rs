@@ -1,13 +1,15 @@
 use std::path::Path;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use ash::vk;
 use glam::{Mat4, Quat, Vec2, Vec3, Vec4};
 
 use super::buffer::{IndexBuffer, VertexBuffer};
 use super::draw_context::DrawContext;
-use super::font::Font;
+use super::font::{Font, FontCpuData};
+use super::texture::TextureCpuData;
 use super::framebuffer::{Framebuffer, FramebufferSpec};
+use super::gpu_allocation::GpuAllocator;
 use super::pipeline::{self, Pipeline};
 use super::render_command::RenderCommand;
 use super::renderer_2d::{
@@ -52,12 +54,13 @@ pub struct Renderer {
     view_projection: Mat4,
 
     // Handles needed for resource creation.
-    instance: ash::Instance,
-    physical_device: vk::PhysicalDevice,
     device: ash::Device,
     render_pass: vk::RenderPass,
     graphics_queue: vk::Queue,
     command_pool: vk::CommandPool,
+
+    // GPU sub-allocator for buffer/image memory.
+    allocator: Arc<Mutex<GpuAllocator>>,
 
     // Texture descriptor infrastructure.
     descriptor_pool: vk::DescriptorPool,
@@ -72,6 +75,9 @@ pub struct Renderer {
     color_format: vk::Format,
     depth_format: vk::Format,
 
+    // Pipeline cache for faster startup on subsequent runs.
+    pipeline_cache: vk::PipelineCache,
+
     // Built-in 2D renderer resources.
     renderer_2d: Option<Renderer2DData>,
 
@@ -85,6 +91,7 @@ pub struct Renderer {
 impl Renderer {
     pub(crate) fn new(
         vk_ctx: &VulkanContext,
+        allocator: &Arc<Mutex<GpuAllocator>>,
         render_pass: vk::RenderPass,
         command_pool: vk::CommandPool,
         color_format: vk::Format,
@@ -135,12 +142,7 @@ impl Renderer {
                 .expect("Failed to create camera UBO descriptor set layout");
 
         // -- Camera UBO buffer (64 bytes, double-buffered) --
-        let camera_ubo = UniformBuffer::new(
-            vk_ctx.instance(),
-            vk_ctx.physical_device(),
-            device,
-            CameraData::SIZE,
-        );
+        let camera_ubo = UniformBuffer::new(allocator, device, CameraData::SIZE);
 
         // -- Allocate 2 descriptor sets for the camera UBO --
         let ubo_layouts = [camera_ubo_ds_layout; 2];
@@ -168,16 +170,25 @@ impl Renderer {
             }
         }
 
+        // -- Pipeline cache (load from disk if available) --
+        let cache_data = Self::load_pipeline_cache_data();
+        let cache_create_info = if cache_data.is_empty() {
+            vk::PipelineCacheCreateInfo::default()
+        } else {
+            vk::PipelineCacheCreateInfo::default().initial_data(&cache_data)
+        };
+        let pipeline_cache = unsafe { device.create_pipeline_cache(&cache_create_info, None) }
+            .expect("Failed to create pipeline cache");
+
         Self {
             api,
             draw_context: None,
             view_projection: Mat4::IDENTITY,
-            instance: vk_ctx.instance().clone(),
-            physical_device: vk_ctx.physical_device(),
             device: device.clone(),
             render_pass,
             graphics_queue: vk_ctx.graphics_queue(),
             command_pool,
+            allocator: allocator.clone(),
             descriptor_pool,
             texture_descriptor_set_layout,
             camera_ubo,
@@ -185,9 +196,42 @@ impl Renderer {
             camera_ubo_ds,
             color_format,
             depth_format,
+            pipeline_cache,
             renderer_2d: None,
             line_width: 4.0,
             last_stats_2d: Renderer2DStats::default(),
+        }
+    }
+
+    // -- Pipeline cache persistence -------------------------------------------
+
+    fn pipeline_cache_path() -> Option<std::path::PathBuf> {
+        std::env::current_exe()
+            .ok()
+            .and_then(|p| p.parent().map(|d| d.join("pipeline_cache.bin")))
+    }
+
+    fn load_pipeline_cache_data() -> Vec<u8> {
+        Self::pipeline_cache_path()
+            .and_then(|p| std::fs::read(&p).ok())
+            .unwrap_or_default()
+    }
+
+    fn save_pipeline_cache(&self) {
+        let data = unsafe { self.device.get_pipeline_cache_data(self.pipeline_cache) };
+        match data {
+            Ok(bytes) => {
+                if let Some(path) = Self::pipeline_cache_path() {
+                    if let Err(e) = std::fs::write(&path, &bytes) {
+                        log::warn!("Failed to save pipeline cache: {}", e);
+                    } else {
+                        log::info!("Pipeline cache saved ({} bytes)", bytes.len());
+                    }
+                }
+            }
+            Err(e) => {
+                log::warn!("Failed to read pipeline cache data: {:?}", e);
+            }
         }
     }
 
@@ -202,12 +246,12 @@ impl Renderer {
     ///
     /// Use [`as_bytes`](super::as_bytes) to convert typed vertex slices.
     pub fn create_vertex_buffer(&self, data: &[u8]) -> VertexBuffer {
-        VertexBuffer::new(&self.instance, self.physical_device, &self.device, data)
+        VertexBuffer::new(&self.allocator, &self.device, data)
     }
 
     /// Create a GPU index buffer from u32 indices.
     pub fn create_index_buffer(&self, indices: &[u32]) -> IndexBuffer {
-        IndexBuffer::new(&self.instance, self.physical_device, &self.device, indices)
+        IndexBuffer::new(&self.allocator, &self.device, indices)
     }
 
     /// Create an empty vertex array.
@@ -237,6 +281,7 @@ impl Renderer {
             self.camera_ubo_ds_layout,
             &[],
             blend_enable,
+            self.pipeline_cache,
         ))
     }
 
@@ -253,12 +298,13 @@ impl Renderer {
             self.camera_ubo_ds_layout,
             &[self.texture_descriptor_set_layout],
             true,
+            self.pipeline_cache,
         ))
     }
 
     /// Load a texture from an image file.
     pub fn create_texture_from_file(&self, path: &Path) -> Texture2D {
-        let mut texture = Texture2D::from_file(&self.resources(), path);
+        let mut texture = Texture2D::from_file(&self.resources(), &self.allocator, path);
         if let Some(data) = &self.renderer_2d {
             let index = data.register_texture(&texture);
             texture.set_bindless_index(index);
@@ -268,7 +314,7 @@ impl Renderer {
 
     /// Create a texture from raw RGBA8 pixel data.
     pub fn create_texture_from_rgba8(&self, width: u32, height: u32, pixels: &[u8]) -> Texture2D {
-        let mut texture = Texture2D::from_rgba8(&self.resources(), width, height, pixels);
+        let mut texture = Texture2D::from_rgba8(&self.resources(), &self.allocator, width, height, pixels);
         if let Some(data) = &self.renderer_2d {
             let index = data.register_texture(&texture);
             texture.set_bindless_index(index);
@@ -279,9 +325,31 @@ impl Renderer {
     /// Load a font from a TTF file and generate an MSDF atlas.
     /// The atlas texture is registered in the bindless descriptor array.
     pub fn create_font(&self, path: &Path) -> Font {
-        let mut font = Font::load(&self.resources(), path);
+        let mut font = Font::load(&self.resources(), &self.allocator, path);
         if let Some(data) = &self.renderer_2d {
             let index = data.register_texture(&font.atlas_texture);
+            font.atlas_texture.set_bindless_index(index);
+        }
+        font
+    }
+
+    /// Upload a texture from pre-loaded CPU data (async path).
+    /// Performs GPU upload and registers in the bindless array.
+    pub fn upload_texture(&self, data: &TextureCpuData) -> Texture2D {
+        let mut texture = Texture2D::from_cpu_data(&self.resources(), &self.allocator, data);
+        if let Some(r2d) = &self.renderer_2d {
+            let index = r2d.register_texture(&texture);
+            texture.set_bindless_index(index);
+        }
+        texture
+    }
+
+    /// Upload a font from pre-generated CPU data (async path).
+    /// Performs GPU upload of the atlas and registers in the bindless array.
+    pub fn upload_font(&self, data: FontCpuData) -> Font {
+        let mut font = Font::from_cpu_data(&self.resources(), &self.allocator, data);
+        if let Some(r2d) = &self.renderer_2d {
+            let index = r2d.register_texture(&font.atlas_texture);
             font.atlas_texture.set_bindless_index(index);
         }
         font
@@ -304,15 +372,13 @@ impl Renderer {
 
     /// Create an offscreen framebuffer for rendering to a texture.
     pub fn create_framebuffer(&self, spec: FramebufferSpec) -> Framebuffer {
-        Framebuffer::new(&self.resources(), spec)
+        Framebuffer::new(&self.resources(), &self.allocator, spec)
     }
 
     /// Bundle Renderer-owned Vulkan state into a lightweight view for internal
     /// factory functions, avoiding 7-8 individual parameter lists.
     fn resources(&self) -> super::RendererResources<'_> {
         super::RendererResources {
-            instance: &self.instance,
-            physical_device: self.physical_device,
             device: &self.device,
             graphics_queue: self.graphics_queue,
             command_pool: self.command_pool,
@@ -341,6 +407,7 @@ impl Renderer {
                 render_pass,
                 self.camera_ubo_ds_layout,
                 color_attachment_count,
+                self.pipeline_cache,
             );
         }
     }
@@ -361,12 +428,12 @@ impl Renderer {
         let _timer = ProfileTimer::new("Renderer::init_2d");
         let white_texture = self.create_texture_from_rgba8(1, 1, &[255, 255, 255, 255]);
         let data = Renderer2DData::new(
-            &self.instance,
-            self.physical_device,
+            &self.allocator,
             &self.device,
             self.render_pass,
             self.camera_ubo_ds_layout,
             white_texture,
+            self.pipeline_cache,
         );
         // White texture gets bindless index 0.
         data.register_texture(&data.white_texture);
@@ -1351,7 +1418,10 @@ impl Renderer {
 
 impl Drop for Renderer {
     fn drop(&mut self) {
+        self.save_pipeline_cache();
         unsafe {
+            self.device
+                .destroy_pipeline_cache(self.pipeline_cache, None);
             self.device
                 .destroy_descriptor_pool(self.descriptor_pool, None);
             self.device

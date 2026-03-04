@@ -689,6 +689,30 @@ impl Scene {
             .and_then(|r| r.parent)
     }
 
+    /// Move a child entity to a specific index within its parent's children list.
+    ///
+    /// No-op if the entity has no parent or the UUID is not found in the children.
+    pub fn reorder_child(&mut self, child_uuid: u64, new_index: usize) {
+        let Some(child_entity) = self.find_entity_by_uuid(child_uuid) else {
+            return;
+        };
+        let parent_uuid = match self.get_parent(child_entity) {
+            Some(p) => p,
+            None => return,
+        };
+        let Some(parent_entity) = self.find_entity_by_uuid(parent_uuid) else {
+            return;
+        };
+        if let Some(mut rel) = self.get_component_mut::<RelationshipComponent>(parent_entity) {
+            let Some(current_pos) = rel.children.iter().position(|&c| c == child_uuid) else {
+                return;
+            };
+            rel.children.remove(current_pos);
+            let clamped = new_index.min(rel.children.len());
+            rel.children.insert(clamped, child_uuid);
+        }
+    }
+
     /// Return all root entities (entities without a parent), sorted by entity ID.
     pub fn root_entities(&self) -> Vec<(Entity, String)> {
         let mut entities: Vec<(Entity, String)> = self
@@ -839,6 +863,69 @@ impl Scene {
                 if let Ok(mut tilemap) = self.world.get::<&mut TilemapComponent>(handle) {
                     tilemap.texture = Some(texture);
                 }
+            }
+        }
+    }
+
+    /// Async variant of [`resolve_texture_handles`](Self::resolve_texture_handles).
+    ///
+    /// For entities with unresolved texture handles:
+    /// - If the texture is already loaded in the asset manager, assigns it immediately.
+    /// - Otherwise, requests an async background load (non-blocking).
+    ///
+    /// On subsequent frames, `poll_loaded` will upload completed textures,
+    /// and this method will find them in the cache and assign them.
+    pub fn resolve_texture_handles_async(
+        &mut self,
+        asset_manager: &mut crate::asset::EditorAssetManager,
+    ) {
+        let _timer = crate::profiling::ProfileTimer::new("Scene::resolve_texture_handles_async");
+
+        // Phase 1: sprites.
+        let needs_resolve: Vec<(hecs::Entity, crate::uuid::Uuid)> = self
+            .world
+            .query::<(hecs::Entity, &SpriteRendererComponent)>()
+            .iter()
+            .filter_map(|(handle, sprite)| {
+                if sprite.texture_handle.raw() != 0 && sprite.texture.is_none() {
+                    Some((handle, sprite.texture_handle))
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        for (handle, asset_handle) in needs_resolve {
+            if let Some(texture) = asset_manager.get_texture(&asset_handle) {
+                if let Ok(mut sprite) = self.world.get::<&mut SpriteRendererComponent>(handle) {
+                    sprite.texture = Some(texture);
+                }
+            } else {
+                asset_manager.request_load(&asset_handle);
+            }
+        }
+
+        // Phase 2: tilemaps.
+        let tilemap_needs: Vec<(hecs::Entity, crate::uuid::Uuid)> = self
+            .world
+            .query::<(hecs::Entity, &TilemapComponent)>()
+            .iter()
+            .filter_map(|(handle, tilemap)| {
+                if tilemap.texture_handle.raw() != 0 && tilemap.texture.is_none() {
+                    Some((handle, tilemap.texture_handle))
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        for (handle, asset_handle) in tilemap_needs {
+            if let Some(texture) = asset_manager.get_texture(&asset_handle) {
+                if let Ok(mut tilemap) = self.world.get::<&mut TilemapComponent>(handle) {
+                    tilemap.texture = Some(texture);
+                }
+            } else {
+                asset_manager.request_load(&asset_handle);
             }
         }
     }

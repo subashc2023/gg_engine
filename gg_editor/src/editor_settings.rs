@@ -1,8 +1,14 @@
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
+use crate::gizmo::GizmoOperation;
+
 const SETTINGS_FILE_NAME: &str = "editor_settings.yaml";
 const MAX_RECENT_PROJECTS: usize = 10;
+
+fn default_true() -> bool {
+    true
+}
 
 #[derive(Serialize, Deserialize, Clone)]
 pub(crate) struct RecentProject {
@@ -13,6 +19,12 @@ pub(crate) struct RecentProject {
 #[derive(Serialize, Deserialize, Default)]
 pub(crate) struct EditorSettings {
     pub recent_projects: Vec<RecentProject>,
+    #[serde(default = "default_true")]
+    pub vsync: bool,
+    #[serde(default)]
+    pub show_physics_colliders: bool,
+    #[serde(default)]
+    pub gizmo_operation: GizmoOperation,
 }
 
 impl EditorSettings {

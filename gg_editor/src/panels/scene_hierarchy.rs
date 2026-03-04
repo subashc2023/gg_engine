@@ -18,7 +18,11 @@ enum DeferredHierarchyAction {
     CreateChild(Entity),
     Reparent { child: Entity, new_parent: Entity },
     DetachToRoot(Entity),
+    ReorderSibling { child_uuid: u64, new_index: usize },
 }
+
+/// Fraction of item height at top/bottom that triggers reorder vs reparent.
+const REORDER_EDGE_FRACTION: f32 = 0.3;
 
 // ---------------------------------------------------------------------------
 // Main panel UI
@@ -112,6 +116,14 @@ pub(crate) fn scene_hierarchy_ui(
                     *scene_dirty = true;
                 }
             }
+            DeferredHierarchyAction::ReorderSibling {
+                child_uuid,
+                new_index,
+            } => {
+                undo_system.record(scene);
+                scene.reorder_child(child_uuid, new_index);
+                *scene_dirty = true;
+            }
         }
     }
 }
@@ -141,7 +153,7 @@ fn draw_entity_node(
         }
         entity_context_menu(&response, entity, deferred_action, scene_dirty, has_parent);
         handle_drag_source(ui, &response, entity);
-        handle_drop_target(&response, ui, entity, deferred_action);
+        handle_drop_target(&response, ui, entity, deferred_action, scene);
     } else {
         // Parent node — collapsing header with children.
         let id = ui.make_persistent_id(entity.id());
@@ -182,7 +194,7 @@ fn draw_entity_node(
             });
 
         // Drop target on the header label.
-        handle_drop_target(&header_ir.inner, ui, entity, deferred_action);
+        handle_drop_target(&header_ir.inner, ui, entity, deferred_action, scene);
     }
 }
 
@@ -196,30 +208,141 @@ fn handle_drag_source(ui: &egui::Ui, response: &egui::Response, entity: Entity) 
     }
 }
 
+/// Determines drop zone based on cursor Y position relative to item rect.
+/// Returns (is_reorder, insert_before) — if not reorder, it's a reparent.
+fn drop_zone(response: &egui::Response, cursor_y: f32) -> (bool, bool) {
+    let rect = response.rect;
+    let edge = rect.height() * REORDER_EDGE_FRACTION;
+    if cursor_y < rect.min.y + edge {
+        (true, true) // top edge → insert before
+    } else if cursor_y > rect.max.y - edge {
+        (true, false) // bottom edge → insert after
+    } else {
+        (false, false) // center → reparent
+    }
+}
+
 fn handle_drop_target(
     response: &egui::Response,
     ui: &egui::Ui,
     entity: Entity,
     deferred_action: &mut Option<DeferredHierarchyAction>,
+    scene: &Scene,
 ) {
+    let cursor_y = ui.input(|i| i.pointer.hover_pos().map(|p| p.y));
+
     if let Some(payload) = response.dnd_release_payload::<HierarchyDragPayload>() {
         if payload.entity != entity {
-            *deferred_action = Some(DeferredHierarchyAction::Reparent {
-                child: payload.entity,
-                new_parent: entity,
-            });
+            if let Some(cy) = cursor_y {
+                let (is_reorder, insert_before) = drop_zone(response, cy);
+                if is_reorder {
+                    if let Some(action) =
+                        compute_reorder_action(scene, entity, &payload, insert_before)
+                    {
+                        *deferred_action = Some(action);
+                    } else {
+                        // Fallback to reparent if not siblings.
+                        *deferred_action = Some(DeferredHierarchyAction::Reparent {
+                            child: payload.entity,
+                            new_parent: entity,
+                        });
+                    }
+                } else {
+                    *deferred_action = Some(DeferredHierarchyAction::Reparent {
+                        child: payload.entity,
+                        new_parent: entity,
+                    });
+                }
+            } else {
+                *deferred_action = Some(DeferredHierarchyAction::Reparent {
+                    child: payload.entity,
+                    new_parent: entity,
+                });
+            }
         }
     }
     if let Some(payload) = response.dnd_hover_payload::<HierarchyDragPayload>() {
         if payload.entity != entity {
-            ui.painter().rect_stroke(
-                response.rect,
-                egui::CornerRadius::ZERO,
-                egui::Stroke::new(2.0, egui::Color32::from_rgb(0x00, 0x7A, 0xCC)),
-                egui::StrokeKind::Inside,
-            );
+            let accent = egui::Color32::from_rgb(0x00, 0x7A, 0xCC);
+            if let Some(cy) = cursor_y {
+                let (is_reorder, insert_before) = drop_zone(response, cy);
+                if is_reorder && are_siblings(scene, entity, payload.entity) {
+                    // Insertion line indicator.
+                    let line_y = if insert_before {
+                        response.rect.min.y
+                    } else {
+                        response.rect.max.y
+                    };
+                    ui.painter().hline(
+                        response.rect.min.x..=response.rect.max.x,
+                        line_y,
+                        egui::Stroke::new(2.0, accent),
+                    );
+                } else {
+                    // Reparent highlight.
+                    ui.painter().rect_stroke(
+                        response.rect,
+                        egui::CornerRadius::ZERO,
+                        egui::Stroke::new(2.0, accent),
+                        egui::StrokeKind::Inside,
+                    );
+                }
+            } else {
+                ui.painter().rect_stroke(
+                    response.rect,
+                    egui::CornerRadius::ZERO,
+                    egui::Stroke::new(2.0, accent),
+                    egui::StrokeKind::Inside,
+                );
+            }
         }
     }
+}
+
+/// Check if two entities share the same parent.
+fn are_siblings(scene: &Scene, a: Entity, b: Entity) -> bool {
+    let pa = scene.get_parent(a);
+    let pb = scene.get_parent(b);
+    pa.is_some() && pa == pb
+}
+
+/// Compute a ReorderSibling action for dropping a payload entity relative to
+/// the target entity (insert before or after).
+fn compute_reorder_action(
+    scene: &Scene,
+    target: Entity,
+    payload: &HierarchyDragPayload,
+    insert_before: bool,
+) -> Option<DeferredHierarchyAction> {
+    // Both must share the same parent.
+    let target_parent = scene.get_parent(target)?;
+    let payload_parent = scene.get_parent(payload.entity)?;
+    if target_parent != payload_parent {
+        return None;
+    }
+
+    let parent_entity = scene.find_entity_by_uuid(target_parent)?;
+    let children = scene.get_children(parent_entity);
+
+    let target_uuid = scene
+        .get_component::<IdComponent>(target)
+        .map(|id| id.id.raw())?;
+    let child_uuid = scene
+        .get_component::<IdComponent>(payload.entity)
+        .map(|id| id.id.raw())?;
+
+    let target_idx = children.iter().position(|&c| c == target_uuid)?;
+
+    let new_index = if insert_before {
+        target_idx
+    } else {
+        target_idx + 1
+    };
+
+    Some(DeferredHierarchyAction::ReorderSibling {
+        child_uuid,
+        new_index,
+    })
 }
 
 // ---------------------------------------------------------------------------

@@ -1,11 +1,12 @@
 use std::cell::RefCell;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use ash::vk;
 
 use super::buffer::{
     BufferElement, BufferLayout, DynamicVertexBuffer, IndexBuffer, ShaderDataType,
 };
+use super::gpu_allocation::GpuAllocator;
 use super::pipeline::{self, Pipeline};
 use super::shader::Shader;
 use super::texture::Texture2D;
@@ -258,12 +259,12 @@ pub(super) struct Renderer2DData {
 
 impl Renderer2DData {
     pub(super) fn new(
-        instance: &ash::Instance,
-        physical_device: vk::PhysicalDevice,
+        allocator: &Arc<Mutex<GpuAllocator>>,
         device: &ash::Device,
         render_pass: vk::RenderPass,
         camera_ubo_ds_layout: vk::DescriptorSetLayout,
         white_texture: Texture2D,
+        pipeline_cache: vk::PipelineCache,
     ) -> Self {
         let _timer = ProfileTimer::new("Renderer2D::init");
 
@@ -337,38 +338,14 @@ impl Renderer2DData {
 
         // -- Per-frame-in-flight quad vertex buffers (persistently mapped) --
         let vertex_buffers = [
-            DynamicVertexBuffer::new(
-                instance,
-                physical_device,
-                device,
-                quad_vb_capacity,
-                quad_layout.clone(),
-            ),
-            DynamicVertexBuffer::new(
-                instance,
-                physical_device,
-                device,
-                quad_vb_capacity,
-                quad_layout.clone(),
-            ),
+            DynamicVertexBuffer::new(allocator, device, quad_vb_capacity, quad_layout.clone()),
+            DynamicVertexBuffer::new(allocator, device, quad_vb_capacity, quad_layout.clone()),
         ];
 
         // -- Per-frame-in-flight circle vertex buffers (persistently mapped) --
         let circle_vertex_buffers = [
-            DynamicVertexBuffer::new(
-                instance,
-                physical_device,
-                device,
-                circle_vb_capacity,
-                circle_layout.clone(),
-            ),
-            DynamicVertexBuffer::new(
-                instance,
-                physical_device,
-                device,
-                circle_vb_capacity,
-                circle_layout.clone(),
-            ),
+            DynamicVertexBuffer::new(allocator, device, circle_vb_capacity, circle_layout.clone()),
+            DynamicVertexBuffer::new(allocator, device, circle_vb_capacity, circle_layout.clone()),
         ];
 
         // -- Line Vertex layout --
@@ -378,38 +355,14 @@ impl Renderer2DData {
 
         // -- Per-frame-in-flight line vertex buffers (persistently mapped) --
         let line_vertex_buffers = [
-            DynamicVertexBuffer::new(
-                instance,
-                physical_device,
-                device,
-                line_vb_capacity,
-                line_layout.clone(),
-            ),
-            DynamicVertexBuffer::new(
-                instance,
-                physical_device,
-                device,
-                line_vb_capacity,
-                line_layout.clone(),
-            ),
+            DynamicVertexBuffer::new(allocator, device, line_vb_capacity, line_layout.clone()),
+            DynamicVertexBuffer::new(allocator, device, line_vb_capacity, line_layout.clone()),
         ];
 
         // -- Per-frame-in-flight text vertex buffers (same layout as quads) --
         let text_vertex_buffers = [
-            DynamicVertexBuffer::new(
-                instance,
-                physical_device,
-                device,
-                quad_vb_capacity,
-                quad_layout.clone(),
-            ),
-            DynamicVertexBuffer::new(
-                instance,
-                physical_device,
-                device,
-                quad_vb_capacity,
-                quad_layout.clone(),
-            ),
+            DynamicVertexBuffer::new(allocator, device, quad_vb_capacity, quad_layout.clone()),
+            DynamicVertexBuffer::new(allocator, device, quad_vb_capacity, quad_layout.clone()),
         ];
 
         // -- Static index buffer (pre-generated quad pattern) --
@@ -423,7 +376,7 @@ impl Renderer2DData {
             indices.push(base + 3);
             indices.push(base);
         }
-        let index_buffer = IndexBuffer::new(instance, physical_device, device, &indices);
+        let index_buffer = IndexBuffer::new(allocator, device, &indices);
 
         // -- Bindless descriptor set layout (UPDATE_AFTER_BIND + PARTIALLY_BOUND) --
         let binding = vk::DescriptorSetLayoutBinding::default()
@@ -454,6 +407,7 @@ impl Renderer2DData {
             camera_ubo_ds_layout,
             &[bindless_ds_layout],
             1,
+            pipeline_cache,
         ));
 
         // -- Circle Pipeline (swapchain: 1 color attachment, no entity ID output) --
@@ -466,6 +420,7 @@ impl Renderer2DData {
             camera_ubo_ds_layout,
             &[],
             1,
+            pipeline_cache,
         ));
 
         // -- Line Pipeline (swapchain: 1 color attachment, no entity ID output) --
@@ -477,6 +432,7 @@ impl Renderer2DData {
             render_pass,
             camera_ubo_ds_layout,
             1,
+            pipeline_cache,
         ));
 
         // -- Text Pipeline (swapchain: 1 color attachment, uses bindless textures for font atlas) --
@@ -489,6 +445,7 @@ impl Renderer2DData {
             camera_ubo_ds_layout,
             &[bindless_ds_layout],
             1,
+            pipeline_cache,
         ));
 
         // -- Bindless descriptor pool (UPDATE_AFTER_BIND) --
@@ -1054,6 +1011,7 @@ impl Renderer2DData {
         render_pass: vk::RenderPass,
         camera_ubo_ds_layout: vk::DescriptorSetLayout,
         color_attachment_count: u32,
+        pipeline_cache: vk::PipelineCache,
     ) {
         // Quad offscreen pipeline (with bindless textures at set 1).
         self.offscreen_pipeline = Some(Arc::new(pipeline::create_batch_pipeline(
@@ -1064,6 +1022,7 @@ impl Renderer2DData {
             camera_ubo_ds_layout,
             &[self.bindless_ds_layout],
             color_attachment_count,
+            pipeline_cache,
         )));
 
         // Circle offscreen pipeline (no textures).
@@ -1075,6 +1034,7 @@ impl Renderer2DData {
             camera_ubo_ds_layout,
             &[],
             color_attachment_count,
+            pipeline_cache,
         )));
 
         // Line offscreen pipeline (no textures, LINE_LIST topology).
@@ -1085,6 +1045,7 @@ impl Renderer2DData {
             render_pass,
             camera_ubo_ds_layout,
             color_attachment_count,
+            pipeline_cache,
         )));
 
         // Text offscreen pipeline (with bindless textures at set 1, MSDF shader).
@@ -1096,6 +1057,7 @@ impl Renderer2DData {
             camera_ubo_ds_layout,
             &[self.bindless_ds_layout],
             color_attachment_count,
+            pipeline_cache,
         )));
     }
 

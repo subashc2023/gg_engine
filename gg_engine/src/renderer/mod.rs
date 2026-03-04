@@ -2,6 +2,7 @@ mod buffer;
 mod draw_context;
 mod editor_camera;
 mod font;
+pub(crate) mod gpu_allocation;
 mod msdf;
 mod framebuffer;
 mod orthographic_camera;
@@ -27,7 +28,8 @@ pub use buffer::{
 };
 pub(crate) use draw_context::DrawContext;
 pub use editor_camera::EditorCamera;
-pub use font::{Font, GlyphInfo};
+pub use font::{Font, FontCpuData, GlyphInfo};
+pub(crate) use font::generate_font_cpu_data;
 pub use framebuffer::{
     Framebuffer, FramebufferSpec, FramebufferTextureFormat, FramebufferTextureSpec,
 };
@@ -40,9 +42,10 @@ pub use shader::Shader;
 pub use shader_library::ShaderLibrary;
 pub use sub_texture::SubTexture2D;
 pub use swapchain::{Swapchain, SwapchainError};
-pub use texture::{ImageFormat, Texture2D, TextureSpecification};
+pub use texture::{ImageFormat, Texture2D, TextureCpuData, TextureSpecification};
 pub use vertex_array::VertexArray;
 pub use vulkan_context::{VulkanContext, VulkanInitError};
+pub(crate) use gpu_allocation::GpuAllocator;
 
 // ---------------------------------------------------------------------------
 // RendererResources — lightweight view of Renderer-owned Vulkan state
@@ -52,8 +55,6 @@ pub use vulkan_context::{VulkanContext, VulkanInitError};
 /// (textures, framebuffers). Avoids passing 7-8 individual parameters
 /// through internal APIs.
 pub(crate) struct RendererResources<'a> {
-    pub instance: &'a ash::Instance,
-    pub physical_device: vk::PhysicalDevice,
     pub device: &'a ash::Device,
     pub graphics_queue: vk::Queue,
     pub command_pool: vk::CommandPool,

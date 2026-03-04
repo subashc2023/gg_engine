@@ -263,6 +263,10 @@ impl Application for GGEditor {
             &script_reload_pending,
         );
 
+        let initial_vsync = editor_settings.vsync;
+        let initial_show_colliders = editor_settings.show_physics_colliders;
+        let initial_gizmo_op = editor_settings.gizmo_operation;
+
         GGEditor {
             editor_mode,
             editor_settings,
@@ -275,12 +279,12 @@ impl Application for GGEditor {
             viewport_size: (0, 0),
             viewport_focused: false,
             viewport_hovered: false,
-            vsync: true,
+            vsync: initial_vsync,
             frame_time_ms: 0.0,
             scene,
             selection_context: None,
             gizmo: Gizmo::default(),
-            gizmo_operation: GizmoOperation::Translate,
+            gizmo_operation: initial_gizmo_op,
             editor_camera: EditorCamera::new(45.0_f32.to_radians(), 0.1, 1000.0),
             hovered_entity: -1,
             current_directory: assets_root.clone(),
@@ -290,7 +294,7 @@ impl Application for GGEditor {
             pending_font_loads: Vec::new(),
             font_cache: HashMap::new(),
             pending_drop_scenes: Vec::new(),
-            show_physics_colliders: false,
+            show_physics_colliders: initial_show_colliders,
             tilemap_paint: TilemapPaintState::new(),
             viewport_mouse_pos: None,
             egui_texture_map: HashMap::new(),
@@ -570,25 +574,44 @@ impl Application for GGEditor {
             return;
         }
 
-        // Resolve any pending texture/audio handles via the asset manager.
+        // Step 1: Poll completed async loads.
         if let Some(ref mut am) = self.asset_manager {
-            self.scene.resolve_texture_handles(am, renderer);
-            self.scene.resolve_audio_handles(am);
-        }
-
-        // Process deferred font loads for TextComponents.
-        for (entity, path) in self.pending_font_loads.drain(..) {
-            if self.scene.is_alive(entity) {
-                let font = self.font_cache.entry(path.clone())
-                    .or_insert_with(|| Ref::new(renderer.create_font(&path)))
-                    .clone();
-                if let Some(mut tc) = self.scene.get_component_mut::<TextComponent>(entity) {
-                    tc.font = Some(font);
+            let font_results = am.poll_loaded(renderer);
+            for result in font_results {
+                if let gg_engine::asset::LoadResult::Font { font_key, data } = result {
+                    match data {
+                        Ok(cpu_data) => {
+                            let font = Ref::new(renderer.upload_font(cpu_data));
+                            self.font_cache.insert(font_key, font);
+                        }
+                        Err(e) => {
+                            warn!("Async font load failed: {e}");
+                        }
+                    }
                 }
             }
         }
 
-        // Check for TextComponents that need fonts loaded (e.g. after font_path change).
+        // Step 2: Resolve texture handles (async — requests loads, assigns ready textures).
+        if let Some(ref mut am) = self.asset_manager {
+            self.scene.resolve_texture_handles_async(am);
+            self.scene.resolve_audio_handles(am);
+        }
+
+        // Step 3: Process deferred font loads for TextComponents.
+        for (entity, path) in self.pending_font_loads.drain(..) {
+            if self.scene.is_alive(entity) {
+                if let Some(font) = self.font_cache.get(&path) {
+                    if let Some(mut tc) = self.scene.get_component_mut::<TextComponent>(entity) {
+                        tc.font = Some(font.clone());
+                    }
+                } else if let Some(ref mut am) = self.asset_manager {
+                    am.loader().request_font(path);
+                }
+            }
+        }
+
+        // Step 4: Check for TextComponents that need fonts loaded (e.g. after font_path change).
         {
             let needs_load: Vec<(Entity, std::path::PathBuf)> = self
                 .scene
@@ -609,11 +632,12 @@ impl Application for GGEditor {
                 })
                 .collect();
             for (entity, path) in needs_load {
-                let font = self.font_cache.entry(path.clone())
-                    .or_insert_with(|| Ref::new(renderer.create_font(&path)))
-                    .clone();
-                if let Some(mut tc) = self.scene.get_component_mut::<TextComponent>(entity) {
-                    tc.font = Some(font);
+                if let Some(font) = self.font_cache.get(&path) {
+                    if let Some(mut tc) = self.scene.get_component_mut::<TextComponent>(entity) {
+                        tc.font = Some(font.clone());
+                    }
+                } else if let Some(ref mut am) = self.asset_manager {
+                    am.loader().request_font(path);
                 }
             }
         }
@@ -1028,6 +1052,17 @@ impl Application for GGEditor {
             egui_dock::DockArea::new(&mut self.dock_state)
                 .style(dock_style)
                 .show(ctx, &mut viewer);
+        }
+
+        // Sync editor settings to disk when they change.
+        if self.vsync != self.editor_settings.vsync
+            || self.show_physics_colliders != self.editor_settings.show_physics_colliders
+            || self.gizmo_operation != self.editor_settings.gizmo_operation
+        {
+            self.editor_settings.vsync = self.vsync;
+            self.editor_settings.show_physics_colliders = self.show_physics_colliders;
+            self.editor_settings.gizmo_operation = self.gizmo_operation;
+            self.editor_settings.save();
         }
 
         // Auto-clear tilemap brush when selection changes to a non-tilemap
@@ -1543,7 +1578,7 @@ impl GGEditor {
         let path_str = scene_path.to_string_lossy().to_string();
 
         // Serialize the empty scene to disk immediately.
-        SceneSerializer::serialize(&scene, &path_str);
+        SceneSerializer::serialize(&scene, &path_str, Some(name));
 
         // Swap in the new scene.
         let old = std::mem::replace(&mut self.scene, scene);
@@ -1581,9 +1616,15 @@ impl GGEditor {
         }
     }
 
+    fn scene_name_from_path(path: &str) -> Option<&str> {
+        std::path::Path::new(path)
+            .file_stem()
+            .and_then(|s| s.to_str())
+    }
+
     fn save_scene(&mut self) {
         if let Some(ref path) = self.editor_scene_path {
-            SceneSerializer::serialize(&self.scene, path);
+            SceneSerializer::serialize(&self.scene, path, Self::scene_name_from_path(path));
             self.scene_dirty = false;
         } else {
             self.save_scene_as();
@@ -1592,7 +1633,7 @@ impl GGEditor {
 
     fn save_scene_as(&mut self) {
         if let Some(path) = FileDialogs::save_file("GGScene files", &["ggscene"]) {
-            SceneSerializer::serialize(&self.scene, &path);
+            SceneSerializer::serialize(&self.scene, &path, Self::scene_name_from_path(&path));
             self.editor_scene_path = Some(path);
             self.scene_dirty = false;
             panels::project::invalidate_scene_cache();

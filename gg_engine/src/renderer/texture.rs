@@ -1,8 +1,10 @@
 use std::path::Path;
+use std::sync::{Arc, Mutex};
 
 use ash::vk::{self, Handle};
 
-use super::buffer::{create_staging_buffer, find_memory_type};
+use super::buffer::create_staging_buffer;
+use super::gpu_allocation::{GpuAllocation, GpuAllocator, MemoryLocation};
 use super::RendererResources;
 
 use crate::profiling::ProfileTimer;
@@ -83,6 +85,19 @@ impl TextureSpecification {
 }
 
 // ---------------------------------------------------------------------------
+// TextureCpuData — CPU-side pixel data (Send-safe, no Vulkan types)
+// ---------------------------------------------------------------------------
+
+/// CPU-side texture data ready for GPU upload. Produced by background
+/// threads (image decode), consumed on the main thread for Vulkan upload.
+pub struct TextureCpuData {
+    pub width: u32,
+    pub height: u32,
+    pub pixels: Vec<u8>,
+    pub spec: TextureSpecification,
+}
+
+// ---------------------------------------------------------------------------
 // Texture2D
 // ---------------------------------------------------------------------------
 
@@ -91,7 +106,7 @@ impl TextureSpecification {
 /// [`Renderer::create_texture_from_rgba8`].
 pub struct Texture2D {
     image: vk::Image,
-    memory: vk::DeviceMemory,
+    _allocation: GpuAllocation,
     image_view: vk::ImageView,
     sampler: vk::Sampler,
     descriptor_set: vk::DescriptorSet,
@@ -102,8 +117,36 @@ pub struct Texture2D {
 }
 
 impl Texture2D {
+    /// Load an image file and return CPU-side pixel data (no GPU work).
+    /// Suitable for calling on a background thread.
+    pub(crate) fn load_cpu_data(path: &Path, spec: TextureSpecification) -> Result<TextureCpuData, String> {
+        let img = image::open(path)
+            .map_err(|e| format!("Failed to load texture '{}': {e}", path.display()))?;
+        let rgba = img.to_rgba8();
+        let (width, height) = rgba.dimensions();
+        Ok(TextureCpuData {
+            width,
+            height,
+            pixels: rgba.into_raw(),
+            spec,
+        })
+    }
+
+    /// Create a texture from pre-loaded CPU data (GPU upload only).
+    pub(crate) fn from_cpu_data(
+        res: &RendererResources<'_>,
+        allocator: &Arc<Mutex<GpuAllocator>>,
+        data: &TextureCpuData,
+    ) -> Self {
+        Self::from_rgba8_with_spec(res, allocator, data.width, data.height, &data.pixels, &data.spec)
+    }
+
     /// Load a texture from an image file (PNG, JPEG, etc).
-    pub(crate) fn from_file(res: &RendererResources<'_>, path: &Path) -> Self {
+    pub(crate) fn from_file(
+        res: &RendererResources<'_>,
+        allocator: &Arc<Mutex<GpuAllocator>>,
+        path: &Path,
+    ) -> Self {
         let _timer = ProfileTimer::new("Texture2D::from_file");
         let img = image::open(path)
             .unwrap_or_else(|e| panic!("Failed to load texture '{}': {e}", path.display()));
@@ -111,22 +154,24 @@ impl Texture2D {
         let (width, height) = rgba.dimensions();
         let pixels = rgba.into_raw();
 
-        Self::from_rgba8(res, width, height, &pixels)
+        Self::from_rgba8(res, allocator, width, height, &pixels)
     }
 
     /// Create a texture from raw RGBA8 pixel data with default spec (sRGB, nearest, repeat).
     pub(crate) fn from_rgba8(
         res: &RendererResources<'_>,
+        allocator: &Arc<Mutex<GpuAllocator>>,
         width: u32,
         height: u32,
         pixels: &[u8],
     ) -> Self {
-        Self::from_rgba8_with_spec(res, width, height, pixels, &TextureSpecification::default())
+        Self::from_rgba8_with_spec(res, allocator, width, height, pixels, &TextureSpecification::default())
     }
 
     /// Create a texture from raw RGBA8 pixel data with a custom specification.
     pub(crate) fn from_rgba8_with_spec(
         res: &RendererResources<'_>,
+        allocator: &Arc<Mutex<GpuAllocator>>,
         width: u32,
         height: u32,
         pixels: &[u8],
@@ -136,8 +181,6 @@ impl Texture2D {
         let image_size = (width * height * 4) as vk::DeviceSize;
         assert_eq!(pixels.len() as vk::DeviceSize, image_size);
 
-        let instance = res.instance;
-        let physical_device = res.physical_device;
         let device = res.device;
         let graphics_queue = res.graphics_queue;
         let command_pool = res.command_pool;
@@ -147,8 +190,8 @@ impl Texture2D {
         let vk_format = spec.format.to_vk();
 
         // 1. Create staging buffer with pixel data.
-        let (staging_buffer, staging_memory) =
-            create_staging_buffer(instance, physical_device, device, pixels);
+        let (staging_buffer, _staging_alloc) =
+            create_staging_buffer(allocator, device, pixels);
 
         // 2. Create Vulkan image.
         let image_info = vk::ImageCreateInfo::default()
@@ -170,22 +213,9 @@ impl Texture2D {
         let image =
             unsafe { device.create_image(&image_info, None) }.expect("Failed to create image");
 
-        // 3. Allocate and bind DEVICE_LOCAL memory.
-        let mem_req = unsafe { device.get_image_memory_requirements(image) };
-        let mem_type_index = find_memory_type(
-            instance,
-            physical_device,
-            mem_req.memory_type_bits,
-            vk::MemoryPropertyFlags::DEVICE_LOCAL,
-        );
-
-        let alloc_info = vk::MemoryAllocateInfo::default()
-            .allocation_size(mem_req.size)
-            .memory_type_index(mem_type_index);
-
-        let memory = unsafe { device.allocate_memory(&alloc_info, None) }
-            .expect("Failed to allocate image memory");
-        unsafe { device.bind_image_memory(image, memory, 0) }.expect("Failed to bind image memory");
+        // 3. Allocate and bind DEVICE_LOCAL memory via sub-allocator.
+        let allocation =
+            GpuAllocator::allocate_for_image(allocator, device, image, "Texture2D", MemoryLocation::GpuOnly);
 
         // 4. One-shot command buffer: transition + copy + transition.
         execute_one_shot(device, command_pool, graphics_queue, |cmd_buf| {
@@ -234,11 +264,11 @@ impl Texture2D {
             );
         });
 
-        // 5. Destroy staging buffer.
+        // 5. Staging buffer + allocation auto-freed when _staging_alloc drops.
         unsafe {
-            device.free_memory(staging_memory, None);
             device.destroy_buffer(staging_buffer, None);
         }
+        drop(_staging_alloc);
 
         // 6. Create image view.
         let view_info = vk::ImageViewCreateInfo::default()
@@ -308,7 +338,7 @@ impl Texture2D {
 
         Self {
             image,
-            memory,
+            _allocation: allocation,
             image_view,
             sampler,
             descriptor_set,
@@ -369,8 +399,8 @@ impl Drop for Texture2D {
             self.device.destroy_sampler(self.sampler, None);
             self.device.destroy_image_view(self.image_view, None);
             self.device.destroy_image(self.image, None);
-            self.device.free_memory(self.memory, None);
         }
+        // GpuAllocation auto-frees memory on drop.
     }
 }
 

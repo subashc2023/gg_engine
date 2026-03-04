@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 use ash::vk::{self, Handle};
@@ -14,7 +14,8 @@ use crate::input::Input;
 use crate::layer::LayerStack;
 use crate::profiling::ProfileTimer;
 use crate::renderer::{
-    DrawContext, Framebuffer, OrthographicCamera, PresentMode, Renderer, Swapchain, VulkanContext,
+    DrawContext, Framebuffer, GpuAllocator, OrthographicCamera, PresentMode, Renderer, Swapchain,
+    VulkanContext,
 };
 use crate::timestep::Timestep;
 use glam::Mat4;
@@ -184,6 +185,9 @@ struct EngineRunner<T: Application> {
     // Swapchain — dropped before VulkanContext.
     swapchain: Option<Swapchain>,
 
+    // GPU memory sub-allocator — dropped after renderer/swapchain but before VulkanContext.
+    allocator: Option<Arc<Mutex<GpuAllocator>>>,
+
     // Vulkan context must be dropped before window (surface references native handle).
     vulkan_context: Option<VulkanContext>,
     window: Option<Arc<Window>>,
@@ -241,12 +245,20 @@ impl<T: Application> ApplicationHandler for EngineRunner<T> {
                 // Initialize Vulkan immediately after window creation.
                 match VulkanContext::new(&window) {
                     Ok(ctx) => {
+                        // Create GPU memory sub-allocator.
+                        let allocator = Arc::new(Mutex::new(GpuAllocator::new(
+                            ctx.instance(),
+                            ctx.device(),
+                            ctx.physical_device(),
+                        )));
+
                         // Create swapchain.
                         match Swapchain::new(
                             &ctx,
                             self.window_config.width,
                             self.window_config.height,
                             self.current_present_mode,
+                            &allocator,
                         ) {
                             Ok(sc) => {
                                 // Initialize egui-winit state.
@@ -281,6 +293,7 @@ impl<T: Application> ApplicationHandler for EngineRunner<T> {
                                     Ok(egui_rend) => {
                                         self.renderer = Some(Renderer::new(
                                             &ctx,
+                                            &allocator,
                                             sc.render_pass(),
                                             sc.command_pool(),
                                             sc.format().format,
@@ -289,6 +302,7 @@ impl<T: Application> ApplicationHandler for EngineRunner<T> {
                                         self.egui_winit_state = Some(egui_winit_state);
                                         self.egui_renderer = Some(egui_rend);
                                         self.swapchain = Some(sc);
+                                        self.allocator = Some(allocator);
                                         self.vulkan_context = Some(ctx);
                                         log::info!(target: "gg_engine", "Egui initialized");
 
@@ -327,12 +341,14 @@ impl<T: Application> ApplicationHandler for EngineRunner<T> {
                                         log::error!(target: "gg_engine", "Egui renderer init failed: {e}");
                                         // Still store vulkan context and swapchain so they drop cleanly.
                                         self.swapchain = Some(sc);
+                                        self.allocator = Some(allocator);
                                         self.vulkan_context = Some(ctx);
                                     }
                                 }
                             }
                             Err(e) => {
                                 log::error!(target: "gg_engine", "Swapchain creation failed: {e}");
+                                self.allocator = Some(allocator);
                                 self.vulkan_context = Some(ctx);
                             }
                         }
@@ -1131,6 +1147,7 @@ pub fn run<T: Application>() {
         user_textures: HashMap::new(),
         renderer: None,
         swapchain: None,
+        allocator: None,
         vulkan_context: None,
         window: None,
     };

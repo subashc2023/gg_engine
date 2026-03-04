@@ -28,4 +28,5 @@ rand = "0.9"
 rapier2d = { version = "0.22", features = ["simd-stable"] }
 mlua = { version = "0.10", features = ["luajit", "vendored"], optional = true }
 ttf-parser = "0.25"
+gpu-allocator = { version = "0.28", default-features = false, features = ["vulkan", "std"] }
 kira = "0.12"

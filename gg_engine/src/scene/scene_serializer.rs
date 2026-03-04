@@ -19,8 +19,12 @@ use crate::uuid::Uuid;
 // Serialization data types (intermediate representation)
 // ---------------------------------------------------------------------------
 
+const SCENE_VERSION: u32 = 1;
+
 #[derive(Serialize, Deserialize)]
 struct SceneData {
+    #[serde(rename = "Version", default)]
+    version: u32,
     #[serde(rename = "Scene")]
     name: String,
     #[serde(rename = "Entities")]
@@ -375,7 +379,7 @@ fn has_no_relationships(r: &Option<RelationshipData>) -> bool {
 ///
 /// ```ignore
 /// // Save
-/// SceneSerializer::serialize(&scene, "assets/scenes/example.ggscene");
+/// SceneSerializer::serialize(&scene, "assets/scenes/example.ggscene", Some("example"));
 ///
 /// // Load
 /// let mut scene = Scene::new();
@@ -388,8 +392,8 @@ impl SceneSerializer {
     ///
     /// Creates parent directories if they don't exist. Returns `true` on
     /// success, `false` on failure (errors are logged).
-    pub fn serialize(scene: &Scene, file_path: &str) -> bool {
-        let scene_data = Self::scene_to_data(scene);
+    pub fn serialize(scene: &Scene, file_path: &str, scene_name: Option<&str>) -> bool {
+        let scene_data = Self::scene_to_data(scene, scene_name);
 
         // Ensure parent directories exist.
         if let Some(parent) = Path::new(file_path).parent() {
@@ -443,8 +447,9 @@ impl SceneSerializer {
         };
 
         log::info!(
-            "Deserializing scene '{}' ({} entities)",
+            "Deserializing scene '{}' (version {}, {} entities)",
             scene_data.name,
+            scene_data.version,
             scene_data.entities.len()
         );
 
@@ -454,7 +459,7 @@ impl SceneSerializer {
 
     /// Serialize a scene to a YAML string (in-memory snapshot).
     pub fn serialize_to_string(scene: &Scene) -> Option<String> {
-        let scene_data = Self::scene_to_data(scene);
+        let scene_data = Self::scene_to_data(scene, None);
         match serde_yaml::to_string(&scene_data) {
             Ok(yaml) => Some(yaml),
             Err(e) => {
@@ -483,7 +488,7 @@ impl SceneSerializer {
 
     // -- Shared helpers -------------------------------------------------------
 
-    fn scene_to_data(scene: &Scene) -> SceneData {
+    fn scene_to_data(scene: &Scene, scene_name: Option<&str>) -> SceneData {
         let mut entities_data = Vec::new();
 
         for (entity, _name) in scene.each_entity_with_tag() {
@@ -679,7 +684,8 @@ impl SceneSerializer {
         }
 
         SceneData {
-            name: "Untitled".to_string(),
+            version: SCENE_VERSION,
+            name: scene_name.unwrap_or("Untitled").to_string(),
             entities: entities_data,
         }
     }
@@ -928,7 +934,7 @@ mod tests {
             .join("gg_test_scene.ggscene")
             .to_string_lossy()
             .to_string();
-        assert!(SceneSerializer::serialize(&scene, &path));
+        assert!(SceneSerializer::serialize(&scene, &path, Some("gg_test_scene")));
 
         // Deserialize into a fresh scene.
         let mut loaded = Scene::new();
