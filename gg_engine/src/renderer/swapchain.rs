@@ -24,7 +24,7 @@ pub enum SwapchainError {
     SemaphoreCreation(vk::Result),
     FenceCreation(vk::Result),
     DepthImageCreation(vk::Result),
-    DepthMemoryAllocation(vk::Result),
+    DepthMemoryAllocation(String),
 }
 
 impl std::fmt::Display for SwapchainError {
@@ -327,8 +327,7 @@ impl Swapchain {
             unsafe { self.device.destroy_semaphore(sem, None) };
         }
 
-        // Destroy old render pass (depth format may theoretically change).
-        unsafe { self.device.destroy_render_pass(self.render_pass, None) };
+        // Render pass reused — it depends on formats (which don't change), not dimensions.
 
         let old_swapchain = self.swapchain;
 
@@ -416,10 +415,6 @@ impl Swapchain {
                     .expect("Failed to create image view during resize")
             })
             .collect();
-
-        // Recreate render pass and depth resources at new extent.
-        self.render_pass = create_render_pass(&self.device, self.format.format, self.depth_format)
-            .expect("Failed to recreate render pass during resize");
 
         let (depth_image, depth_allocation, depth_image_view) = create_depth_resources(
             &self.allocator,
@@ -584,7 +579,8 @@ fn create_depth_resources(
         depth_image,
         "SwapchainDepth",
         MemoryLocation::GpuOnly,
-    );
+    )
+    .map_err(SwapchainError::DepthMemoryAllocation)?;
 
     let view_info = vk::ImageViewCreateInfo::default()
         .image(depth_image)
@@ -745,8 +741,9 @@ fn resolve_present_mode(
 
 impl Drop for Swapchain {
     fn drop(&mut self) {
+        // NOTE: Caller (EngineRunner::Drop) must call device_wait_idle before
+        // dropping the swapchain.
         unsafe {
-            let _ = self.device.device_wait_idle();
             for &fence in &self.in_flight_fences {
                 self.device.destroy_fence(fence, None);
             }

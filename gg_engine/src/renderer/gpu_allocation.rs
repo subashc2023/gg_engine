@@ -42,7 +42,7 @@ impl GpuAllocator {
         buffer: vk::Buffer,
         name: &str,
         location: MemoryLocation,
-    ) -> GpuAllocation {
+    ) -> Result<GpuAllocation, String> {
         let mem_req = unsafe { device.get_buffer_memory_requirements(buffer) };
         let allocation = {
             let mut alloc = allocator.lock().unwrap();
@@ -55,19 +55,19 @@ impl GpuAllocator {
                     linear: true,
                     allocation_scheme: gpu_allocator::vulkan::AllocationScheme::GpuAllocatorManaged,
                 })
-                .expect("Failed to allocate buffer memory")
+                .map_err(|e| format!("Failed to allocate buffer memory for '{name}': {e}"))?
         };
 
         unsafe {
             device
                 .bind_buffer_memory(buffer, allocation.memory(), allocation.offset())
-                .expect("Failed to bind buffer memory");
+                .map_err(|e| format!("Failed to bind buffer memory for '{name}': {e}"))?;
         }
 
-        GpuAllocation {
+        Ok(GpuAllocation {
             allocation: Some(allocation),
             allocator: allocator.clone(),
-        }
+        })
     }
 
     /// Allocate memory for an image. Returns a GpuAllocation that auto-frees on Drop.
@@ -77,7 +77,7 @@ impl GpuAllocator {
         image: vk::Image,
         name: &str,
         location: MemoryLocation,
-    ) -> GpuAllocation {
+    ) -> Result<GpuAllocation, String> {
         let mem_req = unsafe { device.get_image_memory_requirements(image) };
         let allocation = {
             let mut alloc = allocator.lock().unwrap();
@@ -90,19 +90,19 @@ impl GpuAllocator {
                     linear: false,
                     allocation_scheme: gpu_allocator::vulkan::AllocationScheme::GpuAllocatorManaged,
                 })
-                .expect("Failed to allocate image memory")
+                .map_err(|e| format!("Failed to allocate image memory for '{name}': {e}"))?
         };
 
         unsafe {
             device
                 .bind_image_memory(image, allocation.memory(), allocation.offset())
-                .expect("Failed to bind image memory");
+                .map_err(|e| format!("Failed to bind image memory for '{name}': {e}"))?;
         }
 
-        GpuAllocation {
+        Ok(GpuAllocation {
             allocation: Some(allocation),
             allocator: allocator.clone(),
-        }
+        })
     }
 }
 

@@ -1,3 +1,5 @@
+use std::cell::RefCell;
+use std::collections::HashMap;
 use std::path::PathBuf;
 
 use gg_engine::egui;
@@ -5,6 +7,12 @@ use gg_engine::prelude::*;
 use gg_engine::ui_theme::BOLD_FONT;
 
 use crate::editor_settings::EditorSettings;
+
+// Cache of `Path::exists()` results so we don't issue a syscall per entry per frame.
+// Cleared when the recent-projects list changes (remove action).
+thread_local! {
+    static EXISTS_CACHE: RefCell<HashMap<String, bool>> = RefCell::new(HashMap::new());
+}
 
 pub(crate) struct HubResponse {
     pub open_project_path: Option<PathBuf>,
@@ -78,7 +86,11 @@ pub(crate) fn hub_ui(ctx: &egui::Context, settings: &mut EditorSettings) -> HubR
                     let mut to_open: Option<PathBuf> = None;
 
                     for recent in &settings.recent_projects {
-                        let exists = std::path::Path::new(&recent.path).exists();
+                        let exists = EXISTS_CACHE.with(|cache| {
+                            *cache.borrow_mut().entry(recent.path.clone()).or_insert_with(|| {
+                                std::path::Path::new(&recent.path).exists()
+                            })
+                        });
 
                         ui.horizontal(|ui| {
                             let name_text = if exists {
@@ -111,6 +123,7 @@ pub(crate) fn hub_ui(ctx: &egui::Context, settings: &mut EditorSettings) -> HubR
 
                     if let Some(path) = to_remove {
                         settings.remove_recent_project(&path);
+                        EXISTS_CACHE.with(|c| c.borrow_mut().clear());
                     }
                     if let Some(path) = to_open {
                         response.open_project_path = Some(path);

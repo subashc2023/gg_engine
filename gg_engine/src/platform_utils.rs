@@ -1,9 +1,44 @@
+use std::io::Write;
+use std::path::Path;
+
+/// Write data to a file atomically by writing to a temp file first, then renaming.
+///
+/// This prevents data corruption if the process crashes mid-write. The rename
+/// is atomic on most filesystems (including NTFS on Windows).
+pub fn atomic_write(path: impl AsRef<Path>, data: &str) -> std::io::Result<()> {
+    let path = path.as_ref();
+    let temp_path = path.with_extension("tmp");
+
+    // Write to temp file.
+    let mut file = std::fs::File::create(&temp_path)?;
+    file.write_all(data.as_bytes())?;
+    file.sync_all()?;
+    drop(file);
+
+    // Atomic rename (overwrites existing file on Windows via rename).
+    // On Windows, std::fs::rename can fail if the target exists, so remove first.
+    if path.exists() {
+        std::fs::remove_file(path)?;
+    }
+    std::fs::rename(&temp_path, path)
+}
+
 /// Platform-specific utilities implemented per-platform.
 ///
 /// On Windows this wraps the Win32 Common Dialog APIs (via [`rfd`]).
 /// On macOS it uses NSOpenPanel / NSSavePanel.
 /// On Linux it uses GTK / kdialog / zenity.
 pub struct FileDialogs;
+
+/// Show a Yes/No confirmation dialog. Returns `true` if the user clicks Yes.
+pub fn confirm_dialog(title: &str, message: &str) -> bool {
+    rfd::MessageDialog::new()
+        .set_title(title)
+        .set_description(message)
+        .set_buttons(rfd::MessageButtons::YesNo)
+        .show()
+        == rfd::MessageDialogResult::Yes
+}
 
 impl FileDialogs {
     /// Show a native "Open File" dialog.

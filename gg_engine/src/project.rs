@@ -126,7 +126,7 @@ impl Project {
 
         match serde_yaml::to_string(&data) {
             Ok(yaml) => {
-                if let Err(e) = fs::write(&self.project_file_path, &yaml) {
+                if let Err(e) = crate::platform_utils::atomic_write(&self.project_file_path, &yaml) {
                     log::error!(
                         "Failed to write project file '{}': {}",
                         self.project_file_path,

@@ -127,7 +127,12 @@ impl Scene {
             TransformComponent::default(),
             RelationshipComponent::default(),
         ));
-        self.uuid_cache.insert(uuid.raw(), handle);
+        if let Some(_old_handle) = self.uuid_cache.insert(uuid.raw(), handle) {
+            log::warn!(
+                "UUID collision: entity with UUID {} already existed in the scene — overwriting",
+                uuid.raw()
+            );
+        }
         self.name_cache = None; // invalidate
         Entity::new(handle)
     }
@@ -479,6 +484,11 @@ impl Scene {
     ///
     /// O(n) scan — intended for one-off lookups (e.g. `on_create`), not
     /// per-frame use in hot loops. Returns the entity and its UUID.
+    ///
+    /// **Note:** If multiple entities share the same name, which one is
+    /// returned is arbitrary (depends on hecs iteration order, which is not
+    /// guaranteed to be stable). Callers that need deterministic results
+    /// should ensure entity names are unique or use UUID-based lookup instead.
     pub fn find_entity_by_name(&mut self, name: &str) -> Option<(Entity, u64)> {
         // Build the name cache lazily on first call.
         if self.name_cache.is_none() {
@@ -977,11 +987,14 @@ impl Scene {
 
         let mut cache: HashMap<PathBuf, crate::Ref<Font>> = HashMap::new();
         for (handle, path) in loads {
-            let font = cache.entry(path.clone())
-                .or_insert_with(|| crate::Ref::new(renderer.create_font(&path)))
-                .clone();
-            if let Ok(mut tc) = self.world.get::<&mut TextComponent>(handle) {
-                tc.font = Some(font);
+            if let Some(font) = cache.get(&path).cloned().or_else(|| {
+                let f = crate::Ref::new(renderer.create_font(&path)?);
+                cache.insert(path.clone(), f.clone());
+                Some(f)
+            }) {
+                if let Ok(mut tc) = self.world.get::<&mut TextComponent>(handle) {
+                    tc.font = Some(font);
+                }
             }
         }
     }
@@ -1053,7 +1066,10 @@ impl Scene {
                         .density(bc.density)
                         .friction(bc.friction)
                         .restitution(bc.restitution)
-                        .translation(na::Vector2::new(bc.offset.x, bc.offset.y))
+                        .translation(na::Vector2::new(
+                            bc.offset.x * scale.x.abs(),
+                            bc.offset.y * scale.y.abs(),
+                        ))
                         .active_events(rapier2d::prelude::ActiveEvents::COLLISION_EVENTS)
                         .build();
 
@@ -1080,7 +1096,10 @@ impl Scene {
                         .density(cc.density)
                         .friction(cc.friction)
                         .restitution(cc.restitution)
-                        .translation(na::Vector2::new(cc.offset.x, cc.offset.y))
+                        .translation(na::Vector2::new(
+                            cc.offset.x * scale.x.abs(),
+                            cc.offset.y * scale.y.abs(),
+                        ))
                         .active_events(rapier2d::prelude::ActiveEvents::COLLISION_EVENTS)
                         .build();
 
@@ -1533,7 +1552,6 @@ impl Scene {
         let ctx = SceneScriptContext {
             scene: self as *mut Scene,
             input: input as *const Input,
-            script_engine: &engine as *const ScriptEngine,
         };
         engine.lua().set_app_data(ctx);
 
@@ -1574,7 +1592,6 @@ impl Scene {
         let ctx = SceneScriptContext {
             scene: self as *mut Scene,
             input: std::ptr::null(),
-            script_engine: &engine as *const ScriptEngine,
         };
         engine.lua().set_app_data(ctx);
 
@@ -1895,7 +1912,6 @@ impl Scene {
         let ctx = SceneScriptContext {
             scene: self as *mut Scene,
             input: std::ptr::null(),
-            script_engine: &engine as *const ScriptEngine,
         };
         engine.lua().set_app_data(ctx);
 
@@ -1922,7 +1938,6 @@ impl Scene {
             let ctx = SceneScriptContext {
                 scene: self as *mut Scene,
                 input: std::ptr::null(),
-                script_engine: &engine as *const ScriptEngine,
             };
             engine.lua().set_app_data(ctx);
 
@@ -1971,12 +1986,59 @@ impl Scene {
 
     /// Call per-entity `on_update(dt)` for all loaded Lua scripts.
     ///
+    /// Also detects dynamically-spawned entities with unloaded scripts and
+    /// initializes them (creates env, applies overrides, calls `on_create`).
+    ///
     /// Call this each frame during play mode, passing the current [`Input`]
     /// so scripts can query key state via `Engine.is_key_down()`.
     #[cfg(feature = "lua-scripting")]
     pub fn on_update_lua_scripts(&mut self, dt: Timestep, input: &Input) {
         use script_glue::SceneScriptContext;
         let _timer = crate::profiling::ProfileTimer::new("Scene::on_update_lua_scripts");
+
+        // Take engine out (take-modify-replace pattern).
+        let mut engine = match self.script_engine.take() {
+            Some(e) => e,
+            None => return,
+        };
+
+        // Check for dynamically-spawned entities with unloaded scripts.
+        let unloaded: Vec<(hecs::Entity, u64, String)> = self
+            .world
+            .query::<(hecs::Entity, &IdComponent, &LuaScriptComponent)>()
+            .iter()
+            .filter(|(_, _, lsc)| !lsc.loaded && !lsc.script_path.is_empty())
+            .map(|(handle, id, lsc)| (handle, id.id.raw(), lsc.script_path.clone()))
+            .collect();
+
+        if !unloaded.is_empty() {
+            // Initialize newly-spawned scripts.
+            for (handle, uuid, path) in &unloaded {
+                if engine.create_entity_env(*uuid, path) {
+                    if let Ok(lsc) = self.world.get::<&LuaScriptComponent>(*handle) {
+                        for (name, value) in &lsc.field_overrides {
+                            engine.set_entity_field(*uuid, name, value);
+                        }
+                    }
+                    if let Ok(mut lsc) = self.world.get::<&mut LuaScriptComponent>(*handle) {
+                        lsc.loaded = true;
+                    }
+                }
+            }
+
+            // Call on_create for newly loaded scripts (with context set).
+            let ctx = SceneScriptContext {
+                scene: self as *mut Scene,
+                input: input as *const Input,
+            };
+            engine.lua().set_app_data(ctx);
+
+            for (_, uuid, _) in &unloaded {
+                engine.call_entity_on_create(*uuid);
+            }
+
+            engine.lua().remove_app_data::<SceneScriptContext>();
+        }
 
         // Collect UUIDs of loaded script entities.
         let uuids: Vec<u64> = self
@@ -1988,20 +2050,14 @@ impl Scene {
             .collect();
 
         if uuids.is_empty() {
+            self.script_engine = Some(engine);
             return;
         }
-
-        // Take engine out (take-modify-replace pattern).
-        let mut engine = match self.script_engine.take() {
-            Some(e) => e,
-            None => return,
-        };
 
         // Set scene + input context.
         let ctx = SceneScriptContext {
             scene: self as *mut Scene,
             input: input as *const Input,
-            script_engine: &engine as *const ScriptEngine,
         };
         engine.lua().set_app_data(ctx);
 

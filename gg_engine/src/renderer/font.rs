@@ -340,10 +340,15 @@ impl Font {
 
     /// Load a font from a TTF file and generate an MSDF atlas (synchronous).
     /// Calls [`generate_font_cpu_data`] then [`Font::from_cpu_data`].
-    pub(crate) fn load(res: &RendererResources<'_>, allocator: &Arc<Mutex<GpuAllocator>>, path: &Path) -> Self {
-        let cpu_data = generate_font_cpu_data(path)
-            .unwrap_or_else(|e| panic!("{e}"));
-        Self::from_cpu_data(res, allocator, cpu_data)
+    pub(crate) fn load(res: &RendererResources<'_>, allocator: &Arc<Mutex<GpuAllocator>>, path: &Path) -> Option<Self> {
+        let cpu_data = match generate_font_cpu_data(path) {
+            Ok(data) => data,
+            Err(e) => {
+                log::error!("Failed to load font '{}': {e}", path.display());
+                return None;
+            }
+        };
+        Some(Self::from_cpu_data(res, allocator, cpu_data))
     }
 
     /// Look up glyph information for a character.

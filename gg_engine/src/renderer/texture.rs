@@ -110,6 +110,7 @@ pub struct Texture2D {
     image_view: vk::ImageView,
     sampler: vk::Sampler,
     descriptor_set: vk::DescriptorSet,
+    descriptor_pool: vk::DescriptorPool,
     bindless_index: u32,
     _width: u32,
     _height: u32,
@@ -142,19 +143,26 @@ impl Texture2D {
     }
 
     /// Load a texture from an image file (PNG, JPEG, etc).
+    ///
+    /// Returns `None` if the file cannot be loaded or decoded.
     pub(crate) fn from_file(
         res: &RendererResources<'_>,
         allocator: &Arc<Mutex<GpuAllocator>>,
         path: &Path,
-    ) -> Self {
+    ) -> Option<Self> {
         let _timer = ProfileTimer::new("Texture2D::from_file");
-        let img = image::open(path)
-            .unwrap_or_else(|e| panic!("Failed to load texture '{}': {e}", path.display()));
+        let img = match image::open(path) {
+            Ok(img) => img,
+            Err(e) => {
+                log::error!("Failed to load texture '{}': {e}", path.display());
+                return None;
+            }
+        };
         let rgba = img.to_rgba8();
         let (width, height) = rgba.dimensions();
         let pixels = rgba.into_raw();
 
-        Self::from_rgba8(res, allocator, width, height, &pixels)
+        Some(Self::from_rgba8(res, allocator, width, height, &pixels))
     }
 
     /// Create a texture from raw RGBA8 pixel data with default spec (sRGB, nearest, repeat).
@@ -215,7 +223,8 @@ impl Texture2D {
 
         // 3. Allocate and bind DEVICE_LOCAL memory via sub-allocator.
         let allocation =
-            GpuAllocator::allocate_for_image(allocator, device, image, "Texture2D", MemoryLocation::GpuOnly);
+            GpuAllocator::allocate_for_image(allocator, device, image, "Texture2D", MemoryLocation::GpuOnly)
+                .expect("GPU image allocation failed for Texture2D");
 
         // 4. One-shot command buffer: transition + copy + transition.
         execute_one_shot(device, command_pool, graphics_queue, |cmd_buf| {
@@ -342,6 +351,7 @@ impl Texture2D {
             image_view,
             sampler,
             descriptor_set,
+            descriptor_pool,
             bindless_index: 0,
             _width: width,
             _height: height,
@@ -395,7 +405,10 @@ impl Texture2D {
 impl Drop for Texture2D {
     fn drop(&mut self) {
         unsafe {
-            // Descriptor set is freed when the pool is destroyed/reset.
+            // Free the per-texture descriptor set back to the pool.
+            let _ = self
+                .device
+                .free_descriptor_sets(self.descriptor_pool, &[self.descriptor_set]);
             self.device.destroy_sampler(self.sampler, None);
             self.device.destroy_image_view(self.image_view, None);
             self.device.destroy_image(self.image, None);
@@ -473,7 +486,14 @@ fn transition_image_layout(
             vk::PipelineStageFlags::TRANSFER,
             vk::PipelineStageFlags::FRAGMENT_SHADER,
         ),
-        _ => panic!("Unsupported image layout transition: {old_layout:?} -> {new_layout:?}"),
+        _ => {
+            log::error!(
+                "Unsupported image layout transition: {:?} -> {:?} — skipping barrier",
+                old_layout,
+                new_layout
+            );
+            return;
+        }
     };
 
     let barrier = vk::ImageMemoryBarrier::default()

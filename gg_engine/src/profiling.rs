@@ -31,8 +31,16 @@ mod inner {
     use std::fs::File;
     use std::io::{BufWriter, Write};
     use std::path::{Path, PathBuf};
+    use std::sync::atomic::{AtomicU64, Ordering};
     use std::sync::Mutex;
     use std::time::{Duration, Instant};
+
+    /// Monotonic thread ID counter (avoids relying on `ThreadId`'s Debug format).
+    static NEXT_THREAD_ID: AtomicU64 = AtomicU64::new(1);
+
+    thread_local! {
+        static THREAD_ID: u64 = NEXT_THREAD_ID.fetch_add(1, Ordering::Relaxed);
+    }
 
     // -----------------------------------------------------------------------
     // Chrome Tracing JSON instrumentor
@@ -79,7 +87,16 @@ mod inner {
             }
         };
 
-        let file = File::create(&resolved).expect("Failed to create profiling output file");
+        let file = match File::create(&resolved) {
+            Ok(f) => f,
+            Err(e) => {
+                log::warn!(target: "gg_engine",
+                    "Cannot create profiling output '{}': {e}. Profiling disabled for this session.",
+                    resolved.display()
+                );
+                return;
+            }
+        };
         let mut writer = BufWriter::new(file);
         if let Err(e) = write!(writer, r#"{{"otherData":{{}},"traceEvents":["#) {
             log::error!(target: "gg_engine", "Failed to write profiling header: {e}");
@@ -109,13 +126,7 @@ mod inner {
 
     /// Write a single Chrome Tracing "X" (complete) event to the active session.
     fn write_profile(name: &str, start: Instant, duration: Duration) {
-        let tid = {
-            let id = format!("{:?}", std::thread::current().id());
-            id.trim_start_matches("ThreadId(")
-                .trim_end_matches(')')
-                .parse::<u64>()
-                .unwrap_or(0)
-        };
+        let tid = THREAD_ID.with(|id| *id);
 
         let mut guard = INSTRUMENTOR.lock().unwrap();
         if let Some(session) = guard.as_mut() {

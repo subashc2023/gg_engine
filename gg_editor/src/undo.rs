@@ -1,3 +1,5 @@
+use std::collections::VecDeque;
+
 use gg_engine::prelude::*;
 
 /// Snapshot-based undo/redo system using YAML scene serialization.
@@ -6,7 +8,7 @@ use gg_engine::prelude::*;
 /// Gestures (drags, gizmo transforms) are coalesced via `begin_edit()`
 /// and `end_edit()` bracketing so they produce a single undo step.
 pub(crate) struct UndoSystem {
-    undo_stack: Vec<String>,
+    undo_stack: VecDeque<String>,
     redo_stack: Vec<String>,
     max_entries: usize,
     /// "Before" snapshot captured at the start of a continuous gesture.
@@ -18,7 +20,7 @@ pub(crate) struct UndoSystem {
 impl UndoSystem {
     pub fn new() -> Self {
         Self {
-            undo_stack: Vec::new(),
+            undo_stack: VecDeque::new(),
             redo_stack: Vec::new(),
             max_entries: 100,
             pending_before: None,
@@ -62,7 +64,7 @@ impl UndoSystem {
 
     /// Pop the undo stack, push current state to redo, return restored scene.
     pub fn undo(&mut self, current_scene: &Scene) -> Option<Scene> {
-        let snapshot = self.undo_stack.pop()?;
+        let snapshot = self.undo_stack.pop_back()?;
         // Push current state to redo.
         if let Some(current_yaml) = SceneSerializer::serialize_to_string(current_scene) {
             self.redo_stack.push(current_yaml);
@@ -75,9 +77,9 @@ impl UndoSystem {
         let snapshot = self.redo_stack.pop()?;
         // Push current state to undo (with cap enforcement).
         if let Some(current_yaml) = SceneSerializer::serialize_to_string(current_scene) {
-            self.undo_stack.push(current_yaml);
+            self.undo_stack.push_back(current_yaml);
             if self.undo_stack.len() > self.max_entries {
-                self.undo_stack.remove(0);
+                self.undo_stack.pop_front();
             }
         }
         self.restore_from_yaml(&snapshot)
@@ -107,11 +109,11 @@ impl UndoSystem {
     // -- Internal helpers --
 
     fn push_undo(&mut self, snapshot: String) {
-        self.undo_stack.push(snapshot);
+        self.undo_stack.push_back(snapshot);
         self.redo_stack.clear();
-        // Enforce cap.
+        // Enforce cap — O(1) with VecDeque.
         if self.undo_stack.len() > self.max_entries {
-            self.undo_stack.remove(0);
+            self.undo_stack.pop_front();
         }
     }
 

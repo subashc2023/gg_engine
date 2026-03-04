@@ -113,7 +113,8 @@ impl Renderer {
         ];
         let pool_info = vk::DescriptorPoolCreateInfo::default()
             .pool_sizes(&pool_sizes)
-            .max_sets(102);
+            .max_sets(102)
+            .flags(vk::DescriptorPoolCreateFlags::FREE_DESCRIPTOR_SET);
         let descriptor_pool = unsafe { device.create_descriptor_pool(&pool_info, None) }
             .expect("Failed to create descriptor pool");
 
@@ -303,13 +304,15 @@ impl Renderer {
     }
 
     /// Load a texture from an image file.
-    pub fn create_texture_from_file(&self, path: &Path) -> Texture2D {
-        let mut texture = Texture2D::from_file(&self.resources(), &self.allocator, path);
+    ///
+    /// Returns `None` if the file cannot be loaded or decoded.
+    pub fn create_texture_from_file(&self, path: &Path) -> Option<Texture2D> {
+        let mut texture = Texture2D::from_file(&self.resources(), &self.allocator, path)?;
         if let Some(data) = &self.renderer_2d {
             let index = data.register_texture(&texture);
             texture.set_bindless_index(index);
         }
-        texture
+        Some(texture)
     }
 
     /// Create a texture from raw RGBA8 pixel data.
@@ -324,13 +327,15 @@ impl Renderer {
 
     /// Load a font from a TTF file and generate an MSDF atlas.
     /// The atlas texture is registered in the bindless descriptor array.
-    pub fn create_font(&self, path: &Path) -> Font {
-        let mut font = Font::load(&self.resources(), &self.allocator, path);
+    ///
+    /// Returns `None` if the font file cannot be loaded or parsed.
+    pub fn create_font(&self, path: &Path) -> Option<Font> {
+        let mut font = Font::load(&self.resources(), &self.allocator, path)?;
         if let Some(data) = &self.renderer_2d {
             let index = data.register_texture(&font.atlas_texture);
             font.atlas_texture.set_bindless_index(index);
         }
-        font
+        Some(font)
     }
 
     /// Upload a texture from pre-loaded CPU data (async path).
@@ -1152,8 +1157,8 @@ impl Renderer {
         let mut cursor_x: f32 = 0.0;
         let mut cursor_y: f32 = 0.0;
 
-        let chars: Vec<char> = text.chars().collect();
-        for (i, &ch) in chars.iter().enumerate() {
+        let mut chars = text.chars().peekable();
+        while let Some(ch) = chars.next() {
             if ch == '\n' {
                 cursor_x = 0.0;
                 cursor_y -= font.line_height * scale * line_spacing;
@@ -1202,7 +1207,7 @@ impl Renderer {
 
             // Advance cursor: glyph advance + font kerning pair + user kerning offset.
             let mut advance = glyph.advance_x;
-            if let Some(&next_ch) = chars.get(i + 1) {
+            if let Some(&next_ch) = chars.peek() {
                 advance += font.kerning(ch, next_ch);
             }
             cursor_x += (advance + kerning) * scale;

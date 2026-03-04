@@ -171,18 +171,30 @@ impl Drop for AssetLoader {
 fn worker_thread_fn(rx: Arc<Mutex<Receiver<LoadRequest>>>, tx: Sender<LoadResult>) {
     loop {
         let request = {
-            let guard = rx.lock().unwrap();
+            let guard = rx.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
             guard.recv()
         };
 
         match request {
             Ok(LoadRequest::Shutdown) | Err(_) => return,
             Ok(LoadRequest::Texture { handle, path, spec }) => {
-                let data = Texture2D::load_cpu_data(&path, spec);
+                let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    Texture2D::load_cpu_data(&path, spec)
+                }));
+                let data = match result {
+                    Ok(data) => data,
+                    Err(_) => Err(format!("Panic while loading texture: {}", path.display())),
+                };
                 let _ = tx.send(LoadResult::Texture { handle, data });
             }
             Ok(LoadRequest::Font { font_key, path }) => {
-                let data = generate_font_cpu_data(&path);
+                let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    generate_font_cpu_data(&path)
+                }));
+                let data = match result {
+                    Ok(data) => data,
+                    Err(_) => Err(format!("Panic while loading font: {}", path.display())),
+                };
                 let _ = tx.send(LoadResult::Font { font_key, data });
             }
         }

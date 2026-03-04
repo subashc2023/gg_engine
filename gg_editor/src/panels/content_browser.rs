@@ -529,14 +529,13 @@ fn render_rename_field(
             *first_frame = false;
         }
 
-        // Commit on Enter or when focus is lost.
+        // Commit only on Enter; cancel on Escape or any other focus loss.
         if response.lost_focus() {
-            let committed = ui.input(|i| i.key_pressed(egui::Key::Enter))
-                || !ui.input(|i| i.key_pressed(egui::Key::Escape));
-            if committed && !edit_text.is_empty() {
+            let enter_pressed = ui.input(|i| i.key_pressed(egui::Key::Enter));
+            if enter_pressed && !edit_text.is_empty() {
                 *deferred_rename = Some((path.to_path_buf(), edit_text.clone()));
             } else {
-                // Cancelled — clear rename state.
+                // Cancelled (Escape, clicked away, etc.) — clear rename state.
                 *deferred_rename = None;
                 drop(s);
                 state.borrow_mut().take();

@@ -208,10 +208,8 @@ impl EditorCamera {
 
     fn mouse_zoom(&mut self, delta: f32) {
         self.distance -= delta * self.zoom_speed();
-        if self.distance < 1.0 {
-            self.focal_point += self.forward();
-            self.distance = 1.0;
-        }
+        // Clamp to a small positive value to prevent camera inversion.
+        self.distance = self.distance.max(0.1);
     }
 
     fn pan_speed(&self) -> (f32, f32) {

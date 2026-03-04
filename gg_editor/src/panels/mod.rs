@@ -1,6 +1,6 @@
 pub(crate) mod content_browser;
 pub(crate) mod project;
-mod properties;
+pub(crate) mod properties;
 mod scene_hierarchy;
 mod settings;
 pub(crate) mod viewport;

@@ -6,7 +6,7 @@ mod layer;
 mod logging;
 mod orthographic_camera_controller;
 pub mod particle_system;
-mod platform_utils;
+pub mod platform_utils;
 pub mod profiling;
 pub mod project;
 pub mod renderer;

@@ -11,10 +11,14 @@ use crate::profiling::ProfileTimer;
 
 /// Cast a typed slice to raw bytes for uploading into a vertex buffer.
 ///
-/// # Safety contract
-/// `T` must be `Copy` (no drop glue) and `#[repr(C)]` for the bytes to be
-/// meaningful as vertex data.
+/// # Safety
+///
+/// The caller must ensure `T` is `#[repr(C)]` with no padding bytes. Types
+/// with internal padding contain uninitialized memory, and reading those
+/// bytes is undefined behavior. All built-in vertex types (`BatchQuadVertex`,
+/// `BatchCircleVertex`, etc.) satisfy this requirement.
 pub fn as_bytes<T: Copy>(data: &[T]) -> &[u8] {
+    // Safety: T: Copy ensures no drop glue. Caller guarantees #[repr(C)], no padding.
     unsafe { std::slice::from_raw_parts(data.as_ptr() as *const u8, std::mem::size_of_val(data)) }
 }
 
@@ -425,7 +429,8 @@ pub(super) fn create_buffer_with_allocation(
         unsafe { device.create_buffer(&buffer_info, None) }.expect("Failed to create buffer");
 
     let allocation =
-        GpuAllocator::allocate_for_buffer(allocator, device, buffer, name, MemoryLocation::CpuToGpu);
+        GpuAllocator::allocate_for_buffer(allocator, device, buffer, name, MemoryLocation::CpuToGpu)
+            .expect("GPU buffer allocation failed");
 
     (buffer, allocation)
 }

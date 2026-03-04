@@ -50,23 +50,58 @@ impl ScriptFieldValue {
 /// Maximum consecutive errors before a script is auto-disabled.
 const MAX_SCRIPT_ERRORS: u32 = 10;
 
+/// Lua named-registry key for the master entity-environments table.
+/// Callbacks (`get_script_field`, `set_script_field`) look up entity envs
+/// directly from this table, avoiding any raw pointer to `ScriptEngine`.
+pub(crate) const ENTITY_ENVS_REGISTRY_KEY: &str = "__gg_entity_envs";
+
 pub struct ScriptEngine {
     lua: Lua,
     /// Per-entity Lua environments keyed by entity UUID (u64).
     entity_envs: HashMap<u64, LuaRegistryKey>,
-    /// Consecutive error counts per entity — used to auto-disable broken scripts.
-    error_counts: HashMap<u64, u32>,
+    /// Consecutive error counts per (entity, callback) — used to auto-disable broken scripts.
+    /// Keyed by (entity UUID, callback name) so errors in one callback don't
+    /// reset the count for a different callback on the same entity.
+    error_counts: HashMap<(u64, String), u32>,
 }
 
 impl ScriptEngine {
     /// Create a new LuaJIT state with standard libraries loaded.
     ///
     /// Registers all engine bindings (ScriptGlue) into the Lua state.
+    /// Maximum instructions before a Lua callback is interrupted.
+    /// 10 million instructions ≈ a few seconds of CPU time.
+    const INSTRUCTION_LIMIT: u32 = 10_000_000;
+
     pub fn new() -> Self {
         let lua = Lua::new();
 
+        // Install an instruction count hook to prevent infinite loops.
+        lua.set_hook(
+            mlua::HookTriggers::new().every_nth_instruction(Self::INSTRUCTION_LIMIT),
+            |_lua, _debug| {
+                Err(mlua::Error::RuntimeError(
+                    "Script exceeded instruction limit (possible infinite loop)".into(),
+                ))
+            },
+        );
+
         if let Err(e) = super::script_glue::register_all(&lua) {
             log::error!("ScriptEngine: failed to register script glue: {}", e);
+        }
+
+        // Create the master entity-envs table in the Lua registry so that
+        // Lua callbacks can look up entity environments without needing a
+        // raw pointer back to ScriptEngine.
+        match lua.create_table() {
+            Ok(t) => {
+                if let Err(e) = lua.set_named_registry_value(ENTITY_ENVS_REGISTRY_KEY, t) {
+                    log::error!("ScriptEngine: failed to register entity envs table: {}", e);
+                }
+            }
+            Err(e) => {
+                log::error!("ScriptEngine: failed to create entity envs table: {}", e);
+            }
         }
 
         log::info!("ScriptEngine: LuaJIT state initialized");
@@ -152,6 +187,17 @@ impl ScriptEngine {
             return false;
         }
 
+        // Mirror the env into the Lua-side master table so callbacks can
+        // access it without going through a ScriptEngine pointer.
+        if let Ok(envs_table) = self
+            .lua
+            .named_registry_value::<LuaTable>(ENTITY_ENVS_REGISTRY_KEY)
+        {
+            if let Err(e) = envs_table.set(uuid, env.clone()) {
+                log::error!("ScriptEngine: failed to mirror env to registry table: {}", e);
+            }
+        }
+
         // Store the environment in the Lua registry.
         match self.lua.create_registry_value(env) {
             Ok(key) => {
@@ -210,6 +256,13 @@ impl ScriptEngine {
         if let Some(key) = self.entity_envs.remove(&uuid) {
             self.lua.remove_registry_value(key).ok();
         }
+        // Also remove from the Lua-side master table.
+        if let Ok(envs_table) = self
+            .lua
+            .named_registry_value::<LuaTable>(ENTITY_ENVS_REGISTRY_KEY)
+        {
+            envs_table.set(uuid, LuaValue::Nil).ok();
+        }
     }
 
     /// Shared helper: look up a function by name in an entity's env table
@@ -218,8 +271,9 @@ impl ScriptEngine {
     /// Tracks consecutive errors per entity and auto-disables scripts that
     /// exceed [`MAX_SCRIPT_ERRORS`] failures to prevent log spam.
     fn call_entity_function<A: IntoLuaMulti>(&mut self, uuid: u64, name: &str, args: A) -> bool {
-        // Skip entities that have been auto-disabled.
-        if let Some(&count) = self.error_counts.get(&uuid) {
+        // Skip entities that have been auto-disabled for this callback.
+        let err_key = (uuid, name.to_string());
+        if let Some(&count) = self.error_counts.get(&err_key) {
             if count >= MAX_SCRIPT_ERRORS {
                 return false;
             }
@@ -252,13 +306,13 @@ impl ScriptEngine {
         };
 
         if let Err(e) = func.call::<()>(args) {
-            let count = self.error_counts.entry(uuid).or_insert(0);
+            let count = self.error_counts.entry(err_key).or_insert(0);
             *count += 1;
             if *count == MAX_SCRIPT_ERRORS {
                 log::error!(
-                    "ScriptEngine: entity {} script disabled after {} consecutive errors. \
-                     Last error in '{}': {}",
-                    uuid, MAX_SCRIPT_ERRORS, name, e
+                    "ScriptEngine: entity {} '{}' disabled after {} consecutive errors. \
+                     Last error: {}",
+                    uuid, name, MAX_SCRIPT_ERRORS, e
                 );
             } else {
                 log::error!(
@@ -269,8 +323,8 @@ impl ScriptEngine {
             return false;
         }
 
-        // Reset error count on success.
-        self.error_counts.remove(&uuid);
+        // Reset error count for this specific callback on success.
+        self.error_counts.remove(&err_key);
         true
     }
 

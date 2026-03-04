@@ -137,7 +137,7 @@ impl SceneCamera {
     /// Update the viewport dimensions. Recalculates the projection matrix
     /// to match the new aspect ratio.
     pub fn set_viewport_size(&mut self, width: u32, height: u32) {
-        if height > 0 {
+        if width > 0 && height > 0 {
             self.aspect_ratio = width as f32 / height as f32;
             self.recalculate_projection();
         }

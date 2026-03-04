@@ -89,6 +89,12 @@ impl Input {
         self.mouse_y = y;
     }
 
+    /// Clear all pressed state (call on window focus loss to avoid stuck keys).
+    pub(crate) fn clear_all(&mut self) {
+        self.keys_pressed.clear();
+        self.mouse_buttons_pressed.clear();
+    }
+
     /// Snapshot current state so next frame can detect transitions.
     /// Call at the end of each frame, after all updates and rendering.
     pub(crate) fn end_frame(&mut self) {

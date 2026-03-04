@@ -10,11 +10,19 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 
 // Cache for discovered script fields (avoids re-executing scripts every frame).
-// Keyed by script path -> field list. Invalidated when script path changes.
+// Keyed by script path -> field list. Invalidated when script path changes or
+// scripts are hot-reloaded.
 #[cfg(feature = "lua-scripting")]
 thread_local! {
     static FIELD_CACHE: RefCell<HashMap<String, Vec<(String, ScriptFieldValue)>>> =
         RefCell::new(HashMap::new());
+}
+
+/// Clear the cached script field definitions. Call this after hot-reloading
+/// Lua scripts so that updated `fields` tables are re-discovered.
+#[cfg(feature = "lua-scripting")]
+pub(crate) fn clear_field_cache() {
+    FIELD_CACHE.with(|c| c.borrow_mut().clear());
 }
 
 #[cfg(feature = "lua-scripting")]
@@ -1262,6 +1270,7 @@ fn draw_components(
                     rb.body_type = body_type;
                     rb.fixed_rotation = fixed_rotation;
                 }
+                *scene_dirty = true;
             }
         });
 
@@ -1401,6 +1410,7 @@ fn draw_components(
                     bc.restitution = restitution;
                     bc.restitution_threshold = restitution_threshold;
                 }
+                *scene_dirty = true;
             }
         });
 
@@ -1525,6 +1535,7 @@ fn draw_components(
                     cc.restitution = restitution;
                     cc.restitution_threshold = restitution_threshold;
                 }
+                *scene_dirty = true;
             }
         });
 

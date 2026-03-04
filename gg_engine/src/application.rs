@@ -14,8 +14,8 @@ use crate::input::Input;
 use crate::layer::LayerStack;
 use crate::profiling::ProfileTimer;
 use crate::renderer::{
-    DrawContext, Framebuffer, GpuAllocator, OrthographicCamera, PresentMode, Renderer, Swapchain,
-    VulkanContext,
+    ClearValues, DrawContext, Framebuffer, GpuAllocator, OrthographicCamera, PresentMode, Renderer,
+    Swapchain, VulkanContext,
 };
 use crate::timestep::Timestep;
 use glam::Mat4;
@@ -83,6 +83,13 @@ pub trait Application {
     /// Polled each frame after `on_egui`. Default: `false`.
     fn should_exit(&self) -> bool {
         false
+    }
+
+    /// Called when the window close button is pressed. Return `true` to allow
+    /// the close, `false` to cancel it (e.g. to show a "save changes?" dialog).
+    /// Default: `true` (always allow close).
+    fn on_close_requested(&mut self) -> bool {
+        true
     }
 
     /// Clear color for the render pass. Polled each frame.
@@ -405,11 +412,17 @@ impl<T: Application> ApplicationHandler for EngineRunner<T> {
                 self.input.set_mouse_position(position.x, position.y);
             }
             winit::event::WindowEvent::MouseInput { state, button, .. } => {
-                let btn = map_mouse_button(*button);
-                match state {
-                    ElementState::Pressed => self.input.press_mouse_button(btn),
-                    ElementState::Released => self.input.release_mouse_button(btn),
+                if let Some(btn) = map_mouse_button(*button) {
+                    match state {
+                        ElementState::Pressed => self.input.press_mouse_button(btn),
+                        ElementState::Released => self.input.release_mouse_button(btn),
+                    }
                 }
+            }
+            winit::event::WindowEvent::Focused(false) => {
+                // Clear all pressed keys/buttons on focus loss to prevent
+                // "stuck" keys when the user Alt+Tabs away while holding keys.
+                self.input.clear_all();
             }
             _ => {}
         }
@@ -445,7 +458,9 @@ impl<T: Application> ApplicationHandler for EngineRunner<T> {
             }
 
             if matches!(engine_event, Event::Window(WindowEvent::Close)) {
-                event_loop.exit();
+                if self.app.on_close_requested() {
+                    event_loop.exit();
+                }
             }
         }
     }
@@ -464,6 +479,11 @@ impl<T: Application> ApplicationHandler for EngineRunner<T> {
                     sc.recreate(vk_ctx, w, h, None);
                     if let Some(renderer) = &mut self.renderer {
                         renderer.update_render_pass(sc.render_pass());
+                    }
+                    if let Some(egui_renderer) = &mut self.egui_renderer {
+                        if let Err(e) = egui_renderer.set_render_pass(sc.render_pass()) {
+                            log::error!(target: "gg_engine", "Failed to update egui render pass: {e:?}");
+                        }
                     }
                 }
                 let aspect = w as f32 / h as f32;
@@ -649,7 +669,7 @@ impl<T: Application> ApplicationHandler for EngineRunner<T> {
                     };
                     (Some(info), clear_vals)
                 } else {
-                    (None, Vec::new())
+                    (None, ClearValues::default())
                 };
 
             // Render frame.
@@ -687,6 +707,9 @@ impl<T: Application> ApplicationHandler for EngineRunner<T> {
                     let mode_arg = if mode_changed { Some(desired) } else { None };
                     swapchain.recreate(vk_ctx, size.width, size.height, mode_arg);
                     renderer.update_render_pass(swapchain.render_pass());
+                    if let Err(e) = egui_renderer.set_render_pass(swapchain.render_pass()) {
+                        log::error!(target: "gg_engine", "Failed to update egui render pass: {e:?}");
+                    }
                     self.current_present_mode = desired;
                 }
             }
@@ -1245,14 +1268,19 @@ fn map_window_event(event: &winit::event::WindowEvent) -> (Option<Event>, Option
         }
 
         winit::event::WindowEvent::MouseInput { state, button, .. } => {
-            let btn = map_mouse_button(*button);
-            (
-                match state {
-                    ElementState::Pressed => Some(Event::Mouse(MouseEvent::ButtonPressed(btn))),
-                    ElementState::Released => Some(Event::Mouse(MouseEvent::ButtonReleased(btn))),
-                },
-                None,
-            )
+            if let Some(btn) = map_mouse_button(*button) {
+                (
+                    match state {
+                        ElementState::Pressed => Some(Event::Mouse(MouseEvent::ButtonPressed(btn))),
+                        ElementState::Released => {
+                            Some(Event::Mouse(MouseEvent::ButtonReleased(btn)))
+                        }
+                    },
+                    None,
+                )
+            } else {
+                (None, None)
+            }
         }
 
         _ => (None, None),
@@ -1347,13 +1375,13 @@ fn map_key_code(code: winit::keyboard::KeyCode) -> KeyCode {
     }
 }
 
-fn map_mouse_button(button: winit::event::MouseButton) -> MouseButton {
+fn map_mouse_button(button: winit::event::MouseButton) -> Option<MouseButton> {
     match button {
-        winit::event::MouseButton::Left => MouseButton::Left,
-        winit::event::MouseButton::Right => MouseButton::Right,
-        winit::event::MouseButton::Middle => MouseButton::Middle,
-        winit::event::MouseButton::Back => MouseButton::Back,
-        winit::event::MouseButton::Forward => MouseButton::Forward,
-        winit::event::MouseButton::Other(_) => MouseButton::Left, // fallback
+        winit::event::MouseButton::Left => Some(MouseButton::Left),
+        winit::event::MouseButton::Right => Some(MouseButton::Right),
+        winit::event::MouseButton::Middle => Some(MouseButton::Middle),
+        winit::event::MouseButton::Back => Some(MouseButton::Back),
+        winit::event::MouseButton::Forward => Some(MouseButton::Forward),
+        winit::event::MouseButton::Other(_) => None, // ignore unknown buttons
     }
 }

@@ -95,7 +95,7 @@ impl EditorSettings {
         };
         let _ = std::fs::create_dir_all(&dir);
         if let Ok(yaml) = serde_yaml::to_string(self) {
-            let _ = std::fs::write(&path, yaml);
+            let _ = gg_engine::platform_utils::atomic_write(&path, &yaml);
         }
     }
 

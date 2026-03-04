@@ -142,10 +142,14 @@ impl EditorAssetManager {
             AssetType::Texture2D => {
                 let abs_path = self.asset_directory.join(&metadata.file_path);
                 if abs_path.exists() {
-                    let texture = Ref::new(renderer.create_texture_from_file(&abs_path));
-                    self.loaded_assets
-                        .insert(*handle, AssetData::Texture(texture));
-                    true
+                    if let Some(texture) = renderer.create_texture_from_file(&abs_path) {
+                        self.loaded_assets
+                            .insert(*handle, AssetData::Texture(Ref::new(texture)));
+                        true
+                    } else {
+                        log::warn!("Failed to load texture: {}", abs_path.display());
+                        false
+                    }
                 } else {
                     log::warn!("Texture file not found: {}", abs_path.display());
                     false

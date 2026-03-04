@@ -57,6 +57,47 @@ fn resolve_vk_format(
 /// capabilities, but this is a safe upper bound for now (~8K).
 const MAX_FRAMEBUFFER_SIZE: u32 = 8192;
 
+/// Maximum number of clear values (color attachments + depth).
+/// Avoids heap allocation in [`Framebuffer::clear_values`].
+const MAX_CLEAR_VALUES: usize = 8;
+
+/// Stack-allocated clear value array returned by [`Framebuffer::clear_values`].
+/// Dereferences to `&[vk::ClearValue]` for seamless use with Vulkan APIs.
+pub(crate) struct ClearValues {
+    values: [vk::ClearValue; MAX_CLEAR_VALUES],
+    len: usize,
+}
+
+impl ClearValues {
+    fn new() -> Self {
+        Self {
+            values: [vk::ClearValue::default(); MAX_CLEAR_VALUES],
+            len: 0,
+        }
+    }
+
+    fn push(&mut self, value: vk::ClearValue) {
+        debug_assert!(self.len < MAX_CLEAR_VALUES, "ClearValues overflow");
+        if self.len < MAX_CLEAR_VALUES {
+            self.values[self.len] = value;
+            self.len += 1;
+        }
+    }
+}
+
+impl Default for ClearValues {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl std::ops::Deref for ClearValues {
+    type Target = [vk::ClearValue];
+    fn deref(&self) -> &[vk::ClearValue] {
+        &self.values[..self.len]
+    }
+}
+
 /// Configuration for creating an offscreen framebuffer.
 pub struct FramebufferSpec {
     pub width: u32,
@@ -248,10 +289,8 @@ impl Framebuffer {
             attachments: Vec::new(), // attachments list not needed after initial parse
         };
 
-        // Ensure GPU is idle before destroying resources it may still reference.
-        unsafe {
-            self.device.device_wait_idle().expect("Failed to wait for device idle during framebuffer resize");
-        }
+        // NOTE: Caller must ensure GPU is idle before calling resize()
+        // (e.g. via device_wait_idle in application.rs).
 
         // Destroy old framebuffer (keep render pass, sampler, descriptor set).
         unsafe {
@@ -372,8 +411,10 @@ impl Framebuffer {
     /// Build the correct clear value array for this framebuffer's attachments.
     /// Color attachments use the supplied clear color; RedInteger clears to -1;
     /// depth clears to 1.0/0.
-    pub(crate) fn clear_values(&self, clear_color: [f32; 4]) -> Vec<vk::ClearValue> {
-        let mut values = Vec::with_capacity(self.color_attachments.len() + 1);
+    ///
+    /// Returns a stack-allocated [`ClearValues`] (no heap allocation).
+    pub(crate) fn clear_values(&self, clear_color: [f32; 4]) -> ClearValues {
+        let mut values = ClearValues::new();
 
         for ca in &self.color_attachments {
             match ca.format {
@@ -407,9 +448,12 @@ impl Framebuffer {
     }
 
     /// Request a pixel readback from the given color attachment at (x, y).
-    /// Coordinates are in framebuffer pixel space.
+    /// Coordinates are in framebuffer pixel space. Out-of-bounds coordinates
+    /// are silently ignored to avoid Vulkan validation errors.
     pub fn schedule_pixel_readback(&mut self, attachment_index: usize, x: i32, y: i32) {
-        self.pending_readback = Some((attachment_index, x, y));
+        if x >= 0 && y >= 0 && (x as u32) < self.width() && (y as u32) < self.height() {
+            self.pending_readback = Some((attachment_index, x, y));
+        }
     }
 
     /// Read the staging buffer for the given frame slot (data from 2 frames ago).
@@ -593,7 +637,8 @@ fn create_color_attachment(
         unsafe { device.create_image(&image_info, None) }.expect("Failed to create color image");
 
     let allocation =
-        GpuAllocator::allocate_for_image(allocator, device, image, "FB_Color", MemoryLocation::GpuOnly);
+        GpuAllocator::allocate_for_image(allocator, device, image, "FB_Color", MemoryLocation::GpuOnly)
+            .expect("GPU image allocation failed for FB color attachment");
 
     let view_info = vk::ImageViewCreateInfo::default()
         .image(image)
@@ -644,7 +689,8 @@ fn create_depth_attachment(
         unsafe { device.create_image(&image_info, None) }.expect("Failed to create depth image");
 
     let allocation =
-        GpuAllocator::allocate_for_image(allocator, device, image, "FB_Depth", MemoryLocation::GpuOnly);
+        GpuAllocator::allocate_for_image(allocator, device, image, "FB_Depth", MemoryLocation::GpuOnly)
+            .expect("GPU image allocation failed for FB depth attachment");
 
     let view_info = vk::ImageViewCreateInfo::default()
         .image(image)
@@ -741,7 +787,8 @@ fn create_readback_staging_buffer(
         unsafe { device.create_buffer(&buf_info, None) }.expect("Failed to create readback buffer");
 
     let allocation =
-        GpuAllocator::allocate_for_buffer(allocator, device, buffer, "ReadbackBuffer", MemoryLocation::GpuToCpu);
+        GpuAllocator::allocate_for_buffer(allocator, device, buffer, "ReadbackBuffer", MemoryLocation::GpuToCpu)
+            .expect("GPU buffer allocation failed for readback buffer");
 
     // Initialize both slots to -1.
     let mapping = allocation

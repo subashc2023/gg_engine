@@ -81,11 +81,11 @@ impl UniformBuffer {
 impl Drop for UniformBuffer {
     fn drop(&mut self) {
         for i in 0..FRAMES_IN_FLIGHT {
-            // Drop allocation first (frees memory), then destroy buffer.
-            self.allocations[i].take();
+            // Destroy buffer first, then free memory (Vulkan spec requirement).
             unsafe {
                 self.device.destroy_buffer(self.buffers[i], None);
             }
+            self.allocations[i].take();
         }
     }
 }

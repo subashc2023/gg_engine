@@ -21,9 +21,13 @@ use crate::uuid::Uuid;
 
 const SCENE_VERSION: u32 = 1;
 
+fn default_scene_version() -> u32 {
+    SCENE_VERSION
+}
+
 #[derive(Serialize, Deserialize)]
 struct SceneData {
-    #[serde(rename = "Version", default)]
+    #[serde(rename = "Version", default = "default_scene_version")]
     version: u32,
     #[serde(rename = "Scene")]
     name: String,
@@ -76,7 +80,6 @@ struct EntityData {
         default
     )]
     circle_collider_2d: Option<CircleCollider2DData>,
-    #[cfg(feature = "lua-scripting")]
     #[serde(
         rename = "LuaScriptComponent",
         skip_serializing_if = "Option::is_none",
@@ -253,13 +256,16 @@ struct CircleCollider2DData {
     restitution_threshold: f32,
 }
 
-#[cfg(feature = "lua-scripting")]
 #[derive(Serialize, Deserialize)]
 struct LuaScriptData {
     #[serde(rename = "ScriptPath")]
     script_path: String,
+    #[cfg(feature = "lua-scripting")]
     #[serde(rename = "Fields", default, skip_serializing_if = "Option::is_none")]
     fields: Option<std::collections::HashMap<String, super::script_engine::ScriptFieldValue>>,
+    #[cfg(not(feature = "lua-scripting"))]
+    #[serde(rename = "Fields", default, skip_serializing_if = "Option::is_none")]
+    fields: Option<serde_yaml::Value>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -407,7 +413,7 @@ impl SceneSerializer {
 
         match serde_yaml::to_string(&scene_data) {
             Ok(yaml) => {
-                if let Err(e) = fs::write(file_path, &yaml) {
+                if let Err(e) = crate::platform_utils::atomic_write(file_path, &yaml) {
                     log::error!("Failed to write scene file '{}': {}", file_path, e);
                     false
                 } else {
@@ -445,6 +451,13 @@ impl SceneSerializer {
                 return false;
             }
         };
+
+        if scene_data.version > SCENE_VERSION {
+            log::warn!(
+                "Scene '{}' was saved with version {} (current: {}). Some data may not load correctly.",
+                file_path, scene_data.version, SCENE_VERSION
+            );
+        }
 
         log::info!(
             "Deserializing scene '{}' (version {}, {} entities)",
@@ -608,6 +621,8 @@ impl SceneSerializer {
                             fields,
                         }
                     });
+            #[cfg(not(feature = "lua-scripting"))]
+            let lua_script_data: Option<LuaScriptData> = None;
             let sprite_animator_data = scene
                 .get_component::<SpriteAnimatorComponent>(entity)
                 .map(|sa| SpriteAnimatorData {
@@ -674,7 +689,6 @@ impl SceneSerializer {
                 rigidbody_2d: rigidbody_2d_data,
                 box_collider_2d: box_collider_2d_data,
                 circle_collider_2d: circle_collider_2d_data,
-                #[cfg(feature = "lua-scripting")]
                 lua_script: lua_script_data,
                 sprite_animator: sprite_animator_data,
                 relationship: relationship_data,

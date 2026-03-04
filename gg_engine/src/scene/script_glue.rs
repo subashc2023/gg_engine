@@ -9,19 +9,15 @@ use mlua::prelude::*;
 use crate::events::{KeyCode, MouseButton};
 use crate::input::Input;
 use super::Scene;
-use super::script_engine::ScriptEngine;
 
 /// Runtime context set as Lua `app_data` during script execution.
 ///
 /// Raw pointers are used to sidestep Rust borrow rules (take-modify-replace
 /// pattern ensures safety — the scene is exclusively borrowed while scripts
 /// run). `input` is null during `on_create` / `on_destroy`.
-/// `script_engine` provides access to other entities' Lua environments for
-/// cross-entity field reads/writes.
 pub(crate) struct SceneScriptContext {
     pub scene: *mut Scene,
     pub input: *const Input,
-    pub script_engine: *const ScriptEngine,
 }
 
 unsafe impl Send for SceneScriptContext {}
@@ -486,46 +482,67 @@ fn find_entity_by_name(lua: &Lua, name: String) -> LuaResult<LuaValue> {
 
 /// `Engine.get_script_field(entity_id, field_name)` — read a field from
 /// another entity's running Lua script. Returns the value or `nil`.
+///
+/// Accesses entity environments directly from the Lua-side registry table
+/// (`__gg_entity_envs`) — no ScriptEngine pointer needed.
 fn get_script_field(lua: &Lua, (entity_id, field_name): (u64, String)) -> LuaResult<LuaValue> {
-    let ctx = match lua.app_data_ref::<SceneScriptContext>() {
-        Some(ctx) => ctx,
-        None => return Ok(LuaValue::Nil),
+    use super::script_engine::ENTITY_ENVS_REGISTRY_KEY;
+
+    let envs_table: LuaTable = match lua.named_registry_value(ENTITY_ENVS_REGISTRY_KEY) {
+        Ok(t) => t,
+        Err(_) => return Ok(LuaValue::Nil),
     };
 
-    if ctx.script_engine.is_null() {
-        return Ok(LuaValue::Nil);
-    }
+    let env: LuaTable = match envs_table.get(entity_id) {
+        Ok(t) => t,
+        Err(_) => return Ok(LuaValue::Nil),
+    };
 
-    let engine = unsafe { &*ctx.script_engine };
-    match engine.get_entity_field(entity_id, &field_name) {
-        Some(value) => value.to_lua(lua).map(Into::into),
-        None => Ok(LuaValue::Nil),
-    }
+    let fields_table: LuaTable = match env.raw_get("fields") {
+        Ok(t) => t,
+        Err(_) => return Ok(LuaValue::Nil),
+    };
+
+    fields_table.get(field_name)
 }
 
 /// `Engine.set_script_field(entity_id, field_name, value)` — write a field on
 /// another entity's running Lua script.
+///
+/// Accesses entity environments directly from the Lua-side registry table
+/// (`__gg_entity_envs`) — no ScriptEngine pointer needed.
+/// Only Bool, Integer, Number, and String values are accepted.
 fn set_script_field(lua: &Lua, (entity_id, field_name, value): (u64, String, LuaValue)) -> LuaResult<()> {
-    let ctx = match lua.app_data_ref::<SceneScriptContext>() {
-        Some(ctx) => ctx,
-        None => return Ok(()),
+    use super::script_engine::ENTITY_ENVS_REGISTRY_KEY;
+
+    // Validate value type before touching the env table.
+    match &value {
+        LuaValue::Boolean(_) | LuaValue::Integer(_) | LuaValue::Number(_) | LuaValue::String(_) => {}
+        _ => {
+            log::warn!(
+                "ScriptGlue: set_script_field unsupported value type for field '{}'",
+                field_name
+            );
+            return Ok(());
+        }
+    }
+
+    let envs_table: LuaTable = match lua.named_registry_value(ENTITY_ENVS_REGISTRY_KEY) {
+        Ok(t) => t,
+        Err(_) => return Ok(()),
     };
 
-    if ctx.script_engine.is_null() {
-        return Ok(());
-    }
+    let env: LuaTable = match envs_table.get(entity_id) {
+        Ok(t) => t,
+        Err(_) => return Ok(()),
+    };
 
-    let engine = unsafe { &*ctx.script_engine };
-    if let Some(sfv) = super::script_engine::ScriptFieldValue::from_lua_value(&value) {
-        engine.set_entity_field(entity_id, &field_name, &sfv);
-    } else {
-        log::warn!(
-            "ScriptGlue: set_script_field unsupported value type for field '{}'",
-            field_name
-        );
-    }
+    let fields_table: LuaTable = match env.raw_get("fields") {
+        Ok(t) => t,
+        Err(_) => return Ok(()),
+    };
 
-    Ok(())
+    fields_table.set(field_name, value)
 }
 
 // ---------------------------------------------------------------------------

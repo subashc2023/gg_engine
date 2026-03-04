@@ -21,14 +21,20 @@ pub struct Uuid(u64);
 const UUID_SAFE_MASK: u64 = (1u64 << 53) - 1;
 
 impl Uuid {
-    /// Generate a new random UUID (53-bit safe).
+    /// Generate a new random UUID (53-bit safe, guaranteed non-zero).
     pub fn new() -> Self {
-        Self(rand::rng().random::<u64>() & UUID_SAFE_MASK)
+        loop {
+            let v = rand::rng().random::<u64>() & UUID_SAFE_MASK;
+            if v != 0 {
+                return Self(v);
+            }
+        }
     }
 
     /// Create a UUID from a known value (e.g. deserialization).
+    /// Values above 2^53 are masked to preserve Lua/f64 safety.
     pub fn from_raw(value: u64) -> Self {
-        Self(value)
+        Self(value & UUID_SAFE_MASK)
     }
 
     /// The raw 64-bit value.

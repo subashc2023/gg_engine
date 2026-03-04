@@ -33,6 +33,7 @@ pub(crate) use font::generate_font_cpu_data;
 pub use framebuffer::{
     Framebuffer, FramebufferSpec, FramebufferTextureFormat, FramebufferTextureSpec,
 };
+pub(crate) use framebuffer::ClearValues;
 pub use orthographic_camera::OrthographicCamera;
 pub use pipeline::Pipeline;
 pub use renderer::Renderer;

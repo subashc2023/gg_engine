@@ -12,6 +12,8 @@ use crate::uuid::Uuid;
 /// Persisted to/from a `.ggregistry` YAML file in the project's assets directory.
 pub struct AssetRegistry {
     assets: HashMap<AssetHandle, AssetMetadata>,
+    /// Reverse index: normalized file path → asset handle for O(1) lookup.
+    path_index: HashMap<String, AssetHandle>,
 }
 
 // -- Serde intermediate types ------------------------------------------------
@@ -38,10 +40,13 @@ impl AssetRegistry {
     pub fn new() -> Self {
         Self {
             assets: HashMap::new(),
+            path_index: HashMap::new(),
         }
     }
 
     pub fn insert(&mut self, handle: AssetHandle, metadata: AssetMetadata) {
+        let normalized_path = metadata.file_path.replace('\\', "/");
+        self.path_index.insert(normalized_path, handle);
         self.assets.insert(handle, metadata);
     }
 
@@ -50,7 +55,13 @@ impl AssetRegistry {
     }
 
     pub fn remove(&mut self, handle: &AssetHandle) -> Option<AssetMetadata> {
-        self.assets.remove(handle)
+        if let Some(metadata) = self.assets.remove(handle) {
+            let normalized_path = metadata.file_path.replace('\\', "/");
+            self.path_index.remove(&normalized_path);
+            Some(metadata)
+        } else {
+            None
+        }
     }
 
     pub fn contains(&self, handle: &AssetHandle) -> bool {
@@ -61,10 +72,7 @@ impl AssetRegistry {
     /// Normalizes backslashes to forward slashes for cross-platform consistency.
     pub fn find_by_path(&self, path: &str) -> Option<AssetHandle> {
         let normalized = path.replace('\\', "/");
-        self.assets
-            .iter()
-            .find(|(_, meta)| meta.file_path == normalized)
-            .map(|(handle, _)| *handle)
+        self.path_index.get(&normalized).copied()
     }
 
     pub fn iter(&self) -> impl Iterator<Item = (&AssetHandle, &AssetMetadata)> {
@@ -137,7 +145,7 @@ impl AssetRegistry {
 
         match serde_yaml::to_string(&file_data) {
             Ok(yaml) => {
-                if let Err(e) = fs::write(file_path, &yaml) {
+                if let Err(e) = crate::platform_utils::atomic_write(file_path, &yaml) {
                     log::error!("Failed to write registry file '{}': {}", file_path.display(), e);
                     false
                 } else {
