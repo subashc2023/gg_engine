@@ -1,7 +1,8 @@
 use gg_engine::egui;
-use gg_engine::winit::window::Window;
+use gg_engine::winit::window::{ResizeDirection, Window};
 
 const TITLE_BAR_HEIGHT: f32 = 30.0;
+const RESIZE_BORDER: f32 = 5.0;
 const BUTTON_WIDTH: f32 = 46.0;
 
 const BAR_BG: egui::Color32 = egui::Color32::from_rgb(0x18, 0x18, 0x18);
@@ -25,6 +26,51 @@ pub struct TitleBarResponse {
     pub step_pressed: bool,
 }
 
+fn handle_resize_borders(ctx: &egui::Context, window: &Window) {
+    if window.is_maximized() {
+        return;
+    }
+    let screen_rect = ctx.input(|i| i.viewport_rect());
+    let pos = match ctx.input(|i| i.pointer.latest_pos()) {
+        Some(p) => p,
+        None => return,
+    };
+
+    let at_left = pos.x <= screen_rect.left() + RESIZE_BORDER;
+    let at_right = pos.x >= screen_rect.right() - RESIZE_BORDER;
+    let at_top = pos.y <= screen_rect.top() + RESIZE_BORDER;
+    let at_bottom = pos.y >= screen_rect.bottom() - RESIZE_BORDER;
+
+    use ResizeDirection::*;
+    let direction = match (at_left, at_right, at_top, at_bottom) {
+        (true, _, true, _) => Some(NorthWest),
+        (_, true, true, _) => Some(NorthEast),
+        (true, _, _, true) => Some(SouthWest),
+        (_, true, _, true) => Some(SouthEast),
+        (true, _, _, _) => Some(West),
+        (_, true, _, _) => Some(East),
+        (_, _, true, _) => Some(North),
+        (_, _, _, true) => Some(South),
+        _ => None,
+    };
+
+    if let Some(dir) = direction {
+        ctx.set_cursor_icon(match dir {
+            East => egui::CursorIcon::ResizeEast,
+            West => egui::CursorIcon::ResizeWest,
+            North => egui::CursorIcon::ResizeNorth,
+            South => egui::CursorIcon::ResizeSouth,
+            NorthEast => egui::CursorIcon::ResizeNorthEast,
+            NorthWest => egui::CursorIcon::ResizeNorthWest,
+            SouthEast => egui::CursorIcon::ResizeSouthEast,
+            SouthWest => egui::CursorIcon::ResizeSouthWest,
+        });
+        if ctx.input(|i| i.pointer.button_pressed(egui::PointerButton::Primary)) {
+            let _ = window.drag_resize_window(dir);
+        }
+    }
+}
+
 pub fn title_bar_ui(
     ctx: &egui::Context,
     window: &Window,
@@ -33,6 +79,8 @@ pub fn title_bar_ui(
     project_title: &str,
     menu_contents: impl FnOnce(&mut egui::Ui),
 ) -> TitleBarResponse {
+    handle_resize_borders(ctx, window);
+
     let mut close_requested = false;
     let mut play_toggled = false;
     let mut simulate_toggled = false;

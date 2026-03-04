@@ -7,6 +7,30 @@ use crate::scene::native_script::NativeScript;
 use crate::uuid::Uuid;
 use crate::Ref;
 
+// ---------------------------------------------------------------------------
+// Relationship Component (parent-child hierarchy)
+// ---------------------------------------------------------------------------
+
+/// Tracks parent-child relationships between entities.
+///
+/// Every entity gets a default `RelationshipComponent` on creation.
+/// Parent and children are stored as UUIDs (from [`IdComponent`]) so
+/// relationships survive scene copy and serialization.
+#[derive(Clone, Default)]
+pub struct RelationshipComponent {
+    /// Parent entity UUID. `None` = root entity.
+    pub parent: Option<u64>,
+    /// Ordered list of child entity UUIDs.
+    pub children: Vec<u64>,
+}
+
+impl RelationshipComponent {
+    /// Returns `true` if this entity has a parent or children.
+    pub fn has_relationships(&self) -> bool {
+        self.parent.is_some() || !self.children.is_empty()
+    }
+}
+
 /// Globally unique identifier for an entity, persisted across
 /// save/load and scene copies. Every entity receives an `IdComponent`
 /// automatically on creation.
@@ -448,6 +472,148 @@ impl Default for CircleCollider2DComponent {
 }
 
 // ---------------------------------------------------------------------------
+// Audio Source Component
+// ---------------------------------------------------------------------------
+
+/// Audio source attached to an entity for sound playback.
+///
+/// The `audio_handle` references an audio asset (wav/ogg/mp3/flac) in the
+/// asset registry. At runtime, the resolved file path is stored in
+/// `resolved_path` (runtime-only, not serialized).
+#[derive(Clone)]
+pub struct AudioSourceComponent {
+    /// Asset handle referencing an audio file in the asset registry.
+    /// 0 = no audio assigned.
+    pub audio_handle: crate::uuid::Uuid,
+    /// Playback volume (0.0–1.0).
+    pub volume: f32,
+    /// Playback rate/pitch (1.0 = normal speed).
+    pub pitch: f32,
+    /// Whether the sound loops.
+    pub looping: bool,
+    /// If true, the sound plays automatically when entering play mode.
+    pub play_on_start: bool,
+    /// Runtime-only: resolved file path from asset manager. Not serialized.
+    pub(crate) resolved_path: Option<String>,
+}
+
+impl Default for AudioSourceComponent {
+    fn default() -> Self {
+        Self {
+            audio_handle: crate::uuid::Uuid::from_raw(0),
+            volume: 1.0,
+            pitch: 1.0,
+            looping: false,
+            play_on_start: false,
+            resolved_path: None,
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Tilemap Component
+// ---------------------------------------------------------------------------
+
+/// Bit flag for horizontal tile flip (bit 30). Combine with tile ID via bitwise OR.
+pub const TILE_FLIP_H: i32 = 0x4000_0000;
+/// Bit flag for vertical tile flip (bit 29). Combine with tile ID via bitwise OR.
+pub const TILE_FLIP_V: i32 = 0x2000_0000;
+/// Mask to extract the raw tile ID (lower 29 bits) from a tile value with flip flags.
+pub const TILE_ID_MASK: i32 = 0x1FFF_FFFF;
+
+/// Tile-based map renderer for 2D grid levels.
+///
+/// Each entity with a `TilemapComponent` renders a grid of tiles using a
+/// tileset texture. Tile IDs map to sub-regions of the tileset image.
+/// A tile ID of `-1` means "empty" (not rendered).
+///
+/// Tile values may include flip flags in the high bits:
+/// - Bit 30 ([`TILE_FLIP_H`]): horizontal flip
+/// - Bit 29 ([`TILE_FLIP_V`]): vertical flip
+/// - Lower 29 bits ([`TILE_ID_MASK`]): actual tile ID
+///
+/// The tilemap's world position comes from the entity's [`TransformComponent`].
+/// Each tile is `tile_size` in world-space units, laid out in a row-major grid.
+#[derive(Clone)]
+pub struct TilemapComponent {
+    /// Number of columns in the grid.
+    pub width: u32,
+    /// Number of rows in the grid.
+    pub height: u32,
+    /// World-space size per tile.
+    pub tile_size: Vec2,
+    /// Asset handle referencing the tileset texture. 0 = no texture assigned.
+    pub texture_handle: crate::uuid::Uuid,
+    /// Runtime-only loaded texture. Not serialized.
+    pub texture: Option<Ref<crate::renderer::Texture2D>>,
+    /// Number of columns in the tileset image.
+    pub tileset_columns: u32,
+    /// Pixel size per cell in the tileset image.
+    pub cell_size: Vec2,
+    /// Spacing between tiles in the tileset image (pixels). Default: (0, 0).
+    pub spacing: Vec2,
+    /// Margin from the edge of the tileset image (pixels). Default: (0, 0).
+    pub margin: Vec2,
+    /// Tile IDs, row-major (width * height). -1 = empty.
+    /// High bits encode flip flags (see [`TILE_FLIP_H`], [`TILE_FLIP_V`]).
+    pub tiles: Vec<i32>,
+}
+
+impl TilemapComponent {
+    /// Get the tile ID at grid position (x, y). Returns -1 if out of bounds.
+    pub fn get_tile(&self, x: u32, y: u32) -> i32 {
+        if x >= self.width || y >= self.height {
+            return -1;
+        }
+        self.tiles[(y * self.width + x) as usize]
+    }
+
+    /// Set the tile ID at grid position (x, y). No-op if out of bounds.
+    pub fn set_tile(&mut self, x: u32, y: u32, id: i32) {
+        if x < self.width && y < self.height {
+            self.tiles[(y * self.width + x) as usize] = id;
+        }
+    }
+
+    /// Resize the grid, preserving existing tile data where possible.
+    /// New cells are filled with -1 (empty).
+    pub fn resize(&mut self, new_width: u32, new_height: u32) {
+        if new_width == self.width && new_height == self.height {
+            return;
+        }
+        let mut new_tiles = vec![-1i32; (new_width * new_height) as usize];
+        let copy_w = self.width.min(new_width);
+        let copy_h = self.height.min(new_height);
+        for y in 0..copy_h {
+            for x in 0..copy_w {
+                new_tiles[(y * new_width + x) as usize] =
+                    self.tiles[(y * self.width + x) as usize];
+            }
+        }
+        self.width = new_width;
+        self.height = new_height;
+        self.tiles = new_tiles;
+    }
+}
+
+impl Default for TilemapComponent {
+    fn default() -> Self {
+        Self {
+            width: 10,
+            height: 10,
+            tile_size: Vec2::new(1.0, 1.0),
+            texture_handle: crate::uuid::Uuid::from_raw(0),
+            texture: None,
+            tileset_columns: 1,
+            cell_size: Vec2::new(32.0, 32.0),
+            spacing: Vec2::ZERO,
+            margin: Vec2::ZERO,
+            tiles: vec![-1; 100],
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Lua Scripting Component
 // ---------------------------------------------------------------------------
 
@@ -502,5 +668,57 @@ impl Default for LuaScriptComponent {
             field_overrides: std::collections::HashMap::new(),
             loaded: false,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn tilemap_get_set_tile() {
+        let mut tm = TilemapComponent::default();
+        assert_eq!(tm.get_tile(0, 0), -1);
+        tm.set_tile(2, 3, 5);
+        assert_eq!(tm.get_tile(2, 3), 5);
+        assert_eq!(tm.get_tile(0, 0), -1);
+        // OOB returns -1.
+        assert_eq!(tm.get_tile(100, 100), -1);
+        // OOB set is a no-op.
+        tm.set_tile(100, 100, 42);
+    }
+
+    #[test]
+    fn tilemap_resize_preserves_data() {
+        let mut tm = TilemapComponent::default(); // 10x10
+        tm.set_tile(0, 0, 1);
+        tm.set_tile(4, 4, 7);
+        tm.set_tile(9, 9, 3);
+
+        // Shrink.
+        tm.resize(5, 5);
+        assert_eq!(tm.width, 5);
+        assert_eq!(tm.height, 5);
+        assert_eq!(tm.get_tile(0, 0), 1);
+        assert_eq!(tm.get_tile(4, 4), 7);
+        assert_eq!(tm.get_tile(3, 3), -1); // new cell
+        assert_eq!(tm.tiles.len(), 25);
+
+        // Grow.
+        tm.resize(8, 8);
+        assert_eq!(tm.width, 8);
+        assert_eq!(tm.height, 8);
+        assert_eq!(tm.get_tile(0, 0), 1);
+        assert_eq!(tm.get_tile(4, 4), 7);
+        assert_eq!(tm.get_tile(7, 7), -1);
+        assert_eq!(tm.tiles.len(), 64);
+    }
+
+    #[test]
+    fn tilemap_resize_noop() {
+        let mut tm = TilemapComponent::default();
+        tm.set_tile(0, 0, 42);
+        tm.resize(10, 10); // same size
+        assert_eq!(tm.get_tile(0, 0), 42);
     }
 }

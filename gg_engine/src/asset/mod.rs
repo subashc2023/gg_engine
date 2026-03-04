@@ -15,6 +15,7 @@ pub enum AssetType {
     None,
     Scene,
     Texture2D,
+    Audio,
 }
 
 impl AssetType {
@@ -23,6 +24,7 @@ impl AssetType {
             AssetType::None => "None",
             AssetType::Scene => "Scene",
             AssetType::Texture2D => "Texture2D",
+            AssetType::Audio => "Audio",
         }
     }
 
@@ -30,6 +32,7 @@ impl AssetType {
         match s {
             "Scene" => AssetType::Scene,
             "Texture2D" => AssetType::Texture2D,
+            "Audio" => AssetType::Audio,
             _ => AssetType::None,
         }
     }
@@ -47,6 +50,7 @@ pub fn asset_type_from_extension(ext: &str) -> AssetType {
     match ext.to_lowercase().as_str() {
         "png" | "jpg" | "jpeg" => AssetType::Texture2D,
         "ggscene" => AssetType::Scene,
+        "wav" | "ogg" | "mp3" | "flac" => AssetType::Audio,
         _ => AssetType::None,
     }
 }

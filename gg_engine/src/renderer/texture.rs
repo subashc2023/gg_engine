@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use ash::vk;
+use ash::vk::{self, Handle};
 
 use super::buffer::{create_staging_buffer, find_memory_type};
 use super::RendererResources;
@@ -342,6 +342,13 @@ impl Texture2D {
     /// The height of the texture in pixels.
     pub fn height(&self) -> u32 {
         self._height
+    }
+
+    /// Opaque handle for registering this texture with egui via
+    /// [`Application::egui_user_textures`]. Returns the raw Vulkan
+    /// descriptor set as a `u64`.
+    pub fn egui_handle(&self) -> u64 {
+        self.descriptor_set.as_raw()
     }
 
     /// The global bindless descriptor array index for this texture.

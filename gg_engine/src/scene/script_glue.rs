@@ -6,7 +6,7 @@
 
 use mlua::prelude::*;
 
-use crate::events::KeyCode;
+use crate::events::{KeyCode, MouseButton};
 use crate::input::Input;
 use super::Scene;
 use super::script_engine::ScriptEngine;
@@ -49,6 +49,10 @@ pub fn register_all(lua: &Lua) -> LuaResult<()> {
 
     // Input
     engine.set("is_key_down", lua.create_function(is_key_down)?)?;
+    engine.set("is_key_pressed", lua.create_function(is_key_just_pressed)?)?;
+    engine.set("is_mouse_button_down", lua.create_function(is_mouse_button_down)?)?;
+    engine.set("is_mouse_button_pressed", lua.create_function(is_mouse_button_just_pressed)?)?;
+    engine.set("get_mouse_position", lua.create_function(get_mouse_position)?)?;
 
     // Component queries
     engine.set("has_component", lua.create_function(has_component)?)?;
@@ -57,6 +61,28 @@ pub fn register_all(lua: &Lua) -> LuaResult<()> {
     engine.set("find_entity_by_name", lua.create_function(find_entity_by_name)?)?;
     engine.set("get_script_field", lua.create_function(get_script_field)?)?;
     engine.set("set_script_field", lua.create_function(set_script_field)?)?;
+
+    // Entity lifecycle
+    engine.set("create_entity", lua.create_function(lua_create_entity)?)?;
+    engine.set("destroy_entity", lua.create_function(lua_destroy_entity)?)?;
+    engine.set("get_entity_name", lua.create_function(lua_get_entity_name)?)?;
+
+    // Animation
+    engine.set("play_animation", lua.create_function(lua_play_animation)?)?;
+    engine.set("stop_animation", lua.create_function(lua_stop_animation)?)?;
+    engine.set("is_animation_playing", lua.create_function(lua_is_animation_playing)?)?;
+
+    // Audio
+    engine.set("play_sound", lua.create_function(lua_play_sound)?)?;
+    engine.set("stop_sound", lua.create_function(lua_stop_sound)?)?;
+    engine.set("set_volume", lua.create_function(lua_set_volume)?)?;
+
+    // Tilemap
+    engine.set("set_tile", lua.create_function(lua_set_tile)?)?;
+    engine.set("get_tile", lua.create_function(lua_get_tile)?)?;
+    engine.set("TILE_FLIP_H", super::TILE_FLIP_H)?;
+    engine.set("TILE_FLIP_V", super::TILE_FLIP_V)?;
+    engine.set("TILE_ID_MASK", super::TILE_ID_MASK)?;
 
     // Physics
     engine.set("apply_impulse", lua.create_function(lua_apply_impulse)?)?;
@@ -165,6 +191,21 @@ fn key_name_to_keycode(name: &str) -> Option<KeyCode> {
 }
 
 // ---------------------------------------------------------------------------
+// Mouse button name → MouseButton mapping
+// ---------------------------------------------------------------------------
+
+fn mouse_button_name_to_enum(name: &str) -> Option<MouseButton> {
+    match name {
+        "Left" => Some(MouseButton::Left),
+        "Right" => Some(MouseButton::Right),
+        "Middle" => Some(MouseButton::Middle),
+        "Back" => Some(MouseButton::Back),
+        "Forward" => Some(MouseButton::Forward),
+        _ => None,
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Engine.get_translation / Engine.set_translation / Engine.is_key_down
 // ---------------------------------------------------------------------------
 
@@ -222,6 +263,81 @@ fn is_key_down(lua: &Lua, key_name: String) -> LuaResult<bool> {
         log::warn!("ScriptGlue: unknown key name '{}'", key_name);
         Ok(false)
     }
+}
+
+/// `Engine.is_key_pressed(key_name)` — returns true only on the first frame the key is pressed.
+fn is_key_just_pressed(lua: &Lua, key_name: String) -> LuaResult<bool> {
+    let ctx = match lua.app_data_ref::<SceneScriptContext>() {
+        Some(ctx) => ctx,
+        None => return Ok(false),
+    };
+
+    if ctx.input.is_null() {
+        return Ok(false);
+    }
+
+    let input = unsafe { &*ctx.input };
+    if let Some(key_code) = key_name_to_keycode(&key_name) {
+        Ok(input.is_key_just_pressed(key_code))
+    } else {
+        log::warn!("ScriptGlue: unknown key name '{}'", key_name);
+        Ok(false)
+    }
+}
+
+/// `Engine.is_mouse_button_down(button_name)` — returns true if the named mouse button is currently pressed.
+fn is_mouse_button_down(lua: &Lua, button_name: String) -> LuaResult<bool> {
+    let ctx = match lua.app_data_ref::<SceneScriptContext>() {
+        Some(ctx) => ctx,
+        None => return Ok(false),
+    };
+
+    if ctx.input.is_null() {
+        return Ok(false);
+    }
+
+    let input = unsafe { &*ctx.input };
+    if let Some(button) = mouse_button_name_to_enum(&button_name) {
+        Ok(input.is_mouse_button_pressed(button))
+    } else {
+        log::warn!("ScriptGlue: unknown mouse button name '{}'", button_name);
+        Ok(false)
+    }
+}
+
+/// `Engine.is_mouse_button_pressed(button_name)` — returns true only on the first frame the button is pressed.
+fn is_mouse_button_just_pressed(lua: &Lua, button_name: String) -> LuaResult<bool> {
+    let ctx = match lua.app_data_ref::<SceneScriptContext>() {
+        Some(ctx) => ctx,
+        None => return Ok(false),
+    };
+
+    if ctx.input.is_null() {
+        return Ok(false);
+    }
+
+    let input = unsafe { &*ctx.input };
+    if let Some(button) = mouse_button_name_to_enum(&button_name) {
+        Ok(input.is_mouse_button_just_pressed(button))
+    } else {
+        log::warn!("ScriptGlue: unknown mouse button name '{}'", button_name);
+        Ok(false)
+    }
+}
+
+/// `Engine.get_mouse_position()` — returns `(x, y)` screen-space mouse position.
+fn get_mouse_position(lua: &Lua, _: ()) -> LuaResult<(f64, f64)> {
+    let ctx = match lua.app_data_ref::<SceneScriptContext>() {
+        Some(ctx) => ctx,
+        None => return Ok((0.0, 0.0)),
+    };
+
+    if ctx.input.is_null() {
+        return Ok((0.0, 0.0));
+    }
+
+    let input = unsafe { &*ctx.input };
+    Ok(input.mouse_position())
 }
 
 // ---------------------------------------------------------------------------
@@ -326,6 +442,8 @@ fn has_component(lua: &Lua, (entity_id, name): (u64, String)) -> LuaResult<bool>
         "BoxCollider2D" => scene.has_component::<super::BoxCollider2DComponent>(entity),
         "CircleCollider2D" => scene.has_component::<super::CircleCollider2DComponent>(entity),
         "NativeScript" => scene.has_component::<super::NativeScriptComponent>(entity),
+        "Tilemap" => scene.has_component::<super::TilemapComponent>(entity),
+        "AudioSource" | "Audio" => scene.has_component::<super::AudioSourceComponent>(entity),
         "LuaScript" => {
             #[cfg(feature = "lua-scripting")]
             { scene.has_component::<super::LuaScriptComponent>(entity) }
@@ -402,6 +520,193 @@ fn set_script_field(lua: &Lua, (entity_id, field_name, value): (u64, String, Lua
     }
 
     Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Entity lifecycle (create / destroy / get_entity_name)
+// ---------------------------------------------------------------------------
+
+/// `Engine.create_entity(name)` — create a new entity with the given name, returns its UUID.
+fn lua_create_entity(lua: &Lua, name: String) -> LuaResult<LuaValue> {
+    let ctx = match lua.app_data_ref::<SceneScriptContext>() {
+        Some(ctx) => ctx,
+        None => return Ok(LuaValue::Integer(0)),
+    };
+
+    let scene = unsafe { &mut *ctx.scene };
+    let entity = scene.create_entity_with_tag(&name);
+    let uuid = scene
+        .get_component::<super::IdComponent>(entity)
+        .map(|id| id.id.raw())
+        .unwrap_or(0);
+    Ok(LuaValue::Integer(uuid as i64))
+}
+
+/// `Engine.destroy_entity(uuid)` — queue an entity for deferred destruction.
+fn lua_destroy_entity(lua: &Lua, uuid: u64) -> LuaResult<()> {
+    let ctx = match lua.app_data_ref::<SceneScriptContext>() {
+        Some(ctx) => ctx,
+        None => return Ok(()),
+    };
+
+    let scene = unsafe { &mut *ctx.scene };
+    scene.queue_entity_destroy(uuid);
+    Ok(())
+}
+
+/// `Engine.get_entity_name(uuid)` — returns the entity's tag name, or nil.
+fn lua_get_entity_name(lua: &Lua, uuid: u64) -> LuaResult<LuaValue> {
+    let ctx = match lua.app_data_ref::<SceneScriptContext>() {
+        Some(ctx) => ctx,
+        None => return Ok(LuaValue::Nil),
+    };
+
+    let scene = unsafe { &*ctx.scene };
+    if let Some(entity) = scene.find_entity_by_uuid(uuid) {
+        if let Some(tag) = scene.get_component::<super::TagComponent>(entity) {
+            return Ok(LuaValue::String(lua.create_string(&tag.tag)?));
+        }
+    }
+    Ok(LuaValue::Nil)
+}
+
+// ---------------------------------------------------------------------------
+// Animation bindings
+// ---------------------------------------------------------------------------
+
+/// `Engine.play_animation(entity_id, name)` — play an animation clip by name. Returns true if found.
+fn lua_play_animation(lua: &Lua, (entity_id, name): (u64, String)) -> LuaResult<bool> {
+    let ctx = match lua.app_data_ref::<SceneScriptContext>() {
+        Some(ctx) => ctx,
+        None => return Ok(false),
+    };
+
+    let scene = unsafe { &mut *ctx.scene };
+    if let Some(entity) = scene.find_entity_by_uuid(entity_id) {
+        if let Some(mut animator) = scene.get_component_mut::<super::SpriteAnimatorComponent>(entity) {
+            return Ok(animator.play(&name));
+        }
+    }
+    Ok(false)
+}
+
+/// `Engine.stop_animation(entity_id)` — stop the current animation.
+fn lua_stop_animation(lua: &Lua, entity_id: u64) -> LuaResult<()> {
+    let ctx = match lua.app_data_ref::<SceneScriptContext>() {
+        Some(ctx) => ctx,
+        None => return Ok(()),
+    };
+
+    let scene = unsafe { &mut *ctx.scene };
+    if let Some(entity) = scene.find_entity_by_uuid(entity_id) {
+        if let Some(mut animator) = scene.get_component_mut::<super::SpriteAnimatorComponent>(entity) {
+            animator.stop();
+        }
+    }
+    Ok(())
+}
+
+/// `Engine.is_animation_playing(entity_id)` — returns true if an animation is currently playing.
+fn lua_is_animation_playing(lua: &Lua, entity_id: u64) -> LuaResult<bool> {
+    let ctx = match lua.app_data_ref::<SceneScriptContext>() {
+        Some(ctx) => ctx,
+        None => return Ok(false),
+    };
+
+    let scene = unsafe { &*ctx.scene };
+    if let Some(entity) = scene.find_entity_by_uuid(entity_id) {
+        if let Some(animator) = scene.get_component::<super::SpriteAnimatorComponent>(entity) {
+            return Ok(animator.is_playing());
+        }
+    }
+    Ok(false)
+}
+
+// ---------------------------------------------------------------------------
+// Audio bindings
+// ---------------------------------------------------------------------------
+
+/// `Engine.play_sound(entity_id)` — play the entity's audio source.
+fn lua_play_sound(lua: &Lua, entity_id: u64) -> LuaResult<()> {
+    let ctx = match lua.app_data_ref::<SceneScriptContext>() {
+        Some(ctx) => ctx,
+        None => return Ok(()),
+    };
+
+    let scene = unsafe { &mut *ctx.scene };
+    if let Some(entity) = scene.find_entity_by_uuid(entity_id) {
+        scene.play_entity_sound(entity);
+    }
+
+    Ok(())
+}
+
+/// `Engine.stop_sound(entity_id)` — stop the entity's audio playback.
+fn lua_stop_sound(lua: &Lua, entity_id: u64) -> LuaResult<()> {
+    let ctx = match lua.app_data_ref::<SceneScriptContext>() {
+        Some(ctx) => ctx,
+        None => return Ok(()),
+    };
+
+    let scene = unsafe { &mut *ctx.scene };
+    if let Some(entity) = scene.find_entity_by_uuid(entity_id) {
+        scene.stop_entity_sound(entity);
+    }
+
+    Ok(())
+}
+
+/// `Engine.set_volume(entity_id, volume)` — adjust volume at runtime.
+fn lua_set_volume(lua: &Lua, (entity_id, volume): (u64, f32)) -> LuaResult<()> {
+    let ctx = match lua.app_data_ref::<SceneScriptContext>() {
+        Some(ctx) => ctx,
+        None => return Ok(()),
+    };
+
+    let scene = unsafe { &mut *ctx.scene };
+    if let Some(entity) = scene.find_entity_by_uuid(entity_id) {
+        scene.set_entity_volume(entity, volume);
+    }
+
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Tilemap bindings
+// ---------------------------------------------------------------------------
+
+/// `Engine.set_tile(entity_id, x, y, tile_id)` — set tile at grid position.
+fn lua_set_tile(lua: &Lua, (entity_id, x, y, tile_id): (u64, u32, u32, i32)) -> LuaResult<()> {
+    let ctx = match lua.app_data_ref::<SceneScriptContext>() {
+        Some(ctx) => ctx,
+        None => return Ok(()),
+    };
+
+    let scene = unsafe { &mut *ctx.scene };
+    if let Some(entity) = scene.find_entity_by_uuid(entity_id) {
+        if let Some(mut tilemap) = scene.get_component_mut::<super::TilemapComponent>(entity) {
+            tilemap.set_tile(x, y, tile_id);
+        }
+    }
+
+    Ok(())
+}
+
+/// `Engine.get_tile(entity_id, x, y)` — returns tile ID at grid position, -1 if empty/OOB.
+fn lua_get_tile(lua: &Lua, (entity_id, x, y): (u64, u32, u32)) -> LuaResult<i32> {
+    let ctx = match lua.app_data_ref::<SceneScriptContext>() {
+        Some(ctx) => ctx,
+        None => return Ok(-1),
+    };
+
+    let scene = unsafe { &*ctx.scene };
+    if let Some(entity) = scene.find_entity_by_uuid(entity_id) {
+        if let Some(tilemap) = scene.get_component::<super::TilemapComponent>(entity) {
+            return Ok(tilemap.get_tile(x, y));
+        }
+    }
+
+    Ok(-1)
 }
 
 // ---------------------------------------------------------------------------
@@ -598,12 +903,34 @@ mod tests {
         assert!(engine.get::<LuaFunction>("set_scale").is_ok());
         // Input
         assert!(engine.get::<LuaFunction>("is_key_down").is_ok());
+        assert!(engine.get::<LuaFunction>("is_key_pressed").is_ok());
+        assert!(engine.get::<LuaFunction>("is_mouse_button_down").is_ok());
+        assert!(engine.get::<LuaFunction>("is_mouse_button_pressed").is_ok());
+        assert!(engine.get::<LuaFunction>("get_mouse_position").is_ok());
         // Component queries
         assert!(engine.get::<LuaFunction>("has_component").is_ok());
+        // Entity lifecycle
+        assert!(engine.get::<LuaFunction>("create_entity").is_ok());
+        assert!(engine.get::<LuaFunction>("destroy_entity").is_ok());
+        assert!(engine.get::<LuaFunction>("get_entity_name").is_ok());
         // Entity lookup / cross-entity scripting
         assert!(engine.get::<LuaFunction>("find_entity_by_name").is_ok());
         assert!(engine.get::<LuaFunction>("get_script_field").is_ok());
         assert!(engine.get::<LuaFunction>("set_script_field").is_ok());
+        // Animation
+        assert!(engine.get::<LuaFunction>("play_animation").is_ok());
+        assert!(engine.get::<LuaFunction>("stop_animation").is_ok());
+        assert!(engine.get::<LuaFunction>("is_animation_playing").is_ok());
+        // Tilemap
+        assert!(engine.get::<LuaFunction>("set_tile").is_ok());
+        assert!(engine.get::<LuaFunction>("get_tile").is_ok());
+        assert_eq!(engine.get::<i32>("TILE_FLIP_H").unwrap(), 0x4000_0000);
+        assert_eq!(engine.get::<i32>("TILE_FLIP_V").unwrap(), 0x2000_0000);
+        assert_eq!(engine.get::<i32>("TILE_ID_MASK").unwrap(), 0x1FFF_FFFF);
+        // Audio
+        assert!(engine.get::<LuaFunction>("play_sound").is_ok());
+        assert!(engine.get::<LuaFunction>("stop_sound").is_ok());
+        assert!(engine.get::<LuaFunction>("set_volume").is_ok());
         // Physics
         assert!(engine.get::<LuaFunction>("apply_impulse").is_ok());
         assert!(engine.get::<LuaFunction>("apply_impulse_at_point").is_ok());
@@ -798,5 +1125,135 @@ mod tests {
             .unwrap();
         let omega: f32 = lua.globals().get("omega").unwrap();
         assert!(omega.abs() < 0.001);
+    }
+
+    #[test]
+    fn mouse_button_name_mapping() {
+        assert_eq!(mouse_button_name_to_enum("Left"), Some(MouseButton::Left));
+        assert_eq!(mouse_button_name_to_enum("Right"), Some(MouseButton::Right));
+        assert_eq!(mouse_button_name_to_enum("Middle"), Some(MouseButton::Middle));
+        assert_eq!(mouse_button_name_to_enum("Back"), Some(MouseButton::Back));
+        assert_eq!(mouse_button_name_to_enum("Forward"), Some(MouseButton::Forward));
+        assert_eq!(mouse_button_name_to_enum("bogus"), None);
+    }
+
+    #[test]
+    fn is_mouse_button_down_no_context_returns_false() {
+        let lua = setup();
+        lua.load(r#"result = Engine.is_mouse_button_down("Left")"#)
+            .exec()
+            .unwrap();
+        let result: bool = lua.globals().get("result").unwrap();
+        assert!(!result);
+    }
+
+    #[test]
+    fn get_mouse_position_no_context_returns_zero() {
+        let lua = setup();
+        lua.load("mx, my = Engine.get_mouse_position()")
+            .exec()
+            .unwrap();
+        let mx: f64 = lua.globals().get("mx").unwrap();
+        let my: f64 = lua.globals().get("my").unwrap();
+        assert!(mx.abs() < 0.001);
+        assert!(my.abs() < 0.001);
+    }
+
+    #[test]
+    fn create_entity_no_context_returns_zero() {
+        let lua = setup();
+        lua.load(r#"result = Engine.create_entity("Test")"#)
+            .exec()
+            .unwrap();
+        let result: i64 = lua.globals().get("result").unwrap();
+        assert_eq!(result, 0);
+    }
+
+    #[test]
+    fn destroy_entity_no_context_no_error() {
+        let lua = setup();
+        lua.load("Engine.destroy_entity(12345)")
+            .exec()
+            .unwrap();
+    }
+
+    #[test]
+    fn get_entity_name_no_context_returns_nil() {
+        let lua = setup();
+        lua.load("result = Engine.get_entity_name(12345)")
+            .exec()
+            .unwrap();
+        let result: LuaValue = lua.globals().get("result").unwrap();
+        assert!(result.is_nil());
+    }
+
+    #[test]
+    fn set_tile_no_context_no_error() {
+        let lua = setup();
+        lua.load("Engine.set_tile(12345, 0, 0, 1)")
+            .exec()
+            .unwrap();
+    }
+
+    #[test]
+    fn get_tile_no_context_returns_neg1() {
+        let lua = setup();
+        lua.load("result = Engine.get_tile(12345, 0, 0)")
+            .exec()
+            .unwrap();
+        let result: i32 = lua.globals().get("result").unwrap();
+        assert_eq!(result, -1);
+    }
+
+    #[test]
+    fn play_animation_no_context_returns_false() {
+        let lua = setup();
+        lua.load(r#"result = Engine.play_animation(12345, "idle")"#)
+            .exec()
+            .unwrap();
+        let result: bool = lua.globals().get("result").unwrap();
+        assert!(!result);
+    }
+
+    #[test]
+    fn stop_animation_no_context_no_error() {
+        let lua = setup();
+        lua.load("Engine.stop_animation(12345)")
+            .exec()
+            .unwrap();
+    }
+
+    #[test]
+    fn is_animation_playing_no_context_returns_false() {
+        let lua = setup();
+        lua.load("result = Engine.is_animation_playing(12345)")
+            .exec()
+            .unwrap();
+        let result: bool = lua.globals().get("result").unwrap();
+        assert!(!result);
+    }
+
+    #[test]
+    fn play_sound_no_context_no_error() {
+        let lua = setup();
+        lua.load("Engine.play_sound(12345)")
+            .exec()
+            .expect("play_sound should not error without context");
+    }
+
+    #[test]
+    fn stop_sound_no_context_no_error() {
+        let lua = setup();
+        lua.load("Engine.stop_sound(12345)")
+            .exec()
+            .expect("stop_sound should not error without context");
+    }
+
+    #[test]
+    fn set_volume_no_context_no_error() {
+        let lua = setup();
+        lua.load("Engine.set_volume(12345, 0.5)")
+            .exec()
+            .expect("set_volume should not error without context");
     }
 }

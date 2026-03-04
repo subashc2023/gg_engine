@@ -2,6 +2,7 @@ use gg_engine::egui;
 use gg_engine::prelude::*;
 
 use super::content_browser::ContentBrowserPayload;
+use super::{tile_uv_min, tile_uv_max};
 
 #[cfg(feature = "lua-scripting")]
 use std::cell::RefCell;
@@ -40,10 +41,13 @@ pub(crate) fn properties_ui(
     is_playing: bool,
     assets_root: &std::path::Path,
     scene_dirty: &mut bool,
+    undo_system: &mut crate::undo::UndoSystem,
+    tilemap_paint: &mut crate::TilemapPaintState,
+    egui_texture_map: &std::collections::HashMap<u64, egui::TextureId>,
 ) {
     if let Some(entity) = *selection_context {
         if scene.is_alive(entity) {
-            draw_components(ui, scene, entity, asset_manager, is_playing, assets_root, scene_dirty);
+            draw_components(ui, scene, entity, asset_manager, is_playing, assets_root, scene_dirty, undo_system, tilemap_paint, egui_texture_map);
         } else {
             *selection_context = None;
         }
@@ -205,8 +209,20 @@ fn draw_components(
     is_playing: bool,
     assets_root: &std::path::Path,
     scene_dirty: &mut bool,
+    undo_system: &mut crate::undo::UndoSystem,
+    tilemap_paint: &mut crate::TilemapPaintState,
+    egui_texture_map: &std::collections::HashMap<u64, egui::TextureId>,
 ) {
     let bold_family = egui::FontFamily::Name(BOLD_FONT.into());
+
+    // Coalesced undo: detect any drag interaction starting/ending this frame.
+    // If any DragValue/Slider is being dragged, keep the gesture open.
+    let any_drag_active = ui.ctx().dragged_id().is_some();
+    if any_drag_active && !undo_system.is_editing() {
+        undo_system.begin_edit(scene);
+    } else if !any_drag_active && undo_system.is_editing() {
+        undo_system.end_edit();
+    }
 
     // -- Tag Component + Add Component button (inline) --
     if scene.has_component::<TagComponent>(entity) {
@@ -236,49 +252,78 @@ fn draw_components(
             egui::Popup::from_toggle_button_response(&add_btn).show(|ui| {
                 if !scene.has_component::<CameraComponent>(entity) && ui.button("Camera").clicked()
                 {
+                    undo_system.record(scene);
                     scene.add_component(entity, CameraComponent::default());
                     *scene_dirty = true;
                 }
                 if !scene.has_component::<SpriteRendererComponent>(entity)
                     && ui.button("Sprite Renderer").clicked()
                 {
+                    undo_system.record(scene);
                     scene.add_component(entity, SpriteRendererComponent::default());
                     *scene_dirty = true;
                 }
                 if !scene.has_component::<CircleRendererComponent>(entity)
                     && ui.button("Circle Renderer").clicked()
                 {
+                    undo_system.record(scene);
                     scene.add_component(entity, CircleRendererComponent::default());
+                    *scene_dirty = true;
+                }
+                if !scene.has_component::<SpriteAnimatorComponent>(entity)
+                    && ui.button("Sprite Animator").clicked()
+                {
+                    undo_system.record(scene);
+                    scene.add_component(entity, SpriteAnimatorComponent::default());
                     *scene_dirty = true;
                 }
                 if !scene.has_component::<TextComponent>(entity)
                     && ui.button("Text").clicked()
                 {
+                    undo_system.record(scene);
                     scene.add_component(entity, TextComponent::default());
                     *scene_dirty = true;
                 }
                 if !scene.has_component::<RigidBody2DComponent>(entity)
                     && ui.button("Rigidbody 2D").clicked()
                 {
+                    undo_system.record(scene);
                     scene.add_component(entity, RigidBody2DComponent::default());
                     *scene_dirty = true;
                 }
                 if !scene.has_component::<BoxCollider2DComponent>(entity)
                     && ui.button("Box Collider 2D").clicked()
                 {
+                    undo_system.record(scene);
                     scene.add_component(entity, BoxCollider2DComponent::default());
                     *scene_dirty = true;
                 }
                 if !scene.has_component::<CircleCollider2DComponent>(entity)
                     && ui.button("Circle Collider 2D").clicked()
                 {
+                    undo_system.record(scene);
                     scene.add_component(entity, CircleCollider2DComponent::default());
+                    *scene_dirty = true;
+                }
+                if !scene.has_component::<TilemapComponent>(entity)
+                    && ui.button("Tilemap").clicked()
+                {
+                    undo_system.record(scene);
+                    scene.add_component(entity, TilemapComponent::default());
+                    *scene_dirty = true;
+                }
+                if !scene.has_component::<AudioSourceComponent>(entity)
+                    && ui.button("Audio Source").clicked()
+                {
+                    undo_system.record(scene);
+                    scene.add_component(entity, AudioSourceComponent::default());
                     *scene_dirty = true;
                 }
                 #[cfg(feature = "lua-scripting")]
                 if !scene.has_component::<LuaScriptComponent>(entity)
                     && ui.button("Lua Script").clicked()
                 {
+                    undo_system.record(scene);
                     scene.add_component(entity, LuaScriptComponent::default());
                     *scene_dirty = true;
                 }
@@ -527,6 +572,7 @@ fn draw_components(
         });
     }
     if remove_camera {
+        undo_system.record(scene);
         scene.remove_component::<CameraComponent>(entity);
         *scene_dirty = true;
     }
@@ -725,7 +771,174 @@ fn draw_components(
         });
     }
     if remove_sprite {
+        undo_system.record(scene);
         scene.remove_component::<SpriteRendererComponent>(entity);
+        *scene_dirty = true;
+    }
+
+    // -- Sprite Animator Component (removable) --
+    let mut remove_animator = false;
+    if scene.has_component::<SpriteAnimatorComponent>(entity) {
+        let cr = egui::CollapsingHeader::new(
+            egui::RichText::new("Sprite Animator")
+                .font(egui::FontId::new(14.0, bold_family.clone())),
+        )
+        .id_salt(("sprite_animator", entity.id()))
+        .default_open(true)
+        .show(ui, |ui| {
+            let (mut cell_w, mut cell_h, mut columns) = {
+                let sa = scene
+                    .get_component::<SpriteAnimatorComponent>(entity)
+                    .unwrap();
+                (sa.cell_size.x, sa.cell_size.y, sa.columns)
+            };
+
+            let mut changed = false;
+            ui.horizontal(|ui| {
+                ui.label("Cell Size");
+                changed |= ui
+                    .add(egui::DragValue::new(&mut cell_w).prefix("W: ").speed(1.0))
+                    .changed();
+                changed |= ui
+                    .add(egui::DragValue::new(&mut cell_h).prefix("H: ").speed(1.0))
+                    .changed();
+            });
+            ui.horizontal(|ui| {
+                ui.label("Columns");
+                changed |= ui
+                    .add(egui::DragValue::new(&mut columns).range(1..=256).speed(0.1))
+                    .changed();
+            });
+
+            if changed {
+                if let Some(mut sa) =
+                    scene.get_component_mut::<SpriteAnimatorComponent>(entity)
+                {
+                    sa.cell_size = Vec2::new(cell_w, cell_h);
+                    sa.columns = columns;
+                    *scene_dirty = true;
+                }
+            }
+
+            // Clip list
+            let clip_count = scene
+                .get_component::<SpriteAnimatorComponent>(entity)
+                .map(|sa| sa.clips.len())
+                .unwrap_or(0);
+
+            let mut clip_to_remove = None;
+            for i in 0..clip_count {
+                let (mut name, mut start, mut end, mut fps, mut looping) = {
+                    let sa = scene
+                        .get_component::<SpriteAnimatorComponent>(entity)
+                        .unwrap();
+                    let c = &sa.clips[i];
+                    (
+                        c.name.clone(),
+                        c.start_frame,
+                        c.end_frame,
+                        c.fps,
+                        c.looping,
+                    )
+                };
+
+                ui.push_id(("clip", i), |ui| {
+                    ui.separator();
+                    let mut clip_changed = false;
+                    ui.horizontal(|ui| {
+                        ui.label("Name");
+                        clip_changed |= ui.text_edit_singleline(&mut name).changed();
+                        if ui
+                            .add(
+                                egui::Button::new("X")
+                                    .small()
+                                    .fill(egui::Color32::from_rgb(0xCC, 0x33, 0x33)),
+                            )
+                            .clicked()
+                        {
+                            clip_to_remove = Some(i);
+                        }
+                    });
+                    ui.horizontal(|ui| {
+                        ui.label("Frames");
+                        clip_changed |= ui
+                            .add(
+                                egui::DragValue::new(&mut start)
+                                    .prefix("Start: ")
+                                    .speed(0.1),
+                            )
+                            .changed();
+                        clip_changed |= ui
+                            .add(
+                                egui::DragValue::new(&mut end)
+                                    .prefix("End: ")
+                                    .speed(0.1),
+                            )
+                            .changed();
+                    });
+                    ui.horizontal(|ui| {
+                        ui.label("FPS");
+                        clip_changed |= ui
+                            .add(
+                                egui::DragValue::new(&mut fps)
+                                    .range(0.1..=120.0)
+                                    .speed(0.1),
+                            )
+                            .changed();
+                        clip_changed |= ui.checkbox(&mut looping, "Loop").changed();
+                    });
+
+                    if clip_changed {
+                        if let Some(mut sa) =
+                            scene.get_component_mut::<SpriteAnimatorComponent>(entity)
+                        {
+                            if let Some(c) = sa.clips.get_mut(i) {
+                                c.name = name;
+                                c.start_frame = start;
+                                c.end_frame = end;
+                                c.fps = fps;
+                                c.looping = looping;
+                                *scene_dirty = true;
+                            }
+                        }
+                    }
+                });
+            }
+
+            if let Some(idx) = clip_to_remove {
+                if let Some(mut sa) =
+                    scene.get_component_mut::<SpriteAnimatorComponent>(entity)
+                {
+                    sa.clips.remove(idx);
+                    *scene_dirty = true;
+                }
+            }
+
+            ui.separator();
+            if ui.button("Add Clip").clicked() {
+                if let Some(mut sa) =
+                    scene.get_component_mut::<SpriteAnimatorComponent>(entity)
+                {
+                    let idx = sa.clips.len();
+                    sa.clips.push(AnimationClip {
+                        name: format!("clip_{}", idx),
+                        ..Default::default()
+                    });
+                    *scene_dirty = true;
+                }
+            }
+        });
+
+        cr.header_response.context_menu(|ui| {
+            if ui.button("Remove Component").clicked() {
+                remove_animator = true;
+                ui.close();
+            }
+        });
+    }
+    if remove_animator {
+        undo_system.record(scene);
+        scene.remove_component::<SpriteAnimatorComponent>(entity);
         *scene_dirty = true;
     }
 
@@ -831,6 +1044,7 @@ fn draw_components(
         });
     }
     if remove_circle {
+        undo_system.record(scene);
         scene.remove_component::<CircleRendererComponent>(entity);
         *scene_dirty = true;
     }
@@ -989,6 +1203,7 @@ fn draw_components(
         });
     }
     if remove_text {
+        undo_system.record(scene);
         scene.remove_component::<TextComponent>(entity);
         *scene_dirty = true;
     }
@@ -1058,6 +1273,7 @@ fn draw_components(
         });
     }
     if remove_rb2d {
+        undo_system.record(scene);
         scene.remove_component::<RigidBody2DComponent>(entity);
         *scene_dirty = true;
     }
@@ -1196,6 +1412,7 @@ fn draw_components(
         });
     }
     if remove_bc2d {
+        undo_system.record(scene);
         scene.remove_component::<BoxCollider2DComponent>(entity);
         *scene_dirty = true;
     }
@@ -1319,6 +1536,7 @@ fn draw_components(
         });
     }
     if remove_cc2d {
+        undo_system.record(scene);
         scene.remove_component::<CircleCollider2DComponent>(entity);
         *scene_dirty = true;
     }
@@ -1351,7 +1569,523 @@ fn draw_components(
         });
     }
     if remove_native_script {
+        undo_system.record(scene);
         scene.remove_component::<NativeScriptComponent>(entity);
+        *scene_dirty = true;
+    }
+
+    // -- Audio Source Component (removable) --
+    let mut remove_audio_source = false;
+    if scene.has_component::<AudioSourceComponent>(entity) {
+        let cr = egui::CollapsingHeader::new(
+            egui::RichText::new("Audio Source")
+                .font(egui::FontId::new(14.0, bold_family.clone())),
+        )
+        .id_salt(("audio_source", entity.id()))
+        .default_open(true)
+        .show(ui, |ui| {
+            let (audio_handle_raw, mut volume, mut pitch, mut looping, mut play_on_start) = {
+                let ac = scene.get_component::<AudioSourceComponent>(entity).unwrap();
+                (ac.audio_handle.raw(), ac.volume, ac.pitch, ac.looping, ac.play_on_start)
+            };
+
+            // Audio file label: show filename from asset metadata or "None".
+            let audio_label = if audio_handle_raw != 0 {
+                if let Some(am) = asset_manager.as_ref() {
+                    let handle = Uuid::from_raw(audio_handle_raw);
+                    am.get_metadata(&handle)
+                        .map(|m| {
+                            std::path::Path::new(&m.file_path)
+                                .file_name()
+                                .map(|n| n.to_string_lossy().to_string())
+                                .unwrap_or_else(|| m.file_path.clone())
+                        })
+                        .unwrap_or_else(|| "Invalid".to_string())
+                } else {
+                    "No Asset Manager".to_string()
+                }
+            } else {
+                "None".to_string()
+            };
+
+            let btn_width = ((audio_label.len() as f32) * 7.0 + 20.0).max(100.0);
+            ui.horizontal(|ui| {
+                ui.label("Audio File");
+                let btn_resp = ui.add_sized(
+                    [btn_width, 0.0],
+                    egui::Button::new(&audio_label),
+                );
+
+                if btn_resp.clicked() {
+                    if let Some(am) = asset_manager.as_mut() {
+                        let audio_dir = assets_root.join("audio");
+                        let audio_dir_str = audio_dir.to_string_lossy();
+                        if let Some(path_str) =
+                            FileDialogs::open_file_in("Audio files", &["wav", "ogg", "mp3", "flac"], &audio_dir_str)
+                        {
+                            let abs_path = std::path::PathBuf::from(&path_str);
+                            let rel_path = abs_path
+                                .strip_prefix(am.asset_directory())
+                                .map(|p| p.to_string_lossy().to_string())
+                                .unwrap_or(path_str);
+                            let handle = am.import_asset(&rel_path);
+                            if let Some(mut ac) =
+                                scene.get_component_mut::<AudioSourceComponent>(entity)
+                            {
+                                ac.audio_handle = handle;
+
+                            }
+                            *scene_dirty = true;
+                        }
+                    }
+                }
+
+                // Accept drag-and-drop from content browser.
+                if let Some(payload) =
+                    btn_resp.dnd_release_payload::<ContentBrowserPayload>()
+                {
+                    if !payload.is_directory {
+                        let ext = payload
+                            .path
+                            .extension()
+                            .and_then(|e| e.to_str())
+                            .unwrap_or("")
+                            .to_lowercase();
+                        if matches!(ext.as_str(), "wav" | "ogg" | "mp3" | "flac") {
+                            if let Some(am) = asset_manager.as_mut() {
+                                let rel_path = payload.path
+                                    .strip_prefix(am.asset_directory())
+                                    .map(|p| p.to_string_lossy().to_string())
+                                    .unwrap_or_else(|_| payload.path.to_string_lossy().to_string());
+                                let handle = am.import_asset(&rel_path);
+                                if let Some(mut ac) =
+                                    scene.get_component_mut::<AudioSourceComponent>(entity)
+                                {
+                                    ac.audio_handle = handle;
+    
+                                }
+                                *scene_dirty = true;
+                            }
+                        }
+                    }
+                }
+
+                if btn_resp.dnd_hover_payload::<ContentBrowserPayload>().is_some() {
+                    ui.painter().rect_stroke(
+                        btn_resp.rect,
+                        egui::CornerRadius::same(2),
+                        egui::Stroke::new(2.0, egui::Color32::from_rgb(0x56, 0x9C, 0xD6)),
+                        egui::StrokeKind::Inside,
+                    );
+                }
+
+                if audio_handle_raw != 0 {
+                    if ui.small_button("X").clicked() {
+                        if let Some(mut ac) =
+                            scene.get_component_mut::<AudioSourceComponent>(entity)
+                        {
+                            ac.audio_handle = Uuid::from_raw(0);
+                        }
+                        *scene_dirty = true;
+                    }
+                }
+            });
+
+            // Volume slider.
+            ui.horizontal(|ui| {
+                ui.label("Volume");
+                if ui.add(egui::Slider::new(&mut volume, 0.0..=1.0)).changed() {
+                    if let Some(mut ac) = scene.get_component_mut::<AudioSourceComponent>(entity) {
+                        ac.volume = volume;
+                    }
+                    *scene_dirty = true;
+                }
+            });
+
+            // Pitch drag.
+            ui.horizontal(|ui| {
+                ui.label("Pitch");
+                if ui.add(egui::DragValue::new(&mut pitch).range(0.1..=4.0).speed(0.01)).changed() {
+                    if let Some(mut ac) = scene.get_component_mut::<AudioSourceComponent>(entity) {
+                        ac.pitch = pitch;
+                    }
+                    *scene_dirty = true;
+                }
+            });
+
+            // Looping checkbox.
+            ui.horizontal(|ui| {
+                if ui.checkbox(&mut looping, "Looping").changed() {
+                    if let Some(mut ac) = scene.get_component_mut::<AudioSourceComponent>(entity) {
+                        ac.looping = looping;
+                    }
+                    *scene_dirty = true;
+                }
+            });
+
+            // Play on start checkbox.
+            ui.horizontal(|ui| {
+                if ui.checkbox(&mut play_on_start, "Play On Start").changed() {
+                    if let Some(mut ac) = scene.get_component_mut::<AudioSourceComponent>(entity) {
+                        ac.play_on_start = play_on_start;
+                    }
+                    *scene_dirty = true;
+                }
+            });
+        });
+
+        cr.header_response.context_menu(|ui| {
+            if ui.button("Remove Component").clicked() {
+                remove_audio_source = true;
+                ui.close();
+            }
+        });
+    }
+    if remove_audio_source {
+        undo_system.record(scene);
+        scene.remove_component::<AudioSourceComponent>(entity);
+        *scene_dirty = true;
+    }
+
+    // -- Tilemap Component (removable) --
+    let mut remove_tilemap = false;
+    if scene.has_component::<TilemapComponent>(entity) {
+        let cr = egui::CollapsingHeader::new(
+            egui::RichText::new("Tilemap")
+                .font(egui::FontId::new(14.0, bold_family.clone())),
+        )
+        .id_salt(("tilemap", entity.id()))
+        .default_open(true)
+        .show(ui, |ui| {
+            let (mut width, mut height, tile_size, mut tileset_cols, cell_size, spacing, margin, tex_handle) = {
+                let tm = scene.get_component::<TilemapComponent>(entity).unwrap();
+                (tm.width, tm.height, tm.tile_size, tm.tileset_columns, tm.cell_size, tm.spacing, tm.margin, tm.texture_handle)
+            };
+
+            // Grid size.
+            let mut changed = false;
+            ui.horizontal(|ui| {
+                ui.label("Width");
+                if ui.add(egui::DragValue::new(&mut width).speed(1).range(1..=1000u32)).changed() {
+                    changed = true;
+                }
+            });
+            ui.horizontal(|ui| {
+                ui.label("Height");
+                if ui.add(egui::DragValue::new(&mut height).speed(1).range(1..=1000u32)).changed() {
+                    changed = true;
+                }
+            });
+            if changed {
+                if let Some(mut tm) = scene.get_component_mut::<TilemapComponent>(entity) {
+                    tm.resize(width, height);
+                    *scene_dirty = true;
+                }
+            }
+
+            // Tile size.
+            ui.horizontal(|ui| {
+                ui.label("Tile Size");
+                let mut ts = [tile_size.x, tile_size.y];
+                let r1 = ui.add(egui::DragValue::new(&mut ts[0]).speed(0.01).prefix("X: "));
+                let r2 = ui.add(egui::DragValue::new(&mut ts[1]).speed(0.01).prefix("Y: "));
+                if r1.changed() || r2.changed() {
+                    if let Some(mut tm) = scene.get_component_mut::<TilemapComponent>(entity) {
+                        tm.tile_size = Vec2::new(ts[0], ts[1]);
+                        *scene_dirty = true;
+                    }
+                }
+            });
+
+            // Tileset columns.
+            ui.horizontal(|ui| {
+                ui.label("Tileset Columns");
+                if ui.add(egui::DragValue::new(&mut tileset_cols).speed(1).range(1..=256u32)).changed() {
+                    if let Some(mut tm) = scene.get_component_mut::<TilemapComponent>(entity) {
+                        tm.tileset_columns = tileset_cols;
+                        *scene_dirty = true;
+                    }
+                }
+            });
+
+            // Cell size.
+            ui.horizontal(|ui| {
+                ui.label("Cell Size");
+                let mut cs = [cell_size.x, cell_size.y];
+                let r1 = ui.add(egui::DragValue::new(&mut cs[0]).speed(1.0).prefix("X: "));
+                let r2 = ui.add(egui::DragValue::new(&mut cs[1]).speed(1.0).prefix("Y: "));
+                if r1.changed() || r2.changed() {
+                    if let Some(mut tm) = scene.get_component_mut::<TilemapComponent>(entity) {
+                        tm.cell_size = Vec2::new(cs[0], cs[1]);
+                        *scene_dirty = true;
+                    }
+                }
+            });
+
+            // Spacing (gap between tiles in tileset, pixels).
+            ui.horizontal(|ui| {
+                ui.label("Spacing");
+                let mut sp = [spacing.x, spacing.y];
+                let r1 = ui.add(egui::DragValue::new(&mut sp[0]).speed(1.0).range(0.0..=256.0).prefix("X: "));
+                let r2 = ui.add(egui::DragValue::new(&mut sp[1]).speed(1.0).range(0.0..=256.0).prefix("Y: "));
+                if r1.changed() || r2.changed() {
+                    if let Some(mut tm) = scene.get_component_mut::<TilemapComponent>(entity) {
+                        tm.spacing = Vec2::new(sp[0], sp[1]);
+                        *scene_dirty = true;
+                    }
+                }
+            });
+
+            // Margin (offset from tileset image edge, pixels).
+            ui.horizontal(|ui| {
+                ui.label("Margin");
+                let mut mg = [margin.x, margin.y];
+                let r1 = ui.add(egui::DragValue::new(&mut mg[0]).speed(1.0).range(0.0..=256.0).prefix("X: "));
+                let r2 = ui.add(egui::DragValue::new(&mut mg[1]).speed(1.0).range(0.0..=256.0).prefix("Y: "));
+                if r1.changed() || r2.changed() {
+                    if let Some(mut tm) = scene.get_component_mut::<TilemapComponent>(entity) {
+                        tm.margin = Vec2::new(mg[0], mg[1]);
+                        *scene_dirty = true;
+                    }
+                }
+            });
+
+            // Texture handle (drag-drop from content browser).
+            ui.horizontal(|ui| {
+                ui.label("Tileset");
+                let handle_label = if tex_handle.raw() == 0 {
+                    "None".to_string()
+                } else if let Some(ref am) = asset_manager {
+                    am.get_metadata(&tex_handle)
+                        .map(|m| m.file_path.clone())
+                        .unwrap_or_else(|| format!("{}", tex_handle))
+                } else {
+                    format!("{}", tex_handle)
+                };
+                let resp = ui.button(&handle_label);
+                if let Some(payload) = resp.dnd_release_payload::<ContentBrowserPayload>() {
+                    if !payload.is_directory {
+                        let ext = payload.path.extension().and_then(|e| e.to_str()).unwrap_or("");
+                        if matches!(ext, "png" | "jpg" | "jpeg") {
+                            if let Some(ref mut am) = asset_manager {
+                                let rel_path = payload
+                                    .path
+                                    .strip_prefix(assets_root)
+                                    .unwrap_or(&payload.path)
+                                    .to_string_lossy()
+                                    .replace('\\', "/");
+                                let new_handle = am.import_asset(&rel_path);
+                                am.save_registry();
+                                if let Some(mut tm) = scene.get_component_mut::<TilemapComponent>(entity) {
+                                    tm.texture_handle = new_handle;
+                                    tm.texture = None;
+                                    *scene_dirty = true;
+                                }
+                            }
+                        }
+                    }
+                }
+            });
+
+            // -- Tile Palette (paint brush) --
+            ui.separator();
+            ui.label(egui::RichText::new("Tile Palette").strong());
+
+            // Tools row: eraser toggle + clear brush.
+            ui.horizontal(|ui| {
+                let eraser_active = tilemap_paint.brush_tile_id == -1;
+                if ui.selectable_label(eraser_active, "Eraser (X)").clicked() {
+                    if eraser_active {
+                        tilemap_paint.clear_brush();
+                    } else {
+                        tilemap_paint.brush_tile_id = -1;
+                    }
+                }
+                if tilemap_paint.is_active() {
+                    if ui.button("Clear Brush (Esc)").clicked() {
+                        tilemap_paint.clear_brush();
+                    }
+                }
+            });
+
+            // Flip toggles (shown when a tile brush is selected, not eraser).
+            if tilemap_paint.brush_tile_id >= 0 {
+                ui.horizontal(|ui| {
+                    ui.checkbox(&mut tilemap_paint.brush_flip_h, "Flip H");
+                    ui.checkbox(&mut tilemap_paint.brush_flip_v, "Flip V");
+                });
+            }
+
+            // Calculate how many tiles exist in the tileset from texture dimensions.
+            let tileset_col_count = tileset_cols.max(1) as usize;
+            let (tex_dims, tileset_egui_tex) = {
+                let tm = scene.get_component::<TilemapComponent>(entity).unwrap();
+                let dims = tm.texture.as_ref().map(|t| (t.width(), t.height()));
+                let egui_tex = tm.texture.as_ref().and_then(|t| {
+                    egui_texture_map.get(&t.egui_handle()).copied()
+                });
+                (dims, egui_tex)
+            };
+            let max_tiles = if let Some((tex_w, tex_h)) = tex_dims {
+                let effective_cell_w = cell_size.x + spacing.x;
+                let effective_cell_h = cell_size.y + spacing.y;
+                let tileset_rows = ((tex_h as f32 - margin.y * 2.0 + spacing.y) / effective_cell_h)
+                    .floor()
+                    .max(1.0) as usize;
+                let tileset_cols_actual = ((tex_w as f32 - margin.x * 2.0 + spacing.x) / effective_cell_w)
+                    .floor()
+                    .max(1.0) as usize;
+                (tileset_rows * tileset_cols_actual).min(1024)
+            } else {
+                (tileset_col_count * 4).min(64)
+            };
+
+            // Tile coordinate picker (jump to a tile by col/row).
+            if max_tiles > 0 {
+                let max_row = (max_tiles - 1) / tileset_col_count;
+                let mut picker_col = if tilemap_paint.brush_tile_id >= 0 {
+                    tilemap_paint.brush_tile_id as usize % tileset_col_count
+                } else { 0 };
+                let mut picker_row = if tilemap_paint.brush_tile_id >= 0 {
+                    tilemap_paint.brush_tile_id as usize / tileset_col_count
+                } else { 0 };
+                let mut picker_col_i32 = picker_col as i32;
+                let mut picker_row_i32 = picker_row as i32;
+
+                let mut changed = false;
+                ui.horizontal(|ui| {
+                    ui.label("Tile:");
+                    ui.label("Col");
+                    if ui.add(egui::DragValue::new(&mut picker_col_i32)
+                        .range(0..=(tileset_col_count as i32 - 1))
+                        .speed(0.1)
+                    ).changed() {
+                        changed = true;
+                    }
+                    ui.label("Row");
+                    if ui.add(egui::DragValue::new(&mut picker_row_i32)
+                        .range(0..=max_row as i32)
+                        .speed(0.1)
+                    ).changed() {
+                        changed = true;
+                    }
+                });
+                if changed {
+                    picker_col = (picker_col_i32 as usize).min(tileset_col_count - 1);
+                    picker_row = (picker_row_i32 as usize).min(max_row);
+                    let new_id = (picker_row * tileset_col_count + picker_col) as i32;
+                    if (new_id as usize) < max_tiles {
+                        tilemap_paint.brush_tile_id = new_id;
+                    }
+                }
+            }
+
+            if tilemap_paint.brush_tile_id == -1 {
+                egui::Frame::new()
+                    .fill(egui::Color32::from_rgb(0x3A, 0x20, 0x20))
+                    .corner_radius(egui::CornerRadius::same(4))
+                    .inner_margin(egui::Margin::same(6))
+                    .show(ui, |ui| {
+                        ui.label(egui::RichText::new("Eraser active").strong());
+                        ui.label("Click on tilemap to clear tiles");
+                    });
+            }
+
+            ui.add_space(4.0);
+
+            // Palette grid — fill available width with cells.
+            let avail_w = ui.available_width();
+            let cell_side: f32 = 32.0;
+            let grid_spacing = 2.0;
+            let palette_cols = ((avail_w + grid_spacing) / (cell_side + grid_spacing))
+                .floor()
+                .max(1.0) as usize;
+            let palette_rows = (max_tiles + palette_cols - 1) / palette_cols;
+            let cell_btn_size = egui::vec2(cell_side, cell_side);
+
+            egui::ScrollArea::vertical()
+                .max_height(250.0)
+                .id_salt(("tile_palette_scroll", entity.id()))
+                .show(ui, |ui| {
+                    for row in 0..palette_rows {
+                        ui.horizontal(|ui| {
+                            ui.spacing_mut().item_spacing = egui::vec2(grid_spacing, grid_spacing);
+                            for col in 0..palette_cols {
+                                let tile_id = (row * palette_cols + col) as i32;
+                                if tile_id >= max_tiles as i32 {
+                                    break;
+                                }
+                                let is_selected = tilemap_paint.brush_tile_id == tile_id;
+
+                                let (rect, resp) = ui.allocate_exact_size(cell_btn_size, egui::Sense::click());
+
+                                // Draw tile image or fallback colored cell.
+                                if let (Some((tw, th)), Some(egui_tex)) = (tex_dims, tileset_egui_tex) {
+                                    let ts_col = tile_id as usize % tileset_col_count;
+                                    let ts_row = tile_id as usize / tileset_col_count;
+                                    let uv_min = tile_uv_min(ts_col, ts_row, cell_size, spacing, margin, tw as f32, th as f32);
+                                    let uv_max = tile_uv_max(ts_col, ts_row, cell_size, spacing, margin, tw as f32, th as f32);
+                                    let mut mesh = egui::Mesh::with_texture(egui_tex);
+                                    mesh.add_rect_with_uv(
+                                        rect,
+                                        egui::Rect::from_min_max(
+                                            egui::pos2(uv_min.0, uv_min.1),
+                                            egui::pos2(uv_max.0, uv_max.1),
+                                        ),
+                                        egui::Color32::WHITE,
+                                    );
+                                    ui.painter().add(egui::Shape::mesh(mesh));
+                                } else {
+                                    // Fallback: colored cell with number.
+                                    let hue = ((tile_id as f32) * 0.618034) % 1.0;
+                                    let bg: egui::Color32 = egui::ecolor::Hsva::new(hue, 0.5, 0.7, 1.0).into();
+                                    ui.painter().rect_filled(rect, egui::CornerRadius::same(2), bg);
+                                    ui.painter().text(
+                                        rect.center(),
+                                        egui::Align2::CENTER_CENTER,
+                                        format!("{}", tile_id),
+                                        egui::FontId::new(10.0, egui::FontFamily::Monospace),
+                                        egui::Color32::from_rgb(0xEE, 0xEE, 0xEE),
+                                    );
+                                }
+
+                                // Selection highlight.
+                                if is_selected {
+                                    ui.painter().rect_stroke(
+                                        rect,
+                                        egui::CornerRadius::same(2),
+                                        egui::Stroke::new(2.0, egui::Color32::from_rgb(0x00, 0x7A, 0xCC)),
+                                        egui::StrokeKind::Inside,
+                                    );
+                                }
+
+                                if resp.clicked() {
+                                    if is_selected {
+                                        tilemap_paint.clear_brush();
+                                    } else {
+                                        tilemap_paint.brush_tile_id = tile_id;
+                                    }
+                                }
+
+                                let ts_row = tile_id as usize / tileset_col_count;
+                                let ts_col = tile_id as usize % tileset_col_count;
+                                resp.on_hover_text(format!("Tile {} (col {}, row {})", tile_id, ts_col, ts_row));
+                            }
+                        });
+                    }
+                });
+        });
+
+        cr.header_response.context_menu(|ui| {
+            if ui.button("Remove Component").clicked() {
+                remove_tilemap = true;
+                ui.close();
+            }
+        });
+    }
+    if remove_tilemap {
+        undo_system.record(scene);
+        scene.remove_component::<TilemapComponent>(entity);
         *scene_dirty = true;
     }
 
@@ -1574,6 +2308,7 @@ fn draw_components(
             });
         }
         if remove_lua_script {
+            undo_system.record(scene);
             scene.remove_component::<LuaScriptComponent>(entity);
             *scene_dirty = true;
         }

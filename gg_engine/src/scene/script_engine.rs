@@ -188,6 +188,12 @@ impl ScriptEngine {
         self.call_entity_function(uuid, "on_destroy", ())
     }
 
+    /// Call a collision callback (e.g. `on_collision_enter` / `on_collision_exit`)
+    /// in an entity's environment, passing the other entity's UUID.
+    pub fn call_entity_collision(&self, uuid: u64, callback_name: &str, other_uuid: u64) -> bool {
+        self.call_entity_function(uuid, callback_name, other_uuid)
+    }
+
     /// Returns all tracked entity UUIDs.
     pub fn entity_uuids(&self) -> Vec<u64> {
         self.entity_envs.keys().copied().collect()

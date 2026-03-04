@@ -768,6 +768,27 @@ impl Renderer {
         );
     }
 
+    /// Draw a sub-textured quad using a pre-built transform matrix.
+    ///
+    /// Used by the animation system to render the current frame of a
+    /// sprite sheet at the entity's world transform.
+    pub fn draw_sub_textured_quad_transformed(
+        &self,
+        transform: &Mat4,
+        sub_texture: &SubTexture2D,
+        tint_color: Vec4,
+        entity_id: i32,
+    ) {
+        self.push_quad_to_batch_uv(
+            transform,
+            tint_color,
+            sub_texture.bindless_index() as f32,
+            sub_texture.tex_coords(),
+            1.0,
+            entity_id,
+        );
+    }
+
     /// Draw a rotated sub-textured quad. `rotation` is in radians (Z-axis).
     pub fn draw_rotated_sub_textured_quad(
         &self,

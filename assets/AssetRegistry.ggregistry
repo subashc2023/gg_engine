@@ -1,0 +1,13 @@
+Assets:
+- Handle: 1001
+  FilePath: audio/test_tone.wav
+  Type: Audio
+- Handle: 2001
+  FilePath: textures/checkerboard.png
+  Type: Texture2D
+- Handle: 2002
+  FilePath: textures/color_grid.png
+  Type: Texture2D
+- Handle: 2841034490373146
+  FilePath: textures/tileset_legacy.png
+  Type: Texture2D

@@ -4,8 +4,69 @@ use gg_engine::prelude::*;
 use transform_gizmo_egui::math::{DQuat, DVec3, Transform as GizmoTransform};
 use transform_gizmo_egui::{Gizmo, GizmoConfig, GizmoExt, GizmoOrientation};
 
+use crate::TilemapPaintState;
 use crate::gizmo::{gizmo_modes_for, mat4_to_f64, GizmoOperation};
 use crate::panels::content_browser::ContentBrowserPayload;
+use crate::panels::{TilesetPreviewInfo, tile_uv_min, tile_uv_max};
+
+/// Convert a viewport pixel position to a tilemap grid cell (col, row).
+///
+/// Returns `Some((col, row))` if the pixel maps to a valid cell, `None` otherwise.
+pub(crate) fn screen_to_tile_grid(
+    pixel_x: f32,
+    pixel_y: f32,
+    viewport_size: (u32, u32),
+    vp_matrix: &Mat4,
+    entity_world_transform: &Mat4,
+    tilemap_z: f32,
+    tile_size: Vec2,
+    grid_width: u32,
+    grid_height: u32,
+) -> Option<(u32, u32)> {
+    let (vw, vh) = (viewport_size.0 as f32, viewport_size.1 as f32);
+    if vw <= 0.0 || vh <= 0.0 {
+        return None;
+    }
+
+    // Pixel -> NDC.
+    let ndc_x = (pixel_x / vw) * 2.0 - 1.0;
+    let ndc_y = (pixel_y / vh) * 2.0 - 1.0;
+
+    // Unproject near and far points through inverse(VP).
+    let inv_vp = vp_matrix.inverse();
+    let near_clip = inv_vp * Vec4::new(ndc_x, ndc_y, 0.0, 1.0);
+    let far_clip = inv_vp * Vec4::new(ndc_x, ndc_y, 1.0, 1.0);
+    if near_clip.w.abs() < 1e-8 || far_clip.w.abs() < 1e-8 {
+        return None;
+    }
+    let near_world = near_clip.truncate() / near_clip.w;
+    let far_world = far_clip.truncate() / far_clip.w;
+
+    // Ray-plane intersection at Z = tilemap_z.
+    let dir = far_world - near_world;
+    if dir.z.abs() < 1e-8 {
+        return None;
+    }
+    let t = (tilemap_z - near_world.z) / dir.z;
+    let hit = near_world + dir * t;
+
+    // World -> local (inverse of entity world transform).
+    let inv_entity = entity_world_transform.inverse();
+    let local_4 = inv_entity * Vec4::new(hit.x, hit.y, hit.z, 1.0);
+    let local_x = local_4.x;
+    let local_y = local_4.y;
+
+    // Local -> grid. Tiles are centered at integer positions, so the quad
+    // for tile (0,0) spans [-0.5*tile_size .. +0.5*tile_size].
+    let col = ((local_x / tile_size.x) + 0.5).floor() as i32;
+    let row = ((local_y / tile_size.y) + 0.5).floor() as i32;
+
+    if col >= 0 && row >= 0 && (col as u32) < grid_width && (row as u32) < grid_height {
+        Some((col as u32, row as u32))
+    } else {
+        None
+    }
+}
 
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn viewport_ui(
@@ -24,6 +85,11 @@ pub(crate) fn viewport_ui(
     pending_open_path: &mut Option<std::path::PathBuf>,
     is_playing: bool,
     scene_dirty: &mut bool,
+    undo_system: &mut crate::undo::UndoSystem,
+    gizmo_editing: &mut bool,
+    tilemap_paint: &mut TilemapPaintState,
+    viewport_mouse_pos: &mut Option<(f32, f32)>,
+    tileset_preview: &Option<TilesetPreviewInfo>,
 ) {
     let available = ui.available_size();
     if available.x > 0.0 && available.y > 0.0 {
@@ -35,24 +101,49 @@ pub(crate) fn viewport_ui(
 
     *viewport_hovered = ui.ui_contains_pointer();
 
+    // Determine if tilemap paint mode is active: brush is set AND selected
+    // entity has a TilemapComponent.
+    let paint_mode_active = !is_playing
+        && tilemap_paint.is_active()
+        && selection_context
+            .map(|e| scene.has_component::<TilemapComponent>(e))
+            .unwrap_or(false);
+
     let clicked = ui.input(|i| i.pointer.any_pressed());
     if clicked && *viewport_hovered {
         *viewport_focused = true;
 
-        // Mouse picking — select entity on left click (edit mode only).
+        // Mouse picking / paint — left click (edit mode only).
         if !is_playing {
             let left_click =
                 ui.input(|i| i.pointer.button_pressed(egui::PointerButton::Primary));
             let alt_held = ui.input(|i| i.modifiers.alt);
             if left_click && !gizmo.is_focused() && !alt_held {
-                if hovered_entity >= 0 {
-                    *selection_context = scene
-                        .find_entity_by_id(hovered_entity as u32)
-                        .filter(|e| scene.is_alive(*e));
+                if paint_mode_active {
+                    // Begin a paint stroke.
+                    undo_system.begin_edit(scene);
+                    tilemap_paint.painting_in_progress = true;
+                    tilemap_paint.painted_this_stroke.clear();
                 } else {
-                    *selection_context = None;
+                    // Normal entity selection.
+                    if hovered_entity >= 0 {
+                        *selection_context = scene
+                            .find_entity_by_id(hovered_entity as u32)
+                            .filter(|e| scene.is_alive(*e));
+                    } else {
+                        *selection_context = None;
+                    }
                 }
             }
+        }
+    }
+
+    // End paint stroke on mouse release.
+    if tilemap_paint.painting_in_progress {
+        let left_released = ui.input(|i| i.pointer.button_released(egui::PointerButton::Primary));
+        if left_released || !ui.input(|i| i.pointer.button_down(egui::PointerButton::Primary)) {
+            tilemap_paint.painting_in_progress = false;
+            undo_system.end_edit();
         }
     }
 
@@ -96,6 +187,8 @@ pub(crate) fn viewport_ui(
     };
 
     // -- Mouse picking: schedule pixel readback (edit mode only) --
+    // Also store viewport-relative mouse position for tilemap cursor highlight.
+    *viewport_mouse_pos = None;
     if *viewport_hovered && !is_playing {
         if let Some(viewport_rect) = viewport_rect {
             if let Some(pos) = ui.ctx().input(|i| i.pointer.latest_pos()) {
@@ -111,6 +204,38 @@ pub(crate) fn viewport_ui(
                     if let Some(fb) = scene_fb.as_mut() {
                         fb.schedule_pixel_readback(1, mx, my);
                     }
+                    *viewport_mouse_pos = Some((mx as f32, my as f32));
+                }
+            }
+        }
+    }
+
+    // -- Tilemap painting (continuous while dragging) --
+    if tilemap_paint.painting_in_progress && paint_mode_active {
+        if let (Some(entity), Some((px, py))) = (*selection_context, *viewport_mouse_pos) {
+            let vp = editor_camera.view_projection();
+            let world_transform = scene.get_world_transform(entity);
+            let tilemap_z = {
+                scene.get_component::<TransformComponent>(entity)
+                    .map(|tc| tc.translation.z)
+                    .unwrap_or(0.0)
+            };
+            let (tile_size, grid_w, grid_h) = {
+                let tm = scene.get_component::<TilemapComponent>(entity).unwrap();
+                (tm.tile_size, tm.width, tm.height)
+            };
+
+            if let Some((col, row)) = screen_to_tile_grid(
+                px, py, *viewport_size, &vp, &world_transform,
+                tilemap_z, tile_size, grid_w, grid_h,
+            ) {
+                if !tilemap_paint.painted_this_stroke.contains(&(col, row)) {
+                    tilemap_paint.painted_this_stroke.insert((col, row));
+                    let value = tilemap_paint.composed_value();
+                    if let Some(mut tm) = scene.get_component_mut::<TilemapComponent>(entity) {
+                        tm.set_tile(col, row, value);
+                    }
+                    *scene_dirty = true;
                 }
             }
         }
@@ -175,6 +300,85 @@ pub(crate) fn viewport_ui(
         }
     }
 
+    // -- Tile brush overlay (top-right of viewport) --
+    if !is_playing {
+        if let Some(viewport_rect) = viewport_rect {
+            if tilemap_paint.brush_tile_id >= 0 {
+                if let Some(preview) = tileset_preview {
+                    let tid = tilemap_paint.brush_tile_id as usize;
+                    let cols = preview.tileset_columns.max(1) as usize;
+                    let ts_col = tid % cols;
+                    let ts_row = tid / cols;
+
+                    let preview_size = 48.0;
+                    let pad = 8.0;
+                    let text_h = 14.0;
+                    let lines = if tilemap_paint.brush_flip_h || tilemap_paint.brush_flip_v { 3 } else { 2 };
+                    let box_h = pad * 2.0 + preview_size + 4.0 + text_h * lines as f32;
+                    let box_w = pad * 2.0 + preview_size.max(80.0);
+
+                    let box_rect = egui::Rect::from_min_size(
+                        egui::pos2(viewport_rect.right() - box_w - 6.0, viewport_rect.top() + 6.0),
+                        egui::vec2(box_w, box_h),
+                    );
+
+                    // Background
+                    ui.painter().rect_filled(
+                        box_rect,
+                        egui::CornerRadius::same(4),
+                        egui::Color32::from_rgba_premultiplied(0x1E, 0x1E, 0x1E, 0xDD),
+                    );
+
+                    // Tile image
+                    let img_rect = egui::Rect::from_min_size(
+                        egui::pos2(box_rect.center().x - preview_size / 2.0, box_rect.top() + pad),
+                        egui::vec2(preview_size, preview_size),
+                    );
+                    let uv_min = tile_uv_min(ts_col, ts_row, preview.cell_size, preview.spacing, preview.margin, preview.tex_w, preview.tex_h);
+                    let uv_max = tile_uv_max(ts_col, ts_row, preview.cell_size, preview.spacing, preview.margin, preview.tex_w, preview.tex_h);
+                    let mut mesh = egui::Mesh::with_texture(preview.egui_tex);
+                    mesh.add_rect_with_uv(
+                        img_rect,
+                        egui::Rect::from_min_max(egui::pos2(uv_min.0, uv_min.1), egui::pos2(uv_max.0, uv_max.1)),
+                        egui::Color32::WHITE,
+                    );
+                    ui.painter().add(egui::Shape::mesh(mesh));
+
+                    // Labels
+                    let label_y = img_rect.bottom() + 4.0;
+                    let font = egui::FontId::new(11.0, egui::FontFamily::Monospace);
+                    let text_color = egui::Color32::from_rgb(0xCC, 0xCC, 0xCC);
+                    ui.painter().text(
+                        egui::pos2(box_rect.center().x, label_y),
+                        egui::Align2::CENTER_TOP,
+                        format!("Tile {}", tilemap_paint.brush_tile_id),
+                        font.clone(),
+                        egui::Color32::WHITE,
+                    );
+                    ui.painter().text(
+                        egui::pos2(box_rect.center().x, label_y + text_h),
+                        egui::Align2::CENTER_TOP,
+                        format!("col {}, row {}", ts_col, ts_row),
+                        font.clone(),
+                        text_color,
+                    );
+                    if tilemap_paint.brush_flip_h || tilemap_paint.brush_flip_v {
+                        let mut flags = Vec::new();
+                        if tilemap_paint.brush_flip_h { flags.push("H-Flip"); }
+                        if tilemap_paint.brush_flip_v { flags.push("V-Flip"); }
+                        ui.painter().text(
+                            egui::pos2(box_rect.center().x, label_y + text_h * 2.0),
+                            egui::Align2::CENTER_TOP,
+                            flags.join(", "),
+                            font,
+                            egui::Color32::from_rgb(0xE8, 0xA8, 0x48),
+                        );
+                    }
+                }
+            }
+        }
+    }
+
     // -- Gizmos (edit mode only) --
     if let Some(viewport_rect) = viewport_rect {
         if !is_playing {
@@ -186,22 +390,25 @@ pub(crate) fn viewport_ui(
                 let mut camera_projection = *editor_camera.projection();
                 camera_projection.y_axis.y *= -1.0;
 
-                // Read entity transform.
-                let entity_transform = {
-                    let tc = scene.get_component::<TransformComponent>(entity);
-                    tc.map(|tc| {
-                        let original_rotation = tc.rotation;
-                        let quat = Quat::from_euler(
-                            EulerRot::XYZ,
-                            tc.rotation.x,
-                            tc.rotation.y,
-                            tc.rotation.z,
-                        );
-                        (tc.translation, quat, tc.scale, original_rotation)
-                    })
-                };
+                // Read entity world transform for gizmo display.
+                let world_transform = scene.get_world_transform(entity);
+                let (world_scale, world_quat, world_translation) =
+                    world_transform.to_scale_rotation_translation();
 
-                if let Some((translation, quat, scale, original_rotation)) = entity_transform {
+                // Also read the original local rotation for delta approach.
+                let original_rotation = scene
+                    .get_component::<TransformComponent>(entity)
+                    .map(|tc| tc.rotation)
+                    .unwrap_or(Vec3::ZERO);
+
+                // Get parent's world transform for local→world conversion.
+                let parent_world = scene.get_parent(entity).and_then(|puuid| {
+                    scene
+                        .find_entity_by_uuid(puuid)
+                        .map(|pe| scene.get_world_transform(pe))
+                });
+
+                {
                     // Snapping: Ctrl held enables snap.
                     let snapping = ui.input(|i| i.modifiers.ctrl);
 
@@ -219,59 +426,95 @@ pub(crate) fn viewport_ui(
                         ..Default::default()
                     });
 
-                    // Build gizmo Transform from entity data.
+                    // Build gizmo Transform from world data.
                     let gizmo_transform = GizmoTransform::from_scale_rotation_translation(
-                        DVec3::new(scale.x as f64, scale.y as f64, scale.z as f64),
+                        DVec3::new(
+                            world_scale.x as f64,
+                            world_scale.y as f64,
+                            world_scale.z as f64,
+                        ),
                         DQuat::from_xyzw(
-                            quat.x as f64,
-                            quat.y as f64,
-                            quat.z as f64,
-                            quat.w as f64,
+                            world_quat.x as f64,
+                            world_quat.y as f64,
+                            world_quat.z as f64,
+                            world_quat.w as f64,
                         ),
                         DVec3::new(
-                            translation.x as f64,
-                            translation.y as f64,
-                            translation.z as f64,
+                            world_translation.x as f64,
+                            world_translation.y as f64,
+                            world_translation.z as f64,
                         ),
                     );
 
-                    // Interact (renders gizmo + returns new transforms).
+                    // Interact (renders gizmo + returns new world transforms).
+                    // Track gizmo focus transitions for undo bracketing.
+                    let was_editing = *gizmo_editing;
+                    if gizmo.is_focused() && !was_editing {
+                        undo_system.begin_edit(scene);
+                        *gizmo_editing = true;
+                    } else if !gizmo.is_focused() && was_editing {
+                        undo_system.end_edit();
+                        *gizmo_editing = false;
+                    }
                     if let Some((_result, new_transforms)) =
                         gizmo.interact(ui, &[gizmo_transform])
                     {
                         if let Some(new_t) = new_transforms.first() {
-                            // Read back translation & scale from mint types.
-                            let new_translation = Vec3::new(
+                            // Read back new world transform.
+                            let new_world_translation = Vec3::new(
                                 new_t.translation.x as f32,
                                 new_t.translation.y as f32,
                                 new_t.translation.z as f32,
                             );
-                            let new_scale = Vec3::new(
+                            let new_world_scale = Vec3::new(
                                 new_t.scale.x as f32,
                                 new_t.scale.y as f32,
                                 new_t.scale.z as f32,
                             );
-
-                            // Rotation: use delta approach to avoid
-                            // gimbal lock snapping.
-                            let new_quat = Quat::from_xyzw(
+                            let new_world_quat = Quat::from_xyzw(
                                 new_t.rotation.v.x as f32,
                                 new_t.rotation.v.y as f32,
                                 new_t.rotation.v.z as f32,
                                 new_t.rotation.s as f32,
                             );
-                            let (nx, ny, nz) = new_quat.to_euler(EulerRot::XYZ);
-                            let (ox, oy, oz) = quat.to_euler(EulerRot::XYZ);
+
+                            // Build new world matrix.
+                            let new_world_mat = Mat4::from_scale_rotation_translation(
+                                new_world_scale,
+                                new_world_quat,
+                                new_world_translation,
+                            );
+
+                            // Convert world → local if entity has a parent.
+                            let new_local_mat = match parent_world {
+                                Some(pw) => pw.inverse() * new_world_mat,
+                                None => new_world_mat,
+                            };
+
+                            let (local_scale, local_quat, local_translation) =
+                                new_local_mat.to_scale_rotation_translation();
+
+                            // Rotation: delta approach to avoid gimbal lock.
+                            let (nx, ny, nz) = local_quat.to_euler(EulerRot::XYZ);
+
+                            // Compute old local rotation from old world.
+                            let old_local_mat = match parent_world {
+                                Some(pw) => pw.inverse() * world_transform,
+                                None => world_transform,
+                            };
+                            let (_, old_local_quat, _) =
+                                old_local_mat.to_scale_rotation_translation();
+                            let (ox, oy, oz) = old_local_quat.to_euler(EulerRot::XYZ);
                             let delta_rotation = Vec3::new(nx - ox, ny - oy, nz - oz);
                             let new_rotation = original_rotation + delta_rotation;
 
-                            // Write back to component.
+                            // Write back local transform.
                             if let Some(mut tc) =
                                 scene.get_component_mut::<TransformComponent>(entity)
                             {
-                                tc.translation = new_translation;
+                                tc.translation = local_translation;
                                 tc.rotation = new_rotation;
-                                tc.scale = new_scale;
+                                tc.scale = local_scale;
                                 *scene_dirty = true;
                             }
                         }

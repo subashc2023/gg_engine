@@ -1,3 +1,5 @@
+pub mod animation;
+pub(crate) mod audio;
 mod components;
 mod entity;
 pub mod native_script;
@@ -11,12 +13,15 @@ pub(crate) mod script_engine;
 use crate::renderer::Font;
 
 pub use components::{
-    BoxCollider2DComponent, CameraComponent, CircleCollider2DComponent, CircleRendererComponent,
-    IdComponent, NativeScriptComponent, RigidBody2DComponent, RigidBody2DType,
-    SpriteRendererComponent, TagComponent, TextComponent, TransformComponent,
+    AudioSourceComponent, BoxCollider2DComponent, CameraComponent, CircleCollider2DComponent,
+    CircleRendererComponent, IdComponent, NativeScriptComponent, RelationshipComponent,
+    RigidBody2DComponent, RigidBody2DType, SpriteRendererComponent, TagComponent, TextComponent,
+    TilemapComponent, TransformComponent,
+    TILE_FLIP_H, TILE_FLIP_V, TILE_ID_MASK,
 };
 #[cfg(feature = "lua-scripting")]
 pub use components::LuaScriptComponent;
+pub use animation::{AnimationClip, SpriteAnimatorComponent};
 pub use entity::Entity;
 pub use native_script::NativeScript;
 pub use scene_serializer::SceneSerializer;
@@ -24,7 +29,7 @@ pub use scene_serializer::SceneSerializer;
 pub use script_engine::{ScriptEngine, ScriptFieldValue};
 
 use crate::input::Input;
-use crate::renderer::Renderer;
+use crate::renderer::{Renderer, SubTexture2D};
 use crate::timestep::Timestep;
 use crate::uuid::Uuid;
 
@@ -45,8 +50,11 @@ pub struct Scene {
     physics_world: Option<PhysicsWorld2D>,
     #[cfg(feature = "lua-scripting")]
     script_engine: Option<ScriptEngine>,
+    audio_engine: Option<audio::AudioEngine>,
     /// O(1) UUID → hecs::Entity lookup cache, maintained on create/destroy.
     uuid_cache: HashMap<u64, hecs::Entity>,
+    /// Deferred entity destruction queue (UUIDs). Flushed after script callbacks.
+    pending_destroy: Vec<u64>,
 }
 
 /// Invokes `$callback!` with every cloneable component type.
@@ -65,6 +73,10 @@ macro_rules! for_each_cloneable_component {
             RigidBody2DComponent,
             BoxCollider2DComponent,
             CircleCollider2DComponent,
+            RelationshipComponent,
+            SpriteAnimatorComponent,
+            TilemapComponent,
+            AudioSourceComponent,
         );
     };
 }
@@ -79,7 +91,9 @@ impl Scene {
             physics_world: None,
             #[cfg(feature = "lua-scripting")]
             script_engine: None,
+            audio_engine: None,
             uuid_cache: HashMap::new(),
+            pending_destroy: Vec::new(),
         }
     }
 
@@ -107,18 +121,110 @@ impl Scene {
             IdComponent::new(uuid),
             TagComponent::new(name),
             TransformComponent::default(),
+            RelationshipComponent::default(),
         ));
         self.uuid_cache.insert(uuid.raw(), handle);
         Entity::new(handle)
     }
 
     /// Remove an entity and all its components from the scene.
+    ///
+    /// Recursively destroys all children. Detaches from parent if parented.
     pub fn destroy_entity(&mut self, entity: Entity) -> Result<(), hecs::NoSuchEntity> {
-        // Remove from UUID cache before despawning.
-        if let Ok(id) = self.world.get::<&IdComponent>(entity.handle()) {
-            self.uuid_cache.remove(&id.id.raw());
+        // Collect relationship info before despawning.
+        let (uuid, parent_uuid, child_uuids) = {
+            let uuid = self
+                .world
+                .get::<&IdComponent>(entity.handle())
+                .ok()
+                .map(|id| id.id.raw());
+            let rel = self
+                .world
+                .get::<&RelationshipComponent>(entity.handle())
+                .ok();
+            let parent = rel.as_deref().and_then(|r| r.parent);
+            let children = rel
+                .as_deref()
+                .map(|r| r.children.clone())
+                .unwrap_or_default();
+            (uuid, parent, children)
+        };
+
+        // Detach from parent.
+        if let (Some(my_uuid), Some(parent_uuid)) = (uuid, parent_uuid) {
+            if let Some(parent_entity) = self.find_entity_by_uuid(parent_uuid) {
+                if let Ok(mut rel) = self.world.get::<&mut RelationshipComponent>(parent_entity.handle()) {
+                    rel.children.retain(|&c| c != my_uuid);
+                }
+            }
         }
-        self.world.despawn(entity.handle())
+
+        // Remove from UUID cache.
+        if let Some(u) = uuid {
+            self.uuid_cache.remove(&u);
+        }
+
+        // Despawn self.
+        self.world.despawn(entity.handle())?;
+
+        // Recursively destroy children.
+        for child_uuid in child_uuids {
+            if let Some(child_entity) = self.find_entity_by_uuid(child_uuid) {
+                let _ = self.destroy_entity(child_entity);
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Queue an entity for deferred destruction (by UUID).
+    ///
+    /// The entity is not destroyed immediately — call
+    /// [`flush_pending_destroys`](Self::flush_pending_destroys) after all
+    /// script callbacks complete. Duplicates are ignored during flush.
+    pub fn queue_entity_destroy(&mut self, uuid: u64) {
+        self.pending_destroy.push(uuid);
+    }
+
+    /// Destroy all entities queued via [`queue_entity_destroy`](Self::queue_entity_destroy).
+    ///
+    /// Cleans up physics bodies/colliders for each destroyed entity.
+    /// Safe to call even if the queue is empty.
+    pub fn flush_pending_destroys(&mut self) {
+        if self.pending_destroy.is_empty() {
+            return;
+        }
+
+        // Deduplicate.
+        let uuids: Vec<u64> = {
+            let mut v = std::mem::take(&mut self.pending_destroy);
+            v.sort_unstable();
+            v.dedup();
+            v
+        };
+
+        for uuid in uuids {
+            if let Some(entity) = self.find_entity_by_uuid(uuid) {
+                // Extract physics body handle before borrowing physics_world mutably.
+                let body_handle = self
+                    .get_component::<RigidBody2DComponent>(entity)
+                    .and_then(|rb| rb.runtime_body);
+
+                if let (Some(handle), Some(ref mut physics)) =
+                    (body_handle, &mut self.physics_world)
+                {
+                    physics.bodies.remove(
+                        handle,
+                        &mut physics.island_manager,
+                        &mut physics.colliders,
+                        &mut physics.impulse_joints,
+                        &mut physics.multibody_joints,
+                        true,
+                    );
+                }
+                let _ = self.destroy_entity(entity);
+            }
+        }
     }
 
     // -----------------------------------------------------------------
@@ -232,6 +338,9 @@ impl Scene {
         // LuaScriptComponent — Clone-able, duplicate via helper.
         #[cfg(feature = "lua-scripting")]
         duplicate_component_if_has::<LuaScriptComponent>(self, entity, new_entity);
+
+        // Reset relationship — duplicate is a root entity (no parent, no children).
+        self.add_component(new_entity, RelationshipComponent::default());
 
         new_entity
     }
@@ -419,6 +528,215 @@ impl Scene {
     }
 
     // -----------------------------------------------------------------
+    // Hierarchy (parent-child relationships)
+    // -----------------------------------------------------------------
+
+    /// Set `child` as a child of `parent`. Detaches from current parent if any.
+    ///
+    /// If `preserve_world_transform` is `true`, the child's local transform is
+    /// adjusted so its world position stays the same.
+    ///
+    /// Returns `false` if the operation would create a cycle.
+    pub fn set_parent(
+        &mut self,
+        child: Entity,
+        parent: Entity,
+        preserve_world_transform: bool,
+    ) -> bool {
+        let child_uuid = match self.get_component::<IdComponent>(child) {
+            Some(id) => id.id.raw(),
+            None => return false,
+        };
+        let parent_uuid = match self.get_component::<IdComponent>(parent) {
+            Some(id) => id.id.raw(),
+            None => return false,
+        };
+
+        // Prevent self-parenting.
+        if child_uuid == parent_uuid {
+            return false;
+        }
+
+        // Prevent cycles.
+        if self.is_ancestor_of(child_uuid, parent_uuid) {
+            return false;
+        }
+
+        // Compute world transform before reparenting.
+        let world_mat = if preserve_world_transform {
+            Some(self.get_world_transform(child))
+        } else {
+            None
+        };
+
+        // Detach from current parent.
+        self.detach_from_parent_impl(child, child_uuid, false);
+
+        // Add to new parent.
+        if let Some(mut rel) = self.get_component_mut::<RelationshipComponent>(parent) {
+            rel.children.push(child_uuid);
+        }
+        if let Some(mut rel) = self.get_component_mut::<RelationshipComponent>(child) {
+            rel.parent = Some(parent_uuid);
+        }
+
+        // Adjust local transform to preserve world position.
+        if let Some(world_mat) = world_mat {
+            let parent_world = self.get_world_transform(parent);
+            let local = parent_world.inverse() * world_mat;
+            self.decompose_and_set_local_transform(child, local);
+        }
+
+        // Warn if physics entity is parented.
+        if self.has_component::<RigidBody2DComponent>(child) {
+            log::warn!(
+                "Entity with RigidBody2D parented — physics may not behave correctly"
+            );
+        }
+
+        true
+    }
+
+    /// Remove an entity from its parent, making it a root entity.
+    ///
+    /// If `preserve_world_transform` is `true`, the local transform is adjusted
+    /// so the entity's world position stays the same.
+    pub fn detach_from_parent(&mut self, entity: Entity, preserve_world_transform: bool) {
+        let uuid = match self.get_component::<IdComponent>(entity) {
+            Some(id) => id.id.raw(),
+            None => return,
+        };
+        self.detach_from_parent_impl(entity, uuid, preserve_world_transform);
+    }
+
+    fn detach_from_parent_impl(
+        &mut self,
+        entity: Entity,
+        entity_uuid: u64,
+        preserve_world_transform: bool,
+    ) {
+        let parent_uuid = self
+            .get_component::<RelationshipComponent>(entity)
+            .and_then(|r| r.parent);
+
+        let Some(parent_uuid) = parent_uuid else {
+            return;
+        };
+
+        // Compute world transform before detaching.
+        let world_mat = if preserve_world_transform {
+            Some(self.get_world_transform(entity))
+        } else {
+            None
+        };
+
+        // Remove from parent's children list.
+        if let Some(parent_entity) = self.find_entity_by_uuid(parent_uuid) {
+            if let Some(mut rel) =
+                self.get_component_mut::<RelationshipComponent>(parent_entity)
+            {
+                rel.children.retain(|&c| c != entity_uuid);
+            }
+        }
+
+        // Clear parent reference.
+        if let Some(mut rel) = self.get_component_mut::<RelationshipComponent>(entity) {
+            rel.parent = None;
+        }
+
+        // Restore world transform.
+        if let Some(world_mat) = world_mat {
+            self.decompose_and_set_local_transform(entity, world_mat);
+        }
+    }
+
+    /// Compute the world-space transform for an entity by walking the parent chain.
+    ///
+    /// No caching — walks up from entity to root each call. Fine for scenes with
+    /// O(100s) of entities and hierarchy depth ~3.
+    pub fn get_world_transform(&self, entity: Entity) -> glam::Mat4 {
+        let local = self
+            .get_component::<TransformComponent>(entity)
+            .map(|tc| tc.get_transform())
+            .unwrap_or(glam::Mat4::IDENTITY);
+
+        let parent_uuid = self
+            .get_component::<RelationshipComponent>(entity)
+            .and_then(|r| r.parent);
+
+        match parent_uuid {
+            Some(puuid) => {
+                if let Some(parent_entity) = self.find_entity_by_uuid(puuid) {
+                    self.get_world_transform(parent_entity) * local
+                } else {
+                    local
+                }
+            }
+            None => local,
+        }
+    }
+
+    /// Get the children UUIDs of an entity.
+    pub fn get_children(&self, entity: Entity) -> Vec<u64> {
+        self.get_component::<RelationshipComponent>(entity)
+            .map(|r| r.children.clone())
+            .unwrap_or_default()
+    }
+
+    /// Get the parent UUID of an entity.
+    pub fn get_parent(&self, entity: Entity) -> Option<u64> {
+        self.get_component::<RelationshipComponent>(entity)
+            .and_then(|r| r.parent)
+    }
+
+    /// Return all root entities (entities without a parent), sorted by entity ID.
+    pub fn root_entities(&self) -> Vec<(Entity, String)> {
+        let mut entities: Vec<(Entity, String)> = self
+            .world
+            .query::<(hecs::Entity, &TagComponent, &RelationshipComponent)>()
+            .iter()
+            .filter(|(_, _, rel)| rel.parent.is_none())
+            .map(|(handle, tag, _)| (Entity::new(handle), tag.tag.clone()))
+            .collect();
+        entities.sort_by_key(|(e, _)| e.id());
+        entities
+    }
+
+    /// Check if `ancestor_uuid` is an ancestor of `entity_uuid`.
+    ///
+    /// Used for cycle detection in [`set_parent`](Self::set_parent).
+    pub fn is_ancestor_of(&self, ancestor_uuid: u64, entity_uuid: u64) -> bool {
+        let mut current = entity_uuid;
+        for _ in 0..100 {
+            // depth limit prevents infinite loops
+            if let Some(entity) = self.find_entity_by_uuid(current) {
+                if let Some(parent) = self.get_parent(entity) {
+                    if parent == ancestor_uuid {
+                        return true;
+                    }
+                    current = parent;
+                } else {
+                    return false;
+                }
+            } else {
+                return false;
+            }
+        }
+        false
+    }
+
+    /// Decompose a 4x4 matrix into translation/rotation/scale and set on the entity.
+    fn decompose_and_set_local_transform(&mut self, entity: Entity, mat: glam::Mat4) {
+        let (scale, rotation, translation) = mat.to_scale_rotation_translation();
+        let (rx, ry, rz) = rotation.to_euler(glam::EulerRot::XYZ);
+        if let Some(mut tc) = self.get_component_mut::<TransformComponent>(entity) {
+            tc.translation = translation;
+            tc.rotation = glam::Vec3::new(rx, ry, rz);
+            tc.scale = scale;
+        }
+    }
+
+    // -----------------------------------------------------------------
     // Viewport
     // -----------------------------------------------------------------
 
@@ -441,6 +759,21 @@ impl Scene {
             if !camera.fixed_aspect_ratio {
                 camera.camera.set_viewport_size(width, height);
             }
+        }
+    }
+
+    // -----------------------------------------------------------------
+    // Animation
+    // -----------------------------------------------------------------
+
+    /// Advance all [`SpriteAnimatorComponent`] timers by `dt`.
+    ///
+    /// Call this each frame before rendering (in both play mode and editor
+    /// preview). This only updates the animator state — rendering uses the
+    /// current frame to compute UV coordinates.
+    pub fn on_update_animations(&mut self, dt: f32) {
+        for animator in self.world.query_mut::<&mut SpriteAnimatorComponent>() {
+            animator.update(dt);
         }
     }
 
@@ -482,6 +815,29 @@ impl Scene {
             if let Some(texture) = asset_manager.get_texture(&asset_handle) {
                 if let Ok(mut sprite) = self.world.get::<&mut SpriteRendererComponent>(handle) {
                     sprite.texture = Some(texture);
+                }
+            }
+        }
+
+        // Phase 3: resolve tilemap textures.
+        let tilemap_needs: Vec<(hecs::Entity, crate::uuid::Uuid)> = self
+            .world
+            .query::<(hecs::Entity, &TilemapComponent)>()
+            .iter()
+            .filter_map(|(handle, tilemap)| {
+                if tilemap.texture_handle.raw() != 0 && tilemap.texture.is_none() {
+                    Some((handle, tilemap.texture_handle))
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        for (handle, asset_handle) in tilemap_needs {
+            asset_manager.load_asset(&asset_handle, renderer);
+            if let Some(texture) = asset_manager.get_texture(&asset_handle) {
+                if let Ok(mut tilemap) = self.world.get::<&mut TilemapComponent>(handle) {
+                    tilemap.texture = Some(texture);
                 }
             }
         }
@@ -537,17 +893,19 @@ impl Scene {
         let mut physics = PhysicsWorld2D::new(0.0, -9.81);
 
         // Snapshot entities with RigidBody2DComponent to avoid borrow conflicts.
-        let body_entities: Vec<(hecs::Entity, glam::Vec3, glam::Vec3, glam::Vec3, RigidBody2DType, bool)> = self
+        let body_entities: Vec<(hecs::Entity, u64, glam::Vec3, glam::Vec3, glam::Vec3, RigidBody2DType, bool)> = self
             .world
             .query::<(
                 hecs::Entity,
+                &IdComponent,
                 &TransformComponent,
                 &RigidBody2DComponent,
             )>()
             .iter()
-            .map(|(handle, transform, rb)| {
+            .map(|(handle, id, transform, rb)| {
                 (
                     handle,
+                    id.id.raw(),
                     transform.translation,
                     transform.rotation,
                     transform.scale,
@@ -557,7 +915,7 @@ impl Scene {
             })
             .collect();
 
-        for (handle, translation, rotation, scale, body_type, fixed_rotation) in body_entities {
+        for (handle, entity_uuid, translation, rotation, scale, body_type, fixed_rotation) in body_entities {
             // Create rapier rigid body.
             let mut body_builder = rapier2d::dynamics::RigidBodyBuilder::new(body_type.to_rapier())
                 .translation(na::Vector2::new(translation.x, translation.y))
@@ -584,6 +942,7 @@ impl Scene {
                     .friction(bc.friction)
                     .restitution(bc.restitution)
                     .translation(na::Vector2::new(bc.offset.x, bc.offset.y))
+                    .active_events(rapier2d::prelude::ActiveEvents::COLLISION_EVENTS)
                     .build();
 
                 let collider_handle =
@@ -591,6 +950,7 @@ impl Scene {
                         .colliders
                         .insert_with_parent(collider, body_handle, &mut physics.bodies);
                 bc.runtime_fixture = Some(collider_handle);
+                physics.register_collider(collider_handle, entity_uuid);
             }
 
             // If entity also has a CircleCollider2DComponent, create a collider.
@@ -602,6 +962,7 @@ impl Scene {
                     .friction(cc.friction)
                     .restitution(cc.restitution)
                     .translation(na::Vector2::new(cc.offset.x, cc.offset.y))
+                    .active_events(rapier2d::prelude::ActiveEvents::COLLISION_EVENTS)
                     .build();
 
                 let collider_handle =
@@ -609,6 +970,7 @@ impl Scene {
                         .colliders
                         .insert_with_parent(collider, body_handle, &mut physics.bodies);
                 cc.runtime_fixture = Some(collider_handle);
+                physics.register_collider(collider_handle, entity_uuid);
             }
         }
 
@@ -630,6 +992,125 @@ impl Scene {
         }
         for cc in self.world.query_mut::<&mut CircleCollider2DComponent>() {
             cc.runtime_fixture = None;
+        }
+    }
+
+    // -----------------------------------------------------------------
+    // Audio lifecycle
+    // -----------------------------------------------------------------
+
+    /// Create the audio engine and play sounds with `play_on_start`.
+    fn on_audio_start(&mut self) {
+        let _timer = crate::profiling::ProfileTimer::new("Scene::on_audio_start");
+        let engine = match audio::AudioEngine::new() {
+            Some(e) => e,
+            None => return,
+        };
+        self.audio_engine = Some(engine);
+
+        // Collect entities that should auto-play.
+        let auto_play: Vec<(u64, String, f32, f32, bool)> = self
+            .world
+            .query::<(hecs::Entity, &IdComponent, &AudioSourceComponent)>()
+            .iter()
+            .filter(|(_, _, asc)| asc.play_on_start && asc.resolved_path.is_some())
+            .map(|(_, id, asc)| {
+                (
+                    id.id.raw(),
+                    asc.resolved_path.clone().unwrap(),
+                    asc.volume,
+                    asc.pitch,
+                    asc.looping,
+                )
+            })
+            .collect();
+
+        if let Some(ref mut engine) = self.audio_engine {
+            for (uuid, path, volume, pitch, looping) in auto_play {
+                engine.play_sound(uuid, &path, volume, pitch, looping);
+            }
+        }
+    }
+
+    /// Stop all sounds and drop the audio engine.
+    fn on_audio_stop(&mut self) {
+        if let Some(ref mut engine) = self.audio_engine {
+            engine.stop_all();
+        }
+        self.audio_engine = None;
+    }
+
+    /// Resolve audio handles to file paths via the asset manager.
+    pub fn resolve_audio_handles(
+        &mut self,
+        asset_manager: &mut crate::asset::EditorAssetManager,
+    ) {
+        let needs_resolve: Vec<(hecs::Entity, crate::uuid::Uuid)> = self
+            .world
+            .query::<(hecs::Entity, &AudioSourceComponent)>()
+            .iter()
+            .filter_map(|(handle, asc)| {
+                if asc.audio_handle.raw() != 0 && asc.resolved_path.is_none() {
+                    Some((handle, asc.audio_handle))
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        for (handle, asset_handle) in needs_resolve {
+            if let Some(abs_path) = asset_manager.get_absolute_path(&asset_handle) {
+                if abs_path.exists() {
+                    let path_str = abs_path.to_string_lossy().to_string();
+                    if let Ok(mut asc) = self.world.get::<&mut AudioSourceComponent>(handle) {
+                        asc.resolved_path = Some(path_str);
+                    }
+                }
+            }
+        }
+    }
+
+    /// Play audio for an entity (used by Lua scripts).
+    pub fn play_entity_sound(&mut self, entity: Entity) {
+        let (uuid, path, volume, pitch, looping) = {
+            let id = match self.get_component::<IdComponent>(entity) {
+                Some(id) => id.id.raw(),
+                None => return,
+            };
+            let asc = match self.get_component::<AudioSourceComponent>(entity) {
+                Some(a) => a,
+                None => return,
+            };
+            let path = match &asc.resolved_path {
+                Some(p) => p.clone(),
+                None => return,
+            };
+            (id, path, asc.volume, asc.pitch, asc.looping)
+        };
+        if let Some(ref mut engine) = self.audio_engine {
+            engine.play_sound(uuid, &path, volume, pitch, looping);
+        }
+    }
+
+    /// Stop audio for an entity (used by Lua scripts).
+    pub fn stop_entity_sound(&mut self, entity: Entity) {
+        let uuid = match self.get_component::<IdComponent>(entity) {
+            Some(id) => id.id.raw(),
+            None => return,
+        };
+        if let Some(ref mut engine) = self.audio_engine {
+            engine.stop_sound(uuid);
+        }
+    }
+
+    /// Set audio volume for an entity (used by Lua scripts).
+    pub fn set_entity_volume(&mut self, entity: Entity, volume: f32) {
+        let uuid = match self.get_component::<IdComponent>(entity) {
+            Some(id) => id.id.raw(),
+            None => return,
+        };
+        if let Some(ref mut engine) = self.audio_engine {
+            engine.set_volume(uuid, volume);
         }
     }
 
@@ -760,13 +1241,15 @@ impl Scene {
         self.on_physics_2d_start();
         #[cfg(feature = "lua-scripting")]
         self.on_lua_scripting_start();
+        self.on_audio_start();
     }
 
-    /// Tear down physics and scripting for runtime (play mode).
+    /// Tear down physics, scripting, and audio for runtime (play mode).
     ///
     /// Call this when exiting play mode (before restoring the snapshot).
     pub fn on_runtime_stop(&mut self) {
         let _timer = crate::profiling::ProfileTimer::new("Scene::on_runtime_stop");
+        self.on_audio_stop();
         self.on_native_scripting_stop();
         #[cfg(feature = "lua-scripting")]
         self.on_lua_scripting_stop();
@@ -858,6 +1341,12 @@ impl Scene {
             let physics = self.physics_world.as_mut().unwrap();
             physics.snapshot_transforms();
             physics.step_once();
+
+            // Dispatch collision events to Lua scripts.
+            #[cfg(feature = "lua-scripting")]
+            if input.is_some() {
+                self.dispatch_collision_events();
+            }
         }
 
         let physics = self.physics_world.as_ref().unwrap();
@@ -933,6 +1422,54 @@ impl Scene {
 
         engine.lua().remove_app_data::<SceneScriptContext>();
         self.script_engine = Some(engine);
+
+        // Flush deferred entity destructions from fixed-update scripts.
+        self.flush_pending_destroys();
+    }
+
+    /// Drain collision events from the physics world and dispatch to Lua scripts.
+    ///
+    /// Calls `on_collision_enter(other_uuid)` and `on_collision_exit(other_uuid)`
+    /// on both entities in each collision pair.
+    #[cfg(feature = "lua-scripting")]
+    fn dispatch_collision_events(&mut self) {
+        use script_glue::SceneScriptContext;
+
+        // Drain events from physics.
+        let events: Vec<(u64, u64, bool)> = match self.physics_world.as_ref() {
+            Some(physics) => physics.drain_collision_events(),
+            None => return,
+        };
+
+        if events.is_empty() {
+            return;
+        }
+
+        let engine = match self.script_engine.take() {
+            Some(e) => e,
+            None => return,
+        };
+
+        let ctx = SceneScriptContext {
+            scene: self as *mut Scene,
+            input: std::ptr::null(),
+            script_engine: &engine as *const ScriptEngine,
+        };
+        engine.lua().set_app_data(ctx);
+
+        for (uuid_a, uuid_b, started) in &events {
+            let callback = if *started {
+                "on_collision_enter"
+            } else {
+                "on_collision_exit"
+            };
+            // Notify both entities.
+            engine.call_entity_collision(*uuid_a, callback, *uuid_b);
+            engine.call_entity_collision(*uuid_b, callback, *uuid_a);
+        }
+
+        engine.lua().remove_app_data::<SceneScriptContext>();
+        self.script_engine = Some(engine);
     }
 
     // -----------------------------------------------------------------
@@ -1000,55 +1537,141 @@ impl Scene {
     /// the renderer before calling this.
     fn render_scene(&self, renderer: &mut Renderer) {
         let _timer = crate::profiling::ProfileTimer::new("Scene::render_scene");
-        // Draw sprites.
-        for (entity, transform, sprite) in self
+        // Draw sprites (with optional animation).
+        for (handle, sprite) in self
             .world
             .query::<(
                 hecs::Entity,
-                &TransformComponent,
                 &SpriteRendererComponent,
             )>()
             .iter()
         {
-            renderer.draw_sprite(
-                &transform.get_transform(),
-                sprite,
-                entity.id() as i32,
-            );
+            let world_transform = self.get_world_transform(Entity::new(handle));
+
+            // Check if this entity has an active animator.
+            let animated = self
+                .world
+                .get::<&SpriteAnimatorComponent>(handle)
+                .ok()
+                .and_then(|anim| {
+                    let (col, row) = anim.current_grid_coords()?;
+                    let texture = sprite.texture.as_ref()?;
+                    Some(SubTexture2D::from_coords(
+                        texture,
+                        glam::Vec2::new(col as f32, row as f32),
+                        anim.cell_size,
+                        glam::Vec2::ONE,
+                    ))
+                });
+
+            if let Some(sub_tex) = animated {
+                renderer.draw_sub_textured_quad_transformed(
+                    &world_transform,
+                    &sub_tex,
+                    sprite.color,
+                    handle.id() as i32,
+                );
+            } else {
+                renderer.draw_sprite(
+                    &world_transform,
+                    sprite,
+                    handle.id() as i32,
+                );
+            }
         }
 
         // Draw circles.
-        for (entity, transform, circle) in self
+        for (handle, circle) in self
             .world
             .query::<(
                 hecs::Entity,
-                &TransformComponent,
                 &CircleRendererComponent,
             )>()
             .iter()
         {
+            let world_transform = self.get_world_transform(Entity::new(handle));
             renderer.draw_circle_component(
-                &transform.get_transform(),
+                &world_transform,
                 circle,
-                entity.id() as i32,
+                handle.id() as i32,
             );
         }
 
         // Draw text.
-        for (entity, transform, text) in self
+        for (handle, text) in self
             .world
             .query::<(
                 hecs::Entity,
-                &TransformComponent,
                 &TextComponent,
             )>()
             .iter()
         {
+            let world_transform = self.get_world_transform(Entity::new(handle));
             renderer.draw_text_component(
-                &transform.get_transform(),
+                &world_transform,
                 text,
-                entity.id() as i32,
+                handle.id() as i32,
             );
+        }
+
+        // Draw tilemaps.
+        for (handle, tilemap) in self
+            .world
+            .query::<(
+                hecs::Entity,
+                &TilemapComponent,
+            )>()
+            .iter()
+        {
+            let texture = match tilemap.texture.as_ref() {
+                Some(tex) => tex,
+                None => continue,
+            };
+            let entity_world = self.get_world_transform(Entity::new(handle));
+            let cols = tilemap.tileset_columns.max(1);
+            let tw = texture.width() as f32;
+            let th = texture.height() as f32;
+            for row in 0..tilemap.height {
+                for col in 0..tilemap.width {
+                    let raw = tilemap.tiles[(row * tilemap.width + col) as usize];
+                    if raw < 0 {
+                        continue;
+                    }
+                    let flip_h = raw & TILE_FLIP_H != 0;
+                    let flip_v = raw & TILE_FLIP_V != 0;
+                    let tile_id = raw & TILE_ID_MASK;
+
+                    let tex_col = (tile_id as u32) % cols;
+                    let tex_row = (tile_id as u32) / cols;
+
+                    // UV calculation with spacing and margin.
+                    let px = tilemap.margin.x + tex_col as f32 * (tilemap.cell_size.x + tilemap.spacing.x);
+                    let py = tilemap.margin.y + tex_row as f32 * (tilemap.cell_size.y + tilemap.spacing.y);
+                    let mut min_uv = glam::Vec2::new(px / tw, py / th);
+                    let mut max_uv = glam::Vec2::new((px + tilemap.cell_size.x) / tw, (py + tilemap.cell_size.y) / th);
+
+                    if flip_h { std::mem::swap(&mut min_uv.x, &mut max_uv.x); }
+                    if flip_v { std::mem::swap(&mut min_uv.y, &mut max_uv.y); }
+
+                    let sub_tex = SubTexture2D::new(texture, min_uv, max_uv);
+                    let tile_transform = entity_world
+                        * glam::Mat4::from_scale_rotation_translation(
+                            glam::Vec3::new(tilemap.tile_size.x, tilemap.tile_size.y, 1.0),
+                            glam::Quat::IDENTITY,
+                            glam::Vec3::new(
+                                col as f32 * tilemap.tile_size.x,
+                                row as f32 * tilemap.tile_size.y,
+                                0.0,
+                            ),
+                        );
+                    renderer.draw_sub_textured_quad_transformed(
+                        &tile_transform,
+                        &sub_tex,
+                        glam::Vec4::ONE,
+                        handle.id() as i32,
+                    );
+                }
+            }
         }
     }
 
@@ -1065,15 +1688,16 @@ impl Scene {
         let _timer = crate::profiling::ProfileTimer::new("Scene::on_update_runtime");
         // Find the primary camera entity.
         let mut main_camera_vp: Option<glam::Mat4> = None;
-        for (transform, camera) in self
+        for (handle, camera) in self
             .world
-            .query::<(&TransformComponent, &CameraComponent)>()
+            .query::<(hecs::Entity, &CameraComponent)>()
             .iter()
         {
             if camera.primary {
-                // VP = projection * inverse(camera_transform)
+                // VP = projection * inverse(camera_world_transform)
+                let world = self.get_world_transform(Entity::new(handle));
                 main_camera_vp =
-                    Some(*camera.camera.projection() * transform.get_transform().inverse());
+                    Some(*camera.camera.projection() * world.inverse());
                 break;
             }
         }
@@ -1267,6 +1891,9 @@ impl Scene {
         // Clear context and put engine back.
         engine.lua().remove_app_data::<SceneScriptContext>();
         self.script_engine = Some(engine);
+
+        // Flush deferred entity destructions.
+        self.flush_pending_destroys();
     }
 
     /// Access the script engine (if active).
@@ -1585,5 +2212,53 @@ mod tests {
         let e = scene.create_entity();
         scene.add_component(e, RigidBody2DComponent::default());
         assert!(scene.get_angular_velocity(e).is_none());
+    }
+
+    // --- Deferred destroy tests ---
+
+    #[test]
+    fn queue_and_flush_destroys_entity() {
+        let mut scene = Scene::new();
+        let e = scene.create_entity_with_tag("ToDestroy");
+        let uuid = scene.get_component::<IdComponent>(e).unwrap().id.raw();
+        assert_eq!(scene.entity_count(), 1);
+
+        scene.queue_entity_destroy(uuid);
+        // Not destroyed yet.
+        assert_eq!(scene.entity_count(), 1);
+
+        scene.flush_pending_destroys();
+        assert_eq!(scene.entity_count(), 0);
+    }
+
+    #[test]
+    fn flush_deduplicates() {
+        let mut scene = Scene::new();
+        let e = scene.create_entity_with_tag("Dup");
+        let uuid = scene.get_component::<IdComponent>(e).unwrap().id.raw();
+
+        scene.queue_entity_destroy(uuid);
+        scene.queue_entity_destroy(uuid);
+        scene.queue_entity_destroy(uuid);
+
+        scene.flush_pending_destroys();
+        assert_eq!(scene.entity_count(), 0);
+    }
+
+    #[test]
+    fn flush_nonexistent_uuid_is_noop() {
+        let mut scene = Scene::new();
+        scene.create_entity();
+        scene.queue_entity_destroy(99999);
+        scene.flush_pending_destroys();
+        assert_eq!(scene.entity_count(), 1);
+    }
+
+    #[test]
+    fn flush_empty_queue_is_noop() {
+        let mut scene = Scene::new();
+        scene.create_entity();
+        scene.flush_pending_destroys();
+        assert_eq!(scene.entity_count(), 1);
     }
 }

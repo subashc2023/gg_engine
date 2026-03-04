@@ -118,6 +118,8 @@ impl Application for GGPlayer {
 
         #[cfg(feature = "lua-scripting")]
         self.scene.on_update_lua_scripts(dt, input);
+
+        self.scene.on_update_animations(dt.seconds());
     }
 
     fn on_render(&mut self, renderer: &mut Renderer) {
@@ -128,6 +130,7 @@ impl Application for GGPlayer {
                 .on_viewport_resize(self.window_width, self.window_height);
             if let Some(ref mut am) = self.asset_manager {
                 self.scene.resolve_texture_handles(am, renderer);
+                self.scene.resolve_audio_handles(am);
             }
             self.scene.load_fonts(renderer);
             self.textures_loaded = true;

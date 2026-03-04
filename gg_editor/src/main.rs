@@ -4,8 +4,9 @@ mod panels;
 mod physics_player;
 #[cfg(not(target_os = "macos"))]
 mod title_bar;
+mod undo;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
 use gg_engine::egui;
@@ -16,7 +17,7 @@ use camera_controller::NativeCameraFollow;
 use gizmo::GizmoOperation;
 use physics_player::PhysicsPlayer;
 use panels::content_browser::{render_dnd_ghost, ASSETS_DIR};
-use panels::{EditorTabViewer, Tab};
+use panels::{EditorTabViewer, Tab, TilesetPreviewInfo};
 
 // ---------------------------------------------------------------------------
 // Scene state (edit vs play mode)
@@ -27,6 +28,56 @@ enum SceneState {
     Edit,
     Play,
     Simulate,
+}
+
+// ---------------------------------------------------------------------------
+// Tilemap paint brush state
+// ---------------------------------------------------------------------------
+
+pub(crate) struct TilemapPaintState {
+    /// -2 = no brush, -1 = eraser, 0+ = tile ID
+    pub brush_tile_id: i32,
+    pub brush_flip_h: bool,
+    pub brush_flip_v: bool,
+    pub painting_in_progress: bool,
+    pub painted_this_stroke: HashSet<(u32, u32)>,
+}
+
+impl TilemapPaintState {
+    fn new() -> Self {
+        Self {
+            brush_tile_id: -2,
+            brush_flip_h: false,
+            brush_flip_v: false,
+            painting_in_progress: false,
+            painted_this_stroke: HashSet::new(),
+        }
+    }
+
+    pub fn is_active(&self) -> bool {
+        self.brush_tile_id >= -1
+    }
+
+    pub fn clear_brush(&mut self) {
+        self.brush_tile_id = -2;
+        self.brush_flip_h = false;
+        self.brush_flip_v = false;
+    }
+
+    /// Compose the tile value from brush_tile_id + flip flags.
+    pub fn composed_value(&self) -> i32 {
+        if self.brush_tile_id < 0 {
+            return -1; // eraser
+        }
+        let mut v = self.brush_tile_id;
+        if self.brush_flip_h {
+            v |= TILE_FLIP_H;
+        }
+        if self.brush_flip_v {
+            v |= TILE_FLIP_V;
+        }
+        v
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -60,7 +111,13 @@ struct GGEditor {
     /// Old scenes awaiting GPU-safe destruction (deferred from on_egui to on_render).
     pending_drop_scenes: Vec<Scene>,
     show_physics_colliders: bool,
+    tilemap_paint: TilemapPaintState,
+    viewport_mouse_pos: Option<(f32, f32)>,
+    /// Mapping from opaque texture handle → egui TextureId for UI rendering.
+    egui_texture_map: HashMap<u64, egui::TextureId>,
     scene_dirty: bool,
+    undo_system: undo::UndoSystem,
+    gizmo_editing: bool,
     is_paused: bool,
     step_frames: i32,
     should_exit: bool,
@@ -201,7 +258,12 @@ impl Application for GGEditor {
             font_cache: HashMap::new(),
             pending_drop_scenes: Vec::new(),
             show_physics_colliders: false,
+            tilemap_paint: TilemapPaintState::new(),
+            viewport_mouse_pos: None,
+            egui_texture_map: HashMap::new(),
             scene_dirty: false,
+            undo_system: undo::UndoSystem::new(),
+            gizmo_editing: false,
             is_paused: false,
             step_frames: 0,
             should_exit: false,
@@ -309,6 +371,14 @@ impl Application for GGEditor {
                     self.save_scene();
                 }
 
+                // Undo/Redo — edit mode only.
+                KeyCode::Z if ctrl && !shift && self.scene_state == SceneState::Edit => {
+                    self.perform_undo();
+                }
+                KeyCode::Y if ctrl && !shift && self.scene_state == SceneState::Edit => {
+                    self.perform_redo();
+                }
+
                 // Entity duplication — edit mode only.
                 KeyCode::D if ctrl && self.scene_state == SceneState::Edit => {
                     self.on_duplicate_entity();
@@ -323,15 +393,29 @@ impl Application for GGEditor {
                 // Delete selected entity — edit mode only.
                 KeyCode::Delete if !ctrl && !shift && self.scene_state == SceneState::Edit => {
                     if let Some(entity) = self.selection_context.take() {
+                        self.undo_system.record(&self.scene);
                         if self.scene.destroy_entity(entity).is_ok() {
                             self.scene_dirty = true;
                         }
                     }
                 }
 
-                // Escape — clear selection (edit mode only).
+                // Escape — clear brush first, then clear selection (edit mode only).
                 KeyCode::Escape if !ctrl && !shift && self.scene_state == SceneState::Edit => {
-                    self.selection_context = None;
+                    if self.tilemap_paint.is_active() {
+                        self.tilemap_paint.clear_brush();
+                    } else {
+                        self.selection_context = None;
+                    }
+                }
+
+                // X — toggle eraser mode (edit mode only).
+                KeyCode::X if !ctrl && !shift && self.scene_state == SceneState::Edit => {
+                    if self.tilemap_paint.brush_tile_id == -1 {
+                        self.tilemap_paint.clear_brush();
+                    } else {
+                        self.tilemap_paint.brush_tile_id = -1;
+                    }
                 }
 
                 // Gizmo shortcuts (Q/W/E/R) — edit mode only, no modifiers.
@@ -391,6 +475,7 @@ impl Application for GGEditor {
                         dt
                     };
                     self.scene.on_update_physics(physics_dt, None);
+                    self.scene.on_update_animations(physics_dt.seconds());
                     if self.step_frames > 0 {
                         self.step_frames -= 1;
                     }
@@ -413,6 +498,8 @@ impl Application for GGEditor {
                     // Run Lua scripts.
                     #[cfg(feature = "lua-scripting")]
                     self.scene.on_update_lua_scripts(step_dt, input);
+                    // Advance sprite animations.
+                    self.scene.on_update_animations(step_dt.seconds());
                     if self.step_frames > 0 {
                         self.step_frames -= 1;
                     }
@@ -437,9 +524,10 @@ impl Application for GGEditor {
             self.pending_drop_scenes.clear();
         }
 
-        // Resolve any pending texture handles via the asset manager.
+        // Resolve any pending texture/audio handles via the asset manager.
         if let Some(ref mut am) = self.asset_manager {
             self.scene.resolve_texture_handles(am, renderer);
+            self.scene.resolve_audio_handles(am);
         }
 
         // Process deferred font loads for TextComponents.
@@ -772,6 +860,22 @@ impl Application for GGEditor {
         // Tab body matches panel.
         dock_style.tab.tab_body.bg_fill = egui::Color32::from_rgb(0x1E, 0x1E, 0x1E);
 
+        // Compute tileset preview info for viewport overlay.
+        let tileset_preview = self.selection_context.and_then(|entity| {
+            let tm = self.scene.get_component::<TilemapComponent>(entity)?;
+            let tex = tm.texture.as_ref()?;
+            let egui_tex = self.egui_texture_map.get(&tex.egui_handle()).copied()?;
+            Some(TilesetPreviewInfo {
+                egui_tex,
+                tex_w: tex.width() as f32,
+                tex_h: tex.height() as f32,
+                tileset_columns: tm.tileset_columns.max(1),
+                cell_size: tm.cell_size,
+                spacing: tm.spacing,
+                margin: tm.margin,
+            })
+        });
+
         // Scope the viewer so its borrows are released before we handle
         // pending actions and paint the DnD ghost overlay.
         {
@@ -797,11 +901,29 @@ impl Application for GGEditor {
                 assets_root: &self.assets_root,
                 project_name: self.project.as_ref().map(|p| p.name()),
                 editor_scene_path: self.editor_scene_path.as_deref(),
+                undo_system: &mut self.undo_system,
+                gizmo_editing: &mut self.gizmo_editing,
+                tilemap_paint: &mut self.tilemap_paint,
+                viewport_mouse_pos: &mut self.viewport_mouse_pos,
+                egui_texture_map: &self.egui_texture_map,
+                tileset_preview,
             };
 
             egui_dock::DockArea::new(&mut self.dock_state)
                 .style(dock_style)
                 .show(ctx, &mut viewer);
+        }
+
+        // Auto-clear tilemap brush when selection changes to a non-tilemap
+        // entity or deselects entirely.
+        if self.tilemap_paint.is_active() {
+            let has_tilemap = self
+                .selection_context
+                .map(|e| self.scene.has_component::<TilemapComponent>(e))
+                .unwrap_or(false);
+            if !has_tilemap {
+                self.tilemap_paint.clear_brush();
+            }
         }
 
         // DnD ghost overlay — painted on a tooltip layer so it floats above
@@ -812,6 +934,22 @@ impl Application for GGEditor {
         if let Some(path) = self.pending_open_path.take() {
             self.open_scene_from_path(&path);
         }
+    }
+
+    fn egui_user_textures(&self) -> Vec<u64> {
+        // Register tileset textures from all TilemapComponents so we can
+        // render tile previews in the properties panel.
+        let mut handles = Vec::new();
+        for tm in self.scene.world().query::<&TilemapComponent>().iter() {
+            if let Some(ref tex) = tm.texture {
+                handles.push(tex.egui_handle());
+            }
+        }
+        handles
+    }
+
+    fn receive_egui_user_textures(&mut self, map: &HashMap<u64, egui::TextureId>) {
+        self.egui_texture_map = map.clone();
     }
 }
 
@@ -896,6 +1034,47 @@ impl GGEditor {
             if let Some(transform) = self.scene.get_component::<TransformComponent>(selected) {
                 let outline_color = Vec4::new(1.0, 0.5, 0.0, 1.0);
                 renderer.draw_rect_transform(&transform.get_transform(), outline_color, -1);
+            }
+        }
+
+        // Tilemap paint cursor highlight.
+        if self.tilemap_paint.is_active() && self.scene_state == SceneState::Edit {
+            if let Some(entity) = self.selection_context {
+                if self.scene.has_component::<TilemapComponent>(entity) {
+                    if let Some((px, py)) = self.viewport_mouse_pos {
+                        let vp = self.editor_camera.view_projection();
+                        let world_transform = self.scene.get_world_transform(entity);
+                        let tilemap_z = self.scene.get_component::<TransformComponent>(entity)
+                            .map(|tc| tc.translation.z)
+                            .unwrap_or(0.0);
+                        let (tile_size, grid_w, grid_h) = {
+                            let tm = self.scene.get_component::<TilemapComponent>(entity).unwrap();
+                            (tm.tile_size, tm.width, tm.height)
+                        };
+
+                        if let Some((col, row)) = panels::viewport::screen_to_tile_grid(
+                            px, py, self.viewport_size, &vp, &world_transform,
+                            tilemap_z, tile_size, grid_w, grid_h,
+                        ) {
+                            // Compute world position of this tile cell.
+                            let local_x = col as f32 * tile_size.x;
+                            let local_y = row as f32 * tile_size.y;
+                            let tile_world = world_transform * Vec4::new(local_x, local_y, 0.0, 1.0);
+                            let tile_transform = Mat4::from_scale_rotation_translation(
+                                Vec3::new(tile_size.x, tile_size.y, 1.0),
+                                Quat::IDENTITY,
+                                Vec3::new(tile_world.x, tile_world.y, tilemap_z - 0.001),
+                            );
+
+                            let cursor_color = if self.tilemap_paint.brush_tile_id == -1 {
+                                Vec4::new(1.0, 0.2, 0.2, 1.0) // red for eraser
+                            } else {
+                                Vec4::new(0.2, 1.0, 0.2, 1.0) // green for paint
+                            };
+                            renderer.draw_rect_transform(&tile_transform, cursor_color, -1);
+                        }
+                    }
+                }
             }
         }
     }
@@ -1142,6 +1321,7 @@ impl GGEditor {
         self.selection_context = None;
         self.editor_scene_path = None;
         self.scene_dirty = false;
+        self.undo_system.clear();
 
         // Ensure cameras get the correct viewport on the next frame.
         let (w, h) = self.viewport_size;
@@ -1159,6 +1339,7 @@ impl GGEditor {
                 self.selection_context = None;
                 self.editor_scene_path = Some(path);
                 self.scene_dirty = false;
+                self.undo_system.clear();
 
                 let (w, h) = self.viewport_size;
                 if w > 0 && h > 0 {
@@ -1187,9 +1368,45 @@ impl GGEditor {
         }
     }
 
+    fn perform_undo(&mut self) {
+        if let Some(restored) = self.undo_system.undo(&self.scene) {
+            let old = std::mem::replace(&mut self.scene, restored);
+            self.pending_drop_scenes.push(old);
+            // Try to restore selection by UUID.
+            self.selection_context = self.selection_context.and_then(|sel| {
+                let uuid = sel.id();
+                self.scene.find_entity_by_id(uuid)
+            });
+            let (w, h) = self.viewport_size;
+            if w > 0 && h > 0 {
+                self.scene.on_viewport_resize(w, h);
+            }
+            self.queue_font_loads_from_scene();
+            self.scene_dirty = true;
+        }
+    }
+
+    fn perform_redo(&mut self) {
+        if let Some(restored) = self.undo_system.redo(&self.scene) {
+            let old = std::mem::replace(&mut self.scene, restored);
+            self.pending_drop_scenes.push(old);
+            self.selection_context = self.selection_context.and_then(|sel| {
+                let uuid = sel.id();
+                self.scene.find_entity_by_id(uuid)
+            });
+            let (w, h) = self.viewport_size;
+            if w > 0 && h > 0 {
+                self.scene.on_viewport_resize(w, h);
+            }
+            self.queue_font_loads_from_scene();
+            self.scene_dirty = true;
+        }
+    }
+
     fn on_duplicate_entity(&mut self) {
         if let Some(selected) = self.selection_context {
             if self.scene.is_alive(selected) {
+                self.undo_system.record(&self.scene);
                 self.scene.duplicate_entity(selected);
                 self.scene_dirty = true;
             }
@@ -1198,6 +1415,7 @@ impl GGEditor {
 
     fn open_scene_from_path(&mut self, path: &std::path::Path) {
         self.scene_dirty = false;
+        self.undo_system.clear();
         let path_str = path.to_string_lossy().to_string();
         let mut new_scene = Scene::new();
         if SceneSerializer::deserialize(&mut new_scene, &path_str) {

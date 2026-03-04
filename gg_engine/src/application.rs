@@ -1,7 +1,8 @@
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Instant;
 
-use ash::vk;
+use ash::vk::{self, Handle};
 use winit::application::ApplicationHandler;
 use winit::event::{ElementState, MouseScrollDelta};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
@@ -124,6 +125,19 @@ pub trait Application {
     fn desired_viewport_size(&self) -> Option<(u32, u32)> {
         None
     }
+
+    /// Return opaque texture handles (from [`Texture2D::egui_handle`]) that
+    /// should be registered as egui user textures for UI rendering (e.g. tile
+    /// palette previews). Called each frame; the engine registers new ones
+    /// and unregisters stale ones. The resulting `egui::TextureId` mapping is
+    /// delivered via [`receive_egui_user_textures`].
+    fn egui_user_textures(&self) -> Vec<u64> {
+        Vec::new()
+    }
+
+    /// Receive the mapping from opaque texture handle → egui TextureId
+    /// for textures registered via [`egui_user_textures`].
+    fn receive_egui_user_textures(&mut self, _map: &HashMap<u64, egui::TextureId>) {}
 }
 
 // ---------------------------------------------------------------------------
@@ -152,6 +166,8 @@ struct EngineRunner<T: Application> {
     egui_ctx: egui::Context,
     egui_winit_state: Option<egui_winit::State>,
     egui_renderer: Option<egui_ash_renderer::Renderer>,
+    /// App-registered user textures: opaque handle → egui TextureId.
+    user_textures: HashMap<u64, egui::TextureId>,
 
     // Renderer abstraction — dropped before swapchain/device.
     renderer: Option<Renderer>,
@@ -182,6 +198,13 @@ impl<T: Application> Drop for EngineRunner<T> {
                 if let Some(egui_renderer) = &mut self.egui_renderer {
                     egui_renderer.remove_user_texture(tex_id);
                 }
+            }
+        }
+
+        // Unregister app user textures.
+        if let Some(egui_renderer) = &mut self.egui_renderer {
+            for (_, tex_id) in self.user_textures.drain() {
+                egui_renderer.remove_user_texture(tex_id);
             }
         }
     }
@@ -492,6 +515,39 @@ impl<T: Application> ApplicationHandler for EngineRunner<T> {
                 }
             }
 
+            // Register/unregister app-provided user textures with egui.
+            {
+                let wanted: Vec<u64> = self.app.egui_user_textures();
+                let wanted_set: std::collections::HashSet<u64> =
+                    wanted.iter().copied().collect();
+
+                // Remove stale registrations.
+                let stale: Vec<u64> = self
+                    .user_textures
+                    .keys()
+                    .filter(|h| !wanted_set.contains(h))
+                    .copied()
+                    .collect();
+                for h in stale {
+                    if let Some(tex_id) = self.user_textures.remove(&h) {
+                        egui_renderer.remove_user_texture(tex_id);
+                    }
+                }
+
+                // Register new ones (handle is a raw vk::DescriptorSet).
+                for h in wanted {
+                    self.user_textures
+                        .entry(h)
+                        .or_insert_with(|| {
+                            let ds = vk::DescriptorSet::from_raw(h);
+                            egui_renderer.add_user_texture(ds)
+                        });
+                }
+
+                // Provide the mapping to the app.
+                self.app.receive_egui_user_textures(&self.user_textures);
+            }
+
             // Resize scene framebuffer if the viewport size changed.
             if let Some((w, h)) = self.app.desired_viewport_size() {
                 if let Some(fb) = self.app.scene_framebuffer_mut() {
@@ -587,6 +643,9 @@ impl<T: Application> ApplicationHandler for EngineRunner<T> {
                 }
             }
         }
+
+        // Snapshot input state so next frame can detect just-pressed transitions.
+        self.input.end_frame();
 
         if let Some(window) = &self.window {
             window.request_redraw();
@@ -1036,6 +1095,7 @@ pub fn run<T: Application>() {
         },
         egui_winit_state: None,
         egui_renderer: None,
+        user_textures: HashMap::new(),
         renderer: None,
         swapchain: None,
         vulkan_context: None,

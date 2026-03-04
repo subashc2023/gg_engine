@@ -45,10 +45,12 @@ pub use renderer::{
     VertexBuffer,
 };
 pub use scene::{
-    BoxCollider2DComponent, CameraComponent, CircleCollider2DComponent, CircleRendererComponent,
-    Entity, IdComponent, NativeScript, NativeScriptComponent, RigidBody2DComponent,
-    RigidBody2DType, Scene, SceneSerializer, SpriteRendererComponent, TagComponent,
-    TextComponent, TransformComponent,
+    AnimationClip, AudioSourceComponent, BoxCollider2DComponent, CameraComponent,
+    CircleCollider2DComponent, CircleRendererComponent, Entity, IdComponent, NativeScript,
+    NativeScriptComponent, RelationshipComponent, RigidBody2DComponent, RigidBody2DType, Scene,
+    SceneSerializer, SpriteAnimatorComponent, SpriteRendererComponent, TagComponent, TextComponent,
+    TilemapComponent, TransformComponent,
+    TILE_FLIP_H, TILE_FLIP_V, TILE_ID_MASK,
 };
 #[cfg(feature = "lua-scripting")]
 pub use scene::{LuaScriptComponent, ScriptEngine, ScriptFieldValue};
@@ -81,10 +83,12 @@ pub mod prelude {
         VertexBuffer,
     };
     pub use crate::scene::{
-        BoxCollider2DComponent, CameraComponent, CircleCollider2DComponent,
-        CircleRendererComponent, Entity, IdComponent, NativeScript, NativeScriptComponent,
-        RigidBody2DComponent, RigidBody2DType, Scene, SceneSerializer, SpriteRendererComponent,
-        TagComponent, TextComponent, TransformComponent,
+        AnimationClip, AudioSourceComponent, BoxCollider2DComponent, CameraComponent,
+        CircleCollider2DComponent, CircleRendererComponent, Entity, IdComponent, NativeScript,
+        NativeScriptComponent, RelationshipComponent, RigidBody2DComponent, RigidBody2DType, Scene,
+        SceneSerializer, SpriteAnimatorComponent, SpriteRendererComponent, TagComponent,
+        TextComponent, TilemapComponent, TransformComponent,
+        TILE_FLIP_H, TILE_FLIP_V, TILE_ID_MASK,
     };
     #[cfg(feature = "lua-scripting")]
     pub use crate::scene::{LuaScriptComponent, ScriptEngine, ScriptFieldValue};

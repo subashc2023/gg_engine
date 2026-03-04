@@ -149,6 +149,17 @@ impl EditorAssetManager {
                 // Scenes are not cached in the asset manager.
                 true
             }
+            AssetType::Audio => {
+                // Audio files are loaded by kira at playback time.
+                // Just verify the file exists.
+                let abs_path = self.asset_directory.join(&metadata.file_path);
+                if abs_path.exists() {
+                    true
+                } else {
+                    log::warn!("Audio file not found: {}", abs_path.display());
+                    false
+                }
+            }
             AssetType::None => false,
         }
     }

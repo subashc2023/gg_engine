@@ -6,9 +6,10 @@ use serde::{Deserialize, Serialize};
 
 use crate::renderer::{ProjectionType, SceneCamera};
 use crate::scene::{
-    BoxCollider2DComponent, CameraComponent, CircleCollider2DComponent, CircleRendererComponent,
-    IdComponent, RigidBody2DComponent, RigidBody2DType, Scene, SpriteRendererComponent,
-    TagComponent, TextComponent, TransformComponent,
+    AnimationClip, AudioSourceComponent, BoxCollider2DComponent, CameraComponent,
+    CircleCollider2DComponent, CircleRendererComponent, IdComponent, RelationshipComponent,
+    RigidBody2DComponent, RigidBody2DType, Scene, SpriteAnimatorComponent,
+    SpriteRendererComponent, TagComponent, TextComponent, TilemapComponent, TransformComponent,
 };
 #[cfg(feature = "lua-scripting")]
 use crate::scene::LuaScriptComponent;
@@ -78,6 +79,30 @@ struct EntityData {
         default
     )]
     lua_script: Option<LuaScriptData>,
+    #[serde(
+        rename = "SpriteAnimatorComponent",
+        skip_serializing_if = "Option::is_none",
+        default
+    )]
+    sprite_animator: Option<SpriteAnimatorData>,
+    #[serde(
+        rename = "RelationshipComponent",
+        skip_serializing_if = "has_no_relationships",
+        default
+    )]
+    relationship: Option<RelationshipData>,
+    #[serde(
+        rename = "TilemapComponent",
+        skip_serializing_if = "Option::is_none",
+        default
+    )]
+    tilemap: Option<TilemapData>,
+    #[serde(
+        rename = "AudioSourceComponent",
+        skip_serializing_if = "Option::is_none",
+        default
+    )]
+    audio_source: Option<AudioSourceData>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -231,6 +256,109 @@ struct LuaScriptData {
     script_path: String,
     #[serde(rename = "Fields", default, skip_serializing_if = "Option::is_none")]
     fields: Option<std::collections::HashMap<String, super::script_engine::ScriptFieldValue>>,
+}
+
+#[derive(Serialize, Deserialize)]
+struct RelationshipData {
+    #[serde(rename = "Parent", skip_serializing_if = "Option::is_none")]
+    parent: Option<u64>,
+    #[serde(rename = "Children", skip_serializing_if = "Vec::is_empty", default)]
+    children: Vec<u64>,
+}
+
+#[derive(Serialize, Deserialize)]
+struct AnimationClipData {
+    #[serde(rename = "Name")]
+    name: String,
+    #[serde(rename = "StartFrame")]
+    start_frame: u32,
+    #[serde(rename = "EndFrame")]
+    end_frame: u32,
+    #[serde(rename = "FPS", default = "default_animation_fps")]
+    fps: f32,
+    #[serde(rename = "Looping", default = "default_true")]
+    looping: bool,
+}
+
+#[derive(Serialize, Deserialize)]
+struct SpriteAnimatorData {
+    #[serde(rename = "CellSize")]
+    cell_size: [f32; 2],
+    #[serde(rename = "Columns")]
+    columns: u32,
+    #[serde(rename = "Clips", default)]
+    clips: Vec<AnimationClipData>,
+}
+
+fn default_animation_fps() -> f32 {
+    12.0
+}
+
+fn default_true() -> bool {
+    true
+}
+
+fn default_zero_vec2() -> [f32; 2] {
+    [0.0, 0.0]
+}
+
+fn is_zero_vec2(v: &[f32; 2]) -> bool {
+    v[0] == 0.0 && v[1] == 0.0
+}
+
+#[derive(Serialize, Deserialize)]
+struct TilemapData {
+    #[serde(rename = "Width")]
+    width: u32,
+    #[serde(rename = "Height")]
+    height: u32,
+    #[serde(rename = "TileSize")]
+    tile_size: [f32; 2],
+    #[serde(rename = "TextureHandle", default, skip_serializing_if = "is_zero_handle")]
+    texture_handle: u64,
+    #[serde(rename = "TilesetColumns", default = "default_tileset_columns")]
+    tileset_columns: u32,
+    #[serde(rename = "CellSize")]
+    cell_size: [f32; 2],
+    #[serde(rename = "Spacing", default = "default_zero_vec2", skip_serializing_if = "is_zero_vec2")]
+    spacing: [f32; 2],
+    #[serde(rename = "Margin", default = "default_zero_vec2", skip_serializing_if = "is_zero_vec2")]
+    margin: [f32; 2],
+    #[serde(rename = "Tiles")]
+    tiles: Vec<i32>,
+}
+
+#[derive(Serialize, Deserialize)]
+struct AudioSourceData {
+    #[serde(rename = "AudioHandle", default, skip_serializing_if = "is_zero_handle")]
+    audio_handle: u64,
+    #[serde(rename = "Volume", default = "default_volume")]
+    volume: f32,
+    #[serde(rename = "Pitch", default = "default_pitch")]
+    pitch: f32,
+    #[serde(rename = "Looping", default)]
+    looping: bool,
+    #[serde(rename = "PlayOnStart", default)]
+    play_on_start: bool,
+}
+
+fn default_volume() -> f32 {
+    1.0
+}
+
+fn default_pitch() -> f32 {
+    1.0
+}
+
+fn default_tileset_columns() -> u32 {
+    1
+}
+
+fn has_no_relationships(r: &Option<RelationshipData>) -> bool {
+    match r {
+        None => true,
+        Some(rd) => rd.parent.is_none() && rd.children.is_empty(),
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -475,6 +603,56 @@ impl SceneSerializer {
                             fields,
                         }
                     });
+            let sprite_animator_data = scene
+                .get_component::<SpriteAnimatorComponent>(entity)
+                .map(|sa| SpriteAnimatorData {
+                    cell_size: sa.cell_size.into(),
+                    columns: sa.columns,
+                    clips: sa
+                        .clips
+                        .iter()
+                        .map(|c| AnimationClipData {
+                            name: c.name.clone(),
+                            start_frame: c.start_frame,
+                            end_frame: c.end_frame,
+                            fps: c.fps,
+                            looping: c.looping,
+                        })
+                        .collect(),
+                });
+
+            let relationship_data = scene
+                .get_component::<RelationshipComponent>(entity)
+                .filter(|r| r.has_relationships())
+                .map(|r| RelationshipData {
+                    parent: r.parent,
+                    children: r.children.clone(),
+                });
+
+            let audio_source_data = scene
+                .get_component::<AudioSourceComponent>(entity)
+                .map(|asc| AudioSourceData {
+                    audio_handle: asc.audio_handle.raw(),
+                    volume: asc.volume,
+                    pitch: asc.pitch,
+                    looping: asc.looping,
+                    play_on_start: asc.play_on_start,
+                });
+
+            let tilemap_data = scene
+                .get_component::<TilemapComponent>(entity)
+                .map(|tm| TilemapData {
+                    width: tm.width,
+                    height: tm.height,
+                    tile_size: tm.tile_size.into(),
+                    texture_handle: tm.texture_handle.raw(),
+                    tileset_columns: tm.tileset_columns,
+                    cell_size: tm.cell_size.into(),
+                    spacing: tm.spacing.into(),
+                    margin: tm.margin.into(),
+                    tiles: tm.tiles.clone(),
+                });
+
             let uuid = scene
                 .get_component::<IdComponent>(entity)
                 .map(|id| id.id.raw())
@@ -493,6 +671,10 @@ impl SceneSerializer {
                 circle_collider_2d: circle_collider_2d_data,
                 #[cfg(feature = "lua-scripting")]
                 lua_script: lua_script_data,
+                sprite_animator: sprite_animator_data,
+                relationship: relationship_data,
+                tilemap: tilemap_data,
+                audio_source: audio_source_data,
             });
         }
 
@@ -645,6 +827,75 @@ impl SceneSerializer {
                 }
                 scene.add_component(entity, lsc);
             }
+
+            // SpriteAnimatorComponent — added only if present in the file.
+            if let Some(ref sad) = entity_data.sprite_animator {
+                let clips = sad
+                    .clips
+                    .iter()
+                    .map(|c| AnimationClip {
+                        name: c.name.clone(),
+                        start_frame: c.start_frame,
+                        end_frame: c.end_frame,
+                        fps: c.fps,
+                        looping: c.looping,
+                    })
+                    .collect();
+                scene.add_component(
+                    entity,
+                    SpriteAnimatorComponent {
+                        cell_size: Vec2::from(sad.cell_size),
+                        columns: sad.columns,
+                        clips,
+                        ..Default::default()
+                    },
+                );
+            }
+
+            // RelationshipComponent — applied only if present in the file.
+            if let Some(ref rd) = entity_data.relationship {
+                scene.add_component(
+                    entity,
+                    RelationshipComponent {
+                        parent: rd.parent,
+                        children: rd.children.clone(),
+                    },
+                );
+            }
+
+            // AudioSourceComponent — added only if present in the file.
+            if let Some(ref asd) = entity_data.audio_source {
+                scene.add_component(
+                    entity,
+                    AudioSourceComponent {
+                        audio_handle: Uuid::from_raw(asd.audio_handle),
+                        volume: asd.volume,
+                        pitch: asd.pitch,
+                        looping: asd.looping,
+                        play_on_start: asd.play_on_start,
+                        resolved_path: None,
+                    },
+                );
+            }
+
+            // TilemapComponent — added only if present in the file.
+            if let Some(ref td) = entity_data.tilemap {
+                scene.add_component(
+                    entity,
+                    TilemapComponent {
+                        width: td.width,
+                        height: td.height,
+                        tile_size: Vec2::from(td.tile_size),
+                        texture_handle: Uuid::from_raw(td.texture_handle),
+                        texture: None,
+                        tileset_columns: td.tileset_columns,
+                        cell_size: Vec2::from(td.cell_size),
+                        spacing: Vec2::from(td.spacing),
+                        margin: Vec2::from(td.margin),
+                        tiles: td.tiles.clone(),
+                    },
+                );
+            }
         }
     }
 }
@@ -719,6 +970,76 @@ mod tests {
     }
 
     #[test]
+    fn tilemap_round_trip() {
+        let mut scene = Scene::new();
+        let e = scene.create_entity_with_tag("Tilemap");
+        let mut tilemap = crate::scene::TilemapComponent::default();
+        tilemap.width = 3;
+        tilemap.height = 2;
+        tilemap.tile_size = Vec2::new(1.5, 1.5);
+        tilemap.tileset_columns = 4;
+        tilemap.cell_size = Vec2::new(16.0, 16.0);
+        tilemap.spacing = Vec2::new(2.0, 2.0);
+        tilemap.margin = Vec2::new(1.0, 1.0);
+        tilemap.tiles = vec![0, 1, -1, 3, -1, 2];
+        tilemap.texture_handle = crate::uuid::Uuid::from_raw(99999);
+        scene.add_component(e, tilemap);
+
+        let yaml = SceneSerializer::serialize_to_string(&scene).unwrap();
+        let mut loaded = Scene::new();
+        assert!(SceneSerializer::deserialize_from_string(&mut loaded, &yaml));
+        assert_eq!(loaded.entity_count(), 1);
+
+        let entities = loaded.each_entity_with_tag();
+        let (ent, _) = entities.iter().find(|(_, n)| n == "Tilemap").unwrap();
+        let tm = loaded
+            .get_component::<crate::scene::TilemapComponent>(*ent)
+            .unwrap();
+        assert_eq!(tm.width, 3);
+        assert_eq!(tm.height, 2);
+        assert_eq!(tm.tile_size, Vec2::new(1.5, 1.5));
+        assert_eq!(tm.tileset_columns, 4);
+        assert_eq!(tm.cell_size, Vec2::new(16.0, 16.0));
+        assert_eq!(tm.spacing, Vec2::new(2.0, 2.0));
+        assert_eq!(tm.margin, Vec2::new(1.0, 1.0));
+        assert_eq!(tm.tiles, vec![0, 1, -1, 3, -1, 2]);
+        assert_eq!(tm.texture_handle.raw(), 99999);
+        assert!(tm.texture.is_none());
+    }
+
+    #[test]
+    fn audio_source_round_trip() {
+        let mut scene = Scene::new();
+        let e = scene.create_entity_with_tag("AudioEntity");
+        let audio = crate::scene::AudioSourceComponent {
+            audio_handle: crate::uuid::Uuid::from_raw(77777),
+            volume: 0.75,
+            pitch: 1.2,
+            looping: true,
+            play_on_start: true,
+            resolved_path: None,
+        };
+        scene.add_component(e, audio);
+
+        let yaml = SceneSerializer::serialize_to_string(&scene).unwrap();
+        let mut loaded = Scene::new();
+        assert!(SceneSerializer::deserialize_from_string(&mut loaded, &yaml));
+        assert_eq!(loaded.entity_count(), 1);
+
+        let entities = loaded.each_entity_with_tag();
+        let (ent, _) = entities.iter().find(|(_, n)| n == "AudioEntity").unwrap();
+        let ac = loaded
+            .get_component::<crate::scene::AudioSourceComponent>(*ent)
+            .unwrap();
+        assert_eq!(ac.audio_handle.raw(), 77777);
+        assert!((ac.volume - 0.75).abs() < 0.001);
+        assert!((ac.pitch - 1.2).abs() < 0.001);
+        assert!(ac.looping);
+        assert!(ac.play_on_start);
+        assert!(ac.resolved_path.is_none());
+    }
+
+    #[test]
     fn demo_scene_deserializes() {
         let yaml = include_str!("../../../assets/scenes/lua_camera_follow.ggscene");
         let mut scene = Scene::new();
@@ -741,5 +1062,58 @@ mod tests {
         // Verify physics components.
         assert!(scene.has_component::<RigidBody2DComponent>(*player));
         assert!(scene.has_component::<BoxCollider2DComponent>(*player));
+    }
+
+    #[test]
+    fn tilemap_test_scene_deserializes() {
+        let yaml = include_str!("../../../assets/scenes/tilemap_test.ggscene");
+        let mut scene = Scene::new();
+        assert!(
+            SceneSerializer::deserialize_from_string(&mut scene, yaml),
+            "Failed to deserialize tilemap_test scene"
+        );
+        assert_eq!(scene.entity_count(), 3);
+
+        let entities = scene.each_entity_with_tag();
+        let (tm_ent, _) = entities.iter().find(|(_, n)| n == "Tilemap").unwrap();
+        let tm = scene
+            .get_component::<crate::scene::TilemapComponent>(*tm_ent)
+            .unwrap();
+        assert_eq!(tm.width, 10);
+        assert_eq!(tm.height, 10);
+        assert_eq!(tm.tiles.len(), 100);
+        assert_eq!(tm.texture_handle.raw(), 2001);
+    }
+
+    #[test]
+    fn audio_test_scene_deserializes() {
+        let yaml = include_str!("../../../assets/scenes/audio_test.ggscene");
+        let mut scene = Scene::new();
+        assert!(
+            SceneSerializer::deserialize_from_string(&mut scene, yaml),
+            "Failed to deserialize audio_test scene"
+        );
+        assert_eq!(scene.entity_count(), 7);
+
+        let entities = scene.each_entity_with_tag();
+
+        // Verify Lua-controlled audio entity.
+        let (audio_ent, _) = entities.iter().find(|(_, n)| n == "Audio Player").unwrap();
+        let ac = scene
+            .get_component::<crate::scene::AudioSourceComponent>(*audio_ent)
+            .unwrap();
+        assert_eq!(ac.audio_handle.raw(), 1001);
+        assert!(!ac.play_on_start);
+        assert!(ac.looping);
+
+        // Verify auto-play entity.
+        let (auto_ent, _) = entities.iter().find(|(_, n)| n == "Auto Player").unwrap();
+        let ac2 = scene
+            .get_component::<crate::scene::AudioSourceComponent>(*auto_ent)
+            .unwrap();
+        assert!(ac2.play_on_start);
+        assert!(!ac2.looping);
+        assert!((ac2.pitch - 1.5).abs() < 0.001);
+        assert!((ac2.volume - 0.3).abs() < 0.001);
     }
 }
