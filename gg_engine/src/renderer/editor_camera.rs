@@ -147,6 +147,35 @@ impl EditorCamera {
         self.orientation() * Vec3::Y
     }
 
+    /// Focal point in world space.
+    pub fn focal_point(&self) -> Vec3 {
+        self.focal_point
+    }
+
+    /// Distance from focal point.
+    pub fn distance(&self) -> f32 {
+        self.distance
+    }
+
+    /// Yaw angle (radians).
+    pub fn yaw(&self) -> f32 {
+        self.yaw
+    }
+
+    /// Pitch angle (radians).
+    pub fn pitch(&self) -> f32 {
+        self.pitch
+    }
+
+    /// Restore camera state from persisted values.
+    pub fn restore_state(&mut self, focal_point: Vec3, distance: f32, yaw: f32, pitch: f32) {
+        self.focal_point = focal_point;
+        self.distance = distance;
+        self.yaw = yaw;
+        self.pitch = pitch.clamp(-1.5, 1.5);
+        self.update_view();
+    }
+
     // -- Internals ------------------------------------------------------------
 
     fn update_projection(&mut self) {

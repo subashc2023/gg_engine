@@ -763,8 +763,13 @@ fn render_frame<T: Application>(
 
     let (image_index, acquire_suboptimal) = match acquire_result {
         Ok((idx, suboptimal)) => (idx, suboptimal),
-        Err(vk::Result::ERROR_OUT_OF_DATE_KHR) => return FrameResult::RecreateSwapchain,
-        Err(e) => panic!("Failed to acquire swapchain image: {e}"),
+        Err(vk::Result::ERROR_OUT_OF_DATE_KHR | vk::Result::ERROR_SURFACE_LOST_KHR) => {
+            return FrameResult::RecreateSwapchain
+        }
+        Err(e) => {
+            log::error!("Failed to acquire swapchain image: {e}");
+            return FrameResult::RecreateSwapchain;
+        }
     };
 
     // Acquire succeeded — now it's safe to reset the fence.
@@ -1096,8 +1101,13 @@ fn render_frame<T: Application>(
     match present_result {
         Ok(false) if !acquire_suboptimal => FrameResult::Ok,
         Ok(_) => FrameResult::RecreateSwapchain,
-        Err(vk::Result::ERROR_OUT_OF_DATE_KHR) => FrameResult::RecreateSwapchain,
-        Err(e) => panic!("Failed to present: {e}"),
+        Err(vk::Result::ERROR_OUT_OF_DATE_KHR | vk::Result::ERROR_SURFACE_LOST_KHR) => {
+            FrameResult::RecreateSwapchain
+        }
+        Err(e) => {
+            log::error!("Failed to present: {e}");
+            FrameResult::RecreateSwapchain
+        }
     }
 }
 

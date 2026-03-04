@@ -302,7 +302,9 @@ impl Swapchain {
         new_present_mode: Option<PresentMode>,
     ) {
         unsafe {
-            let _ = self.device.device_wait_idle();
+            self.device
+                .device_wait_idle()
+                .expect("GPU idle wait failed during swapchain recreation");
         }
 
         // Destroy old framebuffers, image views, and depth resources.

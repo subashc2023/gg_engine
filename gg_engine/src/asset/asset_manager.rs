@@ -58,12 +58,15 @@ impl EditorAssetManager {
     /// Detects the asset type from the file extension, generates a handle,
     /// and registers it. Returns the new handle.
     pub fn import_asset(&mut self, relative_path: &str) -> AssetHandle {
+        // Normalize to forward slashes for cross-platform consistency.
+        let normalized = relative_path.replace('\\', "/");
+
         // Check if already imported.
-        if let Some(handle) = self.registry.find_by_path(relative_path) {
+        if let Some(handle) = self.registry.find_by_path(&normalized) {
             return handle;
         }
 
-        let ext = Path::new(relative_path)
+        let ext = Path::new(&normalized)
             .extension()
             .and_then(|e| e.to_str())
             .unwrap_or("");
@@ -73,14 +76,14 @@ impl EditorAssetManager {
         self.registry.insert(
             handle,
             AssetMetadata {
-                file_path: relative_path.to_string(),
+                file_path: normalized.clone(),
                 asset_type,
             },
         );
 
         log::info!(
             "Imported asset '{}' as {:?} (handle: {})",
-            relative_path,
+            normalized,
             asset_type,
             handle
         );

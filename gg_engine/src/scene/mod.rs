@@ -53,6 +53,9 @@ pub struct Scene {
     audio_engine: Option<audio::AudioEngine>,
     /// O(1) UUID → hecs::Entity lookup cache, maintained on create/destroy.
     uuid_cache: HashMap<u64, hecs::Entity>,
+    /// Lazy name → UUID cache for `find_entity_by_name`. Built on first call,
+    /// invalidated on entity create/destroy. Only stores first match per name.
+    name_cache: Option<HashMap<String, u64>>,
     /// Deferred entity destruction queue (UUIDs). Flushed after script callbacks.
     pending_destroy: Vec<u64>,
 }
@@ -93,6 +96,7 @@ impl Scene {
             script_engine: None,
             audio_engine: None,
             uuid_cache: HashMap::new(),
+            name_cache: None,
             pending_destroy: Vec::new(),
         }
     }
@@ -124,6 +128,7 @@ impl Scene {
             RelationshipComponent::default(),
         ));
         self.uuid_cache.insert(uuid.raw(), handle);
+        self.name_cache = None; // invalidate
         Entity::new(handle)
     }
 
@@ -159,9 +164,10 @@ impl Scene {
             }
         }
 
-        // Remove from UUID cache.
+        // Remove from UUID cache and invalidate name cache.
         if let Some(u) = uuid {
             self.uuid_cache.remove(&u);
+            self.name_cache = None;
         }
 
         // Despawn self.
@@ -213,6 +219,13 @@ impl Scene {
                 if let (Some(handle), Some(ref mut physics)) =
                     (body_handle, &mut self.physics_world)
                 {
+                    // Clean up collider-to-UUID mappings before removing the body,
+                    // since rapier will also remove attached colliders internally.
+                    if let Some(body) = physics.bodies.get(handle) {
+                        for &collider_handle in body.colliders() {
+                            physics.collider_to_uuid.remove(&collider_handle);
+                        }
+                    }
                     physics.bodies.remove(
                         handle,
                         &mut physics.island_manager,
@@ -466,17 +479,20 @@ impl Scene {
     ///
     /// O(n) scan — intended for one-off lookups (e.g. `on_create`), not
     /// per-frame use in hot loops. Returns the entity and its UUID.
-    pub fn find_entity_by_name(&self, name: &str) -> Option<(Entity, u64)> {
-        for (handle, tag, id) in self
-            .world
-            .query::<(hecs::Entity, &TagComponent, &IdComponent)>()
-            .iter()
-        {
-            if tag.tag == name {
-                return Some((Entity::new(handle), id.id.raw()));
+    pub fn find_entity_by_name(&mut self, name: &str) -> Option<(Entity, u64)> {
+        // Build the name cache lazily on first call.
+        if self.name_cache.is_none() {
+            let mut cache = HashMap::new();
+            for (tag, id) in self.world.query::<(&TagComponent, &IdComponent)>().iter() {
+                // First entity registered per name wins (matches old linear scan).
+                cache.entry(tag.tag.clone()).or_insert(id.id.raw());
             }
+            self.name_cache = Some(cache);
         }
-        None
+
+        let uuid = *self.name_cache.as_ref().unwrap().get(name)?;
+        let entity = self.find_entity_by_uuid(uuid)?;
+        Some((entity, uuid))
     }
 
     /// Find an entity by its UUID (from [`IdComponent`]).
@@ -731,8 +747,12 @@ impl Scene {
     /// Used for cycle detection in [`set_parent`](Self::set_parent).
     pub fn is_ancestor_of(&self, ancestor_uuid: u64, entity_uuid: u64) -> bool {
         let mut current = entity_uuid;
-        for _ in 0..100 {
-            // depth limit prevents infinite loops
+        let mut visited = std::collections::HashSet::new();
+        loop {
+            if !visited.insert(current) {
+                // Cycle detected — treat as not an ancestor.
+                return false;
+            }
             if let Some(entity) = self.find_entity_by_uuid(current) {
                 if let Some(parent) = self.get_parent(entity) {
                     if parent == ancestor_uuid {
@@ -746,7 +766,6 @@ impl Scene {
                 return false;
             }
         }
-        false
     }
 
     /// Decompose a 4x4 matrix into translation/rotation/scale and set on the entity.
@@ -1024,40 +1043,54 @@ impl Scene {
                 let half_x = bc.size.x * scale.x.abs();
                 let half_y = bc.size.y * scale.y.abs();
 
-                let collider = rapier2d::geometry::ColliderBuilder::cuboid(half_x, half_y)
-                    .density(bc.density)
-                    .friction(bc.friction)
-                    .restitution(bc.restitution)
-                    .translation(na::Vector2::new(bc.offset.x, bc.offset.y))
-                    .active_events(rapier2d::prelude::ActiveEvents::COLLISION_EVENTS)
-                    .build();
+                if half_x <= 0.0 || half_y <= 0.0 {
+                    log::warn!(
+                        "Entity {} has zero-size box collider ({} x {}), skipping",
+                        entity_uuid, half_x * 2.0, half_y * 2.0
+                    );
+                } else {
+                    let collider = rapier2d::geometry::ColliderBuilder::cuboid(half_x, half_y)
+                        .density(bc.density)
+                        .friction(bc.friction)
+                        .restitution(bc.restitution)
+                        .translation(na::Vector2::new(bc.offset.x, bc.offset.y))
+                        .active_events(rapier2d::prelude::ActiveEvents::COLLISION_EVENTS)
+                        .build();
 
-                let collider_handle =
-                    physics
-                        .colliders
-                        .insert_with_parent(collider, body_handle, &mut physics.bodies);
-                bc.runtime_fixture = Some(collider_handle);
-                physics.register_collider(collider_handle, entity_uuid);
+                    let collider_handle =
+                        physics
+                            .colliders
+                            .insert_with_parent(collider, body_handle, &mut physics.bodies);
+                    bc.runtime_fixture = Some(collider_handle);
+                    physics.register_collider(collider_handle, entity_uuid);
+                }
             }
 
             // If entity also has a CircleCollider2DComponent, create a collider.
             if let Ok(mut cc) = self.world.get::<&mut CircleCollider2DComponent>(handle) {
-                let scaled_radius = cc.radius * scale.x.abs();
+                let scaled_radius = cc.radius * scale.x.abs().max(scale.y.abs());
 
-                let collider = rapier2d::geometry::ColliderBuilder::ball(scaled_radius)
-                    .density(cc.density)
-                    .friction(cc.friction)
-                    .restitution(cc.restitution)
-                    .translation(na::Vector2::new(cc.offset.x, cc.offset.y))
-                    .active_events(rapier2d::prelude::ActiveEvents::COLLISION_EVENTS)
-                    .build();
+                if scaled_radius <= 0.0 {
+                    log::warn!(
+                        "Entity {} has zero-radius circle collider, skipping",
+                        entity_uuid
+                    );
+                } else {
+                    let collider = rapier2d::geometry::ColliderBuilder::ball(scaled_radius)
+                        .density(cc.density)
+                        .friction(cc.friction)
+                        .restitution(cc.restitution)
+                        .translation(na::Vector2::new(cc.offset.x, cc.offset.y))
+                        .active_events(rapier2d::prelude::ActiveEvents::COLLISION_EVENTS)
+                        .build();
 
-                let collider_handle =
-                    physics
-                        .colliders
-                        .insert_with_parent(collider, body_handle, &mut physics.bodies);
-                cc.runtime_fixture = Some(collider_handle);
-                physics.register_collider(collider_handle, entity_uuid);
+                    let collider_handle =
+                        physics
+                            .colliders
+                            .insert_with_parent(collider, body_handle, &mut physics.bodies);
+                    cc.runtime_fixture = Some(collider_handle);
+                    physics.register_collider(collider_handle, entity_uuid);
+                }
             }
         }
 
@@ -1433,6 +1466,7 @@ impl Scene {
             #[cfg(feature = "lua-scripting")]
             if input.is_some() {
                 self.dispatch_collision_events();
+                self.flush_pending_destroys();
             }
         }
 
@@ -1491,7 +1525,7 @@ impl Scene {
             return;
         }
 
-        let engine = match self.script_engine.take() {
+        let mut engine = match self.script_engine.take() {
             Some(e) => e,
             None => return,
         };
@@ -1532,7 +1566,7 @@ impl Scene {
             return;
         }
 
-        let engine = match self.script_engine.take() {
+        let mut engine = match self.script_engine.take() {
             Some(e) => e,
             None => return,
         };
@@ -1855,7 +1889,7 @@ impl Scene {
         // Store engine in self, then take it out for on_create calls
         // (callbacks need scene pointer via app_data).
         self.script_engine = Some(engine);
-        let engine = self.script_engine.take().unwrap();
+        let mut engine = self.script_engine.take().unwrap();
 
         // Set scene context (no input during on_create).
         let ctx = SceneScriptContext {
@@ -1883,7 +1917,7 @@ impl Scene {
         use script_glue::SceneScriptContext;
         let _timer = crate::profiling::ProfileTimer::new("Scene::on_lua_scripting_stop");
 
-        if let Some(engine) = self.script_engine.take() {
+        if let Some(mut engine) = self.script_engine.take() {
             // Set scene context (no input during on_destroy).
             let ctx = SceneScriptContext {
                 scene: self as *mut Scene,
@@ -1958,7 +1992,7 @@ impl Scene {
         }
 
         // Take engine out (take-modify-replace pattern).
-        let engine = match self.script_engine.take() {
+        let mut engine = match self.script_engine.take() {
             Some(e) => e,
             None => return,
         };

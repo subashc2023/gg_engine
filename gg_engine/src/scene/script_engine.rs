@@ -47,10 +47,15 @@ impl ScriptFieldValue {
 ///
 /// Each entity with a Lua script gets its own isolated environment table
 /// stored in the Lua registry via `entity_envs`.
+/// Maximum consecutive errors before a script is auto-disabled.
+const MAX_SCRIPT_ERRORS: u32 = 10;
+
 pub struct ScriptEngine {
     lua: Lua,
     /// Per-entity Lua environments keyed by entity UUID (u64).
     entity_envs: HashMap<u64, LuaRegistryKey>,
+    /// Consecutive error counts per entity — used to auto-disable broken scripts.
+    error_counts: HashMap<u64, u32>,
 }
 
 impl ScriptEngine {
@@ -68,6 +73,7 @@ impl ScriptEngine {
         Self {
             lua,
             entity_envs: HashMap::new(),
+            error_counts: HashMap::new(),
         }
     }
 
@@ -166,12 +172,12 @@ impl ScriptEngine {
     }
 
     /// Call `on_create()` in an entity's environment.
-    pub fn call_entity_on_create(&self, uuid: u64) -> bool {
+    pub fn call_entity_on_create(&mut self, uuid: u64) -> bool {
         self.call_entity_function(uuid, "on_create", ())
     }
 
     /// Call `on_update(dt)` in an entity's environment.
-    pub fn call_entity_on_update(&self, uuid: u64, dt: f32) -> bool {
+    pub fn call_entity_on_update(&mut self, uuid: u64, dt: f32) -> bool {
         self.call_entity_function(uuid, "on_update", dt)
     }
 
@@ -179,18 +185,18 @@ impl ScriptEngine {
     ///
     /// Called once per physics fixed step so that impulses/forces are applied
     /// at a consistent rate regardless of render frame rate.
-    pub fn call_entity_on_fixed_update(&self, uuid: u64, dt: f32) -> bool {
+    pub fn call_entity_on_fixed_update(&mut self, uuid: u64, dt: f32) -> bool {
         self.call_entity_function(uuid, "on_fixed_update", dt)
     }
 
     /// Call `on_destroy()` in an entity's environment.
-    pub fn call_entity_on_destroy(&self, uuid: u64) -> bool {
+    pub fn call_entity_on_destroy(&mut self, uuid: u64) -> bool {
         self.call_entity_function(uuid, "on_destroy", ())
     }
 
     /// Call a collision callback (e.g. `on_collision_enter` / `on_collision_exit`)
     /// in an entity's environment, passing the other entity's UUID.
-    pub fn call_entity_collision(&self, uuid: u64, callback_name: &str, other_uuid: u64) -> bool {
+    pub fn call_entity_collision(&mut self, uuid: u64, callback_name: &str, other_uuid: u64) -> bool {
         self.call_entity_function(uuid, callback_name, other_uuid)
     }
 
@@ -208,13 +214,20 @@ impl ScriptEngine {
 
     /// Shared helper: look up a function by name in an entity's env table
     /// using `raw_get` (does NOT fall through to globals via __index).
-    fn call_entity_function<A: IntoLuaMulti>(&self, uuid: u64, name: &str, args: A) -> bool {
-        let key = match self.entity_envs.get(&uuid) {
-            Some(k) => k,
-            None => {
-                log::error!("ScriptEngine: no env for entity {}", uuid);
+    ///
+    /// Tracks consecutive errors per entity and auto-disables scripts that
+    /// exceed [`MAX_SCRIPT_ERRORS`] failures to prevent log spam.
+    fn call_entity_function<A: IntoLuaMulti>(&mut self, uuid: u64, name: &str, args: A) -> bool {
+        // Skip entities that have been auto-disabled.
+        if let Some(&count) = self.error_counts.get(&uuid) {
+            if count >= MAX_SCRIPT_ERRORS {
                 return false;
             }
+        }
+
+        let key = match self.entity_envs.get(&uuid) {
+            Some(k) => k,
+            None => return false,
         };
 
         let env: LuaTable = match self.lua.registry_value(key) {
@@ -239,15 +252,25 @@ impl ScriptEngine {
         };
 
         if let Err(e) = func.call::<()>(args) {
-            log::error!(
-                "ScriptEngine: error calling '{}' for entity {}: {}",
-                name,
-                uuid,
-                e
-            );
+            let count = self.error_counts.entry(uuid).or_insert(0);
+            *count += 1;
+            if *count == MAX_SCRIPT_ERRORS {
+                log::error!(
+                    "ScriptEngine: entity {} script disabled after {} consecutive errors. \
+                     Last error in '{}': {}",
+                    uuid, MAX_SCRIPT_ERRORS, name, e
+                );
+            } else {
+                log::error!(
+                    "ScriptEngine: error calling '{}' for entity {} ({}/{}): {}",
+                    name, uuid, count, MAX_SCRIPT_ERRORS, e
+                );
+            }
             return false;
         }
 
+        // Reset error count on success.
+        self.error_counts.remove(&uuid);
         true
     }
 

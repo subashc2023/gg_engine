@@ -73,9 +73,12 @@ impl UndoSystem {
     /// Pop the redo stack, push current state to undo, return restored scene.
     pub fn redo(&mut self, current_scene: &Scene) -> Option<Scene> {
         let snapshot = self.redo_stack.pop()?;
-        // Push current state to undo.
+        // Push current state to undo (with cap enforcement).
         if let Some(current_yaml) = SceneSerializer::serialize_to_string(current_scene) {
             self.undo_stack.push(current_yaml);
+            if self.undo_stack.len() > self.max_entries {
+                self.undo_stack.remove(0);
+            }
         }
         self.restore_from_yaml(&snapshot)
     }

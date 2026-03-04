@@ -56,8 +56,12 @@ mod inner {
 
         // End any existing session before starting a new one.
         if let Some(mut prev) = guard.take() {
-            let _ = write!(prev.writer, "]}}");
-            let _ = prev.writer.flush();
+            if let Err(e) = write!(prev.writer, "]}}") {
+                log::warn!(target: "gg_engine", "Failed to write profiling footer: {e}");
+            }
+            if let Err(e) = prev.writer.flush() {
+                log::warn!(target: "gg_engine", "Failed to flush profiling output: {e}");
+            }
             log::warn!(target: "gg_engine", "Ended previous profiling session before starting new one");
         }
 
@@ -77,7 +81,9 @@ mod inner {
 
         let file = File::create(&resolved).expect("Failed to create profiling output file");
         let mut writer = BufWriter::new(file);
-        let _ = write!(writer, r#"{{"otherData":{{}},"traceEvents":["#);
+        if let Err(e) = write!(writer, r#"{{"otherData":{{}},"traceEvents":["#) {
+            log::error!(target: "gg_engine", "Failed to write profiling header: {e}");
+        }
 
         log::info!(target: "gg_engine", "Profiling session \"{name}\" -> {}", resolved.display());
 
@@ -92,8 +98,12 @@ mod inner {
     pub fn end_session() {
         let mut guard = INSTRUMENTOR.lock().unwrap();
         if let Some(mut session) = guard.take() {
-            let _ = write!(session.writer, "]}}");
-            let _ = session.writer.flush();
+            if let Err(e) = write!(session.writer, "]}}") {
+                log::warn!(target: "gg_engine", "Failed to write profiling footer: {e}");
+            }
+            if let Err(e) = session.writer.flush() {
+                log::warn!(target: "gg_engine", "Failed to flush profiling output: {e}");
+            }
         }
     }
 

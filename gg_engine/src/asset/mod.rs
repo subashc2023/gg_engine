@@ -40,6 +40,12 @@ impl AssetType {
     }
 }
 
+impl std::fmt::Display for AssetType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
 /// Metadata for a registered asset.
 #[derive(Debug, Clone)]
 pub struct AssetMetadata {

@@ -16,6 +16,26 @@ pub(crate) struct RecentProject {
     pub path: String,
 }
 
+/// Persisted editor camera state (focal point, distance, orientation).
+#[derive(Serialize, Deserialize, Clone)]
+pub(crate) struct CameraState {
+    pub focal_point: [f32; 3],
+    pub distance: f32,
+    pub yaw: f32,
+    pub pitch: f32,
+}
+
+impl Default for CameraState {
+    fn default() -> Self {
+        Self {
+            focal_point: [0.0, 0.0, 0.0],
+            distance: 10.0,
+            yaw: 0.0,
+            pitch: 0.0,
+        }
+    }
+}
+
 #[derive(Serialize, Deserialize, Default)]
 pub(crate) struct EditorSettings {
     pub recent_projects: Vec<RecentProject>,
@@ -25,6 +45,8 @@ pub(crate) struct EditorSettings {
     pub show_physics_colliders: bool,
     #[serde(default)]
     pub gizmo_operation: GizmoOperation,
+    #[serde(default)]
+    pub camera_state: CameraState,
 }
 
 impl EditorSettings {

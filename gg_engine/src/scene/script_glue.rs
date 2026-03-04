@@ -477,7 +477,7 @@ fn find_entity_by_name(lua: &Lua, name: String) -> LuaResult<LuaValue> {
         None => return Ok(LuaValue::Nil),
     };
 
-    let scene = unsafe { &*ctx.scene };
+    let scene = unsafe { &mut *ctx.scene };
     match scene.find_entity_by_name(&name) {
         Some((_entity, uuid)) => Ok(LuaValue::Integer(uuid as i64)),
         None => Ok(LuaValue::Nil),

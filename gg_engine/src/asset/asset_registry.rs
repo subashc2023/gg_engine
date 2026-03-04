@@ -58,10 +58,12 @@ impl AssetRegistry {
     }
 
     /// Find the handle for an asset by its relative file path.
+    /// Normalizes backslashes to forward slashes for cross-platform consistency.
     pub fn find_by_path(&self, path: &str) -> Option<AssetHandle> {
+        let normalized = path.replace('\\', "/");
         self.assets
             .iter()
-            .find(|(_, meta)| meta.file_path == path)
+            .find(|(_, meta)| meta.file_path == normalized)
             .map(|(handle, _)| *handle)
     }
 

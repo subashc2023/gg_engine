@@ -257,15 +257,22 @@ impl Application for GGEditor {
         let script_reload_pending =
             std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
 
+        // Only create the file watcher in Editor mode (not Hub mode) to
+        // avoid an OS-level filesystem monitor thread sitting idle.
         #[cfg(feature = "lua-scripting")]
-        let _script_watcher = create_script_watcher(
-            &assets_root.join("scripts"),
-            &script_reload_pending,
-        );
+        let _script_watcher = if editor_mode == EditorMode::Editor {
+            create_script_watcher(
+                &assets_root.join("scripts"),
+                &script_reload_pending,
+            )
+        } else {
+            None
+        };
 
         let initial_vsync = editor_settings.vsync;
         let initial_show_colliders = editor_settings.show_physics_colliders;
         let initial_gizmo_op = editor_settings.gizmo_operation;
+        let initial_cam_state = editor_settings.camera_state.clone();
 
         GGEditor {
             editor_mode,
@@ -285,7 +292,16 @@ impl Application for GGEditor {
             selection_context: None,
             gizmo: Gizmo::default(),
             gizmo_operation: initial_gizmo_op,
-            editor_camera: EditorCamera::new(45.0_f32.to_radians(), 0.1, 1000.0),
+            editor_camera: {
+                let mut cam = EditorCamera::new(45.0_f32.to_radians(), 0.1, 1000.0);
+                cam.restore_state(
+                    Vec3::from(initial_cam_state.focal_point),
+                    initial_cam_state.distance,
+                    initial_cam_state.yaw,
+                    initial_cam_state.pitch,
+                );
+                cam
+            },
             hovered_entity: -1,
             current_directory: assets_root.clone(),
             assets_root,
@@ -668,7 +684,7 @@ impl Application for GGEditor {
             #[cfg(not(target_os = "macos"))]
             {
                 if title_bar::hub_title_bar_ui(ctx, window) {
-                    self.should_exit = true;
+                    self.request_exit();
                 }
             }
 
@@ -833,7 +849,7 @@ impl Application for GGEditor {
                 });
             });
             if response.close_requested {
-                self.should_exit = true;
+                self.request_exit();
             }
             if response.play_toggled {
                 match self.scene_state {
@@ -1112,6 +1128,18 @@ impl Application for GGEditor {
 // ---------------------------------------------------------------------------
 
 impl GGEditor {
+    fn request_exit(&mut self) {
+        // Persist camera state on exit.
+        self.editor_settings.camera_state = editor_settings::CameraState {
+            focal_point: self.editor_camera.focal_point().into(),
+            distance: self.editor_camera.distance(),
+            yaw: self.editor_camera.yaw(),
+            pitch: self.editor_camera.pitch(),
+        };
+        self.editor_settings.save();
+        self.should_exit = true;
+    }
+
     fn on_overlay_render(&self, renderer: &mut Renderer) {
         // Set the appropriate camera for the overlay pass.
         match self.scene_state {
@@ -1624,8 +1652,11 @@ impl GGEditor {
 
     fn save_scene(&mut self) {
         if let Some(ref path) = self.editor_scene_path {
-            SceneSerializer::serialize(&self.scene, path, Self::scene_name_from_path(path));
-            self.scene_dirty = false;
+            if SceneSerializer::serialize(&self.scene, path, Self::scene_name_from_path(path)) {
+                self.scene_dirty = false;
+            } else {
+                warn!("Failed to save scene to '{}'", path);
+            }
         } else {
             self.save_scene_as();
         }
@@ -1633,10 +1664,13 @@ impl GGEditor {
 
     fn save_scene_as(&mut self) {
         if let Some(path) = FileDialogs::save_file("GGScene files", &["ggscene"]) {
-            SceneSerializer::serialize(&self.scene, &path, Self::scene_name_from_path(&path));
-            self.editor_scene_path = Some(path);
-            self.scene_dirty = false;
-            panels::project::invalidate_scene_cache();
+            if SceneSerializer::serialize(&self.scene, &path, Self::scene_name_from_path(&path)) {
+                self.editor_scene_path = Some(path);
+                self.scene_dirty = false;
+                panels::project::invalidate_scene_cache();
+            } else {
+                warn!("Failed to save scene to '{}'", path);
+            }
         }
     }
 

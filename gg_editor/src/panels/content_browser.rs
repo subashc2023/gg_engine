@@ -354,7 +354,7 @@ fn file_browser_ui(
     // -- Apply deferred file operations --
 
     if let Some((old_path, new_name)) = deferred_rename {
-        let new_path = old_path.parent().unwrap().join(&new_name);
+        let new_path = old_path.parent().unwrap_or(&old_path).join(&new_name);
         if new_path != old_path {
             let _ = std::fs::rename(&old_path, &new_path);
         }
