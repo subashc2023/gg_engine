@@ -6,6 +6,7 @@ use glam::{Mat4, Quat, Vec2, Vec3, Vec4};
 
 use super::buffer::{IndexBuffer, VertexBuffer};
 use super::draw_context::DrawContext;
+use super::font::Font;
 use super::framebuffer::{Framebuffer, FramebufferSpec};
 use super::pipeline::{self, Pipeline};
 use super::render_command::RenderCommand;
@@ -21,7 +22,7 @@ use super::vertex_array::VertexArray;
 use super::VulkanContext;
 
 use crate::profiling::ProfileTimer;
-use crate::scene::{CircleRendererComponent, SpriteRendererComponent};
+use crate::scene::{CircleRendererComponent, SpriteRendererComponent, TextComponent};
 
 // ---------------------------------------------------------------------------
 // Unit quad positions and tex coords (used for CPU pre-transformation)
@@ -273,6 +274,17 @@ impl Renderer {
             texture.set_bindless_index(index);
         }
         texture
+    }
+
+    /// Load a font from a TTF file and generate an MSDF atlas.
+    /// The atlas texture is registered in the bindless descriptor array.
+    pub fn create_font(&self, path: &Path) -> Font {
+        let mut font = Font::load(&self.resources(), path);
+        if let Some(data) = &self.renderer_2d {
+            let index = data.register_texture(&font.atlas_texture);
+            font.atlas_texture.set_bindless_index(index);
+        }
+        font
     }
 
     /// The descriptor set layout used for texture pipelines.
@@ -965,6 +977,162 @@ impl Renderer {
         self.line_width = width;
     }
 
+    // -- Text drawing ----------------------------------------------------------
+
+    /// Internal: push a text glyph quad into the text batch.
+    fn push_text_quad_to_batch(
+        &self,
+        transform: &Mat4,
+        color: Vec4,
+        tex_index: f32,
+        tex_coords: &[[f32; 2]; 4],
+        entity_id: i32,
+    ) {
+        let data = self
+            .renderer_2d
+            .as_ref()
+            .expect("Renderer2D not initialized — call init_2d first");
+
+        let mut vertices = [BatchQuadVertex {
+            position: [0.0; 3],
+            color: [color.x, color.y, color.z, color.w],
+            tex_coord: [0.0; 2],
+            tex_index,
+            entity_id,
+        }; 4];
+
+        for (i, v) in vertices.iter_mut().enumerate() {
+            let world_pos = *transform * QUAD_POSITIONS[i];
+            v.position = [world_pos.x, world_pos.y, world_pos.z];
+            v.tex_coord = tex_coords[i];
+        }
+
+        if !data.push_text_quad(vertices) {
+            self.flush_text_batch();
+            data.push_text_quad(vertices);
+        }
+    }
+
+    /// Flush the current text batch (if any text quads are pending).
+    fn flush_text_batch(&self) {
+        let data = self
+            .renderer_2d
+            .as_ref()
+            .expect("Renderer2D not initialized — call init_2d first");
+        let ctx = self
+            .draw_context
+            .expect("flush_text_batch called outside begin_scene/end_scene");
+
+        data.flush_text(
+            ctx.cmd_buf,
+            self.camera_ubo_ds[ctx.current_frame],
+            ctx.current_frame,
+        );
+    }
+
+    /// Draw a text string using an SDF font.
+    ///
+    /// Each character is rendered as a separate quad using the font's atlas.
+    /// The `transform` positions the text origin (top-left of first character).
+    /// `font_size` controls the scaling of glyphs relative to the transform.
+    /// `kerning` adds extra horizontal spacing between characters (in font units).
+    pub fn draw_text_string(
+        &self,
+        text: &str,
+        transform: &Mat4,
+        font: &Font,
+        font_size: f32,
+        color: Vec4,
+        line_spacing: f32,
+        kerning: f32,
+        entity_id: i32,
+    ) {
+        let _timer = ProfileTimer::new("Renderer::draw_text_string");
+        let tex_index = font.bindless_index() as f32;
+        let scale = font_size;
+
+        let mut cursor_x: f32 = 0.0;
+        let mut cursor_y: f32 = 0.0;
+
+        let chars: Vec<char> = text.chars().collect();
+        for (i, &ch) in chars.iter().enumerate() {
+            if ch == '\n' {
+                cursor_x = 0.0;
+                cursor_y -= font.line_height * scale * line_spacing;
+                continue;
+            }
+            if ch == '\r' {
+                continue;
+            }
+            if ch == '\t' {
+                // Treat tab as 4 spaces.
+                if let Some(space_glyph) = font.glyph(' ') {
+                    cursor_x += (space_glyph.advance_x + kerning) * scale * 4.0;
+                }
+                continue;
+            }
+
+            let glyph = match font.glyph(ch).or_else(|| font.glyph('?')) {
+                Some(g) => g,
+                None => continue,
+            };
+
+            // Skip rendering for whitespace (no width/height), but advance cursor.
+            if glyph.width > 0.0 && glyph.height > 0.0 {
+                // Position the glyph quad relative to the cursor.
+                let x = cursor_x + glyph.bearing_x * scale;
+                let y = cursor_y + (glyph.bearing_y - glyph.height) * scale;
+                let w = glyph.width * scale;
+                let h = glyph.height * scale;
+
+                // Build a transform for this glyph: translate + scale relative to parent transform.
+                let glyph_transform = *transform
+                    * Mat4::from_scale_rotation_translation(
+                        Vec3::new(w, h, 1.0),
+                        glam::Quat::IDENTITY,
+                        Vec3::new(x + w * 0.5, y + h * 0.5, 0.0),
+                    );
+
+                self.push_text_quad_to_batch(
+                    &glyph_transform,
+                    color,
+                    tex_index,
+                    &glyph.tex_coords,
+                    entity_id,
+                );
+            }
+
+            // Advance cursor: glyph advance + font kerning pair + user kerning offset.
+            let mut advance = glyph.advance_x;
+            if let Some(&next_ch) = chars.get(i + 1) {
+                advance += font.kerning(ch, next_ch);
+            }
+            cursor_x += (advance + kerning) * scale;
+        }
+    }
+
+    /// Draw a [`TextComponent`] using a pre-built transform matrix.
+    pub fn draw_text_component(
+        &self,
+        transform: &Mat4,
+        text: &TextComponent,
+        entity_id: i32,
+    ) {
+        let _timer = ProfileTimer::new("Renderer::draw_text_component");
+        if let Some(font) = &text.font {
+            self.draw_text_string(
+                &text.text,
+                transform,
+                font,
+                text.font_size,
+                text.color,
+                text.line_spacing,
+                text.kerning,
+                entity_id,
+            );
+        }
+    }
+
     // -- GPU synchronization ---------------------------------------------------
 
     /// Wait for the GPU to finish all in-flight work.
@@ -1071,18 +1239,29 @@ impl Renderer {
                         self.line_width,
                     );
                 }
+                // Flush any remaining text.
+                if data.has_pending_text() {
+                    data.flush_text(
+                        ctx.cmd_buf,
+                        self.camera_ubo_ds[ctx.current_frame],
+                        ctx.current_frame,
+                    );
+                }
             }
             // Snapshot stats for this frame (available via stats_2d() until next end_scene).
             let quad_stats = data.quad_stats();
             let circle_stats = data.circle_stats();
             let line_stats = data.line_stats();
+            let text_stats = data.text_stats();
             self.last_stats_2d = Renderer2DStats {
                 draw_calls: quad_stats.draw_calls
                     + circle_stats.draw_calls
-                    + line_stats.draw_calls,
+                    + line_stats.draw_calls
+                    + text_stats.draw_calls,
                 quad_count: quad_stats.quad_count
                     + circle_stats.quad_count
-                    + line_stats.quad_count,
+                    + line_stats.quad_count
+                    + text_stats.quad_count,
             };
         }
         self.draw_context = None;

@@ -27,3 +27,4 @@ rfd = "0.15"
 rand = "0.9"
 rapier2d = { version = "0.22", features = ["simd-stable"] }
 mlua = { version = "0.10", features = ["luajit", "vendored"], optional = true }
+ttf-parser = "0.25"

@@ -8,10 +8,12 @@ mod script_glue;
 #[cfg(feature = "lua-scripting")]
 pub(crate) mod script_engine;
 
+use crate::renderer::Font;
+
 pub use components::{
     BoxCollider2DComponent, CameraComponent, CircleCollider2DComponent, CircleRendererComponent,
     IdComponent, NativeScriptComponent, RigidBody2DComponent, RigidBody2DType,
-    SpriteRendererComponent, TagComponent, TransformComponent,
+    SpriteRendererComponent, TagComponent, TextComponent, TransformComponent,
 };
 #[cfg(feature = "lua-scripting")]
 pub use components::LuaScriptComponent;
@@ -57,6 +59,7 @@ macro_rules! for_each_cloneable_component {
             CameraComponent,
             SpriteRendererComponent,
             CircleRendererComponent,
+            TextComponent,
             RigidBody2DComponent,
             BoxCollider2DComponent,
             CircleCollider2DComponent,
@@ -479,6 +482,43 @@ impl Scene {
             let texture = crate::Ref::new(renderer.create_texture_from_file(&path));
             if let Ok(mut sprite) = self.world.get::<&mut SpriteRendererComponent>(handle) {
                 sprite.texture = Some(texture);
+            }
+        }
+    }
+
+    /// Load fonts for all [`TextComponent`]s that have a `font_path` set
+    /// but no loaded font. Similar to [`load_textures`](Self::load_textures).
+    pub fn load_fonts(&mut self, renderer: &Renderer) {
+        use std::collections::HashMap;
+        use std::path::PathBuf;
+        let _timer = crate::profiling::ProfileTimer::new("Scene::load_fonts");
+
+        let loads: Vec<(hecs::Entity, PathBuf)> = self
+            .world
+            .query::<(hecs::Entity, &TextComponent)>()
+            .iter()
+            .filter_map(|(handle, tc)| {
+                if tc.font.is_none() && !tc.font_path.is_empty() {
+                    let path = PathBuf::from(&tc.font_path);
+                    if path.exists() {
+                        Some((handle, path))
+                    } else {
+                        log::warn!("Font not found: {}", tc.font_path);
+                        None
+                    }
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        let mut cache: HashMap<PathBuf, crate::Ref<Font>> = HashMap::new();
+        for (handle, path) in loads {
+            let font = cache.entry(path.clone())
+                .or_insert_with(|| crate::Ref::new(renderer.create_font(&path)))
+                .clone();
+            if let Ok(mut tc) = self.world.get::<&mut TextComponent>(handle) {
+                tc.font = Some(font);
             }
         }
     }
@@ -957,6 +997,23 @@ impl Scene {
             renderer.draw_circle_component(
                 &transform.get_transform(),
                 circle,
+                entity.id() as i32,
+            );
+        }
+
+        // Draw text.
+        for (entity, transform, text) in self
+            .world
+            .query::<(
+                hecs::Entity,
+                &TransformComponent,
+                &TextComponent,
+            )>()
+            .iter()
+        {
+            renderer.draw_text_component(
+                &transform.get_transform(),
+                text,
                 entity.id() as i32,
             );
         }

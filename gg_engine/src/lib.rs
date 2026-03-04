@@ -36,16 +36,17 @@ pub use platform_utils::FileDialogs;
 pub use project::Project;
 pub use renderer::shaders;
 pub use renderer::{
-    as_bytes, BufferElement, BufferLayout, EditorCamera, Framebuffer, FramebufferSpec,
+    as_bytes, BufferElement, BufferLayout, EditorCamera, Font, Framebuffer, FramebufferSpec,
     FramebufferTextureFormat, FramebufferTextureSpec, IndexBuffer, OrthographicCamera, Pipeline,
     PresentMode, ProjectionType, Renderer, Renderer2DStats, RendererBackend, SceneCamera, Shader,
-    ShaderDataType, ShaderLibrary, SubTexture2D, Texture2D, VertexArray, VertexBuffer,
+    ShaderDataType, ShaderLibrary, SubTexture2D, Texture2D, TextureSpecification, VertexArray,
+    VertexBuffer,
 };
 pub use scene::{
     BoxCollider2DComponent, CameraComponent, CircleCollider2DComponent, CircleRendererComponent,
     Entity, IdComponent, NativeScript, NativeScriptComponent, RigidBody2DComponent,
     RigidBody2DType, Scene, SceneSerializer, SpriteRendererComponent, TagComponent,
-    TransformComponent,
+    TextComponent, TransformComponent,
 };
 #[cfg(feature = "lua-scripting")]
 pub use scene::{LuaScriptComponent, ScriptEngine, ScriptFieldValue};
@@ -71,7 +72,7 @@ pub mod prelude {
         begin_session, drain_profile_results, end_session, ProfileResult, ProfileTimer,
     };
     pub use crate::renderer::{
-        as_bytes, BufferElement, BufferLayout, EditorCamera, Framebuffer, FramebufferSpec,
+        as_bytes, BufferElement, BufferLayout, EditorCamera, Font, Framebuffer, FramebufferSpec,
         FramebufferTextureFormat, FramebufferTextureSpec, IndexBuffer, OrthographicCamera,
         Pipeline, PresentMode, ProjectionType, Renderer, Renderer2DStats, RendererBackend,
         SceneCamera, Shader, ShaderDataType, ShaderLibrary, SubTexture2D, Texture2D, VertexArray,
@@ -81,7 +82,7 @@ pub mod prelude {
         BoxCollider2DComponent, CameraComponent, CircleCollider2DComponent,
         CircleRendererComponent, Entity, IdComponent, NativeScript, NativeScriptComponent,
         RigidBody2DComponent, RigidBody2DType, Scene, SceneSerializer, SpriteRendererComponent,
-        TagComponent, TransformComponent,
+        TagComponent, TextComponent, TransformComponent,
     };
     #[cfg(feature = "lua-scripting")]
     pub use crate::scene::{LuaScriptComponent, ScriptEngine, ScriptFieldValue};

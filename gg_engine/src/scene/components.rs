@@ -1,5 +1,6 @@
 use glam::{Mat4, Vec2, Vec3, Vec4};
 
+use crate::renderer::Font;
 use crate::renderer::SceneCamera;
 use crate::renderer::Texture2D;
 use crate::scene::native_script::NativeScript;
@@ -233,6 +234,54 @@ impl NativeScriptComponent {
             instance: None,
             instantiate_fn: instantiate::<T>,
             created: false,
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Text Component
+// ---------------------------------------------------------------------------
+
+/// Text rendered using an MSDF font atlas.
+///
+/// The `font_path` points to a `.ttf` file. At runtime the font is loaded
+/// into a [`Font`] (MSDF atlas + glyph metrics). The `font` field is
+/// runtime-only and not serialized.
+pub struct TextComponent {
+    pub text: String,
+    pub font_path: String,
+    /// Runtime-only loaded font. Not serialized.
+    pub font: Option<Ref<Font>>,
+    pub font_size: f32,
+    pub color: Vec4,
+    pub line_spacing: f32,
+    pub kerning: f32,
+}
+
+impl Clone for TextComponent {
+    fn clone(&self) -> Self {
+        Self {
+            text: self.text.clone(),
+            font_path: self.font_path.clone(),
+            font: self.font.clone(),
+            font_size: self.font_size,
+            color: self.color,
+            line_spacing: self.line_spacing,
+            kerning: self.kerning,
+        }
+    }
+}
+
+impl Default for TextComponent {
+    fn default() -> Self {
+        Self {
+            text: String::new(),
+            font_path: String::new(),
+            font: None,
+            font_size: 1.0,
+            color: Vec4::ONE,
+            line_spacing: 1.0,
+            kerning: 0.0,
         }
     }
 }

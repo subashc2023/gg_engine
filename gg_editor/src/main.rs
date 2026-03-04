@@ -5,6 +5,7 @@ mod physics_player;
 #[cfg(not(target_os = "macos"))]
 mod title_bar;
 
+use std::collections::HashMap;
 use std::path::PathBuf;
 
 use gg_engine::egui;
@@ -54,6 +55,8 @@ struct GGEditor {
     current_directory: PathBuf,
     pending_open_path: Option<PathBuf>,
     pending_texture_loads: Vec<(Entity, PathBuf)>,
+    pending_font_loads: Vec<(Entity, PathBuf)>,
+    font_cache: HashMap<PathBuf, Ref<Font>>,
     /// Old scenes awaiting GPU-safe destruction (deferred from on_egui to on_render).
     pending_drop_scenes: Vec<Scene>,
     show_physics_colliders: bool,
@@ -185,6 +188,8 @@ impl Application for GGEditor {
             assets_root,
             pending_open_path: None,
             pending_texture_loads: Vec::new(),
+            pending_font_loads: Vec::new(),
+            font_cache: HashMap::new(),
             pending_drop_scenes: Vec::new(),
             show_physics_colliders: false,
             scene_dirty: false,
@@ -432,6 +437,48 @@ impl Application for GGEditor {
                 {
                     sprite.texture = Some(texture);
                     sprite.texture_path = Some(path.to_string_lossy().to_string());
+                }
+            }
+        }
+
+        // Process deferred font loads for TextComponents.
+        for (entity, path) in self.pending_font_loads.drain(..) {
+            if self.scene.is_alive(entity) {
+                let font = self.font_cache.entry(path.clone())
+                    .or_insert_with(|| Ref::new(renderer.create_font(&path)))
+                    .clone();
+                if let Some(mut tc) = self.scene.get_component_mut::<TextComponent>(entity) {
+                    tc.font = Some(font);
+                }
+            }
+        }
+
+        // Check for TextComponents that need fonts loaded (e.g. after font_path change).
+        {
+            let needs_load: Vec<(Entity, std::path::PathBuf)> = self
+                .scene
+                .each_entity_with_tag()
+                .iter()
+                .filter_map(|(entity, _)| {
+                    let tc = self.scene.get_component::<TextComponent>(*entity)?;
+                    if tc.font.is_none() && !tc.font_path.is_empty() {
+                        let path = std::path::PathBuf::from(&tc.font_path);
+                        if path.exists() {
+                            Some((*entity, path))
+                        } else {
+                            None
+                        }
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+            for (entity, path) in needs_load {
+                let font = self.font_cache.entry(path.clone())
+                    .or_insert_with(|| Ref::new(renderer.create_font(&path)))
+                    .clone();
+                if let Some(mut tc) = self.scene.get_component_mut::<TextComponent>(entity) {
+                    tc.font = Some(font);
                 }
             }
         }
@@ -1166,6 +1213,7 @@ impl GGEditor {
 
     /// Scan the current scene for entities with `texture_path` set on their
     /// [`SpriteRendererComponent`] and queue them for deferred GPU loading.
+    /// Also queues font loads for [`TextComponent`]s with `font_path` set.
     fn queue_texture_loads_from_scene(&mut self) {
         let entities = self.scene.each_entity_with_tag();
         for (entity, _tag) in &entities {
@@ -1176,6 +1224,16 @@ impl GGEditor {
                         self.pending_texture_loads.push((*entity, path));
                     } else {
                         warn!("Texture not found: {}", path_str);
+                    }
+                }
+            }
+            if let Some(tc) = self.scene.get_component::<TextComponent>(*entity) {
+                if !tc.font_path.is_empty() && tc.font.is_none() {
+                    let path = std::path::PathBuf::from(&tc.font_path);
+                    if path.exists() {
+                        self.pending_font_loads.push((*entity, path));
+                    } else {
+                        warn!("Font not found: {}", tc.font_path);
                     }
                 }
             }

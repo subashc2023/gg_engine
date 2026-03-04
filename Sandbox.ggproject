@@ -2,4 +2,4 @@ Project:
   Name: Sandbox
   AssetDirectory: assets
   ScriptModulePath: assets/scripts
-  StartScene: scenes/new.ggscene
+  StartScene: scenes/text.ggscene

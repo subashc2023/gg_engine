@@ -120,6 +120,7 @@ impl Application for GGPlayer {
             self.scene
                 .on_viewport_resize(self.window_width, self.window_height);
             self.scene.load_textures(renderer);
+            self.scene.load_fonts(renderer);
             self.textures_loaded = true;
         }
 

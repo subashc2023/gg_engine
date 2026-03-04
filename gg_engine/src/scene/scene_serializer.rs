@@ -8,7 +8,7 @@ use crate::renderer::{ProjectionType, SceneCamera};
 use crate::scene::{
     BoxCollider2DComponent, CameraComponent, CircleCollider2DComponent, CircleRendererComponent,
     IdComponent, RigidBody2DComponent, RigidBody2DType, Scene, SpriteRendererComponent,
-    TagComponent, TransformComponent,
+    TagComponent, TextComponent, TransformComponent,
 };
 #[cfg(feature = "lua-scripting")]
 use crate::scene::LuaScriptComponent;
@@ -47,6 +47,12 @@ struct EntityData {
         default
     )]
     circle: Option<CircleData>,
+    #[serde(
+        rename = "TextComponent",
+        skip_serializing_if = "Option::is_none",
+        default
+    )]
+    text: Option<TextData>,
     #[serde(
         rename = "RigidBody2DComponent",
         skip_serializing_if = "Option::is_none",
@@ -148,6 +154,30 @@ fn default_thickness() -> f32 {
 
 fn default_fade() -> f32 {
     0.005
+}
+
+#[derive(Serialize, Deserialize)]
+struct TextData {
+    #[serde(rename = "Text")]
+    text: String,
+    #[serde(rename = "FontPath")]
+    font_path: String,
+    #[serde(rename = "FontSize", default = "default_font_size")]
+    font_size: f32,
+    #[serde(rename = "Color")]
+    color: [f32; 4],
+    #[serde(rename = "LineSpacing", default = "default_line_spacing")]
+    line_spacing: f32,
+    #[serde(rename = "Kerning", default)]
+    kerning: f32,
+}
+
+fn default_font_size() -> f32 {
+    1.0
+}
+
+fn default_line_spacing() -> f32 {
+    1.0
 }
 
 #[derive(Serialize, Deserialize)]
@@ -375,6 +405,18 @@ impl SceneSerializer {
                         fade: circle.fade,
                     });
 
+            let text_data =
+                scene
+                    .get_component::<TextComponent>(entity)
+                    .map(|tc| TextData {
+                        text: tc.text.clone(),
+                        font_path: tc.font_path.clone(),
+                        font_size: tc.font_size,
+                        color: tc.color.into(),
+                        line_spacing: tc.line_spacing,
+                        kerning: tc.kerning,
+                    });
+
             let rigidbody_2d_data =
                 scene
                     .get_component::<RigidBody2DComponent>(entity)
@@ -441,6 +483,7 @@ impl SceneSerializer {
                 camera: camera_data,
                 sprite: sprite_data,
                 circle: circle_data,
+                text: text_data,
                 rigidbody_2d: rigidbody_2d_data,
                 box_collider_2d: box_collider_2d_data,
                 circle_collider_2d: circle_collider_2d_data,
@@ -525,6 +568,22 @@ impl SceneSerializer {
                         color: Vec4::from(cd.color),
                         thickness: cd.thickness,
                         fade: cd.fade,
+                    },
+                );
+            }
+
+            // TextComponent — added only if present in the file.
+            if let Some(ref td) = entity_data.text {
+                scene.add_component(
+                    entity,
+                    TextComponent {
+                        text: td.text.clone(),
+                        font_path: td.font_path.clone(),
+                        font: None, // Loaded at runtime.
+                        font_size: td.font_size,
+                        color: Vec4::from(td.color),
+                        line_spacing: td.line_spacing,
+                        kerning: td.kerning,
                     },
                 );
             }

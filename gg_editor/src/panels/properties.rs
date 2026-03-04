@@ -251,6 +251,12 @@ fn draw_components(
                     scene.add_component(entity, CircleRendererComponent::default());
                     *scene_dirty = true;
                 }
+                if !scene.has_component::<TextComponent>(entity)
+                    && ui.button("Text").clicked()
+                {
+                    scene.add_component(entity, TextComponent::default());
+                    *scene_dirty = true;
+                }
                 if !scene.has_component::<RigidBody2DComponent>(entity)
                     && ui.button("Rigidbody 2D").clicked()
                 {
@@ -760,6 +766,163 @@ fn draw_components(
     }
     if remove_circle {
         scene.remove_component::<CircleRendererComponent>(entity);
+    }
+
+    // -- Text Component (removable) --
+    let mut remove_text = false;
+    if scene.has_component::<TextComponent>(entity) {
+        let cr = egui::CollapsingHeader::new(
+            egui::RichText::new("Text").font(egui::FontId::new(14.0, bold_family.clone())),
+        )
+        .id_salt(("text", entity.id()))
+        .default_open(true)
+        .show(ui, |ui| {
+            let (mut text_str, mut font_path, mut font_size, mut color_arr, mut line_spacing, mut kerning) = {
+                let tc = scene.get_component::<TextComponent>(entity).unwrap();
+                (
+                    tc.text.clone(),
+                    tc.font_path.clone(),
+                    tc.font_size,
+                    [tc.color.x, tc.color.y, tc.color.z, tc.color.w],
+                    tc.line_spacing,
+                    tc.kerning,
+                )
+            };
+
+            // Text (multiline).
+            ui.label("Text");
+            if ui
+                .add(egui::TextEdit::multiline(&mut text_str).desired_rows(3))
+                .changed()
+            {
+                if let Some(mut tc) = scene.get_component_mut::<TextComponent>(entity) {
+                    tc.text = text_str;
+                    *scene_dirty = true;
+                }
+            }
+
+            // Font path.
+            ui.horizontal(|ui| {
+                ui.label("Font");
+                if ui
+                    .add(egui::TextEdit::singleline(&mut font_path).desired_width(150.0))
+                    .changed()
+                {
+                    if let Some(mut tc) = scene.get_component_mut::<TextComponent>(entity) {
+                        tc.font_path = font_path.clone();
+                        tc.font = None; // Will be reloaded.
+                        *scene_dirty = true;
+                    }
+                }
+                if ui.button("...").clicked() {
+                    let fonts_dir = assets_root.join("fonts");
+                    let fonts_dir_str = fonts_dir.to_string_lossy();
+                    if let Some(path_str) =
+                        FileDialogs::open_file_in("Font files", &["ttf", "otf"], &fonts_dir_str)
+                    {
+                        if let Some(mut tc) = scene.get_component_mut::<TextComponent>(entity) {
+                            tc.font_path = path_str;
+                            tc.font = None;
+                            *scene_dirty = true;
+                        }
+                    }
+                }
+            });
+
+            // Color.
+            let mut egui_color = egui::Color32::from_rgba_unmultiplied(
+                (color_arr[0] * 255.0) as u8,
+                (color_arr[1] * 255.0) as u8,
+                (color_arr[2] * 255.0) as u8,
+                (color_arr[3] * 255.0) as u8,
+            );
+            ui.horizontal(|ui| {
+                ui.label("Color");
+                if egui::color_picker::color_edit_button_srgba(
+                    ui,
+                    &mut egui_color,
+                    egui::color_picker::Alpha::OnlyBlend,
+                )
+                .changed()
+                {
+                    let [r, g, b, a] = egui_color.to_srgba_unmultiplied();
+                    color_arr = [
+                        r as f32 / 255.0,
+                        g as f32 / 255.0,
+                        b as f32 / 255.0,
+                        a as f32 / 255.0,
+                    ];
+                    if let Some(mut tc) = scene.get_component_mut::<TextComponent>(entity) {
+                        tc.color = Vec4::from(color_arr);
+                        *scene_dirty = true;
+                    }
+                }
+            });
+
+            // Font size.
+            ui.horizontal(|ui| {
+                ui.label("Font Size");
+                if ui
+                    .add(
+                        egui::DragValue::new(&mut font_size)
+                            .speed(0.01)
+                            .range(0.01..=100.0),
+                    )
+                    .changed()
+                {
+                    if let Some(mut tc) = scene.get_component_mut::<TextComponent>(entity) {
+                        tc.font_size = font_size;
+                        *scene_dirty = true;
+                    }
+                }
+            });
+
+            // Line spacing.
+            ui.horizontal(|ui| {
+                ui.label("Line Spacing");
+                if ui
+                    .add(
+                        egui::DragValue::new(&mut line_spacing)
+                            .speed(0.01)
+                            .range(0.0..=10.0),
+                    )
+                    .changed()
+                {
+                    if let Some(mut tc) = scene.get_component_mut::<TextComponent>(entity) {
+                        tc.line_spacing = line_spacing;
+                        *scene_dirty = true;
+                    }
+                }
+            });
+
+            // Kerning.
+            ui.horizontal(|ui| {
+                ui.label("Kerning");
+                if ui
+                    .add(
+                        egui::DragValue::new(&mut kerning)
+                            .speed(0.001)
+                            .range(-1.0..=1.0),
+                    )
+                    .changed()
+                {
+                    if let Some(mut tc) = scene.get_component_mut::<TextComponent>(entity) {
+                        tc.kerning = kerning;
+                        *scene_dirty = true;
+                    }
+                }
+            });
+        });
+
+        cr.header_response.context_menu(|ui| {
+            if ui.button("Remove Component").clicked() {
+                remove_text = true;
+                ui.close();
+            }
+        });
+    }
+    if remove_text {
+        scene.remove_component::<TextComponent>(entity);
     }
 
     // -- Rigidbody 2D Component (removable) --

@@ -184,6 +184,29 @@ impl LineBatchState {
 }
 
 // ---------------------------------------------------------------------------
+// TextBatchState — same vertex layout as quads, different shader (MSDF)
+// ---------------------------------------------------------------------------
+
+struct TextBatchState {
+    vertices: Vec<BatchQuadVertex>,
+    quad_count: usize,
+    /// Byte offset into the text vertex buffer for the next flush.
+    vb_write_offset: usize,
+    stats: Renderer2DStats,
+}
+
+impl TextBatchState {
+    fn new() -> Self {
+        Self {
+            vertices: Vec::with_capacity(MAX_VERTICES),
+            quad_count: 0,
+            vb_write_offset: 0,
+            stats: Renderer2DStats::default(),
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Renderer2DData — batch rendering resources (bindless)
 // ---------------------------------------------------------------------------
 
@@ -212,6 +235,14 @@ pub(super) struct Renderer2DData {
     line_vertex_buffers: [DynamicVertexBuffer; FRAMES_IN_FLIGHT],
     // Lines don't use an index buffer (drawn with vkCmdDraw).
     line_batch: RefCell<LineBatchState>,
+
+    // -- Text batch resources (same vertex format as quads, MSDF shader) --
+    _text_shader: Arc<Shader>,
+    text_pipeline: Arc<Pipeline>,
+    text_offscreen_pipeline: Option<Arc<Pipeline>>,
+    text_vertex_buffers: [DynamicVertexBuffer; FRAMES_IN_FLIGHT],
+    // Text reuses the same index_buffer (identical quad topology).
+    text_batch: RefCell<TextBatchState>,
 
     // -- Shared resources --
     bindless_pool: vk::DescriptorPool,
@@ -275,6 +306,20 @@ impl Renderer2DData {
             "line",
             shaders::LINE_VERT_SPV,
             shaders::LINE_FRAG_SPV,
+        ));
+
+        // -- Text Shaders --
+        let text_swapchain_shader = Arc::new(Shader::new(
+            device,
+            "text_swapchain",
+            shaders::TEXT_SWAPCHAIN_VERT_SPV,
+            shaders::TEXT_SWAPCHAIN_FRAG_SPV,
+        ));
+        let text_shader = Arc::new(Shader::new(
+            device,
+            "text",
+            shaders::TEXT_VERT_SPV,
+            shaders::TEXT_FRAG_SPV,
         ));
 
         // -- Quad Vertex layout --
@@ -346,6 +391,24 @@ impl Renderer2DData {
             ),
         ];
 
+        // -- Per-frame-in-flight text vertex buffers (same layout as quads) --
+        let text_vertex_buffers = [
+            DynamicVertexBuffer::new(
+                instance,
+                physical_device,
+                device,
+                quad_vb_capacity,
+                quad_layout.clone(),
+            ),
+            DynamicVertexBuffer::new(
+                instance,
+                physical_device,
+                device,
+                quad_vb_capacity,
+                quad_layout.clone(),
+            ),
+        ];
+
         // -- Static index buffer (pre-generated quad pattern) --
         let mut indices = Vec::with_capacity(MAX_INDICES);
         for i in 0..MAX_QUADS as u32 {
@@ -413,6 +476,18 @@ impl Renderer2DData {
             1,
         ));
 
+        // -- Text Pipeline (swapchain: 1 color attachment, uses bindless textures for font atlas) --
+        // Text uses the same vertex layout as quads but a different (MSDF) fragment shader.
+        let text_pipeline = Arc::new(pipeline::create_batch_pipeline(
+            device,
+            &text_swapchain_shader,
+            vertex_buffers[0].layout(),
+            render_pass,
+            camera_ubo_ds_layout,
+            &[bindless_ds_layout],
+            1,
+        ));
+
         // -- Bindless descriptor pool (UPDATE_AFTER_BIND) --
         let pool_size = vk::DescriptorPoolSize {
             ty: vk::DescriptorType::COMBINED_IMAGE_SAMPLER,
@@ -454,6 +529,12 @@ impl Renderer2DData {
             line_offscreen_pipeline: None,
             line_vertex_buffers,
             line_batch: RefCell::new(LineBatchState::new()),
+
+            _text_shader: text_shader,
+            text_pipeline,
+            text_offscreen_pipeline: None,
+            text_vertex_buffers,
+            text_batch: RefCell::new(TextBatchState::new()),
 
             bindless_pool,
             bindless_ds_layout,
@@ -522,6 +603,14 @@ impl Renderer2DData {
             let mut batch = self.line_batch.borrow_mut();
             batch.vertices.clear();
             batch.line_count = 0;
+            batch.vb_write_offset = 0;
+            batch.stats = Renderer2DStats::default();
+        }
+        // Reset text batch.
+        {
+            let mut batch = self.text_batch.borrow_mut();
+            batch.vertices.clear();
+            batch.quad_count = 0;
             batch.vb_write_offset = 0;
             batch.stats = Renderer2DStats::default();
         }
@@ -831,6 +920,108 @@ impl Renderer2DData {
         self.line_batch.borrow().stats
     }
 
+    // -- Text batch operations --
+
+    /// Push a text quad into the current text batch.
+    /// Returns false if the batch was full and a flush is needed first.
+    pub(super) fn push_text_quad(&self, vertices: [BatchQuadVertex; 4]) -> bool {
+        let mut batch = self.text_batch.borrow_mut();
+        if batch.quad_count >= MAX_QUADS {
+            return false;
+        }
+        batch.vertices.extend_from_slice(&vertices);
+        batch.quad_count += 1;
+        true
+    }
+
+    /// Returns true if there are text quads to flush.
+    pub(super) fn has_pending_text(&self) -> bool {
+        self.text_batch.borrow().quad_count > 0
+    }
+
+    /// Flush the current text batch: write vertices to GPU, bind the MSDF text
+    /// pipeline, and record draw commands.
+    pub(super) fn flush_text(
+        &self,
+        cmd_buf: vk::CommandBuffer,
+        camera_ubo_ds: vk::DescriptorSet,
+        current_frame: usize,
+    ) {
+        let mut batch = self.text_batch.borrow_mut();
+        if batch.quad_count == 0 {
+            return;
+        }
+
+        let _timer = ProfileTimer::new("Renderer2D::flush_text");
+
+        // 1. Copy vertex data to the mapped VB at the current write offset.
+        let vertex_data = unsafe {
+            std::slice::from_raw_parts(
+                batch.vertices.as_ptr() as *const u8,
+                batch.vertices.len() * std::mem::size_of::<BatchQuadVertex>(),
+            )
+        };
+        let vb_offset = batch.vb_write_offset;
+        self.text_vertex_buffers[current_frame].write_at(vb_offset, vertex_data);
+
+        // 2. Record Vulkan commands.
+        let index_count = (batch.quad_count * 6) as u32;
+        let active_pipeline = if self.use_offscreen {
+            self.text_offscreen_pipeline
+                .as_ref()
+                .unwrap_or(&self.text_pipeline)
+        } else {
+            &self.text_pipeline
+        };
+        let pipeline = active_pipeline.pipeline();
+        let layout = active_pipeline.layout();
+
+        unsafe {
+            self.device
+                .cmd_bind_pipeline(cmd_buf, vk::PipelineBindPoint::GRAPHICS, pipeline);
+
+            // Bind camera UBO (set 0) and bindless textures (set 1).
+            self.device.cmd_bind_descriptor_sets(
+                cmd_buf,
+                vk::PipelineBindPoint::GRAPHICS,
+                layout,
+                0,
+                &[camera_ubo_ds, self.bindless_ds[current_frame]],
+                &[],
+            );
+
+            // Bind text vertex buffer at this batch's offset.
+            let vb_handle = self.text_vertex_buffers[current_frame].handle();
+            self.device
+                .cmd_bind_vertex_buffers(cmd_buf, 0, &[vb_handle], &[vb_offset as u64]);
+
+            // Bind index buffer (shared with quads — same topology).
+            self.device.cmd_bind_index_buffer(
+                cmd_buf,
+                self.index_buffer.buffer(),
+                0,
+                vk::IndexType::UINT32,
+            );
+
+            // Draw!
+            self.device
+                .cmd_draw_indexed(cmd_buf, index_count, 1, 0, 0, 0);
+        }
+
+        // 3. Update stats, advance write offset, and reset vertices for next batch.
+        batch.stats.draw_calls += 1;
+        batch.stats.quad_count += batch.quad_count as u32;
+        batch.vb_write_offset = vb_offset + vertex_data.len();
+
+        batch.vertices.clear();
+        batch.quad_count = 0;
+    }
+
+    /// Get the accumulated text statistics for this frame.
+    pub(super) fn text_stats(&self) -> Renderer2DStats {
+        self.text_batch.borrow().stats
+    }
+
     /// Create offscreen batch pipelines compatible with a multi-attachment
     /// render pass (e.g. framebuffer with 2 color attachments for picking).
     pub(super) fn create_offscreen_pipeline(
@@ -869,6 +1060,17 @@ impl Renderer2DData {
             self.line_vertex_buffers[0].layout(),
             render_pass,
             camera_ubo_ds_layout,
+            color_attachment_count,
+        )));
+
+        // Text offscreen pipeline (with bindless textures at set 1, MSDF shader).
+        self.text_offscreen_pipeline = Some(Arc::new(pipeline::create_batch_pipeline(
+            device,
+            &self._text_shader,
+            self.text_vertex_buffers[0].layout(),
+            render_pass,
+            camera_ubo_ds_layout,
+            &[self.bindless_ds_layout],
             color_attachment_count,
         )));
     }

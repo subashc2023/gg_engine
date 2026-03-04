@@ -8,6 +8,81 @@ use super::RendererResources;
 use crate::profiling::ProfileTimer;
 
 // ---------------------------------------------------------------------------
+// ImageFormat — pixel format enum
+// ---------------------------------------------------------------------------
+
+/// Pixel format for textures.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ImageFormat {
+    /// 8-bit RGBA, sRGB color space (standard for color textures).
+    Rgba8Srgb,
+    /// 8-bit RGBA, linear/UNORM (used for SDF font atlases, data textures).
+    Rgba8Unorm,
+}
+
+impl ImageFormat {
+    fn to_vk(self) -> vk::Format {
+        match self {
+            ImageFormat::Rgba8Srgb => vk::Format::R8G8B8A8_SRGB,
+            ImageFormat::Rgba8Unorm => vk::Format::R8G8B8A8_UNORM,
+        }
+    }
+}
+
+impl Default for ImageFormat {
+    fn default() -> Self {
+        ImageFormat::Rgba8Srgb
+    }
+}
+
+// ---------------------------------------------------------------------------
+// TextureSpecification — creation parameters
+// ---------------------------------------------------------------------------
+
+/// Specification for creating a [`Texture2D`].
+///
+/// Use [`TextureSpecification::default()`] for standard color textures
+/// (sRGB, nearest filtering, repeat wrap). Override fields as needed.
+#[derive(Clone, Debug)]
+pub struct TextureSpecification {
+    /// Pixel format.
+    pub format: ImageFormat,
+    /// Magnification and minification filter.
+    pub filter: vk::Filter,
+    /// Texture address / wrap mode.
+    pub address_mode: vk::SamplerAddressMode,
+    /// Enable anisotropic filtering.
+    pub anisotropy: bool,
+    /// Maximum anisotropy level (ignored if `anisotropy` is false).
+    pub max_anisotropy: f32,
+}
+
+impl Default for TextureSpecification {
+    fn default() -> Self {
+        Self {
+            format: ImageFormat::Rgba8Srgb,
+            filter: vk::Filter::NEAREST,
+            address_mode: vk::SamplerAddressMode::REPEAT,
+            anisotropy: true,
+            max_anisotropy: 16.0,
+        }
+    }
+}
+
+impl TextureSpecification {
+    /// Preset for SDF font atlases: linear filtering, UNORM format, clamp-to-edge.
+    pub fn font_atlas() -> Self {
+        Self {
+            format: ImageFormat::Rgba8Unorm,
+            filter: vk::Filter::LINEAR,
+            address_mode: vk::SamplerAddressMode::CLAMP_TO_EDGE,
+            anisotropy: false,
+            max_anisotropy: 1.0,
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Texture2D
 // ---------------------------------------------------------------------------
 
@@ -39,14 +114,25 @@ impl Texture2D {
         Self::from_rgba8(res, width, height, &pixels)
     }
 
-    /// Create a texture from raw RGBA8 pixel data.
+    /// Create a texture from raw RGBA8 pixel data with default spec (sRGB, nearest, repeat).
     pub(crate) fn from_rgba8(
         res: &RendererResources<'_>,
         width: u32,
         height: u32,
         pixels: &[u8],
     ) -> Self {
-        let _timer = ProfileTimer::new("Texture2D::from_rgba8");
+        Self::from_rgba8_with_spec(res, width, height, pixels, &TextureSpecification::default())
+    }
+
+    /// Create a texture from raw RGBA8 pixel data with a custom specification.
+    pub(crate) fn from_rgba8_with_spec(
+        res: &RendererResources<'_>,
+        width: u32,
+        height: u32,
+        pixels: &[u8],
+        spec: &TextureSpecification,
+    ) -> Self {
+        let _timer = ProfileTimer::new("Texture2D::from_rgba8_with_spec");
         let image_size = (width * height * 4) as vk::DeviceSize;
         assert_eq!(pixels.len() as vk::DeviceSize, image_size);
 
@@ -57,6 +143,8 @@ impl Texture2D {
         let command_pool = res.command_pool;
         let descriptor_pool = res.descriptor_pool;
         let descriptor_set_layout = res.texture_ds_layout;
+
+        let vk_format = spec.format.to_vk();
 
         // 1. Create staging buffer with pixel data.
         let (staging_buffer, staging_memory) =
@@ -72,7 +160,7 @@ impl Texture2D {
             })
             .mip_levels(1)
             .array_layers(1)
-            .format(vk::Format::R8G8B8A8_SRGB)
+            .format(vk_format)
             .tiling(vk::ImageTiling::OPTIMAL)
             .initial_layout(vk::ImageLayout::UNDEFINED)
             .usage(vk::ImageUsageFlags::TRANSFER_DST | vk::ImageUsageFlags::SAMPLED)
@@ -101,7 +189,6 @@ impl Texture2D {
 
         // 4. One-shot command buffer: transition + copy + transition.
         execute_one_shot(device, command_pool, graphics_queue, |cmd_buf| {
-            // UNDEFINED -> TRANSFER_DST_OPTIMAL
             transition_image_layout(
                 device,
                 cmd_buf,
@@ -110,7 +197,6 @@ impl Texture2D {
                 vk::ImageLayout::TRANSFER_DST_OPTIMAL,
             );
 
-            // Copy buffer to image.
             let region = vk::BufferImageCopy {
                 buffer_offset: 0,
                 buffer_row_length: 0,
@@ -139,7 +225,6 @@ impl Texture2D {
                 );
             }
 
-            // TRANSFER_DST_OPTIMAL -> SHADER_READ_ONLY_OPTIMAL
             transition_image_layout(
                 device,
                 cmd_buf,
@@ -159,7 +244,7 @@ impl Texture2D {
         let view_info = vk::ImageViewCreateInfo::default()
             .image(image)
             .view_type(vk::ImageViewType::TYPE_2D)
-            .format(vk::Format::R8G8B8A8_SRGB)
+            .format(vk_format)
             .subresource_range(vk::ImageSubresourceRange {
                 aspect_mask: vk::ImageAspectFlags::COLOR,
                 base_mip_level: 0,
@@ -172,18 +257,23 @@ impl Texture2D {
             .expect("Failed to create image view");
 
         // 7. Create sampler.
+        let mipmap_mode = match spec.filter {
+            vk::Filter::LINEAR => vk::SamplerMipmapMode::LINEAR,
+            _ => vk::SamplerMipmapMode::NEAREST,
+        };
+
         let sampler_info = vk::SamplerCreateInfo::default()
-            .mag_filter(vk::Filter::NEAREST)
-            .min_filter(vk::Filter::NEAREST)
-            .address_mode_u(vk::SamplerAddressMode::REPEAT)
-            .address_mode_v(vk::SamplerAddressMode::REPEAT)
-            .address_mode_w(vk::SamplerAddressMode::REPEAT)
-            .anisotropy_enable(true)
-            .max_anisotropy(16.0)
-            .border_color(vk::BorderColor::INT_OPAQUE_BLACK)
+            .mag_filter(spec.filter)
+            .min_filter(spec.filter)
+            .address_mode_u(spec.address_mode)
+            .address_mode_v(spec.address_mode)
+            .address_mode_w(spec.address_mode)
+            .anisotropy_enable(spec.anisotropy)
+            .max_anisotropy(spec.max_anisotropy)
+            .border_color(vk::BorderColor::FLOAT_TRANSPARENT_BLACK)
             .unnormalized_coordinates(false)
             .compare_enable(false)
-            .mipmap_mode(vk::SamplerMipmapMode::NEAREST)
+            .mipmap_mode(mipmap_mode)
             .mip_lod_bias(0.0)
             .min_lod(0.0)
             .max_lod(0.0);

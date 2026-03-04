@@ -1,6 +1,8 @@
 mod buffer;
 mod draw_context;
 mod editor_camera;
+mod font;
+mod msdf;
 mod framebuffer;
 mod orthographic_camera;
 mod pipeline;
@@ -25,6 +27,7 @@ pub use buffer::{
 };
 pub(crate) use draw_context::DrawContext;
 pub use editor_camera::EditorCamera;
+pub use font::{Font, GlyphInfo};
 pub use framebuffer::{
     Framebuffer, FramebufferSpec, FramebufferTextureFormat, FramebufferTextureSpec,
 };
@@ -37,7 +40,7 @@ pub use shader::Shader;
 pub use shader_library::ShaderLibrary;
 pub use sub_texture::SubTexture2D;
 pub use swapchain::{Swapchain, SwapchainError};
-pub use texture::Texture2D;
+pub use texture::{ImageFormat, Texture2D, TextureSpecification};
 pub use vertex_array::VertexArray;
 pub use vulkan_context::{VulkanContext, VulkanInitError};
 

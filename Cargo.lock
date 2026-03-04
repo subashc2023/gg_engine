@@ -1140,6 +1140,7 @@ dependencies = [
  "rfd",
  "serde",
  "serde_yaml",
+ "ttf-parser",
  "winit",
 ]
 
