@@ -36,14 +36,14 @@ pub(crate) fn properties_ui(
     ui: &mut egui::Ui,
     scene: &mut Scene,
     selection_context: &mut Option<Entity>,
-    pending_texture_loads: &mut Vec<(Entity, std::path::PathBuf)>,
+    asset_manager: &mut Option<EditorAssetManager>,
     is_playing: bool,
     assets_root: &std::path::Path,
     scene_dirty: &mut bool,
 ) {
     if let Some(entity) = *selection_context {
         if scene.is_alive(entity) {
-            draw_components(ui, scene, entity, pending_texture_loads, is_playing, assets_root, scene_dirty);
+            draw_components(ui, scene, entity, asset_manager, is_playing, assets_root, scene_dirty);
         } else {
             *selection_context = None;
         }
@@ -201,7 +201,7 @@ fn draw_components(
     ui: &mut egui::Ui,
     scene: &mut Scene,
     entity: Entity,
-    pending_texture_loads: &mut Vec<(Entity, std::path::PathBuf)>,
+    asset_manager: &mut Option<EditorAssetManager>,
     is_playing: bool,
     assets_root: &std::path::Path,
     scene_dirty: &mut bool,
@@ -540,7 +540,7 @@ fn draw_components(
         .id_salt(("sprite_renderer", entity.id()))
         .default_open(true)
         .show(ui, |ui| {
-            let (mut color_arr, _has_texture, mut tiling_factor) = {
+            let (mut color_arr, texture_handle_raw, mut tiling_factor) = {
                 let sprite = scene
                     .get_component::<SpriteRendererComponent>(entity)
                     .unwrap();
@@ -551,7 +551,7 @@ fn draw_components(
                         sprite.color.z,
                         sprite.color.w,
                     ],
-                    sprite.texture.is_some(),
+                    sprite.texture_handle.raw(),
                     sprite.tiling_factor,
                 )
             };
@@ -587,49 +587,113 @@ fn draw_components(
                 }
             });
 
-            // Texture drop target (drag-and-drop + click to browse).
-            let btn_resp = ui.add_sized(
-                [100.0, 0.0],
-                egui::Button::new("Texture"),
-            );
-
-            // Click to open file dialog in assets/textures.
-            if btn_resp.clicked() {
-                let textures_dir = assets_root.join("textures");
-                let textures_dir_str = textures_dir.to_string_lossy();
-                if let Some(path_str) =
-                    FileDialogs::open_file_in("Image files", &["png", "jpg", "jpeg"], &textures_dir_str)
-                {
-                    pending_texture_loads.push((entity, std::path::PathBuf::from(path_str)));
+            // Texture button label: show filename from asset metadata or "None".
+            let texture_label = if texture_handle_raw != 0 {
+                if let Some(am) = asset_manager.as_ref() {
+                    let handle = Uuid::from_raw(texture_handle_raw);
+                    am.get_metadata(&handle)
+                        .map(|m| {
+                            std::path::Path::new(&m.file_path)
+                                .file_name()
+                                .map(|n| n.to_string_lossy().to_string())
+                                .unwrap_or_else(|| m.file_path.clone())
+                        })
+                        .unwrap_or_else(|| "Invalid".to_string())
+                } else {
+                    "No Asset Manager".to_string()
                 }
-            }
+            } else {
+                "None".to_string()
+            };
 
-            // Accept texture drag-and-drop from the content browser.
-            if let Some(payload) =
-                btn_resp.dnd_release_payload::<ContentBrowserPayload>()
-            {
-                if !payload.is_directory {
-                    let ext = payload
-                        .path
-                        .extension()
-                        .and_then(|e| e.to_str())
-                        .unwrap_or("")
-                        .to_lowercase();
-                    if matches!(ext.as_str(), "png" | "jpg" | "jpeg") {
-                        pending_texture_loads.push((entity, payload.path.clone()));
+            // Calculate button width from text (approximate: 7px per char).
+            let btn_width = ((texture_label.len() as f32) * 7.0 + 20.0).max(100.0);
+
+            ui.horizontal(|ui| {
+                let btn_resp = ui.add_sized(
+                    [btn_width, 0.0],
+                    egui::Button::new(&texture_label),
+                );
+
+                // Click to open file dialog in assets/textures.
+                if btn_resp.clicked() {
+                    if let Some(am) = asset_manager.as_mut() {
+                        let textures_dir = assets_root.join("textures");
+                        let textures_dir_str = textures_dir.to_string_lossy();
+                        if let Some(path_str) =
+                            FileDialogs::open_file_in("Image files", &["png", "jpg", "jpeg"], &textures_dir_str)
+                        {
+                            // Make path relative to the asset directory.
+                            let abs_path = std::path::PathBuf::from(&path_str);
+                            let rel_path = abs_path
+                                .strip_prefix(am.asset_directory())
+                                .map(|p| p.to_string_lossy().to_string())
+                                .unwrap_or(path_str);
+                            let handle = am.import_asset(&rel_path);
+                            if let Some(mut sprite) =
+                                scene.get_component_mut::<SpriteRendererComponent>(entity)
+                            {
+                                sprite.texture_handle = handle;
+                                sprite.texture = None; // Will be resolved in on_render
+                            }
+                            *scene_dirty = true;
+                        }
                     }
                 }
-            }
 
-            // Visual feedback when dragging over the button.
-            if btn_resp.dnd_hover_payload::<ContentBrowserPayload>().is_some() {
-                ui.painter().rect_stroke(
-                    btn_resp.rect,
-                    egui::CornerRadius::same(2),
-                    egui::Stroke::new(2.0, egui::Color32::from_rgb(0x56, 0x9C, 0xD6)),
-                    egui::StrokeKind::Inside,
-                );
-            }
+                // Accept texture drag-and-drop from the content browser.
+                if let Some(payload) =
+                    btn_resp.dnd_release_payload::<ContentBrowserPayload>()
+                {
+                    if !payload.is_directory {
+                        let ext = payload
+                            .path
+                            .extension()
+                            .and_then(|e| e.to_str())
+                            .unwrap_or("")
+                            .to_lowercase();
+                        if matches!(ext.as_str(), "png" | "jpg" | "jpeg") {
+                            if let Some(am) = asset_manager.as_mut() {
+                                let rel_path = payload.path
+                                    .strip_prefix(am.asset_directory())
+                                    .map(|p| p.to_string_lossy().to_string())
+                                    .unwrap_or_else(|_| payload.path.to_string_lossy().to_string());
+                                let handle = am.import_asset(&rel_path);
+                                if let Some(mut sprite) =
+                                    scene.get_component_mut::<SpriteRendererComponent>(entity)
+                                {
+                                    sprite.texture_handle = handle;
+                                    sprite.texture = None; // Will be resolved in on_render
+                                }
+                                *scene_dirty = true;
+                            }
+                        }
+                    }
+                }
+
+                // Visual feedback when dragging over the button.
+                if btn_resp.dnd_hover_payload::<ContentBrowserPayload>().is_some() {
+                    ui.painter().rect_stroke(
+                        btn_resp.rect,
+                        egui::CornerRadius::same(2),
+                        egui::Stroke::new(2.0, egui::Color32::from_rgb(0x56, 0x9C, 0xD6)),
+                        egui::StrokeKind::Inside,
+                    );
+                }
+
+                // Clear button (X).
+                if texture_handle_raw != 0 {
+                    if ui.small_button("X").clicked() {
+                        if let Some(mut sprite) =
+                            scene.get_component_mut::<SpriteRendererComponent>(entity)
+                        {
+                            sprite.texture_handle = Uuid::from_raw(0);
+                            sprite.texture = None;
+                        }
+                        *scene_dirty = true;
+                    }
+                }
+            });
 
             // Tiling factor.
             ui.horizontal(|ui| {

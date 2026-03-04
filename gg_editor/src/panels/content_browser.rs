@@ -1,6 +1,24 @@
 use gg_engine::egui;
+use gg_engine::prelude::*;
 
 pub(crate) const ASSETS_DIR: &str = "assets";
+
+// ---------------------------------------------------------------------------
+// Content browser mode
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum ContentBrowserMode {
+    FileSystem,
+    Asset,
+}
+
+// Thread-local state for the content browser mode toggle.
+// (Stored here because the panel function is stateless otherwise.)
+thread_local! {
+    static BROWSER_MODE: std::cell::Cell<ContentBrowserMode> =
+        const { std::cell::Cell::new(ContentBrowserMode::FileSystem) };
+}
 
 // ---------------------------------------------------------------------------
 // Content browser drag-and-drop payload
@@ -20,6 +38,42 @@ pub(crate) fn content_browser_ui(
     ui: &mut egui::Ui,
     current_directory: &mut std::path::PathBuf,
     assets_root: &std::path::Path,
+    asset_manager: &mut Option<EditorAssetManager>,
+) {
+    let assets_root = assets_root.to_path_buf();
+
+    // Mode toggle (File / Asset).
+    let mut mode = BROWSER_MODE.with(|m| m.get());
+    ui.horizontal(|ui| {
+        if ui.selectable_label(mode == ContentBrowserMode::FileSystem, "File").clicked() {
+            mode = ContentBrowserMode::FileSystem;
+        }
+        if ui.selectable_label(mode == ContentBrowserMode::Asset, "Asset").clicked() {
+            mode = ContentBrowserMode::Asset;
+        }
+    });
+    BROWSER_MODE.with(|m| m.set(mode));
+    ui.separator();
+
+    match mode {
+        ContentBrowserMode::FileSystem => {
+            file_browser_ui(ui, current_directory, &assets_root, asset_manager);
+        }
+        ContentBrowserMode::Asset => {
+            asset_browser_ui(ui, &assets_root, asset_manager);
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// File browser (original behavior + right-click import)
+// ---------------------------------------------------------------------------
+
+fn file_browser_ui(
+    ui: &mut egui::Ui,
+    current_directory: &mut std::path::PathBuf,
+    assets_root: &std::path::Path,
+    asset_manager: &mut Option<EditorAssetManager>,
 ) {
     let assets_root = assets_root.to_path_buf();
 
@@ -159,6 +213,26 @@ pub(crate) fn content_browser_ui(
                     );
                 }
 
+                // Right-click context menu: Import into asset registry.
+                response.inner.context_menu(|ui| {
+                    if let Some(am) = asset_manager.as_mut() {
+                        let rel_path = path
+                            .strip_prefix(am.asset_directory())
+                            .map(|p| p.to_string_lossy().to_string())
+                            .unwrap_or_else(|_| path.to_string_lossy().to_string());
+                        let already_imported = am.is_imported(&rel_path);
+                        if already_imported {
+                            ui.label("Already imported");
+                        } else if ui.button("Import").clicked() {
+                            am.import_asset(&rel_path);
+                            am.save_registry();
+                            ui.close();
+                        }
+                    } else {
+                        ui.label("No project loaded");
+                    }
+                });
+
                 col += 1;
                 if col >= columns {
                     col = 0;
@@ -170,6 +244,76 @@ pub(crate) fn content_browser_ui(
             *current_directory = path;
         }
     });
+}
+
+// ---------------------------------------------------------------------------
+// Asset browser (shows imported assets from registry)
+// ---------------------------------------------------------------------------
+
+fn asset_browser_ui(
+    ui: &mut egui::Ui,
+    _assets_root: &std::path::Path,
+    asset_manager: &mut Option<EditorAssetManager>,
+) {
+    let Some(am) = asset_manager.as_mut() else {
+        ui.label("No project loaded");
+        return;
+    };
+
+    if am.registry().is_empty() {
+        ui.label("No assets imported. Use File mode to import assets.");
+        return;
+    }
+
+    // Collect and sort assets by path.
+    let mut entries: Vec<(Uuid, String, AssetType)> = am
+        .registry()
+        .iter()
+        .map(|(handle, meta)| (*handle, meta.file_path.clone(), meta.asset_type))
+        .collect();
+    entries.sort_by(|a, b| a.1.cmp(&b.1));
+
+    // Track which handle to remove (if any) after iteration.
+    let mut remove_handle: Option<Uuid> = None;
+
+    egui::ScrollArea::vertical().show(ui, |ui| {
+        for (handle, file_path, asset_type) in &entries {
+            let label = format!("[{:?}] {}", asset_type, file_path);
+
+            let response = ui.selectable_label(false, &label);
+
+            // Drag source for asset entries.
+            if response.drag_started() || response.dragged() {
+                let abs_path = am.asset_directory().join(file_path);
+                let name = std::path::Path::new(file_path)
+                    .file_name()
+                    .map(|n| n.to_string_lossy().to_string())
+                    .unwrap_or_else(|| file_path.clone());
+                egui::DragAndDrop::set_payload(
+                    ui.ctx(),
+                    ContentBrowserPayload {
+                        path: abs_path,
+                        name,
+                        is_directory: false,
+                    },
+                );
+            }
+
+            // Right-click context menu: Remove from registry.
+            response.context_menu(|ui| {
+                if ui.button("Remove from registry").clicked() {
+                    remove_handle = Some(*handle);
+                    ui.close();
+                }
+            });
+        }
+    });
+
+    // Process deferred removal.
+    if let Some(handle) = remove_handle {
+        am.registry_mut().remove(&handle);
+        am.save_registry();
+    }
 }
 
 // ---------------------------------------------------------------------------

@@ -136,8 +136,11 @@ impl Default for CameraComponent {
 #[derive(Clone)]
 pub struct SpriteRendererComponent {
     pub color: Vec4,
+    /// Runtime-only loaded texture. Not serialized.
     pub texture: Option<Ref<Texture2D>>,
-    pub texture_path: Option<String>,
+    /// Asset handle referencing a texture in the asset registry.
+    /// 0 = no texture assigned.
+    pub texture_handle: Uuid,
     pub tiling_factor: f32,
 }
 
@@ -146,7 +149,7 @@ impl SpriteRendererComponent {
         Self {
             color,
             texture: None,
-            texture_path: None,
+            texture_handle: Uuid::from_raw(0),
             tiling_factor: 1.0,
         }
     }
@@ -156,7 +159,7 @@ impl SpriteRendererComponent {
         Self {
             color: Vec4::new(r, g, b, 1.0),
             texture: None,
-            texture_path: None,
+            texture_handle: Uuid::from_raw(0),
             tiling_factor: 1.0,
         }
     }
@@ -167,7 +170,7 @@ impl Default for SpriteRendererComponent {
         Self {
             color: Vec4::ONE,
             texture: None,
-            texture_path: None,
+            texture_handle: Uuid::from_raw(0),
             tiling_factor: 1.0,
         }
     }

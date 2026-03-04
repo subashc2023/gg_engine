@@ -45,7 +45,7 @@ pub(crate) struct EditorTabViewer<'a> {
     pub(crate) hovered_entity: i32,
     pub(crate) current_directory: &'a mut std::path::PathBuf,
     pub(crate) pending_open_path: &'a mut Option<std::path::PathBuf>,
-    pub(crate) pending_texture_loads: &'a mut Vec<(Entity, std::path::PathBuf)>,
+    pub(crate) asset_manager: &'a mut Option<EditorAssetManager>,
     pub(crate) is_playing: bool,
     pub(crate) scene_dirty: &'a mut bool,
     pub(crate) assets_root: &'a std::path::Path,
@@ -109,7 +109,7 @@ impl egui_dock::TabViewer for EditorTabViewer<'_> {
                     ui,
                     self.scene,
                     self.selection_context,
-                    self.pending_texture_loads,
+                    self.asset_manager,
                     self.is_playing,
                     self.assets_root,
                     self.scene_dirty,
@@ -118,7 +118,7 @@ impl egui_dock::TabViewer for EditorTabViewer<'_> {
 
             Tab::ContentBrowser => {
                 self.unfocus_viewport_on_click(ui);
-                content_browser::content_browser_ui(ui, self.current_directory, self.assets_root);
+                content_browser::content_browser_ui(ui, self.current_directory, self.assets_root, self.asset_manager);
             }
 
             Tab::Settings => {

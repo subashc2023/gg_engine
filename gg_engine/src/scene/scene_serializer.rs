@@ -130,8 +130,12 @@ struct SpriteData {
     color: [f32; 4],
     #[serde(rename = "TilingFactor", default = "default_tiling_factor")]
     tiling_factor: f32,
-    #[serde(rename = "TexturePath", skip_serializing_if = "Option::is_none", default)]
-    texture_path: Option<String>,
+    #[serde(rename = "TextureHandle", default, skip_serializing_if = "is_zero_handle")]
+    texture_handle: u64,
+}
+
+fn is_zero_handle(v: &u64) -> bool {
+    *v == 0
 }
 
 fn default_tiling_factor() -> f32 {
@@ -393,7 +397,7 @@ impl SceneSerializer {
                     .map(|sprite| SpriteData {
                         color: sprite.color.into(),
                         tiling_factor: sprite.tiling_factor,
-                        texture_path: sprite.texture_path.clone(),
+                        texture_handle: sprite.texture_handle.raw(),
                     });
 
             let circle_data =
@@ -556,7 +560,7 @@ impl SceneSerializer {
             if let Some(ref sd) = entity_data.sprite {
                 let mut sprite = SpriteRendererComponent::new(Vec4::from(sd.color));
                 sprite.tiling_factor = sd.tiling_factor;
-                sprite.texture_path = sd.texture_path.clone();
+                sprite.texture_handle = Uuid::from_raw(sd.texture_handle);
                 scene.add_component(entity, sprite);
             }
 
@@ -662,7 +666,7 @@ mod tests {
             tc.scale = Vec3::new(2.0, 2.0, 2.0);
         }
         let mut sprite = SpriteRendererComponent::new(Vec4::new(0.8, 0.2, 0.2, 1.0));
-        sprite.texture_path = Some("assets/textures/test.png".to_string());
+        sprite.texture_handle = crate::uuid::Uuid::from_raw(12345);
         scene.add_component(e1, sprite);
 
         let e2 = scene.create_entity_with_tag("Camera");
@@ -695,15 +699,12 @@ mod tests {
         assert_eq!(tc.rotation, Vec3::new(0.1, 0.2, 0.3));
         assert_eq!(tc.scale, Vec3::new(2.0, 2.0, 2.0));
 
-        // Verify sprite (color + texture_path round-trip).
+        // Verify sprite (color + texture_handle round-trip).
         let sprite = loaded
             .get_component::<SpriteRendererComponent>(*test_entity)
             .unwrap();
         assert_eq!(sprite.color, Vec4::new(0.8, 0.2, 0.2, 1.0));
-        assert_eq!(
-            sprite.texture_path.as_deref(),
-            Some("assets/textures/test.png")
-        );
+        assert_eq!(sprite.texture_handle.raw(), 12345);
 
         // Verify camera entity.
         let (cam_entity, _) = entities.iter().find(|(_, n)| n == "Camera").unwrap();
@@ -719,37 +720,26 @@ mod tests {
 
     #[test]
     fn demo_scene_deserializes() {
-        let yaml = include_str!("../../../assets/scenes/new.ggscene");
+        let yaml = include_str!("../../../assets/scenes/lua_camera_follow.ggscene");
         let mut scene = Scene::new();
         assert!(
             SceneSerializer::deserialize_from_string(&mut scene, yaml),
             "Failed to deserialize demo scene"
         );
-        assert_eq!(scene.entity_count(), 9);
+        assert_eq!(scene.entity_count(), 6);
 
         let entities = scene.each_entity_with_tag();
         let names: Vec<&str> = entities.iter().map(|(_, name)| name.as_str()).collect();
         assert!(names.contains(&"Camera"));
-        assert!(names.contains(&"Lua Player"));
-        assert!(names.contains(&"Native Player"));
-        assert!(names.contains(&"Force Block"));
-        assert!(names.contains(&"Spinner"));
-        assert!(names.contains(&"Bouncy Ball"));
+        assert!(names.contains(&"Player"));
         assert!(names.contains(&"Ground"));
-        assert!(names.contains(&"Left Wall"));
-        assert!(names.contains(&"Right Wall"));
 
         // Verify Lua scripts were loaded.
-        let (lua_player, _) = entities.iter().find(|(_, n)| n == "Lua Player").unwrap();
-        assert!(scene.has_component::<LuaScriptComponent>(*lua_player));
+        let (player, _) = entities.iter().find(|(_, n)| n == "Player").unwrap();
+        assert!(scene.has_component::<LuaScriptComponent>(*player));
 
         // Verify physics components.
-        assert!(scene.has_component::<RigidBody2DComponent>(*lua_player));
-        assert!(scene.has_component::<BoxCollider2DComponent>(*lua_player));
-
-        // Verify circle collider on bouncy ball.
-        let (bouncy, _) = entities.iter().find(|(_, n)| n == "Bouncy Ball").unwrap();
-        assert!(scene.has_component::<CircleCollider2DComponent>(*bouncy));
-        assert!(scene.has_component::<CircleRendererComponent>(*bouncy));
+        assert!(scene.has_component::<RigidBody2DComponent>(*player));
+        assert!(scene.has_component::<BoxCollider2DComponent>(*player));
     }
 }

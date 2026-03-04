@@ -5,6 +5,7 @@ use gg_engine::prelude::*;
 pub struct GGPlayer {
     project_name: String,
     scene: Scene,
+    asset_manager: Option<EditorAssetManager>,
     window_width: u32,
     window_height: u32,
     textures_loaded: bool,
@@ -48,11 +49,17 @@ impl Application for GGPlayer {
             panic!("Failed to deserialize scene: {}", path_str);
         }
 
+        // Create asset manager and load registry.
+        let assets_root = project.asset_directory_path();
+        let mut asset_manager = EditorAssetManager::new(&assets_root);
+        asset_manager.load_registry();
+
         info!("GGPlayer: loaded project '{}', scene '{}'", project_name, path_str);
 
         GGPlayer {
             project_name,
             scene,
+            asset_manager: Some(asset_manager),
             window_width: 1280,
             window_height: 720,
             textures_loaded: false,
@@ -119,7 +126,9 @@ impl Application for GGPlayer {
         if !self.textures_loaded {
             self.scene
                 .on_viewport_resize(self.window_width, self.window_height);
-            self.scene.load_textures(renderer);
+            if let Some(ref mut am) = self.asset_manager {
+                self.scene.resolve_texture_handles(am, renderer);
+            }
             self.scene.load_fonts(renderer);
             self.textures_loaded = true;
         }

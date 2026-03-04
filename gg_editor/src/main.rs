@@ -54,7 +54,7 @@ struct GGEditor {
     assets_root: PathBuf,
     current_directory: PathBuf,
     pending_open_path: Option<PathBuf>,
-    pending_texture_loads: Vec<(Entity, PathBuf)>,
+    asset_manager: Option<EditorAssetManager>,
     pending_font_loads: Vec<(Entity, PathBuf)>,
     font_cache: HashMap<PathBuf, Ref<Font>>,
     /// Old scenes awaiting GPU-safe destruction (deferred from on_egui to on_render).
@@ -134,6 +134,15 @@ impl Application for GGEditor {
             None => PathBuf::from(ASSETS_DIR),
         };
 
+        // Create and load asset manager if a project is loaded.
+        let asset_manager = if project.is_some() {
+            let mut am = EditorAssetManager::new(&assets_root);
+            am.load_registry();
+            Some(am)
+        } else {
+            None
+        };
+
         // Load scene: from project start scene, or create demo scene as fallback.
         let (scene, editor_scene_path) = if let Some(ref proj) = project {
             let start_path = proj.start_scene_path();
@@ -187,7 +196,7 @@ impl Application for GGEditor {
             current_directory: assets_root.clone(),
             assets_root,
             pending_open_path: None,
-            pending_texture_loads: Vec::new(),
+            asset_manager,
             pending_font_loads: Vec::new(),
             font_cache: HashMap::new(),
             pending_drop_scenes: Vec::new(),
@@ -428,17 +437,9 @@ impl Application for GGEditor {
             self.pending_drop_scenes.clear();
         }
 
-        // Process deferred texture loads from the properties panel.
-        for (entity, path) in self.pending_texture_loads.drain(..) {
-            if self.scene.is_alive(entity) {
-                let texture = Ref::new(renderer.create_texture_from_file(&path));
-                if let Some(mut sprite) =
-                    self.scene.get_component_mut::<SpriteRendererComponent>(entity)
-                {
-                    sprite.texture = Some(texture);
-                    sprite.texture_path = Some(path.to_string_lossy().to_string());
-                }
-            }
+        // Resolve any pending texture handles via the asset manager.
+        if let Some(ref mut am) = self.asset_manager {
+            self.scene.resolve_texture_handles(am, renderer);
         }
 
         // Process deferred font loads for TextComponents.
@@ -790,7 +791,7 @@ impl Application for GGEditor {
                 hovered_entity: self.hovered_entity,
                 current_directory: &mut self.current_directory,
                 pending_open_path: &mut self.pending_open_path,
-                pending_texture_loads: &mut self.pending_texture_loads,
+                asset_manager: &mut self.asset_manager,
                 is_playing: self.scene_state == SceneState::Play,  // Simulate still uses editor camera + gizmos
                 scene_dirty: &mut self.scene_dirty,
                 assets_root: &self.assets_root,
@@ -1163,7 +1164,7 @@ impl GGEditor {
                 if w > 0 && h > 0 {
                     self.scene.on_viewport_resize(w, h);
                 }
-                self.queue_texture_loads_from_scene();
+                self.queue_font_loads_from_scene();
             }
         }
     }
@@ -1207,26 +1208,17 @@ impl GGEditor {
             if w > 0 && h > 0 {
                 self.scene.on_viewport_resize(w, h);
             }
-            self.queue_texture_loads_from_scene();
+            self.queue_font_loads_from_scene();
         }
     }
 
-    /// Scan the current scene for entities with `texture_path` set on their
-    /// [`SpriteRendererComponent`] and queue them for deferred GPU loading.
-    /// Also queues font loads for [`TextComponent`]s with `font_path` set.
-    fn queue_texture_loads_from_scene(&mut self) {
+    /// Queue font loads for the current scene.
+    ///
+    /// Textures are now resolved via the asset manager in `on_render`
+    /// (using `resolve_texture_handles`). Only fonts still need queuing.
+    fn queue_font_loads_from_scene(&mut self) {
         let entities = self.scene.each_entity_with_tag();
         for (entity, _tag) in &entities {
-            if let Some(sprite) = self.scene.get_component::<SpriteRendererComponent>(*entity) {
-                if let Some(ref path_str) = sprite.texture_path {
-                    let path = std::path::PathBuf::from(path_str);
-                    if path.exists() {
-                        self.pending_texture_loads.push((*entity, path));
-                    } else {
-                        warn!("Texture not found: {}", path_str);
-                    }
-                }
-            }
             if let Some(tc) = self.scene.get_component::<TextComponent>(*entity) {
                 if !tc.font_path.is_empty() && tc.font.is_none() {
                     let path = std::path::PathBuf::from(&tc.font_path);
@@ -1264,6 +1256,11 @@ impl GGEditor {
                 self.assets_root = project.asset_directory_path();
                 self.current_directory = self.assets_root.clone();
 
+                // Create and load asset manager for the new project.
+                let mut am = EditorAssetManager::new(&self.assets_root);
+                am.load_registry();
+                self.asset_manager = Some(am);
+
                 // Load start scene.
                 let start_path = project.start_scene_path();
                 if start_path.exists() {
@@ -1274,7 +1271,7 @@ impl GGEditor {
                         self.pending_drop_scenes.push(old);
                         self.selection_context = None;
                         self.editor_scene_path = Some(path_str);
-                        self.queue_texture_loads_from_scene();
+                        self.queue_font_loads_from_scene();
                     }
                 } else {
                     let old = std::mem::replace(&mut self.scene, Scene::new());

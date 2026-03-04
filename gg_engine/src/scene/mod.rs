@@ -447,47 +447,47 @@ impl Scene {
     // Texture loading
     // -----------------------------------------------------------------
 
-    /// Load GPU textures for all entities that have a
-    /// [`SpriteRendererComponent`] with a non-empty `texture_path`.
+    /// Resolve texture handles for all sprite entities.
     ///
-    /// Scans every sprite entity, creates a [`Texture2D`] for each path,
-    /// and stores it on the component. Call this after deserializing a
-    /// scene and before the first render.
-    pub fn load_textures(&mut self, renderer: &Renderer) {
-        use std::path::PathBuf;
-        let _timer = crate::profiling::ProfileTimer::new("Scene::load_textures");
+    /// Scans every [`SpriteRendererComponent`] with a non-zero `texture_handle`
+    /// and no loaded texture. For each, ensures the asset is loaded via the
+    /// asset manager and assigns the GPU texture to the component.
+    ///
+    /// Call this after deserializing a scene and before the first render.
+    pub fn resolve_texture_handles(
+        &mut self,
+        asset_manager: &mut crate::asset::EditorAssetManager,
+        renderer: &Renderer,
+    ) {
+        let _timer = crate::profiling::ProfileTimer::new("Scene::resolve_texture_handles");
 
-        // Phase 1: collect (hecs entity handle, path) pairs.
-        // Snapshot first to release the immutable world borrow before
-        // mutating components in phase 2.
-        let loads: Vec<(hecs::Entity, PathBuf)> = self
+        // Phase 1: collect entities that need texture resolution.
+        let needs_resolve: Vec<(hecs::Entity, crate::uuid::Uuid)> = self
             .world
             .query::<(hecs::Entity, &SpriteRendererComponent)>()
             .iter()
             .filter_map(|(handle, sprite)| {
-                sprite.texture_path.as_ref().and_then(|path_str| {
-                    let path = PathBuf::from(path_str);
-                    if path.exists() {
-                        Some((handle, path))
-                    } else {
-                        log::warn!("Texture not found: {}", path_str);
-                        None
-                    }
-                })
+                if sprite.texture_handle.raw() != 0 && sprite.texture.is_none() {
+                    Some((handle, sprite.texture_handle))
+                } else {
+                    None
+                }
             })
             .collect();
 
-        // Phase 2: create GPU textures and assign them to components.
-        for (handle, path) in loads {
-            let texture = crate::Ref::new(renderer.create_texture_from_file(&path));
-            if let Ok(mut sprite) = self.world.get::<&mut SpriteRendererComponent>(handle) {
-                sprite.texture = Some(texture);
+        // Phase 2: load assets and assign textures.
+        for (handle, asset_handle) in needs_resolve {
+            asset_manager.load_asset(&asset_handle, renderer);
+            if let Some(texture) = asset_manager.get_texture(&asset_handle) {
+                if let Ok(mut sprite) = self.world.get::<&mut SpriteRendererComponent>(handle) {
+                    sprite.texture = Some(texture);
+                }
             }
         }
     }
 
     /// Load fonts for all [`TextComponent`]s that have a `font_path` set
-    /// but no loaded font. Similar to [`load_textures`](Self::load_textures).
+    /// but no loaded font. Similar to [`resolve_texture_handles`](Self::resolve_texture_handles).
     pub fn load_fonts(&mut self, renderer: &Renderer) {
         use std::collections::HashMap;
         use std::path::PathBuf;

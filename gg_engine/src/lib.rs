@@ -1,4 +1,5 @@
 mod application;
+pub mod asset;
 pub mod events;
 mod input;
 mod layer;
@@ -22,6 +23,7 @@ pub type Ref<T> = std::sync::Arc<T>;
 pub type Scope<T> = Box<T>;
 
 pub use application::{run, Application, WindowConfig};
+pub use asset::{AssetHandle, AssetMetadata, AssetRegistry, AssetType, EditorAssetManager};
 pub use egui;
 pub use glam;
 pub use hecs;
@@ -86,6 +88,7 @@ pub mod prelude {
     };
     #[cfg(feature = "lua-scripting")]
     pub use crate::scene::{LuaScriptComponent, ScriptEngine, ScriptFieldValue};
+    pub use crate::asset::{AssetHandle, AssetType, EditorAssetManager};
     pub use crate::timestep::Timestep;
     pub use crate::uuid::Uuid;
     pub use crate::ui_theme::BOLD_FONT;
