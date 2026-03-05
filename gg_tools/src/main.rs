@@ -431,10 +431,9 @@ fn generate_flamegraph_svg(trace: &TraceFile, output_path: &Path) {
                 let text_x = x + 2.0;
                 let text_y = y + row_height - 5.0;
                 let esc_label = xml_escape(&label);
-                let _ = write!(
+                let _ = writeln!(
                     svg,
-                    r#"<text x="{text_x:.1}" y="{text_y:.1}" clip-path="url(#clip)">{esc_label}</text>
-"#
+                    r#"<text x="{text_x:.1}" y="{text_y:.1}" clip-path="url(#clip)">{esc_label}</text>"#
                 );
             }
         }

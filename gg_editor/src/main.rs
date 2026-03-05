@@ -9,7 +9,7 @@ mod title_bar;
 mod undo;
 
 use std::collections::{HashMap, HashSet};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use gg_engine::egui;
 use gg_engine::prelude::*;
@@ -224,24 +224,30 @@ impl Application for GGEditor {
         };
 
         // Load scene: from project start scene, or empty scene for hub mode.
-        let (scene, editor_scene_path) = if let Some(ref proj) = project {
+        let (scene, editor_scene_path, recovered_autosave) = if let Some(ref proj) = project {
             let start_path = proj.start_scene_path();
             if start_path.exists() {
                 let mut scene = Scene::new();
                 let path_str = start_path.to_string_lossy().to_string();
                 if SceneSerializer::deserialize(&mut scene, &path_str) {
                     info!("Loaded project start scene: {}", path_str);
-                    (scene, Some(path_str))
+                    // Check for auto-save recovery.
+                    if let Some(recovered) = Self::check_autosave_recovery(&path_str) {
+                        info!("Using recovered auto-save for start scene");
+                        (recovered, Some(path_str), true)
+                    } else {
+                        (scene, Some(path_str), false)
+                    }
                 } else {
                     warn!("Failed to load start scene, creating empty scene");
-                    (Scene::new(), None)
+                    (Scene::new(), None, false)
                 }
             } else {
                 info!("Start scene '{}' not found, creating empty scene", start_path.display());
-                (Scene::new(), None)
+                (Scene::new(), None, false)
             }
         } else {
-            (Scene::new(), None)
+            (Scene::new(), None, false)
         };
 
         // Record CLI-loaded project in recent projects.
@@ -333,7 +339,7 @@ impl Application for GGEditor {
             tilemap_paint: TilemapPaintState::new(),
             viewport_mouse_pos: None,
             egui_texture_map: HashMap::new(),
-            scene_dirty: false,
+            scene_dirty: recovered_autosave,
             autosave_timer: Self::AUTOSAVE_INTERVAL_SECS,
             undo_system: undo::UndoSystem::new(),
             gizmo_editing: false,
@@ -752,6 +758,12 @@ impl Application for GGEditor {
 
         // Snapshot renderer stats for the settings panel.
         self.render_stats = renderer.stats_2d();
+    }
+
+    fn on_device_lost(&mut self) {
+        // Emergency auto-save before exiting due to GPU device lost.
+        error!("GPU device lost — performing emergency auto-save");
+        self.perform_autosave();
     }
 
     fn on_egui(&mut self, ctx: &egui::Context, window: &Window) {
@@ -1987,21 +1999,7 @@ impl GGEditor {
             return;
         }
         if let Some(path) = FileDialogs::open_file("GGScene files", &["ggscene"]) {
-            let mut new_scene = Scene::new();
-            if SceneSerializer::deserialize(&mut new_scene, &path) {
-                let old = std::mem::replace(&mut self.scene, new_scene);
-                self.pending_drop_scenes.push(old);
-                self.selection_context = None;
-                self.editor_scene_path = Some(path);
-                self.scene_dirty = false;
-                self.undo_system.clear();
-
-                let (w, h) = self.viewport_size;
-                if w > 0 && h > 0 {
-                    self.scene.on_viewport_resize(w, h);
-                }
-                self.queue_font_loads_from_scene();
-            }
+            self.open_scene_from_path(std::path::Path::new(&path));
         }
     }
 
@@ -2072,6 +2070,53 @@ impl GGEditor {
                 warn!("Failed to remove auto-save file '{}': {}", autosave, e);
             }
         }
+    }
+
+    /// Check for auto-save recovery when opening a scene.
+    ///
+    /// If a `.autosave.ggscene` sidecar exists and is newer than the original,
+    /// prompts the user to recover. Returns `Some(scene)` if recovery succeeds,
+    /// `None` otherwise (auto-save cleaned up if stale or declined).
+    fn check_autosave_recovery(scene_path: &str) -> Option<Scene> {
+        let autosave = Self::autosave_path_for(scene_path);
+        let autosave_p = std::path::Path::new(&autosave);
+        if !autosave_p.exists() {
+            return None;
+        }
+
+        // Only offer recovery if the auto-save is newer than the original.
+        let orig_modified = std::fs::metadata(scene_path).and_then(|m| m.modified()).ok();
+        let auto_modified = std::fs::metadata(&autosave).and_then(|m| m.modified()).ok();
+
+        let is_newer = match (orig_modified, auto_modified) {
+            (Some(orig), Some(auto)) => auto > orig,
+            (None, Some(_)) => true, // original missing or unreadable
+            _ => false,
+        };
+
+        if !is_newer {
+            let _ = std::fs::remove_file(&autosave);
+            return None;
+        }
+
+        if gg_engine::platform_utils::confirm_dialog(
+            "Recover Auto-Save",
+            "An auto-save file was found that is newer than the last manual save.\n\n\
+             Recover unsaved changes?",
+        ) {
+            let mut recovered = Scene::new();
+            if SceneSerializer::deserialize(&mut recovered, &autosave) {
+                info!("Recovered scene from auto-save: {}", autosave);
+                let _ = std::fs::remove_file(&autosave);
+                return Some(recovered);
+            }
+            warn!("Failed to deserialize auto-save file: {}", autosave);
+        } else {
+            // User declined — clean up stale auto-save.
+            let _ = std::fs::remove_file(&autosave);
+        }
+
+        None
     }
 
     fn perform_undo(&mut self) {
@@ -2154,8 +2199,16 @@ impl GGEditor {
         let path_str = path.to_string_lossy().to_string();
         let mut new_scene = Scene::new();
         if SceneSerializer::deserialize(&mut new_scene, &path_str) {
+            // Check for auto-save recovery before committing the loaded scene.
+            let recovered = if let Some(recovered) = Self::check_autosave_recovery(&path_str) {
+                new_scene = recovered;
+                true
+            } else {
+                false
+            };
+
             // Only clear state after confirming the load succeeded.
-            self.scene_dirty = false;
+            self.scene_dirty = recovered;
             self.undo_system.clear();
             let old = std::mem::replace(&mut self.scene, new_scene);
             self.pending_drop_scenes.push(old);
@@ -2226,9 +2279,17 @@ impl GGEditor {
             let path_str = start_path.to_string_lossy().to_string();
             let mut new_scene = Scene::new();
             if SceneSerializer::deserialize(&mut new_scene, &path_str) {
+                // Check for auto-save recovery.
+                let recovered = if let Some(recovered) = Self::check_autosave_recovery(&path_str) {
+                    new_scene = recovered;
+                    true
+                } else {
+                    false
+                };
                 let old = std::mem::replace(&mut self.scene, new_scene);
                 self.pending_drop_scenes.push(old);
                 self.editor_scene_path = Some(path_str);
+                self.scene_dirty = recovered;
                 self.queue_font_loads_from_scene();
             }
         } else {
@@ -2273,7 +2334,7 @@ impl GGEditor {
         }
     }
 
-    fn handle_new_project_from_hub(&mut self, path: &PathBuf) {
+    fn handle_new_project_from_hub(&mut self, path: &Path) {
         // Ensure the parent directory exists (project_name/ subfolder).
         if let Some(parent) = path.parent() {
             if !parent.exists() {

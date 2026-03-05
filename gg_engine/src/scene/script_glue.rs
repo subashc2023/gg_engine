@@ -23,6 +23,42 @@ pub(crate) struct SceneScriptContext {
 unsafe impl Send for SceneScriptContext {}
 unsafe impl Sync for SceneScriptContext {}
 
+impl SceneScriptContext {
+    /// Borrow the scene immutably.
+    ///
+    /// # Safety
+    /// Caller must ensure the pointer is valid and no mutable alias exists.
+    #[inline]
+    unsafe fn scene(&self) -> &Scene {
+        debug_assert!(!self.scene.is_null(), "SceneScriptContext::scene is null");
+        &*self.scene
+    }
+
+    /// Borrow the scene mutably.
+    ///
+    /// # Safety
+    /// Caller must ensure the pointer is valid and no other alias exists.
+    #[inline]
+    unsafe fn scene_mut(&self) -> &mut Scene {
+        debug_assert!(!self.scene.is_null(), "SceneScriptContext::scene is null");
+        &mut *self.scene
+    }
+
+    /// Borrow the input, returning `None` when the pointer is null
+    /// (e.g. during `on_create` / `on_destroy`).
+    ///
+    /// # Safety
+    /// Caller must ensure the pointer, when non-null, is valid.
+    #[inline]
+    unsafe fn input(&self) -> Option<&Input> {
+        if self.input.is_null() {
+            None
+        } else {
+            Some(&*self.input)
+        }
+    }
+}
+
 /// Register all engine functions into the Lua state under the `Engine` table.
 pub fn register_all(lua: &Lua) -> LuaResult<()> {
     let engine = lua.create_table()?;
@@ -218,7 +254,7 @@ fn get_translation(lua: &Lua, entity_id: u64) -> LuaResult<(f32, f32, f32)> {
         None => return Ok((0.0, 0.0, 0.0)),
     };
 
-    let scene = unsafe { &*ctx.scene };
+    let scene = unsafe { ctx.scene() };
     if let Some(entity) = scene.find_entity_by_uuid(entity_id) {
         if let Some(tc) = scene.get_component::<super::TransformComponent>(entity) {
             return Ok((tc.translation.x, tc.translation.y, tc.translation.z));
@@ -235,7 +271,7 @@ fn set_translation(lua: &Lua, (entity_id, x, y, z): (u64, f32, f32, f32)) -> Lua
         None => return Ok(()),
     };
 
-    let scene = unsafe { &mut *ctx.scene };
+    let scene = unsafe { ctx.scene_mut() };
     if let Some(entity) = scene.find_entity_by_uuid(entity_id) {
         if let Some(mut tc) = scene.get_component_mut::<super::TransformComponent>(entity) {
             tc.translation.x = x;
@@ -254,11 +290,11 @@ fn is_key_down(lua: &Lua, key_name: String) -> LuaResult<bool> {
         None => return Ok(false),
     };
 
-    if ctx.input.is_null() {
-        return Ok(false);
-    }
+    let input = match unsafe { ctx.input() } {
+        Some(input) => input,
+        None => return Ok(false),
+    };
 
-    let input = unsafe { &*ctx.input };
     if let Some(key_code) = key_name_to_keycode(&key_name) {
         Ok(input.is_key_pressed(key_code))
     } else {
@@ -274,11 +310,11 @@ fn is_key_just_pressed(lua: &Lua, key_name: String) -> LuaResult<bool> {
         None => return Ok(false),
     };
 
-    if ctx.input.is_null() {
-        return Ok(false);
-    }
+    let input = match unsafe { ctx.input() } {
+        Some(input) => input,
+        None => return Ok(false),
+    };
 
-    let input = unsafe { &*ctx.input };
     if let Some(key_code) = key_name_to_keycode(&key_name) {
         Ok(input.is_key_just_pressed(key_code))
     } else {
@@ -294,11 +330,11 @@ fn is_mouse_button_down(lua: &Lua, button_name: String) -> LuaResult<bool> {
         None => return Ok(false),
     };
 
-    if ctx.input.is_null() {
-        return Ok(false);
-    }
+    let input = match unsafe { ctx.input() } {
+        Some(input) => input,
+        None => return Ok(false),
+    };
 
-    let input = unsafe { &*ctx.input };
     if let Some(button) = mouse_button_name_to_enum(&button_name) {
         Ok(input.is_mouse_button_pressed(button))
     } else {
@@ -314,11 +350,11 @@ fn is_mouse_button_just_pressed(lua: &Lua, button_name: String) -> LuaResult<boo
         None => return Ok(false),
     };
 
-    if ctx.input.is_null() {
-        return Ok(false);
-    }
+    let input = match unsafe { ctx.input() } {
+        Some(input) => input,
+        None => return Ok(false),
+    };
 
-    let input = unsafe { &*ctx.input };
     if let Some(button) = mouse_button_name_to_enum(&button_name) {
         Ok(input.is_mouse_button_just_pressed(button))
     } else {
@@ -334,11 +370,11 @@ fn get_mouse_position(lua: &Lua, _: ()) -> LuaResult<(f64, f64)> {
         None => return Ok((0.0, 0.0)),
     };
 
-    if ctx.input.is_null() {
-        return Ok((0.0, 0.0));
-    }
+    let input = match unsafe { ctx.input() } {
+        Some(input) => input,
+        None => return Ok((0.0, 0.0)),
+    };
 
-    let input = unsafe { &*ctx.input };
     Ok(input.mouse_position())
 }
 
@@ -353,7 +389,7 @@ fn get_rotation(lua: &Lua, entity_id: u64) -> LuaResult<(f32, f32, f32)> {
         None => return Ok((0.0, 0.0, 0.0)),
     };
 
-    let scene = unsafe { &*ctx.scene };
+    let scene = unsafe { ctx.scene() };
     if let Some(entity) = scene.find_entity_by_uuid(entity_id) {
         if let Some(tc) = scene.get_component::<super::TransformComponent>(entity) {
             return Ok((tc.rotation.x, tc.rotation.y, tc.rotation.z));
@@ -370,7 +406,7 @@ fn set_rotation(lua: &Lua, (entity_id, rx, ry, rz): (u64, f32, f32, f32)) -> Lua
         None => return Ok(()),
     };
 
-    let scene = unsafe { &mut *ctx.scene };
+    let scene = unsafe { ctx.scene_mut() };
     if let Some(entity) = scene.find_entity_by_uuid(entity_id) {
         if let Some(mut tc) = scene.get_component_mut::<super::TransformComponent>(entity) {
             tc.rotation.x = rx;
@@ -389,7 +425,7 @@ fn get_scale(lua: &Lua, entity_id: u64) -> LuaResult<(f32, f32, f32)> {
         None => return Ok((1.0, 1.0, 1.0)),
     };
 
-    let scene = unsafe { &*ctx.scene };
+    let scene = unsafe { ctx.scene() };
     if let Some(entity) = scene.find_entity_by_uuid(entity_id) {
         if let Some(tc) = scene.get_component::<super::TransformComponent>(entity) {
             return Ok((tc.scale.x, tc.scale.y, tc.scale.z));
@@ -406,7 +442,7 @@ fn set_scale(lua: &Lua, (entity_id, sx, sy, sz): (u64, f32, f32, f32)) -> LuaRes
         None => return Ok(()),
     };
 
-    let scene = unsafe { &mut *ctx.scene };
+    let scene = unsafe { ctx.scene_mut() };
     if let Some(entity) = scene.find_entity_by_uuid(entity_id) {
         if let Some(mut tc) = scene.get_component_mut::<super::TransformComponent>(entity) {
             tc.scale.x = sx;
@@ -429,7 +465,7 @@ fn has_component(lua: &Lua, (entity_id, name): (u64, String)) -> LuaResult<bool>
         None => return Ok(false),
     };
 
-    let scene = unsafe { &*ctx.scene };
+    let scene = unsafe { ctx.scene() };
     let entity = match scene.find_entity_by_uuid(entity_id) {
         Some(e) => e,
         None => return Ok(false),
@@ -473,7 +509,7 @@ fn find_entity_by_name(lua: &Lua, name: String) -> LuaResult<LuaValue> {
         None => return Ok(LuaValue::Nil),
     };
 
-    let scene = unsafe { &mut *ctx.scene };
+    let scene = unsafe { ctx.scene_mut() };
     match scene.find_entity_by_name(&name) {
         Some((_entity, uuid)) => Ok(LuaValue::Integer(uuid as i64)),
         None => Ok(LuaValue::Nil),
@@ -556,7 +592,7 @@ fn lua_create_entity(lua: &Lua, name: String) -> LuaResult<LuaValue> {
         None => return Ok(LuaValue::Integer(0)),
     };
 
-    let scene = unsafe { &mut *ctx.scene };
+    let scene = unsafe { ctx.scene_mut() };
     let entity = scene.create_entity_with_tag(&name);
     let uuid = scene
         .get_component::<super::IdComponent>(entity)
@@ -572,7 +608,7 @@ fn lua_destroy_entity(lua: &Lua, uuid: u64) -> LuaResult<()> {
         None => return Ok(()),
     };
 
-    let scene = unsafe { &mut *ctx.scene };
+    let scene = unsafe { ctx.scene_mut() };
     scene.queue_entity_destroy(uuid);
     Ok(())
 }
@@ -584,7 +620,7 @@ fn lua_get_entity_name(lua: &Lua, uuid: u64) -> LuaResult<LuaValue> {
         None => return Ok(LuaValue::Nil),
     };
 
-    let scene = unsafe { &*ctx.scene };
+    let scene = unsafe { ctx.scene() };
     if let Some(entity) = scene.find_entity_by_uuid(uuid) {
         if let Some(tag) = scene.get_component::<super::TagComponent>(entity) {
             return Ok(LuaValue::String(lua.create_string(&tag.tag)?));
@@ -605,7 +641,7 @@ fn lua_set_parent(lua: &Lua, (child_id, parent_id): (u64, u64)) -> LuaResult<boo
         None => return Ok(false),
     };
 
-    let scene = unsafe { &mut *ctx.scene };
+    let scene = unsafe { ctx.scene_mut() };
     let child = match scene.find_entity_by_uuid(child_id) {
         Some(e) => e,
         None => return Ok(false),
@@ -625,7 +661,7 @@ fn lua_detach_from_parent(lua: &Lua, entity_id: u64) -> LuaResult<()> {
         None => return Ok(()),
     };
 
-    let scene = unsafe { &mut *ctx.scene };
+    let scene = unsafe { ctx.scene_mut() };
     if let Some(entity) = scene.find_entity_by_uuid(entity_id) {
         scene.detach_from_parent(entity, true);
     }
@@ -640,7 +676,7 @@ fn lua_get_parent(lua: &Lua, entity_id: u64) -> LuaResult<LuaValue> {
         None => return Ok(LuaValue::Nil),
     };
 
-    let scene = unsafe { &*ctx.scene };
+    let scene = unsafe { ctx.scene() };
     if let Some(entity) = scene.find_entity_by_uuid(entity_id) {
         match scene.get_parent(entity) {
             Some(parent_uuid) => Ok(LuaValue::Integer(parent_uuid as i64)),
@@ -661,7 +697,7 @@ fn lua_get_children(lua: &Lua, entity_id: u64) -> LuaResult<LuaValue> {
         }
     };
 
-    let scene = unsafe { &*ctx.scene };
+    let scene = unsafe { ctx.scene() };
     let table = lua.create_table()?;
     if let Some(entity) = scene.find_entity_by_uuid(entity_id) {
         let children = scene.get_children(entity);
@@ -683,7 +719,7 @@ fn lua_play_animation(lua: &Lua, (entity_id, name): (u64, String)) -> LuaResult<
         None => return Ok(false),
     };
 
-    let scene = unsafe { &mut *ctx.scene };
+    let scene = unsafe { ctx.scene_mut() };
     if let Some(entity) = scene.find_entity_by_uuid(entity_id) {
         if let Some(mut animator) = scene.get_component_mut::<super::SpriteAnimatorComponent>(entity) {
             return Ok(animator.play(&name));
@@ -699,7 +735,7 @@ fn lua_stop_animation(lua: &Lua, entity_id: u64) -> LuaResult<()> {
         None => return Ok(()),
     };
 
-    let scene = unsafe { &mut *ctx.scene };
+    let scene = unsafe { ctx.scene_mut() };
     if let Some(entity) = scene.find_entity_by_uuid(entity_id) {
         if let Some(mut animator) = scene.get_component_mut::<super::SpriteAnimatorComponent>(entity) {
             animator.stop();
@@ -715,7 +751,7 @@ fn lua_is_animation_playing(lua: &Lua, entity_id: u64) -> LuaResult<bool> {
         None => return Ok(false),
     };
 
-    let scene = unsafe { &*ctx.scene };
+    let scene = unsafe { ctx.scene() };
     if let Some(entity) = scene.find_entity_by_uuid(entity_id) {
         if let Some(animator) = scene.get_component::<super::SpriteAnimatorComponent>(entity) {
             return Ok(animator.is_playing());
@@ -735,7 +771,7 @@ fn lua_play_sound(lua: &Lua, entity_id: u64) -> LuaResult<()> {
         None => return Ok(()),
     };
 
-    let scene = unsafe { &mut *ctx.scene };
+    let scene = unsafe { ctx.scene_mut() };
     if let Some(entity) = scene.find_entity_by_uuid(entity_id) {
         scene.play_entity_sound(entity);
     }
@@ -750,7 +786,7 @@ fn lua_stop_sound(lua: &Lua, entity_id: u64) -> LuaResult<()> {
         None => return Ok(()),
     };
 
-    let scene = unsafe { &mut *ctx.scene };
+    let scene = unsafe { ctx.scene_mut() };
     if let Some(entity) = scene.find_entity_by_uuid(entity_id) {
         scene.stop_entity_sound(entity);
     }
@@ -765,7 +801,7 @@ fn lua_set_volume(lua: &Lua, (entity_id, volume): (u64, f32)) -> LuaResult<()> {
         None => return Ok(()),
     };
 
-    let scene = unsafe { &mut *ctx.scene };
+    let scene = unsafe { ctx.scene_mut() };
     if let Some(entity) = scene.find_entity_by_uuid(entity_id) {
         scene.set_entity_volume(entity, volume);
     }
@@ -784,7 +820,7 @@ fn lua_set_tile(lua: &Lua, (entity_id, x, y, tile_id): (u64, u32, u32, i32)) -> 
         None => return Ok(()),
     };
 
-    let scene = unsafe { &mut *ctx.scene };
+    let scene = unsafe { ctx.scene_mut() };
     if let Some(entity) = scene.find_entity_by_uuid(entity_id) {
         if let Some(mut tilemap) = scene.get_component_mut::<super::TilemapComponent>(entity) {
             tilemap.set_tile(x, y, tile_id);
@@ -801,7 +837,7 @@ fn lua_get_tile(lua: &Lua, (entity_id, x, y): (u64, u32, u32)) -> LuaResult<i32>
         None => return Ok(-1),
     };
 
-    let scene = unsafe { &*ctx.scene };
+    let scene = unsafe { ctx.scene() };
     if let Some(entity) = scene.find_entity_by_uuid(entity_id) {
         if let Some(tilemap) = scene.get_component::<super::TilemapComponent>(entity) {
             return Ok(tilemap.get_tile(x, y));
@@ -822,7 +858,7 @@ fn lua_apply_impulse(lua: &Lua, (entity_id, ix, iy): (u64, f32, f32)) -> LuaResu
         None => return Ok(()),
     };
 
-    let scene = unsafe { &mut *ctx.scene };
+    let scene = unsafe { ctx.scene_mut() };
     if let Some(entity) = scene.find_entity_by_uuid(entity_id) {
         scene.apply_impulse(entity, glam::Vec2::new(ix, iy));
     }
@@ -840,7 +876,7 @@ fn lua_apply_impulse_at_point(
         None => return Ok(()),
     };
 
-    let scene = unsafe { &mut *ctx.scene };
+    let scene = unsafe { ctx.scene_mut() };
     if let Some(entity) = scene.find_entity_by_uuid(entity_id) {
         scene.apply_impulse_at_point(entity, glam::Vec2::new(ix, iy), glam::Vec2::new(px, py));
     }
@@ -855,7 +891,7 @@ fn lua_apply_force(lua: &Lua, (entity_id, fx, fy): (u64, f32, f32)) -> LuaResult
         None => return Ok(()),
     };
 
-    let scene = unsafe { &mut *ctx.scene };
+    let scene = unsafe { ctx.scene_mut() };
     if let Some(entity) = scene.find_entity_by_uuid(entity_id) {
         scene.apply_force(entity, glam::Vec2::new(fx, fy));
     }
@@ -870,7 +906,7 @@ fn lua_get_linear_velocity(lua: &Lua, entity_id: u64) -> LuaResult<(f32, f32)> {
         None => return Ok((0.0, 0.0)),
     };
 
-    let scene = unsafe { &*ctx.scene };
+    let scene = unsafe { ctx.scene() };
     if let Some(entity) = scene.find_entity_by_uuid(entity_id) {
         if let Some(v) = scene.get_linear_velocity(entity) {
             return Ok((v.x, v.y));
@@ -887,7 +923,7 @@ fn lua_set_linear_velocity(lua: &Lua, (entity_id, vx, vy): (u64, f32, f32)) -> L
         None => return Ok(()),
     };
 
-    let scene = unsafe { &mut *ctx.scene };
+    let scene = unsafe { ctx.scene_mut() };
     if let Some(entity) = scene.find_entity_by_uuid(entity_id) {
         scene.set_linear_velocity(entity, glam::Vec2::new(vx, vy));
     }
@@ -902,7 +938,7 @@ fn lua_get_angular_velocity(lua: &Lua, entity_id: u64) -> LuaResult<f32> {
         None => return Ok(0.0),
     };
 
-    let scene = unsafe { &*ctx.scene };
+    let scene = unsafe { ctx.scene() };
     if let Some(entity) = scene.find_entity_by_uuid(entity_id) {
         if let Some(omega) = scene.get_angular_velocity(entity) {
             return Ok(omega);
@@ -919,7 +955,7 @@ fn lua_set_angular_velocity(lua: &Lua, (entity_id, omega): (u64, f32)) -> LuaRes
         None => return Ok(()),
     };
 
-    let scene = unsafe { &mut *ctx.scene };
+    let scene = unsafe { ctx.scene_mut() };
     if let Some(entity) = scene.find_entity_by_uuid(entity_id) {
         scene.set_angular_velocity(entity, omega);
     }

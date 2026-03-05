@@ -21,7 +21,8 @@ const MAX_QUADS: usize = 10_000;
 const MAX_VERTICES: usize = MAX_QUADS * 4;
 const MAX_INDICES: usize = MAX_QUADS * 6;
 const MAX_BINDLESS_TEXTURES: u32 = 4096;
-const FRAMES_IN_FLIGHT: usize = 2;
+use super::MAX_FRAMES_IN_FLIGHT;
+const FRAMES_IN_FLIGHT: usize = MAX_FRAMES_IN_FLIGHT;
 /// Max flushes (draw calls) per frame. Sizes the vertex buffer so each flush
 /// writes to a distinct region, avoiding overwrites within a command buffer.
 const MAX_BATCHES_PER_FRAME: usize = 16;

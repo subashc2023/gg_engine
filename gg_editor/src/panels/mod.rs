@@ -209,7 +209,7 @@ impl egui_dock::TabViewer for EditorTabViewer<'_> {
 
             Tab::ContentBrowser => {
                 self.unfocus_viewport_on_click(ui);
-                content_browser::content_browser_ui(ui, self.project.current_directory, self.project.assets_root, self.project.asset_manager);
+                content_browser::content_browser_ui(ui, self.project.current_directory, self.project.assets_root, self.project.asset_manager, self.scene);
             }
 
             Tab::Settings => {

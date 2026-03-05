@@ -61,8 +61,7 @@ impl std::error::Error for SwapchainError {}
 // Swapchain
 // ---------------------------------------------------------------------------
 
-/// Maximum number of frames that can be in-flight simultaneously.
-const MAX_FRAMES_IN_FLIGHT: usize = 2;
+use super::MAX_FRAMES_IN_FLIGHT;
 
 pub struct Swapchain {
     swapchain_loader: khr::swapchain::Device,

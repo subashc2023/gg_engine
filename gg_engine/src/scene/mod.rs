@@ -38,6 +38,19 @@ use std::collections::HashMap;
 use physics_2d::PhysicsWorld2D;
 use rapier2d::na;
 
+/// Clamp a physics property to a minimum, logging a warning if it was invalid.
+fn validate_physics_value(value: f32, min: f32, name: &str, entity_uuid: u64) -> f32 {
+    if value < min {
+        log::warn!(
+            "Entity {}: negative {} ({:.3}), clamped to {}",
+            entity_uuid, name, value, min
+        );
+        min
+    } else {
+        value
+    }
+}
+
 /// A scene is a container for entities and their components.
 ///
 /// Internally wraps a [`hecs::World`], providing a focused API surface.
@@ -702,6 +715,60 @@ impl Scene {
         }
     }
 
+    /// Compute the world transform for `entity`, using and populating `cache`.
+    ///
+    /// Same logic as [`get_world_transform`](Self::get_world_transform) but
+    /// avoids redundant parent-chain walks when many entities share ancestors.
+    fn get_world_transform_cached(
+        &self,
+        entity: Entity,
+        cache: &mut HashMap<hecs::Entity, glam::Mat4>,
+    ) -> glam::Mat4 {
+        if let Some(&cached) = cache.get(&entity.handle()) {
+            return cached;
+        }
+
+        let local = self
+            .get_component::<TransformComponent>(entity)
+            .map(|tc| tc.get_transform())
+            .unwrap_or(glam::Mat4::IDENTITY);
+
+        let parent_uuid = self
+            .get_component::<RelationshipComponent>(entity)
+            .and_then(|r| r.parent);
+
+        let world = match parent_uuid {
+            Some(puuid) => {
+                if let Some(parent_entity) = self.find_entity_by_uuid(puuid) {
+                    self.get_world_transform_cached(parent_entity, cache) * local
+                } else {
+                    local
+                }
+            }
+            None => local,
+        };
+
+        cache.insert(entity.handle(), world);
+        world
+    }
+
+    /// Build a cache of world transforms for all entities.
+    ///
+    /// Call once per frame before rendering to avoid redundant parent-chain
+    /// walks (O(n) total instead of O(n·d) where d is hierarchy depth).
+    fn build_world_transform_cache(&self) -> HashMap<hecs::Entity, glam::Mat4> {
+        let mut cache = HashMap::with_capacity(self.world.len() as usize);
+        let entities: Vec<hecs::Entity> = self
+            .world
+            .query::<hecs::Entity>()
+            .iter()
+            .collect();
+        for handle in entities {
+            self.get_world_transform_cached(Entity::new(handle), &mut cache);
+        }
+        cache
+    }
+
     /// Get the children UUIDs of an entity.
     pub fn get_children(&self, entity: Entity) -> Vec<u64> {
         self.get_component::<RelationshipComponent>(entity)
@@ -1062,10 +1129,14 @@ impl Scene {
                         entity_uuid, half_x * 2.0, half_y * 2.0
                     );
                 } else {
+                    let density = validate_physics_value(bc.density, 0.0, "density", entity_uuid);
+                    let friction = validate_physics_value(bc.friction, 0.0, "friction", entity_uuid);
+                    let restitution = validate_physics_value(bc.restitution, 0.0, "restitution", entity_uuid);
+
                     let collider = rapier2d::geometry::ColliderBuilder::cuboid(half_x, half_y)
-                        .density(bc.density)
-                        .friction(bc.friction)
-                        .restitution(bc.restitution)
+                        .density(density)
+                        .friction(friction)
+                        .restitution(restitution)
                         .translation(na::Vector2::new(
                             bc.offset.x * scale.x.abs(),
                             bc.offset.y * scale.y.abs(),
@@ -1092,10 +1163,14 @@ impl Scene {
                         entity_uuid
                     );
                 } else {
+                    let density = validate_physics_value(cc.density, 0.0, "density", entity_uuid);
+                    let friction = validate_physics_value(cc.friction, 0.0, "friction", entity_uuid);
+                    let restitution = validate_physics_value(cc.restitution, 0.0, "restitution", entity_uuid);
+
                     let collider = rapier2d::geometry::ColliderBuilder::ball(scaled_radius)
-                        .density(cc.density)
-                        .friction(cc.friction)
-                        .restitution(cc.restitution)
+                        .density(density)
+                        .friction(friction)
+                        .restitution(restitution)
                         .translation(na::Vector2::new(
                             cc.offset.x * scale.x.abs(),
                             cc.offset.y * scale.y.abs(),
@@ -1207,6 +1282,38 @@ impl Scene {
                 }
             }
         }
+    }
+
+    /// Find all entities that reference the given asset handle.
+    ///
+    /// Scans `SpriteRendererComponent::texture_handle`,
+    /// `TilemapComponent::texture_handle`, and
+    /// `AudioSourceComponent::audio_handle`.
+    ///
+    /// Returns a list of `(entity_name, component_kind)` pairs describing
+    /// each reference, e.g. `("Player", "Sprite")`.
+    pub fn find_asset_references(&self, asset_handle: crate::uuid::Uuid) -> Vec<(String, &'static str)> {
+        let mut refs = Vec::new();
+
+        for (tag, sprite) in self.world.query::<(&TagComponent, &SpriteRendererComponent)>().iter() {
+            if sprite.texture_handle == asset_handle {
+                refs.push((tag.tag.clone(), "Sprite"));
+            }
+        }
+
+        for (tag, tilemap) in self.world.query::<(&TagComponent, &TilemapComponent)>().iter() {
+            if tilemap.texture_handle == asset_handle {
+                refs.push((tag.tag.clone(), "Tilemap"));
+            }
+        }
+
+        for (tag, asc) in self.world.query::<(&TagComponent, &AudioSourceComponent)>().iter() {
+            if asc.audio_handle == asset_handle {
+                refs.push((tag.tag.clone(), "Audio"));
+            }
+        }
+
+        refs
     }
 
     /// Play audio for an entity (used by Lua scripts).
@@ -1699,6 +1806,9 @@ impl Scene {
     /// the renderer before calling this.
     fn render_scene(&self, renderer: &mut Renderer) {
         let _timer = crate::profiling::ProfileTimer::new("Scene::render_scene");
+        // Pre-compute world transforms for all entities once.
+        let wt_cache = self.build_world_transform_cache();
+
         // Draw sprites (with optional animation).
         for (handle, sprite) in self
             .world
@@ -1708,7 +1818,7 @@ impl Scene {
             )>()
             .iter()
         {
-            let world_transform = self.get_world_transform(Entity::new(handle));
+            let world_transform = wt_cache.get(&handle).copied().unwrap_or(glam::Mat4::IDENTITY);
 
             // Check if this entity has an active animator.
             let animated = self
@@ -1751,7 +1861,7 @@ impl Scene {
             )>()
             .iter()
         {
-            let world_transform = self.get_world_transform(Entity::new(handle));
+            let world_transform = wt_cache.get(&handle).copied().unwrap_or(glam::Mat4::IDENTITY);
             renderer.draw_circle_component(
                 &world_transform,
                 circle,
@@ -1768,7 +1878,7 @@ impl Scene {
             )>()
             .iter()
         {
-            let world_transform = self.get_world_transform(Entity::new(handle));
+            let world_transform = wt_cache.get(&handle).copied().unwrap_or(glam::Mat4::IDENTITY);
             renderer.draw_text_component(
                 &world_transform,
                 text,
@@ -1789,7 +1899,7 @@ impl Scene {
                 Some(tex) => tex,
                 None => continue,
             };
-            let entity_world = self.get_world_transform(Entity::new(handle));
+            let entity_world = wt_cache.get(&handle).copied().unwrap_or(glam::Mat4::IDENTITY);
             let cols = tilemap.tileset_columns.max(1);
             let tw = texture.width() as f32;
             let th = texture.height() as f32;
@@ -2502,5 +2612,113 @@ mod tests {
         scene.create_entity();
         scene.flush_pending_destroys();
         assert_eq!(scene.entity_count(), 1);
+    }
+
+    /// Compile-time guard: if you add or remove a component from
+    /// `for_each_cloneable_component!`, update EXPECTED_COUNT here.
+    /// This test prevents silent drift between the macro and the
+    /// actual set of cloneable components.
+    #[test]
+    fn for_each_cloneable_component_count() {
+        macro_rules! count_types {
+            ($($t:ty),* $(,)?) => {
+                const MACRO_COUNT: usize = 0 $(+ { let _ = std::mem::size_of::<$t>(); 1 })*;
+            };
+        }
+        for_each_cloneable_component!(count_types);
+        // Update this constant when adding or removing cloneable components.
+        const EXPECTED_COUNT: usize = 12;
+        assert_eq!(
+            MACRO_COUNT, EXPECTED_COUNT,
+            "for_each_cloneable_component! has {} types but expected {}. \
+             Update EXPECTED_COUNT if you intentionally added/removed a component.",
+            MACRO_COUNT, EXPECTED_COUNT
+        );
+    }
+
+    #[test]
+    fn validate_physics_value_clamps_negative() {
+        // Negative → clamped to min.
+        assert_eq!(super::validate_physics_value(-1.0, 0.0, "test", 0), 0.0);
+        // Valid → unchanged.
+        assert_eq!(super::validate_physics_value(0.5, 0.0, "test", 0), 0.5);
+        // Zero → unchanged (not < min).
+        assert_eq!(super::validate_physics_value(0.0, 0.0, "test", 0), 0.0);
+    }
+
+    #[test]
+    fn find_asset_references_sprite() {
+        let mut scene = Scene::new();
+        let handle = crate::uuid::Uuid::from_raw(42);
+
+        let e = scene.create_entity_with_tag("Player");
+        let mut sprite = SpriteRendererComponent::default();
+        sprite.texture_handle = handle;
+        scene.add_component(e, sprite);
+
+        let refs = scene.find_asset_references(handle);
+        assert_eq!(refs.len(), 1);
+        assert_eq!(refs[0].0, "Player");
+        assert_eq!(refs[0].1, "Sprite");
+    }
+
+    #[test]
+    fn find_asset_references_audio() {
+        let mut scene = Scene::new();
+        let handle = crate::uuid::Uuid::from_raw(99);
+
+        let e = scene.create_entity_with_tag("BGM");
+        let mut asc = AudioSourceComponent::default();
+        asc.audio_handle = handle;
+        scene.add_component(e, asc);
+
+        let refs = scene.find_asset_references(handle);
+        assert_eq!(refs.len(), 1);
+        assert_eq!(refs[0].0, "BGM");
+        assert_eq!(refs[0].1, "Audio");
+    }
+
+    #[test]
+    fn find_asset_references_tilemap() {
+        let mut scene = Scene::new();
+        let handle = crate::uuid::Uuid::from_raw(77);
+
+        let e = scene.create_entity_with_tag("Level");
+        let mut tm = TilemapComponent::default();
+        tm.texture_handle = handle;
+        scene.add_component(e, tm);
+
+        let refs = scene.find_asset_references(handle);
+        assert_eq!(refs.len(), 1);
+        assert_eq!(refs[0].0, "Level");
+        assert_eq!(refs[0].1, "Tilemap");
+    }
+
+    #[test]
+    fn find_asset_references_none_when_unused() {
+        let mut scene = Scene::new();
+        scene.create_entity_with_tag("Empty");
+        let handle = crate::uuid::Uuid::from_raw(123);
+        let refs = scene.find_asset_references(handle);
+        assert!(refs.is_empty());
+    }
+
+    #[test]
+    fn find_asset_references_multiple_entities() {
+        let mut scene = Scene::new();
+        let handle = crate::uuid::Uuid::from_raw(55);
+
+        let e1 = scene.create_entity_with_tag("A");
+        let mut s1 = SpriteRendererComponent::default();
+        s1.texture_handle = handle;
+        scene.add_component(e1, s1);
+
+        let e2 = scene.create_entity_with_tag("B");
+        let mut s2 = SpriteRendererComponent::default();
+        s2.texture_handle = handle;
+        scene.add_component(e2, s2);
+
+        let refs = scene.find_asset_references(handle);
+        assert_eq!(refs.len(), 2);
     }
 }

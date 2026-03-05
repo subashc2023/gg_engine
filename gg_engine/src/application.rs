@@ -15,7 +15,7 @@ use crate::layer::LayerStack;
 use crate::profiling::ProfileTimer;
 use crate::renderer::{
     ClearValues, DrawContext, Framebuffer, GpuAllocator, OrthographicCamera, PresentMode, Renderer,
-    Swapchain, VulkanContext,
+    Swapchain, VulkanContext, MAX_FRAMES_IN_FLIGHT,
 };
 use crate::timestep::Timestep;
 use glam::Mat4;
@@ -153,6 +153,10 @@ pub trait Application {
     /// Receive the mapping from opaque texture handle → egui TextureId
     /// for textures registered via [`egui_user_textures`].
     fn receive_egui_user_textures(&mut self, _map: &HashMap<u64, egui::TextureId>) {}
+
+    /// Called when the GPU device is lost and rendering can no longer continue.
+    /// Override to perform emergency saves before the application exits.
+    fn on_device_lost(&mut self) {}
 }
 
 // ---------------------------------------------------------------------------
@@ -165,6 +169,7 @@ const EDITOR_CHROME_CLEAR: [f32; 4] = [0.06, 0.06, 0.06, 1.0];
 enum FrameResult {
     Ok,
     RecreateSwapchain,
+    DeviceLost,
 }
 
 /// How long to wait after the last resize event before applying the resize.
@@ -303,7 +308,7 @@ impl<T: Application> ApplicationHandler for EngineRunner<T> {
                                     ctx.device().clone(),
                                     sc.render_pass(),
                                     egui_ash_renderer::Options {
-                                        in_flight_frames: 2,
+                                        in_flight_frames: MAX_FRAMES_IN_FLIGHT,
                                         srgb_framebuffer: is_srgb,
                                         ..Default::default()
                                     },
@@ -697,6 +702,16 @@ impl<T: Application> ApplicationHandler for EngineRunner<T> {
                 &scene_clear_values,
             );
 
+            // Handle fatal GPU device lost.
+            if matches!(frame_result, FrameResult::DeviceLost) {
+                log::error!(target: "gg_engine",
+                    "GPU device lost — the application cannot continue rendering. \
+                     Save your work and restart.");
+                self.app.on_device_lost();
+                event_loop.exit();
+                return;
+            }
+
             // Advance to the next frame's sync primitives.
             swapchain.advance_frame();
 
@@ -773,10 +788,11 @@ fn render_frame<T: Application>(
     // Wait for this frame-slot's fence (still signaled from the previous use).
     {
         let _t = ProfileTimer::new("render_frame::wait_fence");
-        unsafe {
-            device
-                .wait_for_fences(&[swapchain.in_flight_fence()], true, u64::MAX)
-                .expect("Failed to wait for fence");
+        if let Err(e) = unsafe {
+            device.wait_for_fences(&[swapchain.in_flight_fence()], true, u64::MAX)
+        } {
+            log::error!("Failed to wait for fence: {e}");
+            return FrameResult::DeviceLost;
         }
     }
 
@@ -800,6 +816,10 @@ fn render_frame<T: Application>(
         Err(vk::Result::ERROR_OUT_OF_DATE_KHR | vk::Result::ERROR_SURFACE_LOST_KHR) => {
             return FrameResult::RecreateSwapchain
         }
+        Err(vk::Result::ERROR_DEVICE_LOST) => {
+            log::error!("GPU device lost during image acquire");
+            return FrameResult::DeviceLost;
+        }
         Err(e) => {
             log::error!("Failed to acquire swapchain image: {e}");
             return FrameResult::RecreateSwapchain;
@@ -807,10 +827,9 @@ fn render_frame<T: Application>(
     };
 
     // Acquire succeeded — now it's safe to reset the fence.
-    unsafe {
-        device
-            .reset_fences(&[swapchain.in_flight_fence()])
-            .expect("Failed to reset fence");
+    if let Err(e) = unsafe { device.reset_fences(&[swapchain.in_flight_fence()]) } {
+        log::error!("Failed to reset fence: {e}");
+        return FrameResult::DeviceLost;
     }
 
     // Read pixel result from the staging buffer for this frame slot
@@ -1104,14 +1123,15 @@ fn render_frame<T: Application>(
 
     {
         let _t = ProfileTimer::new("render_frame::queue_submit");
-        unsafe {
-            device
-                .queue_submit(
-                    vk_ctx.graphics_queue(),
-                    &[submit_info],
-                    swapchain.in_flight_fence(),
-                )
-                .expect("Failed to submit draw command buffer");
+        if let Err(e) = unsafe {
+            device.queue_submit(
+                vk_ctx.graphics_queue(),
+                &[submit_info],
+                swapchain.in_flight_fence(),
+            )
+        } {
+            log::error!("Failed to submit draw command buffer: {e}");
+            return FrameResult::DeviceLost;
         }
     }
 
@@ -1137,6 +1157,10 @@ fn render_frame<T: Application>(
         Ok(_) => FrameResult::RecreateSwapchain,
         Err(vk::Result::ERROR_OUT_OF_DATE_KHR | vk::Result::ERROR_SURFACE_LOST_KHR) => {
             FrameResult::RecreateSwapchain
+        }
+        Err(vk::Result::ERROR_DEVICE_LOST) => {
+            log::error!("GPU device lost during present");
+            FrameResult::DeviceLost
         }
         Err(e) => {
             log::error!("Failed to present: {e}");

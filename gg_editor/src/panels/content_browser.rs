@@ -40,6 +40,9 @@ thread_local! {
         const { std::cell::RefCell::new(None) };
     static DELETE_CONFIRM: std::cell::RefCell<Option<std::path::PathBuf>> =
         const { std::cell::RefCell::new(None) };
+    /// Pending asset removal: (handle, list of referencing entity descriptions).
+    static ASSET_REMOVE_CONFIRM: std::cell::RefCell<Option<(Uuid, Vec<(String, &'static str)>)>> =
+        std::cell::RefCell::new(None);
 }
 
 /// Clear the search filter string.
@@ -57,6 +60,7 @@ pub(crate) fn reset_dialog_state() {
     BROWSER_MODE.with(|m| m.set(ContentBrowserMode::FileSystem));
     RENAME_STATE.with(|s| *s.borrow_mut() = None);
     DELETE_CONFIRM.with(|d| *d.borrow_mut() = None);
+    ASSET_REMOVE_CONFIRM.with(|d| *d.borrow_mut() = None);
     reset_search_filter();
 }
 
@@ -79,6 +83,7 @@ pub(crate) fn content_browser_ui(
     current_directory: &mut std::path::PathBuf,
     assets_root: &std::path::Path,
     asset_manager: &mut Option<EditorAssetManager>,
+    scene: &Scene,
 ) {
     let assets_root = assets_root.to_path_buf();
 
@@ -115,7 +120,7 @@ pub(crate) fn content_browser_ui(
             file_browser_ui(ui, current_directory, &assets_root, asset_manager);
         }
         ContentBrowserMode::Asset => {
-            asset_browser_ui(ui, &assets_root, asset_manager);
+            asset_browser_ui(ui, &assets_root, asset_manager, scene);
         }
     }
 }
@@ -490,6 +495,7 @@ fn asset_browser_ui(
     ui: &mut egui::Ui,
     _assets_root: &std::path::Path,
     asset_manager: &mut Option<EditorAssetManager>,
+    scene: &Scene,
 ) {
     let Some(am) = asset_manager.as_mut() else {
         ui.label("No project loaded");
@@ -552,10 +558,49 @@ fn asset_browser_ui(
         }
     });
 
-    // Process deferred removal.
+    // Process deferred removal — check for references first.
     if let Some(handle) = remove_handle {
-        am.registry_mut().remove(&handle);
-        am.save_registry();
+        let refs = scene.find_asset_references(handle);
+        if refs.is_empty() {
+            am.registry_mut().remove(&handle);
+            am.save_registry();
+        } else {
+            ASSET_REMOVE_CONFIRM.with(|d| *d.borrow_mut() = Some((handle, refs)));
+        }
+    }
+
+    // Asset removal confirmation dialog (shown when references exist).
+    let pending = ASSET_REMOVE_CONFIRM.with(|d| d.borrow().clone());
+    if let Some((handle, refs)) = pending {
+        let mut open = true;
+        egui::Window::new("Remove Asset")
+            .collapsible(false)
+            .resizable(false)
+            .open(&mut open)
+            .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+            .show(ui.ctx(), |ui| {
+                ui.label("This asset is referenced by entities in the current scene:");
+                ui.add_space(4.0);
+                for (name, kind) in &refs {
+                    ui.label(format!("  \u{2022} {} ({})", name, kind));
+                }
+                ui.add_space(4.0);
+                ui.label("Removing it will leave broken references.");
+                ui.add_space(8.0);
+                ui.horizontal(|ui| {
+                    if ui.button("Remove Anyway").clicked() {
+                        am.registry_mut().remove(&handle);
+                        am.save_registry();
+                        ASSET_REMOVE_CONFIRM.with(|d| *d.borrow_mut() = None);
+                    }
+                    if ui.button("Cancel").clicked() {
+                        ASSET_REMOVE_CONFIRM.with(|d| *d.borrow_mut() = None);
+                    }
+                });
+            });
+        if !open {
+            ASSET_REMOVE_CONFIRM.with(|d| *d.borrow_mut() = None);
+        }
     }
 }
 

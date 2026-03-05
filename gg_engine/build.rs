@@ -107,7 +107,7 @@ fn compile_glslc(input: &Path, output: &Path, profile: &str) {
     let mut cmd = Command::new("glslc");
     cmd.arg("--target-env=vulkan1.2");
 
-    if profile == "release" {
+    if profile == "release" || profile == "dist" {
         cmd.arg("-O");
     }
 

@@ -67,6 +67,11 @@ pub(crate) struct RendererResources<'a> {
 
 use ash::vk;
 
+/// Maximum number of frames that can be in-flight simultaneously.
+/// All renderer subsystems (swapchain, batch renderer, uniform buffers) must
+/// use this single constant to stay in sync.
+pub(crate) const MAX_FRAMES_IN_FLIGHT: usize = 2;
+
 // ---------------------------------------------------------------------------
 // PresentMode
 // ---------------------------------------------------------------------------

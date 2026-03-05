@@ -88,7 +88,11 @@ impl ShaderDataType {
             Self::Int4 => vk::Format::R32G32B32A32_SINT,
             Self::Bool => vk::Format::R32_SINT,
             Self::Mat3 | Self::Mat4 => {
-                unimplemented!("Mat vertex attributes require multiple locations")
+                panic!(
+                    "ShaderDataType::{:?} cannot be represented as a single vertex attribute; \
+                     matrix types require one attribute per column (not yet implemented)",
+                    self
+                )
             }
         }
     }

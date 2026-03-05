@@ -23,7 +23,8 @@ impl CameraData {
 // UniformBuffer — per-frame-in-flight double-buffered UBO
 // ---------------------------------------------------------------------------
 
-const FRAMES_IN_FLIGHT: usize = 2;
+use super::MAX_FRAMES_IN_FLIGHT;
+const FRAMES_IN_FLIGHT: usize = MAX_FRAMES_IN_FLIGHT;
 
 pub(crate) struct UniformBuffer {
     buffers: [vk::Buffer; FRAMES_IN_FLIGHT],
