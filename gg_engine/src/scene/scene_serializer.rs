@@ -267,7 +267,7 @@ struct LuaScriptData {
     fields: Option<std::collections::HashMap<String, super::script_engine::ScriptFieldValue>>,
     #[cfg(not(feature = "lua-scripting"))]
     #[serde(rename = "Fields", default, skip_serializing_if = "Option::is_none")]
-    fields: Option<serde_yml::Value>,
+    fields: Option<serde_yaml_ng::Value>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -413,7 +413,7 @@ impl SceneSerializer {
             }
         }
 
-        match serde_yml::to_string(&scene_data) {
+        match serde_yaml_ng::to_string(&scene_data) {
             Ok(yaml) => {
                 if let Err(e) = crate::platform_utils::atomic_write(file_path, &yaml) {
                     log::error!("Failed to write scene file '{}': {}", file_path, e);
@@ -446,7 +446,7 @@ impl SceneSerializer {
             }
         };
 
-        let scene_data: SceneData = match serde_yml::from_str(&contents) {
+        let scene_data: SceneData = match serde_yaml_ng::from_str(&contents) {
             Ok(d) => d,
             Err(e) => {
                 log::error!("Failed to parse scene file '{}': {}", file_path, e);
@@ -475,7 +475,7 @@ impl SceneSerializer {
     /// Serialize a scene to a YAML string (in-memory snapshot).
     pub fn serialize_to_string(scene: &Scene) -> Option<String> {
         let scene_data = Self::scene_to_data(scene, None);
-        match serde_yml::to_string(&scene_data) {
+        match serde_yaml_ng::to_string(&scene_data) {
             Ok(yaml) => Some(yaml),
             Err(e) => {
                 log::error!("Failed to serialize scene to string: {}", e);
@@ -489,7 +489,7 @@ impl SceneSerializer {
     /// Entities are created in the provided `scene`. Callers should provide
     /// a fresh scene if a clean restore is desired.
     pub fn deserialize_from_string(scene: &mut Scene, yaml: &str) -> bool {
-        let scene_data: SceneData = match serde_yml::from_str(yaml) {
+        let scene_data: SceneData = match serde_yaml_ng::from_str(yaml) {
             Ok(d) => d,
             Err(e) => {
                 log::error!("Failed to parse scene from string: {}", e);

@@ -28,12 +28,23 @@ thread_local! {
     )>> = const { std::cell::RefCell::new(None) };
 }
 
+// Search filter for content browser.
+thread_local! {
+    static SEARCH_FILTER: std::cell::RefCell<String> =
+        const { std::cell::RefCell::new(String::new()) };
+}
+
 // Rename state: (original_path, current_edit_string, whether we just entered rename mode).
 thread_local! {
     static RENAME_STATE: std::cell::RefCell<Option<(std::path::PathBuf, String, bool)>> =
         const { std::cell::RefCell::new(None) };
     static DELETE_CONFIRM: std::cell::RefCell<Option<std::path::PathBuf>> =
         const { std::cell::RefCell::new(None) };
+}
+
+/// Clear the search filter string.
+pub(crate) fn reset_search_filter() {
+    SEARCH_FILTER.with(|f| f.borrow_mut().clear());
 }
 
 /// Invalidate the cached directory listing (call on file changes).
@@ -46,6 +57,7 @@ pub(crate) fn reset_dialog_state() {
     BROWSER_MODE.with(|m| m.set(ContentBrowserMode::FileSystem));
     RENAME_STATE.with(|s| *s.borrow_mut() = None);
     DELETE_CONFIRM.with(|d| *d.borrow_mut() = None);
+    reset_search_filter();
 }
 
 // ---------------------------------------------------------------------------
@@ -81,6 +93,21 @@ pub(crate) fn content_browser_ui(
         }
     });
     BROWSER_MODE.with(|m| m.set(mode));
+
+    // Search / filter field.
+    SEARCH_FILTER.with(|f| {
+        let mut filter = f.borrow_mut();
+        ui.horizontal(|ui| {
+            let te = egui::TextEdit::singleline(&mut *filter)
+                .desired_width(ui.available_width() - 22.0)
+                .hint_text("Search...");
+            ui.add(te);
+            if ui.add_enabled(!filter.is_empty(), egui::Button::new("\u{2715}").small()).clicked() {
+                filter.clear();
+            }
+        });
+    });
+
     ui.separator();
 
     match mode {
@@ -158,6 +185,23 @@ fn file_browser_ui(
         let (_, dirs, fls) = cache.as_ref().unwrap();
         (dirs.clone(), fls.clone())
     });
+
+    // Apply search filter (case-insensitive substring match on name).
+    let filter = SEARCH_FILTER.with(|f| f.borrow().clone());
+    let (directories, files) = if filter.is_empty() {
+        (directories, files)
+    } else {
+        let filter_lower = filter.to_lowercase();
+        let dirs = directories
+            .into_iter()
+            .filter(|(name, _)| name.to_lowercase().contains(&filter_lower))
+            .collect();
+        let fls = files
+            .into_iter()
+            .filter(|(name, _)| name.to_lowercase().contains(&filter_lower))
+            .collect();
+        (dirs, fls)
+    };
 
     let padding = 16.0;
     let button_size = 64.0;
@@ -464,6 +508,13 @@ fn asset_browser_ui(
         .map(|(handle, meta)| (*handle, meta.file_path.clone(), meta.asset_type))
         .collect();
     entries.sort_by(|a, b| a.1.cmp(&b.1));
+
+    // Apply search filter (case-insensitive substring match on file_path).
+    let filter = SEARCH_FILTER.with(|f| f.borrow().clone());
+    if !filter.is_empty() {
+        let filter_lower = filter.to_lowercase();
+        entries.retain(|(_, file_path, _)| file_path.to_lowercase().contains(&filter_lower));
+    }
 
     // Track which handle to remove (if any) after iteration.
     let mut remove_handle: Option<Uuid> = None;

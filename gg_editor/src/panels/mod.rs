@@ -7,6 +7,7 @@ pub(crate) mod viewport;
 
 use gg_engine::egui;
 use gg_engine::prelude::*;
+use gg_engine::ui_theme::EditorTheme;
 use transform_gizmo_egui::Gizmo;
 
 use crate::TilemapPaintState;
@@ -63,7 +64,7 @@ pub(crate) fn tile_uv_max(
 // Tab identifiers
 // ---------------------------------------------------------------------------
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub(crate) enum Tab {
     SceneHierarchy,
     Viewport,
@@ -93,6 +94,7 @@ pub(crate) struct ViewportState<'a> {
     pub(crate) tileset_preview: Option<TilesetPreviewInfo>,
     pub(crate) snap_to_grid: bool,
     pub(crate) grid_size: f32,
+    pub(crate) gizmo_local: &'a mut bool,
 }
 
 /// Project and asset context shared across content browser, properties, project panels.
@@ -126,6 +128,7 @@ pub(crate) struct EditorTabViewer<'a> {
     pub(crate) show_grid: &'a mut bool,
     pub(crate) snap_to_grid: &'a mut bool,
     pub(crate) grid_size: &'a mut f32,
+    pub(crate) theme: &'a mut EditorTheme,
     pub(crate) viewport: ViewportState<'a>,
     pub(crate) project: ProjectContext<'a>,
 }
@@ -184,6 +187,7 @@ impl egui_dock::TabViewer for EditorTabViewer<'_> {
                     &self.viewport.tileset_preview,
                     self.viewport.snap_to_grid,
                     self.viewport.grid_size,
+                    self.viewport.gizmo_local,
                 );
             }
 
@@ -222,6 +226,7 @@ impl egui_dock::TabViewer for EditorTabViewer<'_> {
                     self.snap_to_grid,
                     self.grid_size,
                     self.scene_warnings,
+                    self.theme,
                 );
             }
 

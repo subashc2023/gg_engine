@@ -10,23 +10,23 @@ profiling = []
 lua-scripting = ["mlua"]
 
 [dependencies]
-log = { version = "0.4", features = ["release_max_level_info"] }
-winit = "0.30"
-ash = "0.38"
-ash-window = "0.13"
-raw-window-handle = "0.6"
-egui = "0.33"
-egui-winit = { version = "0.33", default-features = false }
-egui-ash-renderer = "0.11"
-glam = "0.29"
-image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
-hecs = "0.11"
-serde = { version = "1", features = ["derive"] }
-serde_yml = "0.0.12"
-rfd = "0.15"
-rand = "0.9"
-rapier2d = { version = "0.22", features = ["simd-stable"] }
-mlua = { version = "0.10", features = ["luajit", "vendored"], optional = true }
-ttf-parser = "0.25"
-gpu-allocator = { version = "0.28", default-features = false, features = ["vulkan", "std"] }
-kira = "0.12"
+log.workspace = true
+winit.workspace = true
+ash.workspace = true
+ash-window.workspace = true
+raw-window-handle.workspace = true
+egui.workspace = true
+egui-winit.workspace = true
+egui-ash-renderer.workspace = true
+glam.workspace = true
+image.workspace = true
+hecs.workspace = true
+serde.workspace = true
+serde_yaml_ng.workspace = true
+rfd.workspace = true
+rand.workspace = true
+rapier2d.workspace = true
+mlua = { workspace = true, optional = true }
+ttf-parser.workspace = true
+gpu-allocator.workspace = true
+kira.workspace = true

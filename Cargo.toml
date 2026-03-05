@@ -8,6 +8,53 @@ members = [
 ]
 resolver = "2"
 
+[workspace.dependencies]
+# Logging
+log = { version = "0.4", features = ["release_max_level_info"] }
+
+# Windowing & platform
+winit = "0.30"
+raw-window-handle = "0.6"
+
+# Vulkan
+ash = "0.38"
+ash-window = "0.13"
+gpu-allocator = { version = "0.28", default-features = false, features = ["vulkan", "std"] }
+
+# UI
+egui = "0.33"
+egui-winit = { version = "0.33", default-features = false }
+egui-ash-renderer = "0.11"
+egui_dock = { version = "0.18", features = ["serde"] }
+transform-gizmo-egui = "0.8"
+
+# Math & ECS
+glam = "0.29"
+hecs = "0.11"
+
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_yaml_ng = "0.10"
+serde_json = "1"
+
+# Asset loading
+image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
+ttf-parser = "0.25"
+
+# Physics
+rapier2d = { version = "0.22", features = ["simd-stable"] }
+
+# Scripting
+mlua = { version = "0.10", features = ["luajit", "vendored"] }
+
+# Audio
+kira = "0.12"
+
+# Misc
+rfd = "0.15"
+rand = "0.9"
+notify = "7"
+
 # Debug
 [profile.dev]
 opt-level = 0

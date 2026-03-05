@@ -1,7 +1,10 @@
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
+use gg_engine::ui_theme::EditorTheme;
+
 use crate::gizmo::GizmoOperation;
+use crate::panels::Tab;
 
 const SETTINGS_FILE_NAME: &str = "editor_settings.yaml";
 const MAX_RECENT_PROJECTS: usize = 10;
@@ -40,6 +43,28 @@ impl Default for CameraState {
     }
 }
 
+/// Persisted window size and position.
+#[derive(Serialize, Deserialize, Clone)]
+pub(crate) struct WindowState {
+    pub width: u32,
+    pub height: u32,
+    pub x: i32,
+    pub y: i32,
+    pub maximized: bool,
+}
+
+impl Default for WindowState {
+    fn default() -> Self {
+        Self {
+            width: 1600,
+            height: 900,
+            x: -1,
+            y: -1,
+            maximized: false,
+        }
+    }
+}
+
 #[derive(Serialize, Deserialize, Default)]
 pub(crate) struct EditorSettings {
     pub recent_projects: Vec<RecentProject>,
@@ -57,6 +82,12 @@ pub(crate) struct EditorSettings {
     pub grid_size: f32,
     #[serde(default)]
     pub snap_to_grid: bool,
+    #[serde(default)]
+    pub window_state: WindowState,
+    #[serde(default)]
+    pub dock_layout: Option<egui_dock::DockState<Tab>>,
+    #[serde(default)]
+    pub theme: EditorTheme,
 }
 
 impl EditorSettings {
@@ -93,7 +124,7 @@ impl EditorSettings {
         let Ok(contents) = std::fs::read_to_string(&path) else {
             return Self::default();
         };
-        serde_yml::from_str(&contents).unwrap_or_default()
+        serde_yaml_ng::from_str(&contents).unwrap_or_default()
     }
 
     pub fn save(&self) {
@@ -104,7 +135,7 @@ impl EditorSettings {
             return;
         };
         let _ = std::fs::create_dir_all(&dir);
-        if let Ok(yaml) = serde_yml::to_string(self) {
+        if let Ok(yaml) = serde_yaml_ng::to_string(self) {
             let _ = gg_engine::platform_utils::atomic_write(&path, &yaml);
         }
     }

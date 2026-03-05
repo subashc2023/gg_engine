@@ -22,6 +22,13 @@ pub struct EditorAssetManager {
     loader: AssetLoader,
     /// Lazily-created magenta/black checkerboard texture used for missing assets.
     fallback_texture: Option<Ref<Texture2D>>,
+    /// Monotonic counter bumped on each asset access, used for LRU eviction.
+    access_counter: u64,
+    /// Last-access timestamp per loaded asset (for LRU ordering).
+    access_times: HashMap<AssetHandle, u64>,
+    /// Maximum number of cached textures before LRU eviction kicks in.
+    /// 0 means unlimited.
+    max_cached_textures: usize,
 }
 
 const REGISTRY_FILENAME: &str = "AssetRegistry.ggregistry";
@@ -35,6 +42,9 @@ impl EditorAssetManager {
             asset_directory: asset_directory.into(),
             loader: AssetLoader::new(),
             fallback_texture: None,
+            access_counter: 0,
+            access_times: HashMap::new(),
+            max_cached_textures: 256,
         }
     }
 
@@ -126,10 +136,14 @@ impl EditorAssetManager {
         self.loaded_assets.get(handle)
     }
 
-    /// Convenience: get a loaded texture by handle.
-    pub fn get_texture(&self, handle: &AssetHandle) -> Option<Ref<Texture2D>> {
+    /// Convenience: get a loaded texture by handle. Updates LRU access time.
+    pub fn get_texture(&mut self, handle: &AssetHandle) -> Option<Ref<Texture2D>> {
         match self.loaded_assets.get(handle) {
-            Some(AssetData::Texture(tex)) => Some(tex.clone()),
+            Some(AssetData::Texture(tex)) => {
+                self.access_counter += 1;
+                self.access_times.insert(*handle, self.access_counter);
+                Some(tex.clone())
+            }
             _ => None,
         }
     }
@@ -139,6 +153,8 @@ impl EditorAssetManager {
     /// Returns `true` if the asset is now loaded (either freshly or already was).
     pub fn load_asset(&mut self, handle: &AssetHandle, renderer: &Renderer) -> bool {
         if self.loaded_assets.contains_key(handle) {
+            self.access_counter += 1;
+            self.access_times.insert(*handle, self.access_counter);
             return true;
         }
 
@@ -298,6 +314,8 @@ impl EditorAssetManager {
         for result in results {
             match result {
                 LoadResult::Texture { handle, data } => {
+                    self.access_counter += 1;
+                    self.access_times.insert(handle, self.access_counter);
                     match data {
                         Ok(cpu_data) => {
                             let texture = Ref::new(renderer.upload_texture(&cpu_data));
@@ -316,11 +334,13 @@ impl EditorAssetManager {
             }
         }
 
+        self.evict_lru();
         font_results
     }
 
     /// Unload a specific asset from GPU memory.
     pub fn unload_asset(&mut self, handle: &AssetHandle) -> bool {
+        self.access_times.remove(handle);
         self.loaded_assets.remove(handle).is_some()
     }
 
@@ -328,8 +348,14 @@ impl EditorAssetManager {
     /// Returns the number of assets evicted.
     pub fn unload_unused(&mut self) -> usize {
         let before = self.loaded_assets.len();
-        self.loaded_assets.retain(|_, data| match data {
-            AssetData::Texture(tex) => std::sync::Arc::strong_count(tex) > 1,
+        self.loaded_assets.retain(|handle, data| {
+            let keep = match data {
+                AssetData::Texture(tex) => std::sync::Arc::strong_count(tex) > 1,
+            };
+            if !keep {
+                self.access_times.remove(handle);
+            }
+            keep
         });
         before - self.loaded_assets.len()
     }
@@ -337,11 +363,53 @@ impl EditorAssetManager {
     /// Unload all cached assets from GPU memory.
     pub fn unload_all(&mut self) {
         self.loaded_assets.clear();
+        self.access_times.clear();
     }
 
     /// Number of currently loaded assets.
     pub fn loaded_count(&self) -> usize {
         self.loaded_assets.len()
+    }
+
+    /// Set the maximum number of cached textures. 0 = unlimited.
+    pub fn set_max_cached_textures(&mut self, max: usize) {
+        self.max_cached_textures = max;
+    }
+
+    /// Evict least-recently-used textures until the cache is within `max_cached_textures`.
+    /// Only evicts textures that are not referenced elsewhere (Arc strong_count == 1).
+    pub fn evict_lru(&mut self) {
+        if self.max_cached_textures == 0 || self.loaded_assets.len() <= self.max_cached_textures {
+            return;
+        }
+
+        let to_evict = self.loaded_assets.len() - self.max_cached_textures;
+
+        // Collect candidates: assets with Arc strong_count == 1 (only held by cache).
+        let mut candidates: Vec<(AssetHandle, u64)> = self
+            .loaded_assets
+            .iter()
+            .filter_map(|(handle, data)| match data {
+                AssetData::Texture(tex) if std::sync::Arc::strong_count(tex) == 1 => {
+                    let access_time = self.access_times.get(handle).copied().unwrap_or(0);
+                    Some((*handle, access_time))
+                }
+                _ => None,
+            })
+            .collect();
+
+        // Sort by access time ascending (oldest first).
+        candidates.sort_by_key(|(_, time)| *time);
+
+        let evict_count = to_evict.min(candidates.len());
+        for (handle, _) in candidates.into_iter().take(evict_count) {
+            self.loaded_assets.remove(&handle);
+            self.access_times.remove(&handle);
+        }
+
+        if evict_count > 0 {
+            log::debug!("LRU cache eviction: removed {} textures", evict_count);
+        }
     }
 
     /// Access the underlying asset loader (e.g., for font loading from editor).

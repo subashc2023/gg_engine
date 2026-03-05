@@ -1,5 +1,6 @@
 use gg_engine::egui;
 use gg_engine::prelude::*;
+use gg_engine::ui_theme::EditorTheme;
 
 const GRID_SIZE_OPTIONS: &[f32] = &[0.1, 0.25, 0.5, 1.0, 2.0, 5.0, 10.0];
 
@@ -16,6 +17,7 @@ pub(crate) fn settings_ui(
     snap_to_grid: &mut bool,
     grid_size: &mut f32,
     scene_warnings: &[String],
+    theme: &mut EditorTheme,
 ) {
     ui.heading("Renderer");
     ui.separator();
@@ -40,6 +42,17 @@ pub(crate) fn settings_ui(
 
     ui.add_space(8.0);
     ui.checkbox(vsync, "VSync");
+
+    ui.add_space(4.0);
+    egui::ComboBox::from_label("Theme")
+        .selected_text(theme.label())
+        .show_ui(ui, |ui| {
+            for &t in EditorTheme::ALL {
+                if ui.selectable_value(theme, t, t.label()).changed() {
+                    gg_engine::ui_theme::apply_theme(ui.ctx(), *theme);
+                }
+            }
+        });
 
     ui.add_space(8.0);
     ui.heading("Debug");

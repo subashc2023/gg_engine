@@ -78,4 +78,13 @@ impl FileDialogs {
             .save_file()
             .map(|p| p.to_string_lossy().to_string())
     }
+
+    /// Show a native "Pick Folder" dialog.
+    ///
+    /// Returns `None` if the user cancels the dialog.
+    pub fn pick_folder() -> Option<String> {
+        rfd::FileDialog::new()
+            .pick_folder()
+            .map(|p| p.to_string_lossy().to_string())
+    }
 }

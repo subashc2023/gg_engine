@@ -29,6 +29,11 @@ pub struct WindowConfig {
     pub width: u32,
     pub height: u32,
     pub decorations: bool,
+    /// Optional window position (x, y). When `Some`, the window is placed at
+    /// the given screen coordinates; when `None`, the OS chooses the position.
+    pub position: Option<(i32, i32)>,
+    /// Whether the window should start maximized.
+    pub maximized: bool,
 }
 
 impl Default for WindowConfig {
@@ -38,6 +43,8 @@ impl Default for WindowConfig {
             width: 1280,
             height: 720,
             decorations: true,
+            position: None,
+            maximized: false,
         }
     }
 }
@@ -238,10 +245,14 @@ impl<T: Application> ApplicationHandler for EngineRunner<T> {
 
         let size =
             winit::dpi::LogicalSize::new(self.window_config.width, self.window_config.height);
-        let attrs = WindowAttributes::default()
+        let mut attrs = WindowAttributes::default()
             .with_title(&self.window_config.title)
             .with_inner_size(size)
-            .with_decorations(self.window_config.decorations);
+            .with_decorations(self.window_config.decorations)
+            .with_maximized(self.window_config.maximized);
+        if let Some((x, y)) = self.window_config.position {
+            attrs = attrs.with_position(winit::dpi::PhysicalPosition::new(x, y));
+        }
 
         match event_loop.create_window(attrs) {
             Ok(window) => {

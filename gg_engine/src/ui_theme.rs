@@ -8,11 +8,45 @@ use std::sync::Arc;
 /// `FontFamily::Name(BOLD_FONT.into())` or `RichText::new(...).font(...)`.
 pub const BOLD_FONT: &str = "JetBrainsMono-Bold";
 
+/// Available editor color themes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, Default)]
+pub enum EditorTheme {
+    #[default]
+    Dark,
+    Light,
+    HighContrast,
+}
+
+impl EditorTheme {
+    pub const ALL: &'static [EditorTheme] = &[
+        EditorTheme::Dark,
+        EditorTheme::Light,
+        EditorTheme::HighContrast,
+    ];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            EditorTheme::Dark => "Dark",
+            EditorTheme::Light => "Light",
+            EditorTheme::HighContrast => "High Contrast",
+        }
+    }
+}
+
 /// Apply the engine-wide dark theme and JetBrains Mono fonts to an egui context.
 /// Called once during engine initialization, before the first frame.
 pub fn apply_engine_theme(ctx: &egui::Context) {
     configure_fonts(ctx);
     configure_style(ctx);
+}
+
+/// Apply a specific theme to the egui context (fonts are not changed).
+pub fn apply_theme(ctx: &egui::Context, theme: EditorTheme) {
+    match theme {
+        EditorTheme::Dark => configure_style(ctx),
+        EditorTheme::Light => configure_light_style(ctx),
+        EditorTheme::HighContrast => configure_high_contrast_style(ctx),
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -67,29 +101,7 @@ fn configure_fonts(ctx: &egui::Context) {
 // ---------------------------------------------------------------------------
 
 fn configure_style(ctx: &egui::Context) {
-    let mut style = Style {
-        text_styles: [
-            (
-                TextStyle::Heading,
-                FontId::new(18.0, FontFamily::Proportional),
-            ),
-            (TextStyle::Body, FontId::new(14.0, FontFamily::Proportional)),
-            (
-                TextStyle::Button,
-                FontId::new(14.0, FontFamily::Proportional),
-            ),
-            (
-                TextStyle::Small,
-                FontId::new(12.0, FontFamily::Proportional),
-            ),
-            (
-                TextStyle::Monospace,
-                FontId::new(14.0, FontFamily::Monospace),
-            ),
-        ]
-        .into(),
-        ..Style::default()
-    };
+    let mut style = base_text_style();
 
     // -- Spacing -------------------------------------------------------------
     style.spacing.item_spacing = egui::vec2(8.0, 4.0);
@@ -183,6 +195,201 @@ fn configure_style(ctx: &egui::Context) {
 
     style.visuals = visuals;
     ctx.set_style(style);
+}
+
+// ---------------------------------------------------------------------------
+// Light theme
+// ---------------------------------------------------------------------------
+
+fn configure_light_style(ctx: &egui::Context) {
+    let mut style = base_text_style();
+
+    style.spacing.item_spacing = egui::vec2(8.0, 4.0);
+    style.spacing.button_padding = egui::vec2(6.0, 3.0);
+
+    let mut visuals = Visuals::light();
+
+    visuals.panel_fill = hex_color(0xF3F3F3);
+    visuals.window_fill = hex_color(0xFFFFFF);
+    visuals.extreme_bg_color = hex_color(0xFFFFFF);
+    visuals.faint_bg_color = hex_color(0xF3F3F3);
+    visuals.code_bg_color = hex_color(0xE8E8E8);
+
+    visuals.selection.bg_fill = hex_color(0xADD6FF);
+    visuals.selection.stroke = Stroke::new(1.0, hex_color(0x0066B8));
+
+    visuals.hyperlink_color = hex_color(0x006AB1);
+
+    visuals.window_stroke = Stroke::new(1.0, hex_color(0xCCCCCC));
+    visuals.window_shadow = Shadow::NONE;
+    visuals.popup_shadow = Shadow {
+        spread: 0,
+        blur: 8,
+        offset: [0, 2],
+        color: Color32::from_black_alpha(32),
+    };
+
+    visuals.collapsing_header_frame = true;
+
+    let corner = egui::CornerRadius::same(3);
+
+    visuals.widgets.noninteractive = WidgetVisuals {
+        bg_fill: hex_color(0xF3F3F3),
+        weak_bg_fill: hex_color(0xF3F3F3),
+        bg_stroke: Stroke::new(1.0, hex_color(0xCCCCCC)),
+        fg_stroke: Stroke::new(1.0, hex_color(0x333333)),
+        corner_radius: corner,
+        expansion: 0.0,
+    };
+
+    visuals.widgets.inactive = WidgetVisuals {
+        bg_fill: hex_color(0xE0E0E0),
+        weak_bg_fill: hex_color(0xE0E0E0),
+        bg_stroke: Stroke::NONE,
+        fg_stroke: Stroke::new(1.0, hex_color(0x333333)),
+        corner_radius: corner,
+        expansion: 0.0,
+    };
+
+    visuals.widgets.hovered = WidgetVisuals {
+        bg_fill: hex_color(0xD0D0D0),
+        weak_bg_fill: hex_color(0xD0D0D0),
+        bg_stroke: Stroke::new(1.0, hex_color(0x0066B8)),
+        fg_stroke: Stroke::new(1.5, hex_color(0x000000)),
+        corner_radius: corner,
+        expansion: 1.0,
+    };
+
+    visuals.widgets.active = WidgetVisuals {
+        bg_fill: hex_color(0x0066B8),
+        weak_bg_fill: hex_color(0x0066B8),
+        bg_stroke: Stroke::new(1.0, hex_color(0x000000)),
+        fg_stroke: Stroke::new(2.0, hex_color(0xFFFFFF)),
+        corner_radius: corner,
+        expansion: 1.0,
+    };
+
+    visuals.widgets.open = WidgetVisuals {
+        bg_fill: hex_color(0xE0E0E0),
+        weak_bg_fill: hex_color(0xE0E0E0),
+        bg_stroke: Stroke::new(1.0, hex_color(0x0066B8)),
+        fg_stroke: Stroke::new(1.0, hex_color(0x000000)),
+        corner_radius: corner,
+        expansion: 0.0,
+    };
+
+    style.visuals = visuals;
+    ctx.set_style(style);
+}
+
+// ---------------------------------------------------------------------------
+// High Contrast theme
+// ---------------------------------------------------------------------------
+
+fn configure_high_contrast_style(ctx: &egui::Context) {
+    let mut style = base_text_style();
+
+    style.spacing.item_spacing = egui::vec2(8.0, 4.0);
+    style.spacing.button_padding = egui::vec2(6.0, 3.0);
+
+    let mut visuals = Visuals::dark();
+
+    visuals.panel_fill = hex_color(0x000000);
+    visuals.window_fill = hex_color(0x000000);
+    visuals.extreme_bg_color = hex_color(0x000000);
+    visuals.faint_bg_color = hex_color(0x0A0A0A);
+    visuals.code_bg_color = hex_color(0x000000);
+
+    visuals.selection.bg_fill = hex_color(0x264F78);
+    visuals.selection.stroke = Stroke::new(2.0, hex_color(0xFFFFFF));
+
+    visuals.hyperlink_color = hex_color(0x3794FF);
+
+    visuals.window_stroke = Stroke::new(2.0, hex_color(0xFFFFFF));
+    visuals.window_shadow = Shadow::NONE;
+    visuals.popup_shadow = Shadow::NONE;
+
+    visuals.collapsing_header_frame = true;
+
+    let corner = egui::CornerRadius::same(3);
+
+    visuals.widgets.noninteractive = WidgetVisuals {
+        bg_fill: hex_color(0x000000),
+        weak_bg_fill: hex_color(0x000000),
+        bg_stroke: Stroke::new(1.0, hex_color(0xFFFFFF)),
+        fg_stroke: Stroke::new(1.0, hex_color(0xFFFFFF)),
+        corner_radius: corner,
+        expansion: 0.0,
+    };
+
+    visuals.widgets.inactive = WidgetVisuals {
+        bg_fill: hex_color(0x1A1A1A),
+        weak_bg_fill: hex_color(0x1A1A1A),
+        bg_stroke: Stroke::new(1.0, hex_color(0xFFFFFF)),
+        fg_stroke: Stroke::new(1.0, hex_color(0xFFFFFF)),
+        corner_radius: corner,
+        expansion: 0.0,
+    };
+
+    visuals.widgets.hovered = WidgetVisuals {
+        bg_fill: hex_color(0x2A2A2A),
+        weak_bg_fill: hex_color(0x2A2A2A),
+        bg_stroke: Stroke::new(2.0, hex_color(0x00FFFF)),
+        fg_stroke: Stroke::new(2.0, hex_color(0xFFFFFF)),
+        corner_radius: corner,
+        expansion: 1.0,
+    };
+
+    visuals.widgets.active = WidgetVisuals {
+        bg_fill: hex_color(0x00FFFF),
+        weak_bg_fill: hex_color(0x00FFFF),
+        bg_stroke: Stroke::new(2.0, hex_color(0xFFFFFF)),
+        fg_stroke: Stroke::new(2.0, hex_color(0x000000)),
+        corner_radius: corner,
+        expansion: 1.0,
+    };
+
+    visuals.widgets.open = WidgetVisuals {
+        bg_fill: hex_color(0x1A1A1A),
+        weak_bg_fill: hex_color(0x1A1A1A),
+        bg_stroke: Stroke::new(2.0, hex_color(0x00FFFF)),
+        fg_stroke: Stroke::new(1.0, hex_color(0xFFFFFF)),
+        corner_radius: corner,
+        expansion: 0.0,
+    };
+
+    style.visuals = visuals;
+    ctx.set_style(style);
+}
+
+// ---------------------------------------------------------------------------
+// Shared text style configuration
+// ---------------------------------------------------------------------------
+
+fn base_text_style() -> Style {
+    Style {
+        text_styles: [
+            (
+                TextStyle::Heading,
+                FontId::new(18.0, FontFamily::Proportional),
+            ),
+            (TextStyle::Body, FontId::new(14.0, FontFamily::Proportional)),
+            (
+                TextStyle::Button,
+                FontId::new(14.0, FontFamily::Proportional),
+            ),
+            (
+                TextStyle::Small,
+                FontId::new(12.0, FontFamily::Proportional),
+            ),
+            (
+                TextStyle::Monospace,
+                FontId::new(14.0, FontFamily::Monospace),
+            ),
+        ]
+        .into(),
+        ..Style::default()
+    }
 }
 
 // ---------------------------------------------------------------------------

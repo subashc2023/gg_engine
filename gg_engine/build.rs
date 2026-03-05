@@ -42,8 +42,13 @@ fn main() {
         // Compile each stage with glslc.
         let vert_spv = out_dir.join(format!("{stem}_vert.spv"));
         let frag_spv = out_dir.join(format!("{stem}_frag.spv"));
-        compile_glslc(&vert_tmp, &vert_spv);
-        compile_glslc(&frag_tmp, &frag_spv);
+        let profile = env::var("PROFILE").unwrap_or_default();
+        compile_glslc(&vert_tmp, &vert_spv, &profile);
+        compile_glslc(&frag_tmp, &frag_spv, &profile);
+
+        // Optionally validate SPIR-V output.
+        validate_spirv(&vert_spv);
+        validate_spirv(&frag_spv);
 
         // Emit pub const declarations.
         let upper = stem.to_uppercase();
@@ -97,9 +102,16 @@ fn split_glsl_source(source: &str, path: &Path) -> (String, String) {
 }
 
 /// Invoke `glslc` to compile a GLSL source file to SPIR-V.
-fn compile_glslc(input: &Path, output: &Path) {
-    let status = Command::new("glslc")
-        .arg("--target-env=vulkan1.2")
+/// Adds `-O` optimization flag when building in release mode.
+fn compile_glslc(input: &Path, output: &Path, profile: &str) {
+    let mut cmd = Command::new("glslc");
+    cmd.arg("--target-env=vulkan1.2");
+
+    if profile == "release" {
+        cmd.arg("-O");
+    }
+
+    let status = cmd
         .arg(input)
         .arg("-o")
         .arg(output)
@@ -121,5 +133,28 @@ fn compile_glslc(input: &Path, output: &Path) {
             "glslc failed to compile '{}'. Check GLSL syntax.",
             input.display()
         );
+    }
+}
+
+/// Run spirv-val on a compiled SPIR-V file. Skips silently if spirv-val is not installed.
+fn validate_spirv(spv_path: &Path) {
+    match Command::new("spirv-val").arg(spv_path).output() {
+        Ok(output) => {
+            if !output.status.success() {
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                panic!(
+                    "spirv-val validation failed for '{}':\n{}",
+                    spv_path.display(),
+                    stderr
+                );
+            }
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            // spirv-val not installed, skip validation.
+            println!("cargo:warning=spirv-val not found, skipping SPIR-V validation");
+        }
+        Err(e) => {
+            println!("cargo:warning=Failed to run spirv-val: {e}");
+        }
     }
 }

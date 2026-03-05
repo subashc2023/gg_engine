@@ -93,6 +93,7 @@ pub(crate) fn viewport_ui(
     tileset_preview: &Option<TilesetPreviewInfo>,
     snap_to_grid: bool,
     grid_size: f32,
+    gizmo_local: &mut bool,
 ) {
     let available = ui.available_size();
     if available.x > 0.0 && available.y > 0.0 {
@@ -300,6 +301,34 @@ pub(crate) fn viewport_ui(
                 }
                 resp.on_hover_text(*tooltip);
             }
+
+            // Local / World toggle — after a small gap.
+            let toggle_x = toolbar_x + operations.len() as f32 * (btn_size.x + spacing) + padding;
+            let toggle_label = if *gizmo_local { "L" } else { "W" };
+            let toggle_tooltip = if *gizmo_local {
+                "Local space (click for World)"
+            } else {
+                "World space (click for Local)"
+            };
+            let toggle_rect = egui::Rect::from_min_size(
+                egui::pos2(toggle_x, toolbar_y),
+                btn_size,
+            );
+            let toggle_resp = ui.allocate_rect(toggle_rect, egui::Sense::click());
+            let toggle_bg = if toggle_resp.hovered() { hover_bg } else { inactive_bg };
+            ui.painter()
+                .rect_filled(toggle_rect, egui::CornerRadius::same(3), toggle_bg);
+            ui.painter().text(
+                toggle_rect.center(),
+                egui::Align2::CENTER_CENTER,
+                toggle_label,
+                egui::FontId::new(12.0, egui::FontFamily::Monospace),
+                egui::Color32::from_rgb(0xCC, 0xCC, 0xCC),
+            );
+            if toggle_resp.clicked() {
+                *gizmo_local = !*gizmo_local;
+            }
+            toggle_resp.on_hover_text(toggle_tooltip);
         }
     }
 
@@ -422,7 +451,11 @@ pub(crate) fn viewport_ui(
                         projection_matrix: mat4_to_f64(&camera_projection).into(),
                         viewport: viewport_rect,
                         modes: gizmo_modes_for(*gizmo_operation),
-                        orientation: GizmoOrientation::Local,
+                        orientation: if *gizmo_local {
+                            GizmoOrientation::Local
+                        } else {
+                            GizmoOrientation::Global
+                        },
                         snapping,
                         snap_angle: std::f32::consts::FRAC_PI_4, // 45 degrees
                         snap_distance: snap_dist,

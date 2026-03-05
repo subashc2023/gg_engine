@@ -11,8 +11,8 @@ lua-scripting = ["gg_engine/lua-scripting", "dep:notify"]
 
 [dependencies]
 gg_engine = { path = "../gg_engine", default-features = false }
-egui_dock = "0.18"
-transform-gizmo-egui = "0.8"
-notify = { version = "7", optional = true }
-serde = { version = "1", features = ["derive"] }
-serde_yml = "0.0.12"
+egui_dock.workspace = true
+transform-gizmo-egui.workspace = true
+notify = { workspace = true, optional = true }
+serde.workspace = true
+serde_yaml_ng.workspace = true

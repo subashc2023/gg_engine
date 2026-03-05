@@ -2,6 +2,115 @@ use std::path::PathBuf;
 
 use gg_engine::prelude::*;
 
+// ---------------------------------------------------------------------------
+// CLI argument parsing
+// ---------------------------------------------------------------------------
+
+struct PlayerConfig {
+    project_path: Option<String>,
+    width: u32,
+    height: u32,
+    vsync: bool,
+}
+
+impl Default for PlayerConfig {
+    fn default() -> Self {
+        Self {
+            project_path: None,
+            width: 1280,
+            height: 720,
+            vsync: false, // Mailbox (no vsync) by default
+        }
+    }
+}
+
+/// Parse CLI arguments manually (no external crate).
+///
+/// Recognised flags:
+///   --width N       Override window width  (default 1280)
+///   --height N      Override window height (default 720)
+///   --vsync         Enable VSync (Fifo present mode)
+///   --no-vsync      Disable VSync (Mailbox present mode, default)
+///   --help / -h     Print usage and exit
+///
+/// Any positional argument ending in `.ggproject` is treated as the project
+/// path. At most one project path is accepted.
+fn parse_args() -> PlayerConfig {
+    let mut config = PlayerConfig::default();
+    let args: Vec<String> = std::env::args().collect();
+    let mut i = 1; // skip executable name
+
+    while i < args.len() {
+        match args[i].as_str() {
+            "--width" => {
+                i += 1;
+                if i < args.len() {
+                    config.width = args[i].parse::<u32>().unwrap_or_else(|_| {
+                        eprintln!("Invalid value for --width: '{}'", args[i]);
+                        std::process::exit(1);
+                    });
+                } else {
+                    eprintln!("--width requires a value");
+                    std::process::exit(1);
+                }
+            }
+            "--height" => {
+                i += 1;
+                if i < args.len() {
+                    config.height = args[i].parse::<u32>().unwrap_or_else(|_| {
+                        eprintln!("Invalid value for --height: '{}'", args[i]);
+                        std::process::exit(1);
+                    });
+                } else {
+                    eprintln!("--height requires a value");
+                    std::process::exit(1);
+                }
+            }
+            "--vsync" => {
+                config.vsync = true;
+            }
+            "--no-vsync" => {
+                config.vsync = false;
+            }
+            "--help" | "-h" => {
+                print_usage();
+                std::process::exit(0);
+            }
+            other => {
+                if other.starts_with('-') {
+                    eprintln!("Unknown flag: {}", other);
+                    print_usage();
+                    std::process::exit(1);
+                }
+                // Treat as a positional argument — expect .ggproject path.
+                if other.ends_with(".ggproject") {
+                    config.project_path = Some(other.to_string());
+                } else {
+                    eprintln!("Unexpected argument: {}", other);
+                    print_usage();
+                    std::process::exit(1);
+                }
+            }
+        }
+        i += 1;
+    }
+
+    config
+}
+
+fn print_usage() {
+    eprintln!(
+        "Usage: gg_player [OPTIONS] [path/to/project.ggproject]\n\
+         \n\
+         Options:\n\
+         \x20 --width N       Window width  (default: 1280)\n\
+         \x20 --height N      Window height (default: 720)\n\
+         \x20 --vsync         Enable VSync  (Fifo present mode)\n\
+         \x20 --no-vsync      Disable VSync (Mailbox present mode, default)\n\
+         \x20 --help, -h      Show this help message"
+    );
+}
+
 pub struct GGPlayer {
     project_name: String,
     scene: Scene,
@@ -15,12 +124,24 @@ pub struct GGPlayer {
 
 impl Application for GGPlayer {
     fn new(_layers: &mut LayerStack) -> Self {
-        let project_path = find_project_path().unwrap_or_else(|| {
-            panic!(
-                "No .ggproject file found. Pass a path as a CLI argument \
-                 or place the player executable next to a .ggproject file."
-            );
-        });
+        let config = parse_args();
+
+        let project_path = config
+            .project_path
+            .map(|p| {
+                // Resolve to an absolute path when provided via CLI.
+                std::fs::canonicalize(&p)
+                    .unwrap_or_else(|_| PathBuf::from(&p))
+                    .to_string_lossy()
+                    .to_string()
+            })
+            .or_else(find_project_path_auto)
+            .unwrap_or_else(|| {
+                panic!(
+                    "No .ggproject file found. Pass a path as a CLI argument \
+                     or place the player executable next to a .ggproject file."
+                );
+            });
 
         let project = Project::load(&project_path)
             .unwrap_or_else(|| panic!("Failed to load project: {}", project_path));
@@ -54,26 +175,36 @@ impl Application for GGPlayer {
         let mut asset_manager = EditorAssetManager::new(&assets_root);
         asset_manager.load_registry();
 
-        info!("GGPlayer: loaded project '{}', scene '{}'", project_name, path_str);
+        let present_mode = if config.vsync {
+            PresentMode::Fifo
+        } else {
+            PresentMode::Mailbox
+        };
+
+        info!(
+            "GGPlayer: loaded project '{}', scene '{}', {}x{}, vsync={}",
+            project_name, path_str, config.width, config.height, config.vsync
+        );
 
         GGPlayer {
             project_name,
             scene,
             asset_manager: Some(asset_manager),
-            window_width: 1280,
-            window_height: 720,
+            window_width: config.width,
+            window_height: config.height,
             textures_loaded: false,
             runtime_started: false,
-            present_mode: PresentMode::Mailbox,
+            present_mode,
         }
     }
 
     fn window_config(&self) -> WindowConfig {
         WindowConfig {
             title: self.project_name.clone(),
-            width: 1280,
-            height: 720,
+            width: self.window_width,
+            height: self.window_height,
             decorations: true,
+            ..Default::default()
         }
     }
 
@@ -150,21 +281,10 @@ impl Application for GGPlayer {
 // Project discovery
 // ---------------------------------------------------------------------------
 
-/// Find the path to a `.ggproject` file.
+/// Auto-detect a `.ggproject` file in the directory containing the executable.
 ///
-/// 1. CLI argument ending in `.ggproject`
-/// 2. Auto-detect in the directory containing the executable
-fn find_project_path() -> Option<String> {
-    // 1. CLI argument.
-    if let Some(arg) = std::env::args().nth(1) {
-        if arg.ends_with(".ggproject") {
-            let abs = std::fs::canonicalize(&arg)
-                .unwrap_or_else(|_| PathBuf::from(&arg));
-            return Some(abs.to_string_lossy().to_string());
-        }
-    }
-
-    // 2. Scan directory next to the executable.
+/// This is the fallback when no project path was supplied via CLI arguments.
+fn find_project_path_auto() -> Option<String> {
     if let Ok(exe_path) = std::env::current_exe() {
         if let Some(exe_dir) = exe_path.parent() {
             if let Ok(entries) = std::fs::read_dir(exe_dir) {

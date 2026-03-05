@@ -855,8 +855,8 @@ end
         ];
 
         for v in &values {
-            let yaml = serde_yml::to_string(v).unwrap();
-            let back: ScriptFieldValue = serde_yml::from_str(&yaml).unwrap();
+            let yaml = serde_yaml_ng::to_string(v).unwrap();
+            let back: ScriptFieldValue = serde_yaml_ng::from_str(&yaml).unwrap();
             assert_eq!(&back, v);
         }
     }

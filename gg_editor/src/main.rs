@@ -137,6 +137,7 @@ struct GGEditor {
     autosave_timer: f32,
     undo_system: undo::UndoSystem,
     gizmo_editing: bool,
+    gizmo_local: bool,
     is_paused: bool,
     step_frames: i32,
     should_exit: bool,
@@ -145,8 +146,16 @@ struct GGEditor {
     egui_wants_keyboard: bool,
     /// Previous window title; only call `window.set_title()` when it changes.
     prev_window_title: String,
+    /// Cached window geometry for persistence on exit.
+    cached_window_state: editor_settings::WindowState,
     /// When `Some`, the "New Scene" modal is open with the current name text.
     new_scene_modal: Option<String>,
+    /// Whether the keyboard shortcuts help dialog is open.
+    show_shortcuts_dialog: bool,
+    /// UUID of the entity last copied via Ctrl+C. Used by Ctrl+V to duplicate.
+    clipboard_entity_uuid: Option<u64>,
+    /// Current editor color theme.
+    theme: gg_engine::ui_theme::EditorTheme,
     /// File watcher that monitors `assets/scripts/` for `.lua` changes.
     /// Kept alive so the OS keeps notifying us; the actual data flows
     /// through `script_reload_pending`.
@@ -162,27 +171,6 @@ struct GGEditor {
 impl Application for GGEditor {
     fn new(_layers: &mut LayerStack) -> Self {
         info!("GGEditor initialized");
-
-        // Layout:
-        //  ┌──────────┬──────────────┬─────────────────┐
-        //  │ Project  │              │ Scene Hierarchy  │
-        //  ├──────────┤   Viewport   ├─────────────────┤
-        //  │ Settings │              │   Properties    │
-        //  ├──────────┴──────────────┤                  │
-        //  │     Content Browser     │                  │
-        //  └─────────────────────────┴─────────────────┘
-        let mut dock_state = egui_dock::DockState::new(vec![Tab::Project]);
-        let surface = dock_state.main_surface_mut();
-        let root = egui_dock::NodeIndex::root();
-        // Right sidebar (20%) — hierarchy + properties, full height.
-        let [left, right] = surface.split_right(root, 0.77, vec![Tab::SceneHierarchy]);
-        surface.split_below(right, 0.5, vec![Tab::Properties]);
-        // Content browser at bottom of left column (30%).
-        let [top_left, _bottom_left] = surface.split_below(left, 0.7, vec![Tab::ContentBrowser]);
-        // Viewport takes 80% right of the top-left area; left sidebar stays left (20%).
-        let [left_sidebar, _viewport] = surface.split_right(top_left, 0.20, vec![Tab::Viewport]);
-        // Split left sidebar: Project on top (50%), Settings on bottom (50%).
-        surface.split_below(left_sidebar, 0.5, vec![Tab::Settings]);
 
         // -- Project loading (CLI arg) --
         let project = std::env::args()
@@ -289,6 +277,15 @@ impl Application for GGEditor {
         let initial_show_grid = editor_settings.show_grid;
         let initial_snap_to_grid = editor_settings.snap_to_grid;
         let initial_grid_size = editor_settings.grid_size;
+        let initial_window_state = editor_settings.window_state.clone();
+        let initial_theme = editor_settings.theme;
+
+        // Restore dock layout from settings, or build default layout.
+        let dock_state = if let Some(saved) = editor_settings.dock_layout.take() {
+            saved
+        } else {
+            Self::default_dock_layout()
+        };
 
         GGEditor {
             editor_mode,
@@ -340,12 +337,17 @@ impl Application for GGEditor {
             autosave_timer: Self::AUTOSAVE_INTERVAL_SECS,
             undo_system: undo::UndoSystem::new(),
             gizmo_editing: false,
+            gizmo_local: true,
             is_paused: false,
             step_frames: 0,
             should_exit: false,
             egui_wants_keyboard: false,
             prev_window_title: String::new(),
+            cached_window_state: initial_window_state,
             new_scene_modal: None,
+            show_shortcuts_dialog: false,
+            clipboard_entity_uuid: None,
+            theme: initial_theme,
             #[cfg(feature = "lua-scripting")]
             _script_watcher,
             #[cfg(feature = "lua-scripting")]
@@ -354,11 +356,18 @@ impl Application for GGEditor {
     }
 
     fn window_config(&self) -> WindowConfig {
+        let ws = &self.editor_settings.window_state;
         WindowConfig {
             title: "GGEditor".into(),
-            width: 1600,
-            height: 900,
+            width: ws.width,
+            height: ws.height,
             decorations: cfg!(target_os = "macos"),
+            position: if ws.x >= 0 && ws.y >= 0 {
+                Some((ws.x, ws.y))
+            } else {
+                None
+            },
+            maximized: ws.maximized,
         }
     }
 
@@ -467,6 +476,15 @@ impl Application for GGEditor {
                 }
                 KeyCode::Y if ctrl && !shift && self.scene_state == SceneState::Edit => {
                     self.perform_redo();
+                }
+
+                // Copy entity — edit mode only.
+                KeyCode::C if ctrl && !shift && self.scene_state == SceneState::Edit => {
+                    self.on_copy_entity();
+                }
+                // Paste entity — edit mode only.
+                KeyCode::V if ctrl && !shift && self.scene_state == SceneState::Edit => {
+                    self.on_paste_entity();
                 }
 
                 // Entity duplication — edit mode only.
@@ -737,9 +755,30 @@ impl Application for GGEditor {
     }
 
     fn on_egui(&mut self, ctx: &egui::Context, window: &Window) {
+        // Apply saved theme on first frame (engine defaults to Dark).
+        if self.prev_window_title.is_empty() && self.theme != gg_engine::ui_theme::EditorTheme::Dark {
+            gg_engine::ui_theme::apply_theme(ctx, self.theme);
+        }
+
         // Track whether egui wants keyboard input (text editing, etc.)
         // so on_event can suppress editor shortcuts next frame.
         self.egui_wants_keyboard = ctx.wants_keyboard_input();
+
+        // Cache window geometry for persistence on exit.
+        if !window.is_minimized().unwrap_or(false) {
+            self.cached_window_state.maximized = window.is_maximized();
+            if !window.is_maximized() {
+                if let Ok(pos) = window.outer_position() {
+                    self.cached_window_state.x = pos.x;
+                    self.cached_window_state.y = pos.y;
+                }
+                let size = window.inner_size();
+                if size.width > 0 && size.height > 0 {
+                    self.cached_window_state.width = size.width;
+                    self.cached_window_state.height = size.height;
+                }
+            }
+        }
 
         // -- Hub mode --
         if self.editor_mode == EditorMode::Hub {
@@ -757,8 +796,8 @@ impl Application for GGEditor {
             if let Some(path) = hub_response.open_project_path {
                 self.load_project_from_path(&path);
             }
-            if hub_response.new_project_requested {
-                self.handle_new_project_from_hub();
+            if let Some(path) = hub_response.create_project_path {
+                self.handle_new_project_from_hub(&path);
             }
             return;
         }
@@ -941,6 +980,7 @@ impl Application for GGEditor {
                 show_grid: &mut self.show_grid,
                 snap_to_grid: &mut self.snap_to_grid,
                 grid_size: &mut self.grid_size,
+                theme: &mut self.theme,
                 viewport: ViewportState {
                     size: &mut self.viewport_size,
                     focused: &mut self.viewport_focused,
@@ -956,6 +996,7 @@ impl Application for GGEditor {
                     tileset_preview,
                     snap_to_grid: current_snap_to_grid,
                     grid_size: current_grid_size,
+                    gizmo_local: &mut self.gizmo_local,
                 },
                 project: ProjectContext {
                     assets_root: &self.assets_root,
@@ -979,6 +1020,7 @@ impl Application for GGEditor {
             || self.show_grid != self.editor_settings.show_grid
             || self.snap_to_grid != self.editor_settings.snap_to_grid
             || self.grid_size != self.editor_settings.grid_size
+            || self.theme != self.editor_settings.theme
         {
             self.editor_settings.vsync = self.vsync;
             self.editor_settings.show_physics_colliders = self.show_physics_colliders;
@@ -986,6 +1028,7 @@ impl Application for GGEditor {
             self.editor_settings.show_grid = self.show_grid;
             self.editor_settings.snap_to_grid = self.snap_to_grid;
             self.editor_settings.grid_size = self.grid_size;
+            self.editor_settings.theme = self.theme;
             self.editor_settings.save();
         }
 
@@ -1003,6 +1046,9 @@ impl Application for GGEditor {
 
         // "New Scene" naming modal.
         self.new_scene_modal_ui(ctx);
+
+        // Keyboard shortcuts help dialog.
+        self.shortcuts_dialog_ui(ctx);
 
         // DnD ghost overlay — painted on a tooltip layer so it floats above
         // all panels and follows the cursor.
@@ -1091,8 +1137,31 @@ impl GGEditor {
         self.editor_settings.show_grid = self.show_grid;
         self.editor_settings.snap_to_grid = self.snap_to_grid;
         self.editor_settings.grid_size = self.grid_size;
+        // Persist window geometry.
+        self.editor_settings.window_state = self.cached_window_state.clone();
+        // Persist dock layout.
+        self.editor_settings.dock_layout = Some(self.dock_state.clone());
         self.editor_settings.save();
         self.should_exit = true;
+    }
+
+    fn default_dock_layout() -> egui_dock::DockState<Tab> {
+        //  ┌──────────┬──────────────┬─────────────────┐
+        //  │ Project  │              │ Scene Hierarchy  │
+        //  ├──────────┤   Viewport   ├─────────────────┤
+        //  │ Settings │              │   Properties    │
+        //  ├──────────┴──────────────┤                  │
+        //  │     Content Browser     │                  │
+        //  └─────────────────────────┴─────────────────┘
+        let mut dock_state = egui_dock::DockState::new(vec![Tab::Project]);
+        let surface = dock_state.main_surface_mut();
+        let root = egui_dock::NodeIndex::root();
+        let [left, right] = surface.split_right(root, 0.77, vec![Tab::SceneHierarchy]);
+        surface.split_below(right, 0.5, vec![Tab::Properties]);
+        let [top_left, _bottom_left] = surface.split_below(left, 0.7, vec![Tab::ContentBrowser]);
+        let [left_sidebar, _viewport] = surface.split_right(top_left, 0.20, vec![Tab::Viewport]);
+        surface.split_below(left_sidebar, 0.5, vec![Tab::Settings]);
+        dock_state
     }
 
     fn on_overlay_render(&self, renderer: &mut Renderer) {
@@ -1632,12 +1701,49 @@ impl GGEditor {
                 self.perform_redo();
                 ui.close();
             }
+            ui.separator();
+            if ui
+                .add_enabled(
+                    in_edit_mode && self.selection_context.is_some(),
+                    egui::Button::new("Copy").shortcut_text("Ctrl+C"),
+                )
+                .clicked()
+            {
+                self.on_copy_entity();
+                ui.close();
+            }
+            if ui
+                .add_enabled(
+                    in_edit_mode && self.clipboard_entity_uuid.is_some(),
+                    egui::Button::new("Paste").shortcut_text("Ctrl+V"),
+                )
+                .clicked()
+            {
+                self.on_paste_entity();
+                ui.close();
+            }
+            ui.separator();
+            if ui
+                .add_enabled(
+                    in_edit_mode && self.selection_context.is_some(),
+                    egui::Button::new("Duplicate").shortcut_text("Ctrl+D"),
+                )
+                .clicked()
+            {
+                self.on_duplicate_entity();
+                ui.close();
+            }
         });
         ui.menu_button("View", |ui| {
             if ui
                 .checkbox(&mut self.show_physics_colliders, "Show Physics Colliders")
                 .clicked()
             {
+                ui.close();
+            }
+            ui.separator();
+            if ui.button("Reset Layout").clicked() {
+                self.dock_state = Self::default_dock_layout();
                 ui.close();
             }
         });
@@ -1649,6 +1755,12 @@ impl GGEditor {
             {
                 self.scene.reload_lua_scripts();
                 panels::properties::clear_field_cache();
+                ui.close();
+            }
+        });
+        ui.menu_button("Help", |ui| {
+            if ui.button("Keyboard Shortcuts").clicked() {
+                self.show_shortcuts_dialog = true;
                 ui.close();
             }
         });
@@ -1753,6 +1865,92 @@ impl GGEditor {
         } else if cancelled {
             self.new_scene_modal = None;
         }
+    }
+
+    fn shortcuts_dialog_ui(&mut self, ctx: &egui::Context) {
+        if !self.show_shortcuts_dialog {
+            return;
+        }
+
+        egui::Window::new("Keyboard Shortcuts")
+            .collapsible(false)
+            .resizable(false)
+            .open(&mut self.show_shortcuts_dialog)
+            .show(ctx, |ui| {
+                ui.label(egui::RichText::new("General").strong());
+                egui::Grid::new("shortcuts_general")
+                    .num_columns(2)
+                    .spacing([40.0, 4.0])
+                    .show(ui, |ui| {
+                        ui.label("Ctrl+N");
+                        ui.label("New Scene");
+                        ui.end_row();
+                        ui.label("Ctrl+O");
+                        ui.label("Open Scene");
+                        ui.end_row();
+                        ui.label("Ctrl+S");
+                        ui.label("Save Scene");
+                        ui.end_row();
+                        ui.label("Ctrl+Shift+S");
+                        ui.label("Save As");
+                        ui.end_row();
+                        ui.label("Ctrl+Z");
+                        ui.label("Undo");
+                        ui.end_row();
+                        ui.label("Ctrl+Y");
+                        ui.label("Redo");
+                        ui.end_row();
+                        ui.label("Ctrl+D");
+                        ui.label("Duplicate Entity");
+                        ui.end_row();
+                        ui.label("Delete");
+                        ui.label("Delete Entity");
+                        ui.end_row();
+                        ui.label("Ctrl+R");
+                        ui.label("Reload Scripts");
+                        ui.end_row();
+                    });
+
+                ui.add_space(8.0);
+                ui.label(egui::RichText::new("Gizmo").strong());
+                egui::Grid::new("shortcuts_gizmo")
+                    .num_columns(2)
+                    .spacing([40.0, 4.0])
+                    .show(ui, |ui| {
+                        ui.label("Q");
+                        ui.label("Select (No Gizmo)");
+                        ui.end_row();
+                        ui.label("W");
+                        ui.label("Translate");
+                        ui.end_row();
+                        ui.label("E");
+                        ui.label("Rotate");
+                        ui.end_row();
+                        ui.label("R");
+                        ui.label("Scale");
+                        ui.end_row();
+                    });
+
+                ui.add_space(8.0);
+                ui.label(egui::RichText::new("Viewport").strong());
+                egui::Grid::new("shortcuts_viewport")
+                    .num_columns(2)
+                    .spacing([40.0, 4.0])
+                    .show(ui, |ui| {
+                        ui.label("Middle Mouse");
+                        ui.label("Pan");
+                        ui.end_row();
+                        ui.label("Alt + Left Mouse");
+                        ui.label("Orbit");
+                        ui.end_row();
+                        ui.label("Scroll");
+                        ui.label("Zoom");
+                        ui.end_row();
+                        ui.label("F");
+                        ui.label("Focus Selected");
+                        ui.end_row();
+                    });
+            });
     }
 
     fn create_named_scene(&mut self, name: &str) {
@@ -1919,6 +2117,28 @@ impl GGEditor {
         }
     }
 
+    fn on_copy_entity(&mut self) {
+        if let Some(selected) = self.selection_context {
+            if self.scene.is_alive(selected) {
+                self.clipboard_entity_uuid = self
+                    .scene
+                    .get_component::<IdComponent>(selected)
+                    .map(|id| id.id.raw());
+            }
+        }
+    }
+
+    fn on_paste_entity(&mut self) {
+        if let Some(uuid) = self.clipboard_entity_uuid {
+            if let Some(source) = self.scene.find_entity_by_uuid(uuid) {
+                self.undo_system.record(&self.scene);
+                let duplicate = self.scene.duplicate_entity(source);
+                self.selection_context = Some(duplicate);
+                self.scene_dirty = true;
+            }
+        }
+    }
+
     fn on_duplicate_entity(&mut self) {
         if let Some(selected) = self.selection_context {
             if self.scene.is_alive(selected) {
@@ -2053,16 +2273,24 @@ impl GGEditor {
         }
     }
 
-    fn handle_new_project_from_hub(&mut self) {
-        if let Some(path) = FileDialogs::save_file("GGProject files", &["ggproject"]) {
-            let name = std::path::Path::new(&path)
-                .file_stem()
-                .map(|s| s.to_string_lossy().to_string())
-                .unwrap_or_else(|| "Untitled".into());
-
-            if Project::new(&path, &name).is_some() {
-                self.load_project_from_path(&PathBuf::from(&path));
+    fn handle_new_project_from_hub(&mut self, path: &PathBuf) {
+        // Ensure the parent directory exists (project_name/ subfolder).
+        if let Some(parent) = path.parent() {
+            if !parent.exists() {
+                if let Err(e) = std::fs::create_dir_all(parent) {
+                    error!("Failed to create project directory {}: {}", parent.display(), e);
+                    return;
+                }
             }
+        }
+
+        let name = path
+            .file_stem()
+            .map(|s| s.to_string_lossy().to_string())
+            .unwrap_or_else(|| "Untitled".into());
+
+        if Project::new(&path.to_string_lossy(), &name).is_some() {
+            self.load_project_from_path(path);
         }
     }
 }

@@ -68,7 +68,7 @@ impl Project {
             }
         };
 
-        let data: ProjectData = match serde_yml::from_str(&contents) {
+        let data: ProjectData = match serde_yaml_ng::from_str(&contents) {
             Ok(d) => d,
             Err(e) => {
                 log::error!("Failed to parse project file '{}': {}", file_path, e);
@@ -152,7 +152,7 @@ impl Project {
             },
         };
 
-        match serde_yml::to_string(&data) {
+        match serde_yaml_ng::to_string(&data) {
             Ok(yaml) => {
                 if let Err(e) = crate::platform_utils::atomic_write(&self.project_file_path, &yaml) {
                     log::error!(
