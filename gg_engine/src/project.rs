@@ -3,6 +3,10 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
+/// Current project schema version. Bump this when changing the project file
+/// format so that older projects can be migrated automatically.
+pub const CURRENT_SCHEMA_VERSION: u32 = 1;
+
 // ---------------------------------------------------------------------------
 // Serialization data types (intermediate representation)
 // ---------------------------------------------------------------------------
@@ -13,8 +17,14 @@ struct ProjectData {
     config: ProjectConfigData,
 }
 
+fn default_schema_version() -> u32 {
+    CURRENT_SCHEMA_VERSION
+}
+
 #[derive(Serialize, Deserialize)]
 struct ProjectConfigData {
+    #[serde(rename = "SchemaVersion", default = "default_schema_version")]
+    schema_version: u32,
     #[serde(rename = "Name")]
     name: String,
     #[serde(rename = "AssetDirectory")]
@@ -30,6 +40,7 @@ struct ProjectConfigData {
 // ---------------------------------------------------------------------------
 
 pub struct ProjectConfig {
+    pub schema_version: u32,
     pub name: String,
     pub asset_directory: String,
     pub script_module_path: String,
@@ -70,14 +81,29 @@ impl Project {
             .map(|p| p.to_path_buf())
             .unwrap_or_else(|| PathBuf::from("."));
 
+        let schema_version = data.config.schema_version;
+        if schema_version > CURRENT_SCHEMA_VERSION {
+            log::warn!(
+                "Project '{}' was saved with schema version {} (current: {}). Some data may not load correctly.",
+                data.config.name,
+                schema_version,
+                CURRENT_SCHEMA_VERSION
+            );
+        }
+
+        // Future migrations go here, e.g.:
+        // if schema_version < 2 { migrate_v1_to_v2(&mut data.config); }
+
         log::info!(
-            "Loaded project '{}' from '{}'",
+            "Loaded project '{}' (schema v{}) from '{}'",
             data.config.name,
+            schema_version,
             file_path
         );
 
         Some(Project {
             config: ProjectConfig {
+                schema_version: schema_version.min(CURRENT_SCHEMA_VERSION),
                 name: data.config.name,
                 asset_directory: data.config.asset_directory,
                 script_module_path: data.config.script_module_path,
@@ -97,6 +123,7 @@ impl Project {
 
         let project = Project {
             config: ProjectConfig {
+                schema_version: CURRENT_SCHEMA_VERSION,
                 name: name.to_string(),
                 asset_directory: "assets".to_string(),
                 script_module_path: "assets/scripts".to_string(),
@@ -117,6 +144,7 @@ impl Project {
     pub fn save(&self) -> bool {
         let data = ProjectData {
             config: ProjectConfigData {
+                schema_version: CURRENT_SCHEMA_VERSION,
                 name: self.config.name.clone(),
                 asset_directory: self.config.asset_directory.clone(),
                 script_module_path: self.config.script_module_path.clone(),

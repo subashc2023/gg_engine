@@ -30,7 +30,7 @@ impl AssetType {
         }
     }
 
-    pub fn from_str(s: &str) -> Self {
+    pub fn parse_str(s: &str) -> Self {
         match s {
             "Scene" => AssetType::Scene,
             "Texture2D" => AssetType::Texture2D,
@@ -53,6 +53,33 @@ pub struct AssetMetadata {
     pub asset_type: AssetType,
 }
 
+/// Validate that a relative asset path does not escape the assets directory.
+///
+/// Rejects absolute paths, `..` components, and empty paths.
+/// The path should already be normalized to forward slashes before calling.
+pub fn validate_asset_path(relative_path: &str) -> bool {
+    if relative_path.is_empty() {
+        return false;
+    }
+
+    // Reject absolute paths (Unix or Windows style).
+    if relative_path.starts_with('/')
+        || relative_path.starts_with('\\')
+        || relative_path.chars().nth(1) == Some(':')
+    {
+        return false;
+    }
+
+    // Reject any `..` path component that could escape the asset directory.
+    for component in relative_path.split('/') {
+        if component == ".." {
+            return false;
+        }
+    }
+
+    true
+}
+
 /// Determine asset type from a file extension.
 pub fn asset_type_from_extension(ext: &str) -> AssetType {
     match ext.to_lowercase().as_str() {
@@ -70,14 +97,14 @@ mod tests {
     #[test]
     fn asset_type_round_trip() {
         for ty in [AssetType::None, AssetType::Scene, AssetType::Texture2D, AssetType::Audio] {
-            assert_eq!(AssetType::from_str(ty.as_str()), ty);
+            assert_eq!(AssetType::parse_str(ty.as_str()), ty);
         }
     }
 
     #[test]
     fn asset_type_from_str_unknown_returns_none() {
-        assert_eq!(AssetType::from_str("Mesh"), AssetType::None);
-        assert_eq!(AssetType::from_str(""), AssetType::None);
+        assert_eq!(AssetType::parse_str("Mesh"), AssetType::None);
+        assert_eq!(AssetType::parse_str(""), AssetType::None);
     }
 
     #[test]
@@ -116,5 +143,46 @@ mod tests {
         assert_eq!(asset_type_from_extension("lua"), AssetType::None);
         assert_eq!(asset_type_from_extension("rs"), AssetType::None);
         assert_eq!(asset_type_from_extension(""), AssetType::None);
+    }
+
+    #[test]
+    fn validate_path_accepts_normal_relative() {
+        assert!(validate_asset_path("textures/player.png"));
+        assert!(validate_asset_path("scenes/level1.ggscene"));
+        assert!(validate_asset_path("music.ogg"));
+        assert!(validate_asset_path("a/b/c/d.png"));
+    }
+
+    #[test]
+    fn validate_path_rejects_empty() {
+        assert!(!validate_asset_path(""));
+    }
+
+    #[test]
+    fn validate_path_rejects_parent_traversal() {
+        assert!(!validate_asset_path("../secret.txt"));
+        assert!(!validate_asset_path("textures/../../etc/passwd"));
+        assert!(!validate_asset_path("a/../b/../../../escape.txt"));
+    }
+
+    #[test]
+    fn validate_path_rejects_absolute_unix() {
+        assert!(!validate_asset_path("/etc/passwd"));
+        assert!(!validate_asset_path("/home/user/file.png"));
+    }
+
+    #[test]
+    fn validate_path_rejects_absolute_windows() {
+        assert!(!validate_asset_path("C:\\Windows\\system32\\file.dll"));
+        assert!(!validate_asset_path("D:\\data\\file.png"));
+        assert!(!validate_asset_path("\\\\server\\share\\file.txt"));
+    }
+
+    #[test]
+    fn validate_path_allows_dot_in_filenames() {
+        // Single dots and dots in filenames are fine.
+        assert!(validate_asset_path("file.name.png"));
+        assert!(validate_asset_path("./textures/player.png"));
+        assert!(validate_asset_path(".hidden/file.png"));
     }
 }

@@ -12,6 +12,7 @@ use crate::panels::{TilesetPreviewInfo, tile_uv_min, tile_uv_max};
 /// Convert a viewport pixel position to a tilemap grid cell (col, row).
 ///
 /// Returns `Some((col, row))` if the pixel maps to a valid cell, `None` otherwise.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn screen_to_tile_grid(
     pixel_x: f32,
     pixel_y: f32,
@@ -90,6 +91,8 @@ pub(crate) fn viewport_ui(
     tilemap_paint: &mut TilemapPaintState,
     viewport_mouse_pos: &mut Option<(f32, f32)>,
     tileset_preview: &Option<TilesetPreviewInfo>,
+    snap_to_grid: bool,
+    grid_size: f32,
 ) {
     let available = ui.available_size();
     if available.x > 0.0 && available.y > 0.0 {
@@ -409,8 +412,9 @@ pub(crate) fn viewport_ui(
                 });
 
                 {
-                    // Snapping: Ctrl held enables snap.
-                    let snapping = ui.input(|i| i.modifiers.ctrl);
+                    // Snapping: always on if snap_to_grid, or Ctrl held.
+                    let snapping = snap_to_grid || ui.input(|i| i.modifiers.ctrl);
+                    let snap_dist = if snap_to_grid { grid_size } else { 0.5_f32 };
 
                     // Configure the gizmo.
                     gizmo.update_config(GizmoConfig {
@@ -421,7 +425,7 @@ pub(crate) fn viewport_ui(
                         orientation: GizmoOrientation::Local,
                         snapping,
                         snap_angle: std::f32::consts::FRAC_PI_4, // 45 degrees
-                        snap_distance: 0.5_f32,
+                        snap_distance: snap_dist,
                         snap_scale: 0.5_f32,
                         ..Default::default()
                     });

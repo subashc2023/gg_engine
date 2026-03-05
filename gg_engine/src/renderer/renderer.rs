@@ -1139,6 +1139,7 @@ impl Renderer {
     /// The `transform` positions the text origin (top-left of first character).
     /// `font_size` controls the scaling of glyphs relative to the transform.
     /// `kerning` adds extra horizontal spacing between characters (in font units).
+    #[allow(clippy::too_many_arguments)]
     pub fn draw_text_string(
         &self,
         text: &str,

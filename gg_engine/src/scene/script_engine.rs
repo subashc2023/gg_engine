@@ -65,6 +65,12 @@ pub struct ScriptEngine {
     error_counts: HashMap<(u64, String), u32>,
 }
 
+impl Default for ScriptEngine {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ScriptEngine {
     /// Create a new LuaJIT state with standard libraries loaded.
     ///

@@ -107,6 +107,7 @@ struct GGEditor {
     viewport_hovered: bool,
     vsync: bool,
     frame_time_ms: f32,
+    render_stats: Renderer2DStats,
     scene: Scene,
     selection_context: Option<Entity>,
     gizmo: Gizmo,
@@ -122,6 +123,11 @@ struct GGEditor {
     /// Old scenes awaiting GPU-safe destruction (deferred from on_egui to on_render).
     pending_drop_scenes: Vec<Scene>,
     show_physics_colliders: bool,
+    show_grid: bool,
+    snap_to_grid: bool,
+    grid_size: f32,
+    hierarchy_filter: String,
+    scene_warnings: Vec<String>,
     tilemap_paint: TilemapPaintState,
     viewport_mouse_pos: Option<(f32, f32)>,
     /// Mapping from opaque texture handle → egui TextureId for UI rendering.
@@ -280,6 +286,9 @@ impl Application for GGEditor {
         let initial_show_colliders = editor_settings.show_physics_colliders;
         let initial_gizmo_op = editor_settings.gizmo_operation;
         let initial_cam_state = editor_settings.camera_state.clone();
+        let initial_show_grid = editor_settings.show_grid;
+        let initial_snap_to_grid = editor_settings.snap_to_grid;
+        let initial_grid_size = editor_settings.grid_size;
 
         GGEditor {
             editor_mode,
@@ -295,6 +304,7 @@ impl Application for GGEditor {
             viewport_hovered: false,
             vsync: initial_vsync,
             frame_time_ms: 0.0,
+            render_stats: Renderer2DStats::default(),
             scene,
             selection_context: None,
             gizmo: Gizmo::default(),
@@ -318,6 +328,11 @@ impl Application for GGEditor {
             font_cache: HashMap::new(),
             pending_drop_scenes: Vec::new(),
             show_physics_colliders: initial_show_colliders,
+            show_grid: initial_show_grid,
+            snap_to_grid: initial_snap_to_grid,
+            grid_size: initial_grid_size,
+            hierarchy_filter: String::new(),
+            scene_warnings: Vec::new(),
             tilemap_paint: TilemapPaintState::new(),
             viewport_mouse_pos: None,
             egui_texture_map: HashMap::new(),
@@ -716,6 +731,9 @@ impl Application for GGEditor {
 
         // -- Overlay rendering (collider visualization) --
         self.on_overlay_render(renderer);
+
+        // Snapshot renderer stats for the settings panel.
+        self.render_stats = renderer.stats_2d();
     }
 
     fn on_egui(&mut self, ctx: &egui::Context, window: &Window) {
@@ -904,6 +922,8 @@ impl Application for GGEditor {
         // Scope the viewer so its borrows are released before we handle
         // pending actions and paint the DnD ghost overlay.
         {
+            let current_snap_to_grid = self.snap_to_grid;
+            let current_grid_size = self.grid_size;
             let mut viewer = EditorTabViewer {
                 scene: &mut self.scene,
                 selection_context: &mut self.selection_context,
@@ -911,9 +931,16 @@ impl Application for GGEditor {
                 is_playing: self.scene_state == SceneState::Play,  // Simulate still uses editor camera + gizmos
                 scene_dirty: &mut self.scene_dirty,
                 undo_system: &mut self.undo_system,
+                hierarchy_filter: &mut self.hierarchy_filter,
+                scene_warnings: &self.scene_warnings,
                 tilemap_paint: &mut self.tilemap_paint,
                 vsync: &mut self.vsync,
                 frame_time_ms: self.frame_time_ms,
+                render_stats: self.render_stats,
+                show_physics_colliders: &mut self.show_physics_colliders,
+                show_grid: &mut self.show_grid,
+                snap_to_grid: &mut self.snap_to_grid,
+                grid_size: &mut self.grid_size,
                 viewport: ViewportState {
                     size: &mut self.viewport_size,
                     focused: &mut self.viewport_focused,
@@ -927,6 +954,8 @@ impl Application for GGEditor {
                     hovered_entity: self.hovered_entity,
                     mouse_pos: &mut self.viewport_mouse_pos,
                     tileset_preview,
+                    snap_to_grid: current_snap_to_grid,
+                    grid_size: current_grid_size,
                 },
                 project: ProjectContext {
                     assets_root: &self.assets_root,
@@ -947,10 +976,16 @@ impl Application for GGEditor {
         if self.vsync != self.editor_settings.vsync
             || self.show_physics_colliders != self.editor_settings.show_physics_colliders
             || self.gizmo_operation != self.editor_settings.gizmo_operation
+            || self.show_grid != self.editor_settings.show_grid
+            || self.snap_to_grid != self.editor_settings.snap_to_grid
+            || self.grid_size != self.editor_settings.grid_size
         {
             self.editor_settings.vsync = self.vsync;
             self.editor_settings.show_physics_colliders = self.show_physics_colliders;
             self.editor_settings.gizmo_operation = self.gizmo_operation;
+            self.editor_settings.show_grid = self.show_grid;
+            self.editor_settings.snap_to_grid = self.snap_to_grid;
+            self.editor_settings.grid_size = self.grid_size;
             self.editor_settings.save();
         }
 
@@ -1004,6 +1039,47 @@ impl GGEditor {
     /// Auto-save interval in seconds (5 minutes).
     const AUTOSAVE_INTERVAL_SECS: f32 = 300.0;
 
+    fn render_grid(&self, renderer: &mut Renderer) {
+        let grid_size = self.grid_size;
+        if grid_size <= 0.0 {
+            return;
+        }
+
+        let grid_color = Vec4::new(0.35, 0.35, 0.35, 0.5);
+        let axis_color_x = Vec4::new(0.8, 0.2, 0.2, 0.6);
+        let axis_color_y = Vec4::new(0.2, 0.8, 0.2, 0.6);
+
+        // Determine visible range from camera.
+        let focal = self.editor_camera.focal_point();
+        let dist = self.editor_camera.distance();
+        let half_extent = dist * 1.5;
+
+        // Snap grid bounds to grid lines.
+        let x_min = ((focal.x - half_extent) / grid_size).floor() as i32;
+        let x_max = ((focal.x + half_extent) / grid_size).ceil() as i32;
+        let y_min = ((focal.y - half_extent) / grid_size).floor() as i32;
+        let y_max = ((focal.y + half_extent) / grid_size).ceil() as i32;
+
+        let lo_y = y_min as f32 * grid_size;
+        let hi_y = y_max as f32 * grid_size;
+        let lo_x = x_min as f32 * grid_size;
+        let hi_x = x_max as f32 * grid_size;
+
+        // Vertical lines (constant X).
+        for i in x_min..=x_max {
+            let x = i as f32 * grid_size;
+            let color = if i == 0 { axis_color_y } else { grid_color };
+            renderer.draw_line(Vec3::new(x, lo_y, -0.01), Vec3::new(x, hi_y, -0.01), color, -1);
+        }
+
+        // Horizontal lines (constant Y).
+        for j in y_min..=y_max {
+            let y = j as f32 * grid_size;
+            let color = if j == 0 { axis_color_x } else { grid_color };
+            renderer.draw_line(Vec3::new(lo_x, y, -0.01), Vec3::new(hi_x, y, -0.01), color, -1);
+        }
+    }
+
     fn request_exit(&mut self) {
         // Persist camera state on exit.
         self.editor_settings.camera_state = editor_settings::CameraState {
@@ -1012,6 +1088,9 @@ impl GGEditor {
             yaw: self.editor_camera.yaw(),
             pitch: self.editor_camera.pitch(),
         };
+        self.editor_settings.show_grid = self.show_grid;
+        self.editor_settings.snap_to_grid = self.snap_to_grid;
+        self.editor_settings.grid_size = self.grid_size;
         self.editor_settings.save();
         self.should_exit = true;
     }
@@ -1032,6 +1111,11 @@ impl GGEditor {
             SceneState::Edit | SceneState::Simulate => {
                 renderer.set_view_projection(self.editor_camera.view_projection());
             }
+        }
+
+        // Grid rendering (behind everything else in the overlay).
+        if self.show_grid && self.scene_state != SceneState::Play {
+            self.render_grid(renderer);
         }
 
         // Physics collider visualization (uses world transforms for hierarchy support).
@@ -1286,6 +1370,7 @@ impl GGEditor {
     }
 
     fn on_scene_play(&mut self) {
+        self.validate_scene();
         self.scene_state = SceneState::Play;
         let runtime_scene = Scene::copy(&self.scene);
         let editor_scene = std::mem::replace(&mut self.scene, runtime_scene);
@@ -1300,11 +1385,73 @@ impl GGEditor {
     }
 
     fn on_scene_simulate(&mut self) {
+        self.validate_scene();
         self.scene_state = SceneState::Simulate;
         let sim_scene = Scene::copy(&self.scene);
         let editor_scene = std::mem::replace(&mut self.scene, sim_scene);
         self.editor_scene = Some(editor_scene);
         self.scene.on_simulation_start();
+    }
+
+    /// Validate the current scene and populate `scene_warnings`.
+    fn validate_scene(&mut self) {
+        let mut warnings = Vec::new();
+
+        // 1. Check for primary camera.
+        if self.scene.get_primary_camera_entity().is_none() {
+            warnings.push("No primary camera found. The scene will not render correctly at runtime.".to_string());
+        }
+
+        // Iterate all entities once, checking component-based validations.
+        let entities = self.scene.each_entity_with_tag();
+        for (entity, tag) in &entities {
+            let entity = *entity;
+
+            // 2. Orphaned colliders (collider without a RigidBody2D).
+            if self.scene.has_component::<BoxCollider2DComponent>(entity)
+                && !self.scene.has_component::<RigidBody2DComponent>(entity)
+            {
+                warnings.push(format!("Entity '{}' has BoxCollider2D but no RigidBody2D.", tag));
+            }
+            if self.scene.has_component::<CircleCollider2DComponent>(entity)
+                && !self.scene.has_component::<RigidBody2DComponent>(entity)
+            {
+                warnings.push(format!("Entity '{}' has CircleCollider2D but no RigidBody2D.", tag));
+            }
+
+            // 3. Missing texture assets.
+            if let Some(sr) = self.scene.get_component::<SpriteRendererComponent>(entity) {
+                let raw = sr.texture_handle.raw();
+                if raw != 0 {
+                    if let Some(ref am) = self.asset_manager {
+                        let handle = Uuid::from_raw(raw);
+                        if am.get_metadata(&handle).is_none() {
+                            warnings.push(format!("Entity '{}' references a missing texture asset.", tag));
+                        }
+                    }
+                }
+            }
+
+            // 4. Missing audio assets.
+            if let Some(ac) = self.scene.get_component::<AudioSourceComponent>(entity) {
+                let raw = ac.audio_handle.raw();
+                if raw != 0 {
+                    if let Some(ref am) = self.asset_manager {
+                        let handle = Uuid::from_raw(raw);
+                        if am.get_metadata(&handle).is_none() {
+                            warnings.push(format!("Entity '{}' references a missing audio asset.", tag));
+                        }
+                    }
+                }
+            }
+        }
+
+        // Log warnings.
+        for w in &warnings {
+            warn!("[Scene Validation] {}", w);
+        }
+
+        self.scene_warnings = warnings;
     }
 
     fn on_scene_stop(&mut self) {
@@ -2072,7 +2219,7 @@ fn create_script_watcher(
             ) && event
                 .paths
                 .iter()
-                .any(|p| p.extension().map_or(false, |e| e == "lua"))
+                .any(|p| p.extension().is_some_and(|e| e == "lua"))
             {
                 pending.store(true, std::sync::atomic::Ordering::Relaxed);
             }

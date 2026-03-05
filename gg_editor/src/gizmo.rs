@@ -2,19 +2,14 @@ use gg_engine::prelude::*;
 use serde::{Deserialize, Serialize};
 use transform_gizmo_egui::{EnumSet, GizmoMode};
 
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
 pub(crate) enum GizmoOperation {
     None,      // Q — select mode, no gizmo
     #[serde(alias = "translate")]
+    #[default]
     Translate, // W
     Rotate,    // E
     Scale,     // R
-}
-
-impl Default for GizmoOperation {
-    fn default() -> Self {
-        Self::Translate
-    }
 }
 
 pub(crate) fn gizmo_modes_for(op: GizmoOperation) -> EnumSet<GizmoMode> {

@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use super::asset_loader::{AssetLoader, LoadResult};
-use super::{asset_type_from_extension, AssetHandle, AssetMetadata, AssetRegistry, AssetType};
+use super::{asset_type_from_extension, validate_asset_path, AssetHandle, AssetMetadata, AssetRegistry, AssetType};
 use crate::renderer::{Renderer, Texture2D, TextureSpecification};
 use crate::uuid::Uuid;
 use crate::Ref;
@@ -20,6 +20,8 @@ pub struct EditorAssetManager {
     loaded_assets: HashMap<AssetHandle, AssetData>,
     asset_directory: PathBuf,
     loader: AssetLoader,
+    /// Lazily-created magenta/black checkerboard texture used for missing assets.
+    fallback_texture: Option<Ref<Texture2D>>,
 }
 
 const REGISTRY_FILENAME: &str = "AssetRegistry.ggregistry";
@@ -32,6 +34,7 @@ impl EditorAssetManager {
             loaded_assets: HashMap::new(),
             asset_directory: asset_directory.into(),
             loader: AssetLoader::new(),
+            fallback_texture: None,
         }
     }
 
@@ -60,6 +63,12 @@ impl EditorAssetManager {
     pub fn import_asset(&mut self, relative_path: &str) -> AssetHandle {
         // Normalize to forward slashes for cross-platform consistency.
         let normalized = relative_path.replace('\\', "/");
+
+        // Reject paths that could escape the asset directory.
+        if !validate_asset_path(&normalized) {
+            log::warn!("Rejected unsafe asset path: '{}'", normalized);
+            return Uuid::from_raw(0);
+        }
 
         // Check if already imported.
         if let Some(handle) = self.registry.find_by_path(&normalized) {
@@ -138,6 +147,11 @@ impl EditorAssetManager {
             None => return false,
         };
 
+        if !validate_asset_path(&metadata.file_path) {
+            log::warn!("Rejected unsafe asset path in registry: '{}'", metadata.file_path);
+            return false;
+        }
+
         match metadata.asset_type {
             AssetType::Texture2D => {
                 let abs_path = self.asset_directory.join(&metadata.file_path);
@@ -147,12 +161,14 @@ impl EditorAssetManager {
                             .insert(*handle, AssetData::Texture(Ref::new(texture)));
                         true
                     } else {
-                        log::warn!("Failed to load texture: {}", abs_path.display());
-                        false
+                        log::warn!("Failed to load texture '{}', using fallback", abs_path.display());
+                        self.store_fallback(*handle, renderer);
+                        true
                     }
                 } else {
-                    log::warn!("Texture file not found: {}", abs_path.display());
-                    false
+                    log::warn!("Texture file not found '{}', using fallback", abs_path.display());
+                    self.store_fallback(*handle, renderer);
+                    true
                 }
             }
             AssetType::Scene => {
@@ -207,6 +223,37 @@ impl EditorAssetManager {
         &self.asset_directory
     }
 
+    /// Get or create the fallback texture (magenta/black 4x4 checkerboard).
+    /// Used to visually indicate missing or broken asset references.
+    fn get_fallback_texture(&mut self, renderer: &Renderer) -> Ref<Texture2D> {
+        if let Some(ref tex) = self.fallback_texture {
+            return tex.clone();
+        }
+
+        // 4x4 checkerboard: magenta (255,0,255) / black (0,0,0)
+        let m = [255u8, 0, 255, 255]; // magenta
+        let b = [0u8, 0, 0, 255]; // black
+        let mut pixels = Vec::with_capacity(4 * 4 * 4);
+        for row in 0..4u32 {
+            for col in 0..4u32 {
+                let cell = if (row + col) % 2 == 0 { &m } else { &b };
+                pixels.extend_from_slice(cell);
+            }
+        }
+
+        let texture = renderer.create_texture_from_rgba8(4, 4, &pixels);
+        let tex_ref = Ref::new(texture);
+        self.fallback_texture = Some(tex_ref.clone());
+        log::info!("Created fallback checkerboard texture for missing assets");
+        tex_ref
+    }
+
+    /// Store the fallback texture for a handle that failed to load.
+    fn store_fallback(&mut self, handle: AssetHandle, renderer: &Renderer) {
+        let tex = self.get_fallback_texture(renderer);
+        self.loaded_assets.insert(handle, AssetData::Texture(tex));
+    }
+
     // -------------------------------------------------------------------
     // Async loading API (used by editor)
     // -------------------------------------------------------------------
@@ -224,6 +271,11 @@ impl EditorAssetManager {
         };
 
         if metadata.asset_type != AssetType::Texture2D {
+            return;
+        }
+
+        if !validate_asset_path(&metadata.file_path) {
+            log::warn!("Rejected unsafe asset path in registry: '{}'", metadata.file_path);
             return;
         }
 
@@ -252,7 +304,9 @@ impl EditorAssetManager {
                             self.loaded_assets.insert(handle, AssetData::Texture(texture));
                         }
                         Err(e) => {
-                            log::warn!("Async texture load failed: {e}");
+                            log::warn!("Async texture load failed: {e}, using fallback");
+                            let fallback = self.get_fallback_texture(renderer);
+                            self.loaded_assets.insert(handle, AssetData::Texture(fallback));
                         }
                     }
                 }

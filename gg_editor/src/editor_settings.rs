@@ -10,6 +10,10 @@ fn default_true() -> bool {
     true
 }
 
+fn default_grid_size() -> f32 {
+    1.0
+}
+
 #[derive(Serialize, Deserialize, Clone)]
 pub(crate) struct RecentProject {
     pub name: String,
@@ -47,6 +51,12 @@ pub(crate) struct EditorSettings {
     pub gizmo_operation: GizmoOperation,
     #[serde(default)]
     pub camera_state: CameraState,
+    #[serde(default = "default_true")]
+    pub show_grid: bool,
+    #[serde(default = "default_grid_size")]
+    pub grid_size: f32,
+    #[serde(default)]
+    pub snap_to_grid: bool,
 }
 
 impl EditorSettings {

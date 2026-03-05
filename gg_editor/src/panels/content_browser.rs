@@ -20,6 +20,7 @@ thread_local! {
     static BROWSER_MODE: std::cell::Cell<ContentBrowserMode> =
         const { std::cell::Cell::new(ContentBrowserMode::FileSystem) };
     // Cached directory listing: (cached_path, directories, files).
+    #[allow(clippy::type_complexity)]
     static DIR_CACHE: std::cell::RefCell<Option<(
         std::path::PathBuf,
         Vec<(String, std::path::PathBuf)>,

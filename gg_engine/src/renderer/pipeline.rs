@@ -203,6 +203,7 @@ pub(crate) fn create_pipeline(
 /// Uses a `BufferLayout` directly instead of a `VertexArray` for vertex input.
 /// Push constant: VP matrix only (64 bytes, vertex stage).
 /// Descriptor set layout: sampler array (16 combined image samplers).
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn create_batch_pipeline(
     device: &ash::Device,
     shader: &Shader,

@@ -177,7 +177,7 @@ pub(crate) fn generate_font_cpu_data(path: &Path) -> Result<FontCpuData, String>
     let cell_h = MSDF_GLYPH_SIZE + GLYPH_PADDING * 2;
     let visible_count = msdf_glyphs.iter().filter(|g| g.bitmap.is_some()).count() as u32;
     let cols = if visible_count == 0 { 1 } else { (visible_count as f64).sqrt().ceil() as u32 };
-    let rows = if visible_count == 0 { 1 } else { (visible_count + cols - 1) / cols };
+    let rows = if visible_count == 0 { 1 } else { visible_count.div_ceil(cols) };
     let atlas_width = (cols * cell_w).max(1);
     let atlas_height = (rows * cell_h).max(1);
 

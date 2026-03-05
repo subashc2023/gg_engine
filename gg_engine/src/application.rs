@@ -457,10 +457,10 @@ impl<T: Application> ApplicationHandler for EngineRunner<T> {
                 self.app.on_event(&engine_event, &self.input);
             }
 
-            if matches!(engine_event, Event::Window(WindowEvent::Close)) {
-                if self.app.on_close_requested() {
-                    event_loop.exit();
-                }
+            if matches!(engine_event, Event::Window(WindowEvent::Close))
+                && self.app.on_close_requested()
+            {
+                event_loop.exit();
             }
         }
     }

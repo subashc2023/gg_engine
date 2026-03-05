@@ -34,11 +34,27 @@ pub(crate) fn scene_hierarchy_ui(
     selection_context: &mut Option<Entity>,
     scene_dirty: &mut bool,
     undo_system: &mut crate::undo::UndoSystem,
+    filter: &mut String,
 ) {
+    // Search box.
+    ui.horizontal(|ui| {
+        ui.label("Search");
+        ui.text_edit_singleline(filter);
+        if !filter.is_empty() && ui.small_button("X").clicked() {
+            filter.clear();
+        }
+    });
+    ui.add_space(2.0);
+
+    let filter_lower = filter.trim().to_lowercase();
+
     let root_entities = scene.root_entities();
     let mut deferred_action: Option<DeferredHierarchyAction> = None;
 
     for (entity, tag) in &root_entities {
+        if !filter_lower.is_empty() && !entity_matches_filter(scene, *entity, tag, &filter_lower) {
+            continue;
+        }
         draw_entity_node(
             ui,
             scene,
@@ -363,12 +379,12 @@ fn entity_context_menu(
             ui.close();
         }
 
-        if has_parent {
-            if ui.button("Detach from Parent").clicked() {
-                *deferred_action = Some(DeferredHierarchyAction::DetachToRoot(entity));
-                *scene_dirty = true;
-                ui.close();
-            }
+        if has_parent
+            && ui.button("Detach from Parent").clicked()
+        {
+            *deferred_action = Some(DeferredHierarchyAction::DetachToRoot(entity));
+            *scene_dirty = true;
+            ui.close();
         }
 
         ui.separator();
@@ -379,4 +395,27 @@ fn entity_context_menu(
             ui.close();
         }
     });
+}
+
+// ---------------------------------------------------------------------------
+// Filter helper — returns true if entity name or any descendant matches
+// ---------------------------------------------------------------------------
+
+fn entity_matches_filter(scene: &Scene, entity: Entity, tag: &str, filter: &str) -> bool {
+    if tag.to_lowercase().contains(filter) {
+        return true;
+    }
+    // Check children recursively.
+    for child_uuid in scene.get_children(entity) {
+        if let Some(child_entity) = scene.find_entity_by_uuid(child_uuid) {
+            let child_tag = scene
+                .get_component::<TagComponent>(child_entity)
+                .map(|t| t.tag.clone())
+                .unwrap_or_default();
+            if entity_matches_filter(scene, child_entity, &child_tag, filter) {
+                return true;
+            }
+        }
+    }
+    false
 }

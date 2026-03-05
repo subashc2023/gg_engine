@@ -14,9 +14,10 @@ use crate::profiling::ProfileTimer;
 // ---------------------------------------------------------------------------
 
 /// Pixel format for textures.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum ImageFormat {
     /// 8-bit RGBA, sRGB color space (standard for color textures).
+    #[default]
     Rgba8Srgb,
     /// 8-bit RGBA, linear/UNORM (used for SDF font atlases, data textures).
     Rgba8Unorm,
@@ -28,12 +29,6 @@ impl ImageFormat {
             ImageFormat::Rgba8Srgb => vk::Format::R8G8B8A8_SRGB,
             ImageFormat::Rgba8Unorm => vk::Format::R8G8B8A8_UNORM,
         }
-    }
-}
-
-impl Default for ImageFormat {
-    fn default() -> Self {
-        ImageFormat::Rgba8Srgb
     }
 }
 

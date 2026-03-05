@@ -580,11 +580,8 @@ fn edge_coloring_simple(shape: &mut Shape, angle_threshold_deg: f64) {
         } else {
             // Multiple corners: cycle colors, switching at each corner.
             let colors = [EdgeColor::Cyan, EdgeColor::Magenta, EdgeColor::Yellow];
-            let mut color_idx = 0usize;
-
             // Start from the first corner.
-            let mut i = corners[0];
-            for ci in 0..corners.len() {
+            for (color_idx, ci) in (0..corners.len()).enumerate() {
                 let next_corner = corners[(ci + 1) % corners.len()];
                 let start = corners[ci];
 
@@ -599,12 +596,7 @@ fn edge_coloring_simple(shape: &mut Shape, angle_threshold_deg: f64) {
                     let edge_idx = (start + j) % n;
                     contour.edges[edge_idx].set_color(colors[color_idx % 3]);
                 }
-
-                // Advance color at each corner.
-                color_idx += 1;
-                i = next_corner;
             }
-            let _ = i; // suppress unused warning
         }
     }
 }

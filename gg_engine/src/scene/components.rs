@@ -318,17 +318,12 @@ impl Default for TextComponent {
 // ---------------------------------------------------------------------------
 
 /// Body type for a 2D rigid body.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum RigidBody2DType {
+    #[default]
     Static,
     Dynamic,
     Kinematic,
-}
-
-impl Default for RigidBody2DType {
-    fn default() -> Self {
-        Self::Static
-    }
 }
 
 impl RigidBody2DType {
@@ -622,6 +617,7 @@ impl Default for TilemapComponent {
 /// `field_overrides` stores editor-set values for the script's `fields`
 /// table. These are applied after loading the script environment and
 /// before `on_create()` is called.
+#[derive(Default)]
 #[cfg(feature = "lua-scripting")]
 pub struct LuaScriptComponent {
     pub script_path: String,
@@ -654,16 +650,6 @@ impl Clone for LuaScriptComponent {
     }
 }
 
-#[cfg(feature = "lua-scripting")]
-impl Default for LuaScriptComponent {
-    fn default() -> Self {
-        Self {
-            script_path: String::new(),
-            field_overrides: std::collections::HashMap::new(),
-            loaded: false,
-        }
-    }
-}
 
 #[cfg(test)]
 mod tests {

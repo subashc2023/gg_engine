@@ -108,7 +108,7 @@ impl AssetRegistry {
         let mut registry = Self::new();
         for entry in &file_data.assets {
             let handle = Uuid::from_raw(entry.handle);
-            let asset_type = AssetType::from_str(&entry.asset_type);
+            let asset_type = AssetType::parse_str(&entry.asset_type);
             registry.insert(
                 handle,
                 AssetMetadata {
