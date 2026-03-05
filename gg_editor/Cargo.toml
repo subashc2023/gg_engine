@@ -15,4 +15,4 @@ egui_dock = "0.18"
 transform-gizmo-egui = "0.8"
 notify = { version = "7", optional = true }
 serde = { version = "1", features = ["derive"] }
-serde_yaml = "0.9"
+serde_yml = "0.0.12"

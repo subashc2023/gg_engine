@@ -236,8 +236,9 @@ struct BoxCollider2DData {
     friction: f32,
     #[serde(rename = "Restitution")]
     restitution: f32,
-    #[serde(rename = "RestitutionThreshold")]
-    restitution_threshold: f32,
+    /// Legacy field, ignored on load — rapier2d has no restitution threshold.
+    #[serde(rename = "RestitutionThreshold", default, skip_serializing)]
+    _restitution_threshold: f32,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -252,8 +253,9 @@ struct CircleCollider2DData {
     friction: f32,
     #[serde(rename = "Restitution")]
     restitution: f32,
-    #[serde(rename = "RestitutionThreshold")]
-    restitution_threshold: f32,
+    /// Legacy field, ignored on load — rapier2d has no restitution threshold.
+    #[serde(rename = "RestitutionThreshold", default, skip_serializing)]
+    _restitution_threshold: f32,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -265,7 +267,7 @@ struct LuaScriptData {
     fields: Option<std::collections::HashMap<String, super::script_engine::ScriptFieldValue>>,
     #[cfg(not(feature = "lua-scripting"))]
     #[serde(rename = "Fields", default, skip_serializing_if = "Option::is_none")]
-    fields: Option<serde_yaml::Value>,
+    fields: Option<serde_yml::Value>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -411,7 +413,7 @@ impl SceneSerializer {
             }
         }
 
-        match serde_yaml::to_string(&scene_data) {
+        match serde_yml::to_string(&scene_data) {
             Ok(yaml) => {
                 if let Err(e) = crate::platform_utils::atomic_write(file_path, &yaml) {
                     log::error!("Failed to write scene file '{}': {}", file_path, e);
@@ -444,7 +446,7 @@ impl SceneSerializer {
             }
         };
 
-        let scene_data: SceneData = match serde_yaml::from_str(&contents) {
+        let scene_data: SceneData = match serde_yml::from_str(&contents) {
             Ok(d) => d,
             Err(e) => {
                 log::error!("Failed to parse scene file '{}': {}", file_path, e);
@@ -473,7 +475,7 @@ impl SceneSerializer {
     /// Serialize a scene to a YAML string (in-memory snapshot).
     pub fn serialize_to_string(scene: &Scene) -> Option<String> {
         let scene_data = Self::scene_to_data(scene, None);
-        match serde_yaml::to_string(&scene_data) {
+        match serde_yml::to_string(&scene_data) {
             Ok(yaml) => Some(yaml),
             Err(e) => {
                 log::error!("Failed to serialize scene to string: {}", e);
@@ -487,7 +489,7 @@ impl SceneSerializer {
     /// Entities are created in the provided `scene`. Callers should provide
     /// a fresh scene if a clean restore is desired.
     pub fn deserialize_from_string(scene: &mut Scene, yaml: &str) -> bool {
-        let scene_data: SceneData = match serde_yaml::from_str(yaml) {
+        let scene_data: SceneData = match serde_yml::from_str(yaml) {
             Ok(d) => d,
             Err(e) => {
                 log::error!("Failed to parse scene from string: {}", e);
@@ -591,7 +593,7 @@ impl SceneSerializer {
                         density: bc.density,
                         friction: bc.friction,
                         restitution: bc.restitution,
-                        restitution_threshold: bc.restitution_threshold,
+                        _restitution_threshold: 0.0,
                     });
 
             let circle_collider_2d_data =
@@ -603,7 +605,7 @@ impl SceneSerializer {
                         density: cc.density,
                         friction: cc.friction,
                         restitution: cc.restitution,
-                        restitution_threshold: cc.restitution_threshold,
+                        _restitution_threshold: 0.0,
                     });
 
             #[cfg(feature = "lua-scripting")]
@@ -816,7 +818,6 @@ impl SceneSerializer {
                         density: bcd.density,
                         friction: bcd.friction,
                         restitution: bcd.restitution,
-                        restitution_threshold: bcd.restitution_threshold,
                         runtime_fixture: None,
                     },
                 );
@@ -832,7 +833,6 @@ impl SceneSerializer {
                         density: ccd.density,
                         friction: ccd.friction,
                         restitution: ccd.restitution,
-                        restitution_threshold: ccd.restitution_threshold,
                         runtime_fixture: None,
                     },
                 );

@@ -91,6 +91,8 @@ pub(crate) fn generate_font_cpu_data(path: &Path) -> Result<FontCpuData, String>
         glyph_w: f64,
         glyph_h: f64,
         bitmap: Option<Vec<u8>>,
+        used_w: f64,
+        used_h: f64,
     }
 
     let mut msdf_glyphs: Vec<MsdfGlyph> = Vec::with_capacity(chars.len());
@@ -111,6 +113,8 @@ pub(crate) fn generate_font_cpu_data(path: &Path) -> Result<FontCpuData, String>
                 glyph_w: 0.0,
                 glyph_h: 0.0,
                 bitmap: None,
+                used_w: 0.0,
+                used_h: 0.0,
             });
             continue;
         }
@@ -127,6 +131,8 @@ pub(crate) fn generate_font_cpu_data(path: &Path) -> Result<FontCpuData, String>
                 glyph_w: 0.0,
                 glyph_h: 0.0,
                 bitmap: None,
+                used_w: 0.0,
+                used_h: 0.0,
             });
             continue;
         }
@@ -140,6 +146,9 @@ pub(crate) fn generate_font_cpu_data(path: &Path) -> Result<FontCpuData, String>
         let bearing_y = (max_y + range_fu_y) / units_per_em;
         let glyph_w = (max_x - min_x + 2.0 * range_fu_x) / units_per_em;
         let glyph_h = (max_y - min_y + 2.0 * range_fu_y) / units_per_em;
+
+        let used_w = (max_x - min_x) * scale.x;
+        let used_h = (max_y - min_y) * scale.y;
 
         let bitmap = msdf::generate_msdf(
             &mut shape,
@@ -158,6 +167,8 @@ pub(crate) fn generate_font_cpu_data(path: &Path) -> Result<FontCpuData, String>
             glyph_w,
             glyph_h,
             bitmap: Some(bitmap),
+            used_w,
+            used_h,
         });
     }
 
@@ -193,10 +204,15 @@ pub(crate) fn generate_font_cpu_data(path: &Path) -> Result<FontCpuData, String>
                 }
             }
 
-            let u0 = cell_x as f32 / atlas_width as f32;
-            let v0 = cell_y as f32 / atlas_height as f32;
-            let u1 = (cell_x + MSDF_GLYPH_SIZE) as f32 / atlas_width as f32;
-            let v1 = (cell_y + MSDF_GLYPH_SIZE) as f32 / atlas_height as f32;
+            let content_w = glyph.used_w as f32 + 2.0 * MSDF_RANGE_PX as f32;
+            let content_h = glyph.used_h as f32 + 2.0 * MSDF_RANGE_PX as f32;
+            let content_x0 = (MSDF_GLYPH_SIZE as f32 - content_w) * 0.5;
+            let content_y0 = (MSDF_GLYPH_SIZE as f32 - content_h) * 0.5;
+
+            let u0 = (cell_x as f32 + content_x0) / atlas_width as f32;
+            let v0 = (cell_y as f32 + content_y0) / atlas_height as f32;
+            let u1 = (cell_x as f32 + content_x0 + content_w) / atlas_width as f32;
+            let v1 = (cell_y as f32 + content_y0 + content_h) / atlas_height as f32;
 
             glyphs.insert(
                 glyph.ch,

@@ -265,6 +265,31 @@ impl EditorAssetManager {
         font_results
     }
 
+    /// Unload a specific asset from GPU memory.
+    pub fn unload_asset(&mut self, handle: &AssetHandle) -> bool {
+        self.loaded_assets.remove(handle).is_some()
+    }
+
+    /// Unload assets that are only held by the cache (Arc strong_count == 1).
+    /// Returns the number of assets evicted.
+    pub fn unload_unused(&mut self) -> usize {
+        let before = self.loaded_assets.len();
+        self.loaded_assets.retain(|_, data| match data {
+            AssetData::Texture(tex) => std::sync::Arc::strong_count(tex) > 1,
+        });
+        before - self.loaded_assets.len()
+    }
+
+    /// Unload all cached assets from GPU memory.
+    pub fn unload_all(&mut self) {
+        self.loaded_assets.clear();
+    }
+
+    /// Number of currently loaded assets.
+    pub fn loaded_count(&self) -> usize {
+        self.loaded_assets.len()
+    }
+
     /// Access the underlying asset loader (e.g., for font loading from editor).
     pub fn loader(&mut self) -> &mut AssetLoader {
         &mut self.loader

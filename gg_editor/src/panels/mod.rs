@@ -13,6 +13,16 @@ use crate::TilemapPaintState;
 use crate::gizmo::GizmoOperation;
 use crate::undo::UndoSystem;
 
+/// Reset all thread-local panel state (caches, rename/delete dialogs, etc.).
+/// Call this when switching projects or performing a full editor reset.
+pub(crate) fn reset_all_panel_state() {
+    content_browser::invalidate_dir_cache();
+    content_browser::reset_dialog_state();
+    project::invalidate_scene_cache();
+    #[cfg(feature = "lua-scripting")]
+    properties::clear_field_cache();
+}
+
 // ---------------------------------------------------------------------------
 // Tileset preview info (for viewport overlay)
 // ---------------------------------------------------------------------------
@@ -64,44 +74,58 @@ pub(crate) enum Tab {
 }
 
 // ---------------------------------------------------------------------------
+// TabViewer sub-structs
+// ---------------------------------------------------------------------------
+
+/// Viewport-specific state (gizmos, camera, framebuffer, picking).
+pub(crate) struct ViewportState<'a> {
+    pub(crate) size: &'a mut (u32, u32),
+    pub(crate) focused: &'a mut bool,
+    pub(crate) hovered: &'a mut bool,
+    pub(crate) fb_tex_id: Option<egui::TextureId>,
+    pub(crate) gizmo: &'a mut Gizmo,
+    pub(crate) gizmo_operation: &'a mut GizmoOperation,
+    pub(crate) gizmo_editing: &'a mut bool,
+    pub(crate) editor_camera: &'a EditorCamera,
+    pub(crate) scene_fb: &'a mut Option<Framebuffer>,
+    pub(crate) hovered_entity: i32,
+    pub(crate) mouse_pos: &'a mut Option<(f32, f32)>,
+    pub(crate) tileset_preview: Option<TilesetPreviewInfo>,
+}
+
+/// Project and asset context shared across content browser, properties, project panels.
+pub(crate) struct ProjectContext<'a> {
+    pub(crate) assets_root: &'a std::path::Path,
+    pub(crate) current_directory: &'a mut std::path::PathBuf,
+    pub(crate) asset_manager: &'a mut Option<EditorAssetManager>,
+    pub(crate) project_name: Option<&'a str>,
+    pub(crate) editor_scene_path: Option<&'a str>,
+    pub(crate) egui_texture_map: &'a std::collections::HashMap<u64, egui::TextureId>,
+}
+
+// ---------------------------------------------------------------------------
 // TabViewer
 // ---------------------------------------------------------------------------
 
 pub(crate) struct EditorTabViewer<'a> {
     pub(crate) scene: &'a mut Scene,
     pub(crate) selection_context: &'a mut Option<Entity>,
-    pub(crate) viewport_size: &'a mut (u32, u32),
-    pub(crate) viewport_focused: &'a mut bool,
-    pub(crate) viewport_hovered: &'a mut bool,
-    pub(crate) fb_tex_id: Option<egui::TextureId>,
-    pub(crate) vsync: &'a mut bool,
-    pub(crate) frame_time_ms: f32,
-    pub(crate) gizmo: &'a mut Gizmo,
-    pub(crate) gizmo_operation: &'a mut GizmoOperation,
-    pub(crate) editor_camera: &'a EditorCamera,
-    pub(crate) scene_fb: &'a mut Option<Framebuffer>,
-    pub(crate) hovered_entity: i32,
-    pub(crate) current_directory: &'a mut std::path::PathBuf,
     pub(crate) pending_open_path: &'a mut Option<std::path::PathBuf>,
-    pub(crate) asset_manager: &'a mut Option<EditorAssetManager>,
     pub(crate) is_playing: bool,
     pub(crate) scene_dirty: &'a mut bool,
-    pub(crate) assets_root: &'a std::path::Path,
-    pub(crate) project_name: Option<&'a str>,
-    pub(crate) editor_scene_path: Option<&'a str>,
     pub(crate) undo_system: &'a mut UndoSystem,
-    pub(crate) gizmo_editing: &'a mut bool,
     pub(crate) tilemap_paint: &'a mut TilemapPaintState,
-    pub(crate) viewport_mouse_pos: &'a mut Option<(f32, f32)>,
-    pub(crate) egui_texture_map: &'a std::collections::HashMap<u64, egui::TextureId>,
-    pub(crate) tileset_preview: Option<TilesetPreviewInfo>,
+    pub(crate) vsync: &'a mut bool,
+    pub(crate) frame_time_ms: f32,
+    pub(crate) viewport: ViewportState<'a>,
+    pub(crate) project: ProjectContext<'a>,
 }
 
 impl EditorTabViewer<'_> {
     fn unfocus_viewport_on_click(&mut self, ui: &egui::Ui) {
         let clicked = ui.input(|i| i.pointer.any_pressed());
         if clicked && ui.ui_contains_pointer() {
-            *self.viewport_focused = false;
+            *self.viewport.focused = false;
         }
     }
 }
@@ -132,23 +156,23 @@ impl egui_dock::TabViewer for EditorTabViewer<'_> {
                     ui,
                     self.scene,
                     self.selection_context,
-                    self.viewport_size,
-                    self.viewport_focused,
-                    self.viewport_hovered,
-                    self.fb_tex_id,
-                    self.gizmo,
-                    self.gizmo_operation,
-                    self.editor_camera,
-                    self.scene_fb,
-                    self.hovered_entity,
+                    self.viewport.size,
+                    self.viewport.focused,
+                    self.viewport.hovered,
+                    self.viewport.fb_tex_id,
+                    self.viewport.gizmo,
+                    self.viewport.gizmo_operation,
+                    self.viewport.editor_camera,
+                    self.viewport.scene_fb,
+                    self.viewport.hovered_entity,
                     self.pending_open_path,
                     self.is_playing,
                     self.scene_dirty,
                     self.undo_system,
-                    self.gizmo_editing,
+                    self.viewport.gizmo_editing,
                     self.tilemap_paint,
-                    self.viewport_mouse_pos,
-                    &self.tileset_preview,
+                    self.viewport.mouse_pos,
+                    &self.viewport.tileset_preview,
                 );
             }
 
@@ -158,19 +182,19 @@ impl egui_dock::TabViewer for EditorTabViewer<'_> {
                     ui,
                     self.scene,
                     self.selection_context,
-                    self.asset_manager,
+                    self.project.asset_manager,
                     self.is_playing,
-                    self.assets_root,
+                    self.project.assets_root,
                     self.scene_dirty,
                     self.undo_system,
                     self.tilemap_paint,
-                    self.egui_texture_map,
+                    self.project.egui_texture_map,
                 );
             }
 
             Tab::ContentBrowser => {
                 self.unfocus_viewport_on_click(ui);
-                content_browser::content_browser_ui(ui, self.current_directory, self.assets_root, self.asset_manager);
+                content_browser::content_browser_ui(ui, self.project.current_directory, self.project.assets_root, self.project.asset_manager);
             }
 
             Tab::Settings => {
@@ -180,7 +204,7 @@ impl egui_dock::TabViewer for EditorTabViewer<'_> {
                     self.scene,
                     self.frame_time_ms,
                     self.vsync,
-                    self.hovered_entity,
+                    self.viewport.hovered_entity,
                 );
             }
 
@@ -188,9 +212,9 @@ impl egui_dock::TabViewer for EditorTabViewer<'_> {
                 self.unfocus_viewport_on_click(ui);
                 project::project_ui(
                     ui,
-                    self.project_name,
-                    self.assets_root,
-                    self.editor_scene_path,
+                    self.project.project_name,
+                    self.project.assets_root,
+                    self.project.editor_scene_path,
                     self.pending_open_path,
                 );
             }

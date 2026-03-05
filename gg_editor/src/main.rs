@@ -20,7 +20,7 @@ use editor_settings::EditorSettings;
 use gizmo::GizmoOperation;
 use physics_player::PhysicsPlayer;
 use panels::content_browser::{render_dnd_ghost, ASSETS_DIR};
-use panels::{EditorTabViewer, Tab, TilesetPreviewInfo};
+use panels::{EditorTabViewer, ProjectContext, Tab, TilesetPreviewInfo, ViewportState};
 
 // ---------------------------------------------------------------------------
 // Scene state (edit vs play mode)
@@ -793,98 +793,7 @@ impl Application for GGEditor {
                 }
             };
             let response = title_bar::title_bar_ui(ctx, window, play_state, self.is_paused, &project_title, |ui| {
-                ui.menu_button("File", |ui| {
-                    if ui
-                        .add(egui::Button::new("New").shortcut_text("Ctrl+N"))
-                        .clicked()
-                    {
-                        if self.scene_state != SceneState::Edit {
-                            self.on_scene_stop();
-                        }
-                        self.new_scene();
-                        ui.close();
-                    }
-                    if ui
-                        .add(egui::Button::new("Open...").shortcut_text("Ctrl+O"))
-                        .clicked()
-                    {
-                        if self.scene_state != SceneState::Edit {
-                            self.on_scene_stop();
-                        }
-                        self.open_scene();
-                        ui.close();
-                    }
-                    if ui
-                        .add(egui::Button::new("Save").shortcut_text("Ctrl+S"))
-                        .clicked()
-                    {
-                        if self.scene_state != SceneState::Edit {
-                            self.on_scene_stop();
-                        }
-                        self.save_scene();
-                        ui.close();
-                    }
-                    if ui
-                        .add(egui::Button::new("Save As...").shortcut_text("Ctrl+Shift+S"))
-                        .clicked()
-                    {
-                        if self.scene_state != SceneState::Edit {
-                            self.on_scene_stop();
-                        }
-                        self.save_scene_as();
-                        ui.close();
-                    }
-                    ui.separator();
-                    if ui
-                        .add(egui::Button::new("Open Project..."))
-                        .clicked()
-                    {
-                        self.open_project();
-                        ui.close();
-                    }
-                });
-                let in_edit_mode = self.scene_state == SceneState::Edit;
-                ui.menu_button("Edit", |ui| {
-                    if ui
-                        .add_enabled(
-                            in_edit_mode && self.undo_system.can_undo(),
-                            egui::Button::new("Undo").shortcut_text("Ctrl+Z"),
-                        )
-                        .clicked()
-                    {
-                        self.perform_undo();
-                        ui.close();
-                    }
-                    if ui
-                        .add_enabled(
-                            in_edit_mode && self.undo_system.can_redo(),
-                            egui::Button::new("Redo").shortcut_text("Ctrl+Y"),
-                        )
-                        .clicked()
-                    {
-                        self.perform_redo();
-                        ui.close();
-                    }
-                });
-                ui.menu_button("View", |ui| {
-                    if ui
-                        .checkbox(&mut self.show_physics_colliders, "Show Physics Colliders")
-                        .clicked()
-                    {
-                        ui.close();
-                    }
-                });
-                #[cfg(feature = "lua-scripting")]
-                ui.menu_button("Script", |ui| {
-                    if ui
-                        .add(egui::Button::new("Reload Scripts").shortcut_text("Ctrl+R"))
-                        .clicked()
-                    {
-                        self.scene.reload_lua_scripts();
-                        panels::properties::clear_field_cache();
-                        ui.close();
-                    }
-                });
+                self.menu_bar_contents(ui);
             });
             if response.close_requested {
                 self.request_exit();
@@ -922,98 +831,7 @@ impl Application for GGEditor {
             let _ = window;
             egui::TopBottomPanel::top("menu_bar").show(ctx, |ui| {
                 egui::MenuBar::new().ui(ui, |ui| {
-                    ui.menu_button("File", |ui| {
-                        if ui
-                            .add(egui::Button::new("New").shortcut_text("Ctrl+N"))
-                            .clicked()
-                        {
-                            if self.scene_state != SceneState::Edit {
-                                self.on_scene_stop();
-                            }
-                            self.new_scene();
-                            ui.close();
-                        }
-                        if ui
-                            .add(egui::Button::new("Open...").shortcut_text("Ctrl+O"))
-                            .clicked()
-                        {
-                            if self.scene_state != SceneState::Edit {
-                                self.on_scene_stop();
-                            }
-                            self.open_scene();
-                            ui.close();
-                        }
-                        if ui
-                            .add(egui::Button::new("Save").shortcut_text("Ctrl+S"))
-                            .clicked()
-                        {
-                            if self.scene_state != SceneState::Edit {
-                                self.on_scene_stop();
-                            }
-                            self.save_scene();
-                            ui.close();
-                        }
-                        if ui
-                            .add(egui::Button::new("Save As...").shortcut_text("Ctrl+Shift+S"))
-                            .clicked()
-                        {
-                            if self.scene_state != SceneState::Edit {
-                                self.on_scene_stop();
-                            }
-                            self.save_scene_as();
-                            ui.close();
-                        }
-                        ui.separator();
-                        if ui
-                            .add(egui::Button::new("Open Project..."))
-                            .clicked()
-                        {
-                            self.open_project();
-                            ui.close();
-                        }
-                    });
-                    let in_edit_mode = self.scene_state == SceneState::Edit;
-                    ui.menu_button("Edit", |ui| {
-                        if ui
-                            .add_enabled(
-                                in_edit_mode && self.undo_system.can_undo(),
-                                egui::Button::new("Undo").shortcut_text("Ctrl+Z"),
-                            )
-                            .clicked()
-                        {
-                            self.perform_undo();
-                            ui.close();
-                        }
-                        if ui
-                            .add_enabled(
-                                in_edit_mode && self.undo_system.can_redo(),
-                                egui::Button::new("Redo").shortcut_text("Ctrl+Y"),
-                            )
-                            .clicked()
-                        {
-                            self.perform_redo();
-                            ui.close();
-                        }
-                    });
-                    ui.menu_button("View", |ui| {
-                        if ui
-                            .checkbox(&mut self.show_physics_colliders, "Show Physics Colliders")
-                            .clicked()
-                        {
-                            ui.close();
-                        }
-                    });
-                    #[cfg(feature = "lua-scripting")]
-                    ui.menu_button("Script", |ui| {
-                        if ui
-                            .add(egui::Button::new("Reload Scripts").shortcut_text("Ctrl+R"))
-                            .clicked()
-                        {
-                            self.scene.reload_lua_scripts();
-                            panels::properties::clear_field_cache();
-                            ui.close();
-                        }
-                    });
+                    self.menu_bar_contents(ui);
                 });
             });
             // Toolbar (Play / Stop) — macOS only (Windows has it in the title bar).
@@ -1077,31 +895,35 @@ impl Application for GGEditor {
             let mut viewer = EditorTabViewer {
                 scene: &mut self.scene,
                 selection_context: &mut self.selection_context,
-                viewport_size: &mut self.viewport_size,
-                viewport_focused: &mut self.viewport_focused,
-                viewport_hovered: &mut self.viewport_hovered,
-                fb_tex_id,
-                vsync: &mut self.vsync,
-                frame_time_ms: self.frame_time_ms,
-                gizmo: &mut self.gizmo,
-                gizmo_operation: &mut self.gizmo_operation,
-                editor_camera: &self.editor_camera,
-                scene_fb: &mut self.scene_fb,
-                hovered_entity: self.hovered_entity,
-                current_directory: &mut self.current_directory,
                 pending_open_path: &mut self.pending_open_path,
-                asset_manager: &mut self.asset_manager,
                 is_playing: self.scene_state == SceneState::Play,  // Simulate still uses editor camera + gizmos
                 scene_dirty: &mut self.scene_dirty,
-                assets_root: &self.assets_root,
-                project_name: self.project.as_ref().map(|p| p.name()),
-                editor_scene_path: self.editor_scene_path.as_deref(),
                 undo_system: &mut self.undo_system,
-                gizmo_editing: &mut self.gizmo_editing,
                 tilemap_paint: &mut self.tilemap_paint,
-                viewport_mouse_pos: &mut self.viewport_mouse_pos,
-                egui_texture_map: &self.egui_texture_map,
-                tileset_preview,
+                vsync: &mut self.vsync,
+                frame_time_ms: self.frame_time_ms,
+                viewport: ViewportState {
+                    size: &mut self.viewport_size,
+                    focused: &mut self.viewport_focused,
+                    hovered: &mut self.viewport_hovered,
+                    fb_tex_id,
+                    gizmo: &mut self.gizmo,
+                    gizmo_operation: &mut self.gizmo_operation,
+                    gizmo_editing: &mut self.gizmo_editing,
+                    editor_camera: &self.editor_camera,
+                    scene_fb: &mut self.scene_fb,
+                    hovered_entity: self.hovered_entity,
+                    mouse_pos: &mut self.viewport_mouse_pos,
+                    tileset_preview,
+                },
+                project: ProjectContext {
+                    assets_root: &self.assets_root,
+                    current_directory: &mut self.current_directory,
+                    asset_manager: &mut self.asset_manager,
+                    project_name: self.project.as_ref().map(|p| p.name()),
+                    editor_scene_path: self.editor_scene_path.as_deref(),
+                    egui_texture_map: &self.egui_texture_map,
+                },
             };
 
             egui_dock::DockArea::new(&mut self.dock_state)
@@ -1573,6 +1395,103 @@ impl GGEditor {
         )
     }
 
+    /// Shared menu bar contents used by both the custom title bar (Windows/Linux)
+    /// and the native menu bar (macOS).
+    fn menu_bar_contents(&mut self, ui: &mut egui::Ui) {
+        ui.menu_button("File", |ui| {
+            if ui
+                .add(egui::Button::new("New").shortcut_text("Ctrl+N"))
+                .clicked()
+            {
+                if self.scene_state != SceneState::Edit {
+                    self.on_scene_stop();
+                }
+                self.new_scene();
+                ui.close();
+            }
+            if ui
+                .add(egui::Button::new("Open...").shortcut_text("Ctrl+O"))
+                .clicked()
+            {
+                if self.scene_state != SceneState::Edit {
+                    self.on_scene_stop();
+                }
+                self.open_scene();
+                ui.close();
+            }
+            if ui
+                .add(egui::Button::new("Save").shortcut_text("Ctrl+S"))
+                .clicked()
+            {
+                if self.scene_state != SceneState::Edit {
+                    self.on_scene_stop();
+                }
+                self.save_scene();
+                ui.close();
+            }
+            if ui
+                .add(egui::Button::new("Save As...").shortcut_text("Ctrl+Shift+S"))
+                .clicked()
+            {
+                if self.scene_state != SceneState::Edit {
+                    self.on_scene_stop();
+                }
+                self.save_scene_as();
+                ui.close();
+            }
+            ui.separator();
+            if ui
+                .add(egui::Button::new("Open Project..."))
+                .clicked()
+            {
+                self.open_project();
+                ui.close();
+            }
+        });
+        let in_edit_mode = self.scene_state == SceneState::Edit;
+        ui.menu_button("Edit", |ui| {
+            if ui
+                .add_enabled(
+                    in_edit_mode && self.undo_system.can_undo(),
+                    egui::Button::new("Undo").shortcut_text("Ctrl+Z"),
+                )
+                .clicked()
+            {
+                self.perform_undo();
+                ui.close();
+            }
+            if ui
+                .add_enabled(
+                    in_edit_mode && self.undo_system.can_redo(),
+                    egui::Button::new("Redo").shortcut_text("Ctrl+Y"),
+                )
+                .clicked()
+            {
+                self.perform_redo();
+                ui.close();
+            }
+        });
+        ui.menu_button("View", |ui| {
+            if ui
+                .checkbox(&mut self.show_physics_colliders, "Show Physics Colliders")
+                .clicked()
+            {
+                ui.close();
+            }
+        });
+        #[cfg(feature = "lua-scripting")]
+        ui.menu_button("Script", |ui| {
+            if ui
+                .add(egui::Button::new("Reload Scripts").shortcut_text("Ctrl+R"))
+                .clicked()
+            {
+                self.scene.reload_lua_scripts();
+                panels::properties::clear_field_cache();
+                ui.close();
+            }
+        });
+    }
+
     fn new_scene(&mut self) {
         if !self.confirm_discard_changes() {
             return;
@@ -1919,6 +1838,9 @@ impl GGEditor {
         self.scene_dirty = false;
         self.undo_system.clear();
         self.editor_mode = EditorMode::Editor;
+
+        // Reset all thread-local panel caches/dialogs for the new project.
+        panels::reset_all_panel_state();
     }
 
     fn open_project(&mut self) {

@@ -1532,6 +1532,7 @@ impl Scene {
     fn call_lua_fixed_update(&mut self, fixed_dt: f32, input: &Input) {
         use script_glue::SceneScriptContext;
 
+        // --- Setup phase (uses &mut self) ---
         let uuids: Vec<u64> = self
             .world
             .query::<(&IdComponent, &LuaScriptComponent)>()
@@ -1549,8 +1550,17 @@ impl Scene {
             None => return,
         };
 
+        // SAFETY: Convert &mut self to raw pointer before Lua dispatch.
+        // Lua callbacks dereference ctx.scene to access Scene (ECS, physics, etc.).
+        // Under Rust's aliasing model, using &mut self after callbacks write through
+        // *mut Scene is UB. By switching to the raw pointer and never using `self`
+        // again, we ensure a single provenance chain for all Scene accesses.
+        // The ScriptEngine is taken out of Scene, so &mut engine does not alias.
+        let scene_ptr: *mut Scene = self;
+
+        // --- Dispatch phase (uses scene_ptr, never self) ---
         let ctx = SceneScriptContext {
-            scene: self as *mut Scene,
+            scene: scene_ptr,
             input: input as *const Input,
         };
         engine.lua().set_app_data(ctx);
@@ -1560,10 +1570,11 @@ impl Scene {
         }
 
         engine.lua().remove_app_data::<SceneScriptContext>();
-        self.script_engine = Some(engine);
 
-        // Flush deferred entity destructions from fixed-update scripts.
-        self.flush_pending_destroys();
+        unsafe {
+            (*scene_ptr).script_engine = Some(engine);
+            (*scene_ptr).flush_pending_destroys();
+        }
     }
 
     /// Drain collision events from the physics world and dispatch to Lua scripts.
@@ -1574,6 +1585,7 @@ impl Scene {
     fn dispatch_collision_events(&mut self) {
         use script_glue::SceneScriptContext;
 
+        // --- Setup phase (uses &mut self) ---
         // Drain events from physics.
         let events: Vec<(u64, u64, bool)> = match self.physics_world.as_ref() {
             Some(physics) => physics.drain_collision_events(),
@@ -1589,8 +1601,17 @@ impl Scene {
             None => return,
         };
 
+        // SAFETY: Convert &mut self to raw pointer before Lua dispatch.
+        // Lua callbacks dereference ctx.scene to access Scene (ECS, physics, etc.).
+        // Under Rust's aliasing model, using &mut self after callbacks write through
+        // *mut Scene is UB. By switching to the raw pointer and never using `self`
+        // again, we ensure a single provenance chain for all Scene accesses.
+        // The ScriptEngine is taken out of Scene, so &mut engine does not alias.
+        let scene_ptr: *mut Scene = self;
+
+        // --- Dispatch phase (uses scene_ptr, never self) ---
         let ctx = SceneScriptContext {
-            scene: self as *mut Scene,
+            scene: scene_ptr,
             input: std::ptr::null(),
         };
         engine.lua().set_app_data(ctx);
@@ -1607,7 +1628,10 @@ impl Scene {
         }
 
         engine.lua().remove_app_data::<SceneScriptContext>();
-        self.script_engine = Some(engine);
+
+        unsafe {
+            (*scene_ptr).script_engine = Some(engine);
+        }
     }
 
     // -----------------------------------------------------------------
@@ -1877,6 +1901,7 @@ impl Scene {
         use script_glue::SceneScriptContext;
         let _timer = crate::profiling::ProfileTimer::new("Scene::on_lua_scripting_start");
 
+        // --- Setup phase (uses &mut self) ---
         let mut engine = ScriptEngine::new();
 
         // Collect entities with non-empty script paths (avoid borrow conflicts).
@@ -1903,27 +1928,32 @@ impl Scene {
             }
         }
 
-        // Store engine in self, then take it out for on_create calls
-        // (callbacks need scene pointer via app_data).
-        self.script_engine = Some(engine);
-        let mut engine = self.script_engine.take().unwrap();
+        let uuids: Vec<u64> = scripts.iter().map(|(_, uuid, _)| *uuid).collect();
 
-        // Set scene context (no input during on_create).
+        // SAFETY: Convert &mut self to raw pointer before Lua dispatch.
+        // Lua callbacks dereference ctx.scene to access Scene (ECS, physics, etc.).
+        // Under Rust's aliasing model, using &mut self after callbacks write through
+        // *mut Scene is UB. By switching to the raw pointer and never using `self`
+        // again, we ensure a single provenance chain for all Scene accesses.
+        // The ScriptEngine is taken out of Scene, so &mut engine does not alias.
+        let scene_ptr: *mut Scene = self;
+
+        // --- Dispatch phase (uses scene_ptr, never self) ---
         let ctx = SceneScriptContext {
-            scene: self as *mut Scene,
+            scene: scene_ptr,
             input: std::ptr::null(),
         };
         engine.lua().set_app_data(ctx);
 
-        // Call on_create for each entity.
-        let uuids: Vec<u64> = scripts.iter().map(|(_, uuid, _)| *uuid).collect();
         for uuid in &uuids {
             engine.call_entity_on_create(*uuid);
         }
 
-        // Clear context and put engine back.
         engine.lua().remove_app_data::<SceneScriptContext>();
-        self.script_engine = Some(engine);
+
+        unsafe {
+            (*scene_ptr).script_engine = Some(engine);
+        }
     }
 
     /// Tear down the Lua script engine: call `on_destroy()` per entity,
@@ -1933,27 +1963,47 @@ impl Scene {
         use script_glue::SceneScriptContext;
         let _timer = crate::profiling::ProfileTimer::new("Scene::on_lua_scripting_stop");
 
-        if let Some(mut engine) = self.script_engine.take() {
-            // Set scene context (no input during on_destroy).
-            let ctx = SceneScriptContext {
-                scene: self as *mut Scene,
-                input: std::ptr::null(),
-            };
-            engine.lua().set_app_data(ctx);
-
-            // Call on_destroy for each entity.
-            let uuids = engine.entity_uuids();
-            for uuid in &uuids {
-                engine.call_entity_on_destroy(*uuid);
+        // --- Setup phase (uses &mut self) ---
+        let mut engine = match self.script_engine.take() {
+            Some(e) => e,
+            None => {
+                // No engine — just reset loaded flags.
+                for lsc in self.world.query_mut::<&mut LuaScriptComponent>() {
+                    lsc.loaded = false;
+                }
+                return;
             }
+        };
 
-            // Clear context — engine is dropped after this block.
-            engine.lua().remove_app_data::<SceneScriptContext>();
+        let uuids = engine.entity_uuids();
+
+        // SAFETY: Convert &mut self to raw pointer before Lua dispatch.
+        // Lua callbacks dereference ctx.scene to access Scene (ECS, physics, etc.).
+        // Under Rust's aliasing model, using &mut self after callbacks write through
+        // *mut Scene is UB. By switching to the raw pointer and never using `self`
+        // again, we ensure a single provenance chain for all Scene accesses.
+        // The ScriptEngine is taken out of Scene, so &mut engine does not alias.
+        let scene_ptr: *mut Scene = self;
+
+        // --- Dispatch phase (uses scene_ptr, never self) ---
+        let ctx = SceneScriptContext {
+            scene: scene_ptr,
+            input: std::ptr::null(),
+        };
+        engine.lua().set_app_data(ctx);
+
+        for uuid in &uuids {
+            engine.call_entity_on_destroy(*uuid);
         }
 
-        // Reset loaded flags.
-        for lsc in self.world.query_mut::<&mut LuaScriptComponent>() {
-            lsc.loaded = false;
+        // Clear context — engine is dropped after this block.
+        engine.lua().remove_app_data::<SceneScriptContext>();
+
+        // Reset loaded flags via raw pointer.
+        unsafe {
+            for lsc in (*scene_ptr).world.query_mut::<&mut LuaScriptComponent>() {
+                lsc.loaded = false;
+            }
         }
     }
 
@@ -1996,6 +2046,7 @@ impl Scene {
         use script_glue::SceneScriptContext;
         let _timer = crate::profiling::ProfileTimer::new("Scene::on_update_lua_scripts");
 
+        // --- Setup phase (uses &mut self) ---
         // Take engine out (take-modify-replace pattern).
         let mut engine = match self.script_engine.take() {
             Some(e) => e,
@@ -2012,7 +2063,7 @@ impl Scene {
             .collect();
 
         if !unloaded.is_empty() {
-            // Initialize newly-spawned scripts.
+            // Initialize newly-spawned scripts (no Lua dispatch yet).
             for (handle, uuid, path) in &unloaded {
                 if engine.create_entity_env(*uuid, path) {
                     if let Ok(lsc) = self.world.get::<&LuaScriptComponent>(*handle) {
@@ -2025,10 +2076,31 @@ impl Scene {
                     }
                 }
             }
+        }
 
-            // Call on_create for newly loaded scripts (with context set).
+        // Collect UUIDs of loaded script entities (before switching to raw pointer).
+        let uuids: Vec<u64> = self
+            .world
+            .query::<(&IdComponent, &LuaScriptComponent)>()
+            .iter()
+            .filter(|(_, lsc)| lsc.loaded)
+            .map(|(id, _)| id.id.raw())
+            .collect();
+
+        // SAFETY: Convert &mut self to raw pointer before Lua dispatch.
+        // Lua callbacks dereference ctx.scene to access Scene (ECS, physics, etc.).
+        // Under Rust's aliasing model, using &mut self after callbacks write through
+        // *mut Scene is UB. By switching to the raw pointer and never using `self`
+        // again, we ensure a single provenance chain for all Scene accesses.
+        // The ScriptEngine is taken out of Scene, so &mut engine does not alias.
+        let scene_ptr: *mut Scene = self;
+
+        // --- Dispatch phase (uses scene_ptr, never self) ---
+
+        // Call on_create for newly loaded scripts.
+        if !unloaded.is_empty() {
             let ctx = SceneScriptContext {
-                scene: self as *mut Scene,
+                scene: scene_ptr,
                 input: input as *const Input,
             };
             engine.lua().set_app_data(ctx);
@@ -2040,23 +2112,16 @@ impl Scene {
             engine.lua().remove_app_data::<SceneScriptContext>();
         }
 
-        // Collect UUIDs of loaded script entities.
-        let uuids: Vec<u64> = self
-            .world
-            .query::<(&IdComponent, &LuaScriptComponent)>()
-            .iter()
-            .filter(|(_, lsc)| lsc.loaded)
-            .map(|(id, _)| id.id.raw())
-            .collect();
-
         if uuids.is_empty() {
-            self.script_engine = Some(engine);
+            unsafe {
+                (*scene_ptr).script_engine = Some(engine);
+            }
             return;
         }
 
-        // Set scene + input context.
+        // Set scene + input context for on_update.
         let ctx = SceneScriptContext {
-            scene: self as *mut Scene,
+            scene: scene_ptr,
             input: input as *const Input,
         };
         engine.lua().set_app_data(ctx);
@@ -2065,12 +2130,12 @@ impl Scene {
             engine.call_entity_on_update(*uuid, dt.seconds());
         }
 
-        // Clear context and put engine back.
         engine.lua().remove_app_data::<SceneScriptContext>();
-        self.script_engine = Some(engine);
 
-        // Flush deferred entity destructions.
-        self.flush_pending_destroys();
+        unsafe {
+            (*scene_ptr).script_engine = Some(engine);
+            (*scene_ptr).flush_pending_destroys();
+        }
     }
 
     /// Access the script engine (if active).

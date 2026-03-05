@@ -1297,7 +1297,7 @@ fn draw_components(
         .id_salt(("box_collider_2d", entity.id()))
         .default_open(true)
         .show(ui, |ui| {
-            let (mut offset, mut size, mut density, mut friction, mut restitution, mut restitution_threshold) = {
+            let (mut offset, mut size, mut density, mut friction, mut restitution) = {
                 let bc = scene
                     .get_component::<BoxCollider2DComponent>(entity)
                     .unwrap();
@@ -1307,7 +1307,6 @@ fn draw_components(
                     bc.density,
                     bc.friction,
                     bc.restitution,
-                    bc.restitution_threshold,
                 )
             };
 
@@ -1388,17 +1387,6 @@ fn draw_components(
                     .changed();
             });
 
-            ui.horizontal(|ui| {
-                ui.label("Restitution Threshold");
-                changed |= ui
-                    .add(
-                        egui::DragValue::new(&mut restitution_threshold)
-                            .speed(0.01)
-                            .range(0.0..=f32::MAX),
-                    )
-                    .changed();
-            });
-
             if changed {
                 if let Some(mut bc) =
                     scene.get_component_mut::<BoxCollider2DComponent>(entity)
@@ -1408,7 +1396,6 @@ fn draw_components(
                     bc.density = density;
                     bc.friction = friction;
                     bc.restitution = restitution;
-                    bc.restitution_threshold = restitution_threshold;
                 }
                 *scene_dirty = true;
             }
@@ -1437,7 +1424,7 @@ fn draw_components(
         .id_salt(("circle_collider_2d", entity.id()))
         .default_open(true)
         .show(ui, |ui| {
-            let (mut offset, mut radius, mut density, mut friction, mut restitution, mut restitution_threshold) = {
+            let (mut offset, mut radius, mut density, mut friction, mut restitution) = {
                 let cc = scene
                     .get_component::<CircleCollider2DComponent>(entity)
                     .unwrap();
@@ -1447,7 +1434,6 @@ fn draw_components(
                     cc.density,
                     cc.friction,
                     cc.restitution,
-                    cc.restitution_threshold,
                 )
             };
 
@@ -1513,17 +1499,6 @@ fn draw_components(
                     .changed();
             });
 
-            ui.horizontal(|ui| {
-                ui.label("Restitution Threshold");
-                changed |= ui
-                    .add(
-                        egui::DragValue::new(&mut restitution_threshold)
-                            .speed(0.01)
-                            .range(0.0..=f32::MAX),
-                    )
-                    .changed();
-            });
-
             if changed {
                 if let Some(mut cc) =
                     scene.get_component_mut::<CircleCollider2DComponent>(entity)
@@ -1533,7 +1508,6 @@ fn draw_components(
                     cc.density = density;
                     cc.friction = friction;
                     cc.restitution = restitution;
-                    cc.restitution_threshold = restitution_threshold;
                 }
                 *scene_dirty = true;
             }

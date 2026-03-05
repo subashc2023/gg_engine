@@ -97,7 +97,7 @@ impl AssetRegistry {
             }
         };
 
-        let file_data: RegistryFileData = match serde_yaml::from_str(&contents) {
+        let file_data: RegistryFileData = match serde_yml::from_str(&contents) {
             Ok(d) => d,
             Err(e) => {
                 log::error!("Failed to parse registry file '{}': {}", file_path.display(), e);
@@ -143,7 +143,7 @@ impl AssetRegistry {
 
         let file_data = RegistryFileData { assets: entries };
 
-        match serde_yaml::to_string(&file_data) {
+        match serde_yml::to_string(&file_data) {
             Ok(yaml) => {
                 if let Err(e) = crate::platform_utils::atomic_write(file_path, &yaml) {
                     log::error!("Failed to write registry file '{}': {}", file_path.display(), e);

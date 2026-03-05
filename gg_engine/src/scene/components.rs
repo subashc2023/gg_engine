@@ -394,7 +394,6 @@ pub struct BoxCollider2DComponent {
     pub density: f32,
     pub friction: f32,
     pub restitution: f32,
-    pub restitution_threshold: f32,
     /// Runtime-only handle into the physics world. Not serialized.
     pub(crate) runtime_fixture: Option<rapier2d::geometry::ColliderHandle>,
 }
@@ -407,7 +406,6 @@ impl Clone for BoxCollider2DComponent {
             density: self.density,
             friction: self.friction,
             restitution: self.restitution,
-            restitution_threshold: self.restitution_threshold,
             runtime_fixture: None, // Runtime-only, not copied.
         }
     }
@@ -421,7 +419,6 @@ impl Default for BoxCollider2DComponent {
             density: 1.0,
             friction: 0.5,
             restitution: 0.0,
-            restitution_threshold: 0.5,
             runtime_fixture: None,
         }
     }
@@ -438,7 +435,6 @@ pub struct CircleCollider2DComponent {
     pub density: f32,
     pub friction: f32,
     pub restitution: f32,
-    pub restitution_threshold: f32,
     /// Runtime-only handle into the physics world. Not serialized.
     pub(crate) runtime_fixture: Option<rapier2d::geometry::ColliderHandle>,
 }
@@ -451,7 +447,6 @@ impl Clone for CircleCollider2DComponent {
             density: self.density,
             friction: self.friction,
             restitution: self.restitution,
-            restitution_threshold: self.restitution_threshold,
             runtime_fixture: None, // Runtime-only, not copied.
         }
     }
@@ -465,7 +460,6 @@ impl Default for CircleCollider2DComponent {
             density: 1.0,
             friction: 0.5,
             restitution: 0.0,
-            restitution_threshold: 0.5,
             runtime_fixture: None,
         }
     }

@@ -111,7 +111,7 @@ Two launch configurations using GDB with Intel disassembly syntax:
 | `hecs` | 0.11 | ECS (archetypal storage) |
 | `rapier2d` | 0.22 | 2D physics |
 | `serde` | 1 | Serialization (with derive) |
-| `serde_yaml` | 0.9 | YAML scene files |
+| `serde_yml` | 0.0.12 | YAML scene files |
 | `rand` | 0.9 | UUID generation |
 | `rfd` | 0.15 | Native file dialogs |
 | `mlua` | 0.10 | Lua scripting (LuaJIT, vendored; optional, `lua-scripting` feature) |

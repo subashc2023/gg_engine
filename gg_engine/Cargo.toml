@@ -22,7 +22,7 @@ glam = "0.29"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
 hecs = "0.11"
 serde = { version = "1", features = ["derive"] }
-serde_yaml = "0.9"
+serde_yml = "0.0.12"
 rfd = "0.15"
 rand = "0.9"
 rapier2d = { version = "0.22", features = ["simd-stable"] }

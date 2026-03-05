@@ -40,6 +40,13 @@ pub(crate) fn invalidate_dir_cache() {
     DIR_CACHE.with(|c| *c.borrow_mut() = None);
 }
 
+/// Clear rename/delete dialog state (call on project switch or editor reset).
+pub(crate) fn reset_dialog_state() {
+    BROWSER_MODE.with(|m| m.set(ContentBrowserMode::FileSystem));
+    RENAME_STATE.with(|s| *s.borrow_mut() = None);
+    DELETE_CONFIRM.with(|d| *d.borrow_mut() = None);
+}
+
 // ---------------------------------------------------------------------------
 // Content browser drag-and-drop payload
 // ---------------------------------------------------------------------------

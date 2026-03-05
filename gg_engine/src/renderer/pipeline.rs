@@ -257,10 +257,10 @@ pub(crate) fn create_batch_pipeline(
     let multisampling = vk::PipelineMultisampleStateCreateInfo::default()
         .rasterization_samples(vk::SampleCountFlags::TYPE_1);
 
+    // 2D batch rendering uses painter's algorithm (draw order); no depth test needed.
     let depth_stencil = vk::PipelineDepthStencilStateCreateInfo::default()
-        .depth_test_enable(true)
-        .depth_write_enable(true)
-        .depth_compare_op(vk::CompareOp::LESS_OR_EQUAL)
+        .depth_test_enable(false)
+        .depth_write_enable(false)
         .depth_bounds_test_enable(false)
         .stencil_test_enable(false);
 
@@ -390,10 +390,10 @@ pub(crate) fn create_line_batch_pipeline(
     let multisampling = vk::PipelineMultisampleStateCreateInfo::default()
         .rasterization_samples(vk::SampleCountFlags::TYPE_1);
 
+    // 2D batch rendering uses painter's algorithm (draw order); no depth test needed.
     let depth_stencil = vk::PipelineDepthStencilStateCreateInfo::default()
-        .depth_test_enable(true)
-        .depth_write_enable(true)
-        .depth_compare_op(vk::CompareOp::LESS_OR_EQUAL)
+        .depth_test_enable(false)
+        .depth_write_enable(false)
         .depth_bounds_test_enable(false)
         .stencil_test_enable(false);
 

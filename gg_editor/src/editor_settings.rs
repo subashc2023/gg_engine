@@ -83,7 +83,7 @@ impl EditorSettings {
         let Ok(contents) = std::fs::read_to_string(&path) else {
             return Self::default();
         };
-        serde_yaml::from_str(&contents).unwrap_or_default()
+        serde_yml::from_str(&contents).unwrap_or_default()
     }
 
     pub fn save(&self) {
@@ -94,7 +94,7 @@ impl EditorSettings {
             return;
         };
         let _ = std::fs::create_dir_all(&dir);
-        if let Ok(yaml) = serde_yaml::to_string(self) {
+        if let Ok(yaml) = serde_yml::to_string(self) {
             let _ = gg_engine::platform_utils::atomic_write(&path, &yaml);
         }
     }
