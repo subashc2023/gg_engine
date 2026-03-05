@@ -90,72 +90,102 @@ impl TilemapPaintState {
 }
 
 // ---------------------------------------------------------------------------
+// Sub-state structs (decomposed from GGEditor to reduce god-object coupling)
+// ---------------------------------------------------------------------------
+
+/// Viewport rendering surface state: framebuffer, dimensions, focus, picking.
+struct ViewportInfo {
+    scene_fb: Option<Framebuffer>,
+    size: (u32, u32),
+    focused: bool,
+    hovered: bool,
+    mouse_pos: Option<(f32, f32)>,
+    hovered_entity: i32,
+}
+
+/// Transform gizmo tool configuration and drag state.
+struct GizmoState {
+    gizmo: Gizmo,
+    operation: GizmoOperation,
+    editing: bool,
+    local: bool,
+}
+
+/// Font loading pipeline: pending loads and cache of loaded fonts.
+struct FontState {
+    pending_loads: Vec<(Entity, PathBuf)>,
+    cache: HashMap<PathBuf, Ref<Font>>,
+}
+
+/// Scene lifecycle: path, dirty flag, auto-save, warnings, deferred drops.
+struct SceneContext {
+    editor_scene_path: Option<String>,
+    dirty: bool,
+    autosave_timer: f32,
+    warnings: Vec<String>,
+    /// Old scenes awaiting GPU-safe destruction (deferred from on_egui to on_render).
+    pending_drop_scenes: Vec<Scene>,
+}
+
+/// Play / Simulate / Edit mode and associated transient state.
+struct PlaybackState {
+    scene_state: SceneState,
+    editor_scene: Option<Scene>,
+    paused: bool,
+    step_frames: i32,
+}
+
+/// Loaded project, asset root, content browser directory, asset manager.
+struct ProjectState {
+    project: Option<Project>,
+    assets_root: PathBuf,
+    current_directory: PathBuf,
+    asset_manager: Option<EditorAssetManager>,
+}
+
+/// Transient UI state: dock layout, dialogs, texture mappings, input flags.
+struct UiState {
+    dock_state: egui_dock::DockState<Tab>,
+    /// Mapping from opaque texture handle → egui TextureId for UI rendering.
+    egui_texture_map: HashMap<u64, egui::TextureId>,
+    /// Set from on_egui each frame; checked in on_event next frame to suppress
+    /// editor shortcuts (Q/W/E/R/Delete/Escape/X) while typing in text fields.
+    egui_wants_keyboard: bool,
+    /// Previous window title; only call `window.set_title()` when it changes.
+    prev_window_title: String,
+    /// When `Some`, the "New Scene" modal is open with the current name text.
+    new_scene_modal: Option<String>,
+    /// Whether the keyboard shortcuts help dialog is open.
+    show_shortcuts_dialog: bool,
+    /// Deferred scene open (set by content browser / project panel, consumed in on_egui).
+    pending_open_path: Option<PathBuf>,
+    hierarchy_filter: String,
+    /// UUID of the entity last copied via Ctrl+C. Used by Ctrl+V to duplicate.
+    clipboard_entity_uuid: Option<u64>,
+}
+
+// ---------------------------------------------------------------------------
 // GGEditor
 // ---------------------------------------------------------------------------
 
 struct GGEditor {
     editor_mode: EditorMode,
     editor_settings: EditorSettings,
-    project: Option<Project>,
-    scene_state: SceneState,
-    editor_scene: Option<Scene>,
-    editor_scene_path: Option<String>,
-    dock_state: egui_dock::DockState<Tab>,
-    scene_fb: Option<Framebuffer>,
-    viewport_size: (u32, u32),
-    viewport_focused: bool,
-    viewport_hovered: bool,
-    vsync: bool,
+    project_state: ProjectState,
+    scene_ctx: SceneContext,
+    ui: UiState,
+    viewport: ViewportInfo,
+    playback: PlaybackState,
+    gizmo_state: GizmoState,
     frame_time_ms: f32,
     render_stats: Renderer2DStats,
     scene: Scene,
     selection_context: Option<Entity>,
-    gizmo: Gizmo,
-    gizmo_operation: GizmoOperation,
     editor_camera: EditorCamera,
-    hovered_entity: i32,
-    assets_root: PathBuf,
-    current_directory: PathBuf,
-    pending_open_path: Option<PathBuf>,
-    asset_manager: Option<EditorAssetManager>,
-    pending_font_loads: Vec<(Entity, PathBuf)>,
-    font_cache: HashMap<PathBuf, Ref<Font>>,
-    /// Old scenes awaiting GPU-safe destruction (deferred from on_egui to on_render).
-    pending_drop_scenes: Vec<Scene>,
-    show_physics_colliders: bool,
-    show_grid: bool,
-    snap_to_grid: bool,
-    grid_size: f32,
-    hierarchy_filter: String,
-    scene_warnings: Vec<String>,
+    fonts: FontState,
     tilemap_paint: TilemapPaintState,
-    viewport_mouse_pos: Option<(f32, f32)>,
-    /// Mapping from opaque texture handle → egui TextureId for UI rendering.
-    egui_texture_map: HashMap<u64, egui::TextureId>,
-    scene_dirty: bool,
-    /// Countdown timer for auto-save (seconds). Resets on manual save.
-    autosave_timer: f32,
     undo_system: undo::UndoSystem,
-    gizmo_editing: bool,
-    gizmo_local: bool,
-    is_paused: bool,
-    step_frames: i32,
     should_exit: bool,
-    /// Set from on_egui each frame; checked in on_event next frame to suppress
-    /// editor shortcuts (Q/W/E/R/Delete/Escape/X) while typing in text fields.
-    egui_wants_keyboard: bool,
-    /// Previous window title; only call `window.set_title()` when it changes.
-    prev_window_title: String,
-    /// Cached window geometry for persistence on exit.
-    cached_window_state: editor_settings::WindowState,
-    /// When `Some`, the "New Scene" modal is open with the current name text.
-    new_scene_modal: Option<String>,
-    /// Whether the keyboard shortcuts help dialog is open.
-    show_shortcuts_dialog: bool,
-    /// UUID of the entity last copied via Ctrl+C. Used by Ctrl+V to duplicate.
-    clipboard_entity_uuid: Option<u64>,
-    /// Current editor color theme.
-    theme: gg_engine::ui_theme::EditorTheme,
     /// File watcher that monitors `assets/scripts/` for `.lua` changes.
     /// Kept alive so the OS keeps notifying us; the actual data flows
     /// through `script_reload_pending`.
@@ -276,15 +306,8 @@ impl Application for GGEditor {
             None
         };
 
-        let initial_vsync = editor_settings.vsync;
-        let initial_show_colliders = editor_settings.show_physics_colliders;
         let initial_gizmo_op = editor_settings.gizmo_operation;
         let initial_cam_state = editor_settings.camera_state.clone();
-        let initial_show_grid = editor_settings.show_grid;
-        let initial_snap_to_grid = editor_settings.snap_to_grid;
-        let initial_grid_size = editor_settings.grid_size;
-        let initial_window_state = editor_settings.window_state.clone();
-        let initial_theme = editor_settings.theme;
 
         // Restore dock layout from settings, or build default layout.
         let dock_state = if let Some(saved) = editor_settings.dock_layout.take() {
@@ -296,22 +319,54 @@ impl Application for GGEditor {
         GGEditor {
             editor_mode,
             editor_settings,
-            project,
-            scene_state: SceneState::Edit,
-            editor_scene: None,
-            editor_scene_path,
-            dock_state,
-            scene_fb: None,
-            viewport_size: (0, 0),
-            viewport_focused: false,
-            viewport_hovered: false,
-            vsync: initial_vsync,
+            project_state: ProjectState {
+                current_directory: assets_root.clone(),
+                assets_root,
+                asset_manager,
+                project,
+            },
+            scene_ctx: SceneContext {
+                editor_scene_path,
+                dirty: recovered_autosave,
+                autosave_timer: Self::AUTOSAVE_INTERVAL_SECS,
+                warnings: Vec::new(),
+                pending_drop_scenes: Vec::new(),
+            },
+            ui: UiState {
+                dock_state,
+                egui_texture_map: HashMap::new(),
+                egui_wants_keyboard: false,
+                prev_window_title: String::new(),
+                new_scene_modal: None,
+                show_shortcuts_dialog: false,
+                pending_open_path: None,
+                hierarchy_filter: String::new(),
+                clipboard_entity_uuid: None,
+            },
+            viewport: ViewportInfo {
+                scene_fb: None,
+                size: (0, 0),
+                focused: false,
+                hovered: false,
+                mouse_pos: None,
+                hovered_entity: -1,
+            },
+            playback: PlaybackState {
+                scene_state: SceneState::Edit,
+                editor_scene: None,
+                paused: false,
+                step_frames: 0,
+            },
+            gizmo_state: GizmoState {
+                gizmo: Gizmo::default(),
+                operation: initial_gizmo_op,
+                editing: false,
+                local: true,
+            },
             frame_time_ms: 0.0,
             render_stats: Renderer2DStats::default(),
             scene,
             selection_context: None,
-            gizmo: Gizmo::default(),
-            gizmo_operation: initial_gizmo_op,
             editor_camera: {
                 let mut cam = EditorCamera::new(45.0_f32.to_radians(), 0.1, 1000.0);
                 cam.restore_state(
@@ -322,38 +377,13 @@ impl Application for GGEditor {
                 );
                 cam
             },
-            hovered_entity: -1,
-            current_directory: assets_root.clone(),
-            assets_root,
-            pending_open_path: None,
-            asset_manager,
-            pending_font_loads: Vec::new(),
-            font_cache: HashMap::new(),
-            pending_drop_scenes: Vec::new(),
-            show_physics_colliders: initial_show_colliders,
-            show_grid: initial_show_grid,
-            snap_to_grid: initial_snap_to_grid,
-            grid_size: initial_grid_size,
-            hierarchy_filter: String::new(),
-            scene_warnings: Vec::new(),
+            fonts: FontState {
+                pending_loads: Vec::new(),
+                cache: HashMap::new(),
+            },
             tilemap_paint: TilemapPaintState::new(),
-            viewport_mouse_pos: None,
-            egui_texture_map: HashMap::new(),
-            scene_dirty: recovered_autosave,
-            autosave_timer: Self::AUTOSAVE_INTERVAL_SECS,
             undo_system: undo::UndoSystem::new(),
-            gizmo_editing: false,
-            gizmo_local: true,
-            is_paused: false,
-            step_frames: 0,
             should_exit: false,
-            egui_wants_keyboard: false,
-            prev_window_title: String::new(),
-            cached_window_state: initial_window_state,
-            new_scene_modal: None,
-            show_shortcuts_dialog: false,
-            clipboard_entity_uuid: None,
-            theme: initial_theme,
             #[cfg(feature = "lua-scripting")]
             _script_watcher,
             #[cfg(feature = "lua-scripting")]
@@ -387,27 +417,27 @@ impl Application for GGEditor {
                 FramebufferTextureFormat::Depth.into(),
             ],
         });
-        self.scene_fb = Some(fb);
+        self.viewport.scene_fb = Some(fb);
     }
 
     fn scene_framebuffer(&self) -> Option<&Framebuffer> {
-        self.scene_fb.as_ref()
+        self.viewport.scene_fb.as_ref()
     }
 
     fn scene_framebuffer_mut(&mut self) -> Option<&mut Framebuffer> {
-        self.scene_fb.as_mut()
+        self.viewport.scene_fb.as_mut()
     }
 
     fn desired_viewport_size(&self) -> Option<(u32, u32)> {
-        if self.viewport_size.0 > 0 && self.viewport_size.1 > 0 {
-            Some(self.viewport_size)
+        if self.viewport.size.0 > 0 && self.viewport.size.1 > 0 {
+            Some(self.viewport.size)
         } else {
             None
         }
     }
 
     fn present_mode(&self) -> PresentMode {
-        if self.vsync {
+        if self.editor_settings.vsync {
             PresentMode::Fifo
         } else {
             PresentMode::Immediate
@@ -415,7 +445,7 @@ impl Application for GGEditor {
     }
 
     fn block_events(&self) -> bool {
-        !self.viewport_hovered
+        !self.viewport.hovered
     }
 
     fn should_exit(&self) -> bool {
@@ -432,7 +462,7 @@ impl Application for GGEditor {
         }
 
         // Editor camera responds in edit and simulate modes.
-        if self.scene_state != SceneState::Play {
+        if self.playback.scene_state != SceneState::Play {
             self.editor_camera.on_event(event);
         }
 
@@ -449,52 +479,52 @@ impl Application for GGEditor {
             match key_code {
                 // File commands — always available; stop playback/simulation first.
                 KeyCode::N if ctrl => {
-                    if self.scene_state != SceneState::Edit {
+                    if self.playback.scene_state != SceneState::Edit {
                         self.on_scene_stop();
                     }
                     self.new_scene();
                 }
                 KeyCode::O if ctrl => {
-                    if self.scene_state != SceneState::Edit {
+                    if self.playback.scene_state != SceneState::Edit {
                         self.on_scene_stop();
                     }
                     self.open_scene();
                 }
                 KeyCode::S if ctrl && shift => {
-                    if self.scene_state != SceneState::Edit {
+                    if self.playback.scene_state != SceneState::Edit {
                         self.on_scene_stop();
                     }
                     self.save_scene_as();
                 }
                 KeyCode::S if ctrl && !shift => {
-                    if self.scene_state != SceneState::Edit {
+                    if self.playback.scene_state != SceneState::Edit {
                         self.on_scene_stop();
                     }
                     self.save_scene();
                 }
 
                 // Undo/Redo — edit mode only.
-                KeyCode::Z if ctrl && !shift && self.scene_state == SceneState::Edit => {
+                KeyCode::Z if ctrl && !shift && self.playback.scene_state == SceneState::Edit => {
                     self.perform_undo();
                 }
-                KeyCode::Z if ctrl && shift && self.scene_state == SceneState::Edit => {
+                KeyCode::Z if ctrl && shift && self.playback.scene_state == SceneState::Edit => {
                     self.perform_redo();
                 }
-                KeyCode::Y if ctrl && !shift && self.scene_state == SceneState::Edit => {
+                KeyCode::Y if ctrl && !shift && self.playback.scene_state == SceneState::Edit => {
                     self.perform_redo();
                 }
 
                 // Copy entity — edit mode only.
-                KeyCode::C if ctrl && !shift && self.scene_state == SceneState::Edit => {
+                KeyCode::C if ctrl && !shift && self.playback.scene_state == SceneState::Edit => {
                     self.on_copy_entity();
                 }
                 // Paste entity — edit mode only.
-                KeyCode::V if ctrl && !shift && self.scene_state == SceneState::Edit => {
+                KeyCode::V if ctrl && !shift && self.playback.scene_state == SceneState::Edit => {
                     self.on_paste_entity();
                 }
 
                 // Entity duplication — edit mode only.
-                KeyCode::D if ctrl && self.scene_state == SceneState::Edit => {
+                KeyCode::D if ctrl && self.playback.scene_state == SceneState::Edit => {
                     self.on_duplicate_entity();
                 }
 
@@ -506,20 +536,20 @@ impl Application for GGEditor {
                 }
 
                 // Delete selected entity — edit mode only, not while typing.
-                KeyCode::Delete if !ctrl && !shift && !self.egui_wants_keyboard
-                    && self.scene_state == SceneState::Edit =>
+                KeyCode::Delete if !ctrl && !shift && !self.ui.egui_wants_keyboard
+                    && self.playback.scene_state == SceneState::Edit =>
                 {
                     if let Some(entity) = self.selection_context.take() {
                         self.undo_system.record(&self.scene);
                         if self.scene.destroy_entity(entity).is_ok() {
-                            self.scene_dirty = true;
+                            self.scene_ctx.dirty = true;
                         }
                     }
                 }
 
                 // Escape — clear brush first, then clear selection (edit mode only).
-                KeyCode::Escape if !ctrl && !shift && !self.egui_wants_keyboard
-                    && self.scene_state == SceneState::Edit =>
+                KeyCode::Escape if !ctrl && !shift && !self.ui.egui_wants_keyboard
+                    && self.playback.scene_state == SceneState::Edit =>
                 {
                     if self.tilemap_paint.is_active() {
                         self.tilemap_paint.clear_brush();
@@ -529,8 +559,8 @@ impl Application for GGEditor {
                 }
 
                 // X — toggle eraser mode (edit mode only, not while typing).
-                KeyCode::X if !ctrl && !shift && !self.egui_wants_keyboard
-                    && self.scene_state == SceneState::Edit =>
+                KeyCode::X if !ctrl && !shift && !self.ui.egui_wants_keyboard
+                    && self.playback.scene_state == SceneState::Edit =>
                 {
                     if self.tilemap_paint.brush_tile_id == -1 {
                         self.tilemap_paint.clear_brush();
@@ -540,25 +570,25 @@ impl Application for GGEditor {
                 }
 
                 // Gizmo shortcuts (Q/W/E/R) — edit mode only, not while typing.
-                KeyCode::Q if !ctrl && !shift && !self.egui_wants_keyboard
-                    && self.scene_state == SceneState::Edit =>
+                KeyCode::Q if !ctrl && !shift && !self.ui.egui_wants_keyboard
+                    && self.playback.scene_state == SceneState::Edit =>
                 {
-                    self.gizmo_operation = GizmoOperation::None;
+                    self.gizmo_state.operation = GizmoOperation::None;
                 }
-                KeyCode::W if !ctrl && !shift && !self.egui_wants_keyboard
-                    && self.scene_state == SceneState::Edit =>
+                KeyCode::W if !ctrl && !shift && !self.ui.egui_wants_keyboard
+                    && self.playback.scene_state == SceneState::Edit =>
                 {
-                    self.gizmo_operation = GizmoOperation::Translate;
+                    self.gizmo_state.operation = GizmoOperation::Translate;
                 }
-                KeyCode::E if !ctrl && !shift && !self.egui_wants_keyboard
-                    && self.scene_state == SceneState::Edit =>
+                KeyCode::E if !ctrl && !shift && !self.ui.egui_wants_keyboard
+                    && self.playback.scene_state == SceneState::Edit =>
                 {
-                    self.gizmo_operation = GizmoOperation::Rotate;
+                    self.gizmo_state.operation = GizmoOperation::Rotate;
                 }
-                KeyCode::R if !ctrl && !shift && !self.egui_wants_keyboard
-                    && self.scene_state == SceneState::Edit =>
+                KeyCode::R if !ctrl && !shift && !self.ui.egui_wants_keyboard
+                    && self.playback.scene_state == SceneState::Edit =>
                 {
-                    self.gizmo_operation = GizmoOperation::Scale;
+                    self.gizmo_state.operation = GizmoOperation::Scale;
                 }
                 _ => {}
             }
@@ -574,10 +604,10 @@ impl Application for GGEditor {
         }
 
         // Auto-save: periodically save a backup when there are unsaved changes.
-        if self.scene_dirty && self.scene_state == SceneState::Edit {
-            self.autosave_timer -= dt.seconds();
-            if self.autosave_timer <= 0.0 {
-                self.autosave_timer = Self::AUTOSAVE_INTERVAL_SECS;
+        if self.scene_ctx.dirty && self.playback.scene_state == SceneState::Edit {
+            self.scene_ctx.autosave_timer -= dt.seconds();
+            if self.scene_ctx.autosave_timer <= 0.0 {
+                self.scene_ctx.autosave_timer = Self::AUTOSAVE_INTERVAL_SECS;
                 self.perform_autosave();
             }
         }
@@ -593,13 +623,13 @@ impl Application for GGEditor {
         }
 
         // Notify scene cameras of viewport resize.
-        let (w, h) = self.viewport_size;
+        let (w, h) = self.viewport.size;
         if w > 0 && h > 0 {
             self.scene.on_viewport_resize(w, h);
             self.editor_camera.set_viewport_size(w as f32, h as f32);
         }
 
-        match self.scene_state {
+        match self.playback.scene_state {
             SceneState::Edit => {
                 // Update editor camera (orbit/pan/zoom via Alt+mouse).
                 self.editor_camera.on_update(dt, input);
@@ -609,27 +639,27 @@ impl Application for GGEditor {
                 // camera, not the scene camera.
                 self.editor_camera.on_update(dt, input);
                 // Step physics (no scripts) — skip when paused unless stepping.
-                if !self.is_paused || self.step_frames > 0 {
+                if !self.playback.paused || self.playback.step_frames > 0 {
                     // When manually stepping, use a fixed dt so each click
                     // advances exactly one physics step regardless of frame rate.
-                    let physics_dt = if self.step_frames > 0 {
+                    let physics_dt = if self.playback.step_frames > 0 {
                         Timestep::from_seconds(1.0 / 60.0)
                     } else {
                         dt
                     };
                     self.scene.on_update_physics(physics_dt, None);
                     self.scene.on_update_animations(physics_dt.seconds());
-                    if self.step_frames > 0 {
-                        self.step_frames -= 1;
+                    if self.playback.step_frames > 0 {
+                        self.playback.step_frames -= 1;
                     }
                 }
             }
             SceneState::Play => {
                 // Skip updates when paused unless stepping.
-                if !self.is_paused || self.step_frames > 0 {
+                if !self.playback.paused || self.playback.step_frames > 0 {
                     // When manually stepping, use a fixed dt so each click
                     // advances exactly one physics step regardless of frame rate.
-                    let step_dt = if self.step_frames > 0 {
+                    let step_dt = if self.playback.step_frames > 0 {
                         Timestep::from_seconds(1.0 / 60.0)
                     } else {
                         dt
@@ -643,16 +673,16 @@ impl Application for GGEditor {
                     self.scene.on_update_lua_scripts(step_dt, input);
                     // Advance sprite animations.
                     self.scene.on_update_animations(step_dt.seconds());
-                    if self.step_frames > 0 {
-                        self.step_frames -= 1;
+                    if self.playback.step_frames > 0 {
+                        self.playback.step_frames -= 1;
                     }
                 }
             }
         }
 
         // Read latest pixel readback result.
-        self.hovered_entity = self
-            .scene_fb
+        self.viewport.hovered_entity = self
+            .viewport.scene_fb
             .as_ref()
             .map(|fb| fb.hovered_entity())
             .unwrap_or(-1);
@@ -662,9 +692,9 @@ impl Application for GGEditor {
         // Drop old scenes that may hold GPU resources (textures). We must
         // wait for all in-flight GPU work to finish before destroying them,
         // since previous frames' command buffers may still reference them.
-        if !self.pending_drop_scenes.is_empty() {
+        if !self.scene_ctx.pending_drop_scenes.is_empty() {
             renderer.wait_gpu_idle();
-            self.pending_drop_scenes.clear();
+            self.scene_ctx.pending_drop_scenes.clear();
         }
 
         if self.editor_mode == EditorMode::Hub {
@@ -672,14 +702,14 @@ impl Application for GGEditor {
         }
 
         // Step 1: Poll completed async loads.
-        if let Some(ref mut am) = self.asset_manager {
+        if let Some(ref mut am) = self.project_state.asset_manager {
             let font_results = am.poll_loaded(renderer);
             for result in font_results {
                 if let gg_engine::asset::LoadResult::Font { font_key, data } = result {
                     match data {
                         Ok(cpu_data) => {
                             let font = Ref::new(renderer.upload_font(cpu_data));
-                            self.font_cache.insert(font_key, font);
+                            self.fonts.cache.insert(font_key, font);
                         }
                         Err(e) => {
                             warn!("Async font load failed: {e}");
@@ -690,19 +720,19 @@ impl Application for GGEditor {
         }
 
         // Step 2: Resolve texture handles (async — requests loads, assigns ready textures).
-        if let Some(ref mut am) = self.asset_manager {
+        if let Some(ref mut am) = self.project_state.asset_manager {
             self.scene.resolve_texture_handles_async(am);
             self.scene.resolve_audio_handles(am);
         }
 
         // Step 3: Process deferred font loads for TextComponents.
-        for (entity, path) in self.pending_font_loads.drain(..) {
+        for (entity, path) in self.fonts.pending_loads.drain(..) {
             if self.scene.is_alive(entity) {
-                if let Some(font) = self.font_cache.get(&path) {
+                if let Some(font) = self.fonts.cache.get(&path) {
                     if let Some(mut tc) = self.scene.get_component_mut::<TextComponent>(entity) {
                         tc.font = Some(font.clone());
                     }
-                } else if let Some(ref mut am) = self.asset_manager {
+                } else if let Some(ref mut am) = self.project_state.asset_manager {
                     am.loader().request_font(path);
                 }
             }
@@ -729,17 +759,17 @@ impl Application for GGEditor {
                 })
                 .collect();
             for (entity, path) in needs_load {
-                if let Some(font) = self.font_cache.get(&path) {
+                if let Some(font) = self.fonts.cache.get(&path) {
                     if let Some(mut tc) = self.scene.get_component_mut::<TextComponent>(entity) {
                         tc.font = Some(font.clone());
                     }
-                } else if let Some(ref mut am) = self.asset_manager {
+                } else if let Some(ref mut am) = self.project_state.asset_manager {
                     am.loader().request_font(path);
                 }
             }
         }
 
-        match self.scene_state {
+        match self.playback.scene_state {
             SceneState::Edit => {
                 self.scene
                     .on_update_editor(&self.editor_camera.view_projection(), renderer);
@@ -768,26 +798,26 @@ impl Application for GGEditor {
 
     fn on_egui(&mut self, ctx: &egui::Context, window: &Window) {
         // Apply saved theme on first frame (engine defaults to Dark).
-        if self.prev_window_title.is_empty() && self.theme != gg_engine::ui_theme::EditorTheme::Dark {
-            gg_engine::ui_theme::apply_theme(ctx, self.theme);
+        if self.ui.prev_window_title.is_empty() && self.editor_settings.theme != gg_engine::ui_theme::EditorTheme::Dark {
+            gg_engine::ui_theme::apply_theme(ctx, self.editor_settings.theme);
         }
 
         // Track whether egui wants keyboard input (text editing, etc.)
         // so on_event can suppress editor shortcuts next frame.
-        self.egui_wants_keyboard = ctx.wants_keyboard_input();
+        self.ui.egui_wants_keyboard = ctx.wants_keyboard_input();
 
         // Cache window geometry for persistence on exit.
         if !window.is_minimized().unwrap_or(false) {
-            self.cached_window_state.maximized = window.is_maximized();
+            self.editor_settings.window_state.maximized = window.is_maximized();
             if !window.is_maximized() {
                 if let Ok(pos) = window.outer_position() {
-                    self.cached_window_state.x = pos.x;
-                    self.cached_window_state.y = pos.y;
+                    self.editor_settings.window_state.x = pos.x;
+                    self.editor_settings.window_state.y = pos.y;
                 }
                 let size = window.inner_size();
                 if size.width > 0 && size.height > 0 {
-                    self.cached_window_state.width = size.width;
-                    self.cached_window_state.height = size.height;
+                    self.editor_settings.window_state.width = size.width;
+                    self.editor_settings.window_state.height = size.height;
                 }
             }
         }
@@ -817,13 +847,13 @@ impl Application for GGEditor {
         // -- Editor mode --
 
         // Sync window title with active scene/project name (only when changed).
-        let dirty_marker = if self.scene_dirty { " *" } else { "" };
+        let dirty_marker = if self.scene_ctx.dirty { " *" } else { "" };
         let title = {
-            let project_prefix = match &self.project {
+            let project_prefix = match &self.project_state.project {
                 Some(proj) => format!("GGEditor - {}", proj.name()),
                 None => "GGEditor".into(),
             };
-            match &self.editor_scene_path {
+            match &self.scene_ctx.editor_scene_path {
                 Some(path) => {
                     let scene_name = std::path::Path::new(path)
                         .file_name()
@@ -834,22 +864,22 @@ impl Application for GGEditor {
                 None => format!("{}{}", project_prefix, dirty_marker),
             }
         };
-        if title != self.prev_window_title {
+        if title != self.ui.prev_window_title {
             window.set_title(&title);
-            self.prev_window_title = title;
+            self.ui.prev_window_title = title;
         }
 
         // -- Title bar / Menu bar --
         #[cfg(not(target_os = "macos"))]
         {
-            let play_state = match self.scene_state {
+            let play_state = match self.playback.scene_state {
                 SceneState::Edit => title_bar::PlayState::Edit,
                 SceneState::Play => title_bar::PlayState::Play,
                 SceneState::Simulate => title_bar::PlayState::Simulate,
             };
-            let project_title = match &self.project {
+            let project_title = match &self.project_state.project {
                 Some(proj) => {
-                    match &self.editor_scene_path {
+                    match &self.scene_ctx.editor_scene_path {
                         Some(path) => {
                             let scene_name = std::path::Path::new(path)
                                 .file_name()
@@ -861,7 +891,7 @@ impl Application for GGEditor {
                     }
                 }
                 None => {
-                    match &self.editor_scene_path {
+                    match &self.scene_ctx.editor_scene_path {
                         Some(path) => {
                             let scene_name = std::path::Path::new(path)
                                 .file_name()
@@ -873,14 +903,14 @@ impl Application for GGEditor {
                     }
                 }
             };
-            let response = title_bar::title_bar_ui(ctx, window, play_state, self.is_paused, &project_title, |ui| {
+            let response = title_bar::title_bar_ui(ctx, window, play_state, self.playback.paused, &project_title, |ui| {
                 self.menu_bar_contents(ui);
             });
             if response.close_requested {
                 self.request_exit();
             }
             if response.play_toggled {
-                match self.scene_state {
+                match self.playback.scene_state {
                     SceneState::Edit => self.on_scene_play(),
                     SceneState::Simulate => {
                         self.on_scene_stop();
@@ -890,7 +920,7 @@ impl Application for GGEditor {
                 }
             }
             if response.simulate_toggled {
-                match self.scene_state {
+                match self.playback.scene_state {
                     SceneState::Edit => self.on_scene_simulate(),
                     SceneState::Play => {
                         self.on_scene_stop();
@@ -919,7 +949,7 @@ impl Application for GGEditor {
             self.toolbar_ui(ctx);
         }
 
-        let fb_tex_id = self.scene_fb.as_ref().and_then(|fb| fb.egui_texture_id());
+        let fb_tex_id = self.viewport.scene_fb.as_ref().and_then(|fb| fb.egui_texture_id());
 
         let mut dock_style = egui_dock::Style::from_egui(ctx.style().as_ref());
 
@@ -958,7 +988,7 @@ impl Application for GGEditor {
         let tileset_preview = self.selection_context.and_then(|entity| {
             let tm = self.scene.get_component::<TilemapComponent>(entity)?;
             let tex = tm.texture.as_ref()?;
-            let egui_tex = self.egui_texture_map.get(&tex.egui_handle()).copied()?;
+            let egui_tex = self.ui.egui_texture_map.get(&tex.egui_handle()).copied()?;
             Some(TilesetPreviewInfo {
                 egui_tex,
                 tex_w: tex.width() as f32,
@@ -970,77 +1000,87 @@ impl Application for GGEditor {
             })
         });
 
+        // Snapshot settings values before panels run, so we can detect
+        // changes and persist to disk afterwards.
+        let settings_snapshot = (
+            self.editor_settings.vsync,
+            self.editor_settings.show_physics_colliders,
+            self.editor_settings.show_grid,
+            self.editor_settings.snap_to_grid,
+            self.editor_settings.grid_size,
+            self.editor_settings.theme,
+            self.editor_settings.gizmo_operation,
+        );
+
         // Scope the viewer so its borrows are released before we handle
         // pending actions and paint the DnD ghost overlay.
         {
-            let current_snap_to_grid = self.snap_to_grid;
-            let current_grid_size = self.grid_size;
+            let current_snap_to_grid = self.editor_settings.snap_to_grid;
+            let current_grid_size = self.editor_settings.grid_size;
             let mut viewer = EditorTabViewer {
                 scene: &mut self.scene,
                 selection_context: &mut self.selection_context,
-                pending_open_path: &mut self.pending_open_path,
-                is_playing: self.scene_state == SceneState::Play,  // Simulate still uses editor camera + gizmos
-                scene_dirty: &mut self.scene_dirty,
+                pending_open_path: &mut self.ui.pending_open_path,
+                is_playing: self.playback.scene_state == SceneState::Play,  // Simulate still uses editor camera + gizmos
+                scene_dirty: &mut self.scene_ctx.dirty,
                 undo_system: &mut self.undo_system,
-                hierarchy_filter: &mut self.hierarchy_filter,
-                scene_warnings: &self.scene_warnings,
+                hierarchy_filter: &mut self.ui.hierarchy_filter,
+                scene_warnings: &self.scene_ctx.warnings,
                 tilemap_paint: &mut self.tilemap_paint,
-                vsync: &mut self.vsync,
+                vsync: &mut self.editor_settings.vsync,
                 frame_time_ms: self.frame_time_ms,
                 render_stats: self.render_stats,
-                show_physics_colliders: &mut self.show_physics_colliders,
-                show_grid: &mut self.show_grid,
-                snap_to_grid: &mut self.snap_to_grid,
-                grid_size: &mut self.grid_size,
-                theme: &mut self.theme,
+                show_physics_colliders: &mut self.editor_settings.show_physics_colliders,
+                show_grid: &mut self.editor_settings.show_grid,
+                snap_to_grid: &mut self.editor_settings.snap_to_grid,
+                grid_size: &mut self.editor_settings.grid_size,
+                theme: &mut self.editor_settings.theme,
                 viewport: ViewportState {
-                    size: &mut self.viewport_size,
-                    focused: &mut self.viewport_focused,
-                    hovered: &mut self.viewport_hovered,
+                    size: &mut self.viewport.size,
+                    focused: &mut self.viewport.focused,
+                    hovered: &mut self.viewport.hovered,
                     fb_tex_id,
-                    gizmo: &mut self.gizmo,
-                    gizmo_operation: &mut self.gizmo_operation,
-                    gizmo_editing: &mut self.gizmo_editing,
+                    gizmo: &mut self.gizmo_state.gizmo,
+                    gizmo_operation: &mut self.gizmo_state.operation,
+                    gizmo_editing: &mut self.gizmo_state.editing,
                     editor_camera: &self.editor_camera,
-                    scene_fb: &mut self.scene_fb,
-                    hovered_entity: self.hovered_entity,
-                    mouse_pos: &mut self.viewport_mouse_pos,
+                    scene_fb: &mut self.viewport.scene_fb,
+                    hovered_entity: self.viewport.hovered_entity,
+                    mouse_pos: &mut self.viewport.mouse_pos,
                     tileset_preview,
                     snap_to_grid: current_snap_to_grid,
                     grid_size: current_grid_size,
-                    gizmo_local: &mut self.gizmo_local,
+                    gizmo_local: &mut self.gizmo_state.local,
                 },
                 project: ProjectContext {
-                    assets_root: &self.assets_root,
-                    current_directory: &mut self.current_directory,
-                    asset_manager: &mut self.asset_manager,
-                    project_name: self.project.as_ref().map(|p| p.name()),
-                    editor_scene_path: self.editor_scene_path.as_deref(),
-                    egui_texture_map: &self.egui_texture_map,
+                    assets_root: &self.project_state.assets_root,
+                    current_directory: &mut self.project_state.current_directory,
+                    asset_manager: &mut self.project_state.asset_manager,
+                    project_name: self.project_state.project.as_ref().map(|p| p.name()),
+                    editor_scene_path: self.scene_ctx.editor_scene_path.as_deref(),
+                    egui_texture_map: &self.ui.egui_texture_map,
                 },
             };
 
-            egui_dock::DockArea::new(&mut self.dock_state)
+            egui_dock::DockArea::new(&mut self.ui.dock_state)
                 .style(dock_style)
                 .show(ctx, &mut viewer);
         }
 
-        // Sync editor settings to disk when they change.
-        if self.vsync != self.editor_settings.vsync
-            || self.show_physics_colliders != self.editor_settings.show_physics_colliders
-            || self.gizmo_operation != self.editor_settings.gizmo_operation
-            || self.show_grid != self.editor_settings.show_grid
-            || self.snap_to_grid != self.editor_settings.snap_to_grid
-            || self.grid_size != self.editor_settings.grid_size
-            || self.theme != self.editor_settings.theme
-        {
-            self.editor_settings.vsync = self.vsync;
-            self.editor_settings.show_physics_colliders = self.show_physics_colliders;
-            self.editor_settings.gizmo_operation = self.gizmo_operation;
-            self.editor_settings.show_grid = self.show_grid;
-            self.editor_settings.snap_to_grid = self.snap_to_grid;
-            self.editor_settings.grid_size = self.grid_size;
-            self.editor_settings.theme = self.theme;
+        // Sync gizmo operation back to settings (lives in gizmo_state, not settings).
+        self.editor_settings.gizmo_operation = self.gizmo_state.operation;
+
+        // Persist settings to disk when any value changed this frame.
+        let settings_current = (
+            self.editor_settings.vsync,
+            self.editor_settings.show_physics_colliders,
+            self.editor_settings.show_grid,
+            self.editor_settings.snap_to_grid,
+            self.editor_settings.grid_size,
+            self.editor_settings.theme,
+            self.editor_settings.gizmo_operation,
+        );
+        if settings_snapshot != settings_current {
             self.editor_settings.save();
         }
 
@@ -1067,7 +1107,7 @@ impl Application for GGEditor {
         render_dnd_ghost(ctx);
 
         // Handle pending scene open from content browser drag-drop.
-        if let Some(path) = self.pending_open_path.take() {
+        if let Some(path) = self.ui.pending_open_path.take() {
             self.open_scene_from_path(&path);
         }
     }
@@ -1085,7 +1125,7 @@ impl Application for GGEditor {
     }
 
     fn receive_egui_user_textures(&mut self, map: &HashMap<u64, egui::TextureId>) {
-        self.egui_texture_map = map.clone();
+        self.ui.egui_texture_map = map.clone();
     }
 }
 
@@ -1098,7 +1138,7 @@ impl GGEditor {
     const AUTOSAVE_INTERVAL_SECS: f32 = 300.0;
 
     fn render_grid(&self, renderer: &mut Renderer) {
-        let grid_size = self.grid_size;
+        let grid_size = self.editor_settings.grid_size;
         if grid_size <= 0.0 {
             return;
         }
@@ -1146,13 +1186,8 @@ impl GGEditor {
             yaw: self.editor_camera.yaw(),
             pitch: self.editor_camera.pitch(),
         };
-        self.editor_settings.show_grid = self.show_grid;
-        self.editor_settings.snap_to_grid = self.snap_to_grid;
-        self.editor_settings.grid_size = self.grid_size;
-        // Persist window geometry.
-        self.editor_settings.window_state = self.cached_window_state.clone();
         // Persist dock layout.
-        self.editor_settings.dock_layout = Some(self.dock_state.clone());
+        self.editor_settings.dock_layout = Some(self.ui.dock_state.clone());
         self.editor_settings.save();
         self.should_exit = true;
     }
@@ -1178,7 +1213,7 @@ impl GGEditor {
 
     fn on_overlay_render(&self, renderer: &mut Renderer) {
         // Set the appropriate camera for the overlay pass.
-        match self.scene_state {
+        match self.playback.scene_state {
             SceneState::Play => {
                 if let Some(cam_entity) = self.scene.get_primary_camera_entity() {
                     let cam = self.scene.get_component::<CameraComponent>(cam_entity);
@@ -1195,12 +1230,12 @@ impl GGEditor {
         }
 
         // Grid rendering (behind everything else in the overlay).
-        if self.show_grid && self.scene_state != SceneState::Play {
+        if self.editor_settings.show_grid && self.playback.scene_state != SceneState::Play {
             self.render_grid(renderer);
         }
 
         // Physics collider visualization (uses world transforms for hierarchy support).
-        if self.show_physics_colliders {
+        if self.editor_settings.show_physics_colliders {
             let collider_color = Vec4::new(0.0, 1.0, 0.0, 1.0);
 
             // Collect entities with colliders (need owned data to avoid borrow conflicts).
@@ -1278,10 +1313,10 @@ impl GGEditor {
         }
 
         // Tilemap paint cursor highlight.
-        if self.tilemap_paint.is_active() && self.scene_state == SceneState::Edit {
+        if self.tilemap_paint.is_active() && self.playback.scene_state == SceneState::Edit {
             if let Some(entity) = self.selection_context {
                 if self.scene.has_component::<TilemapComponent>(entity) {
-                    if let Some((px, py)) = self.viewport_mouse_pos {
+                    if let Some((px, py)) = self.viewport.mouse_pos {
                         let vp = self.editor_camera.view_projection();
                         let world_transform = self.scene.get_world_transform(entity);
                         let tilemap_z = self.scene.get_component::<TransformComponent>(entity)
@@ -1293,7 +1328,7 @@ impl GGEditor {
                         };
 
                         if let Some((col, row)) = panels::viewport::screen_to_tile_grid(
-                            px, py, self.viewport_size, &vp, &world_transform,
+                            px, py, self.viewport.size, &vp, &world_transform,
                             tilemap_z, tile_size, grid_w, grid_h,
                         ) {
                             // Compute world position of this tile cell.
@@ -1351,12 +1386,12 @@ impl GGEditor {
                     |ui| {
                         ui.add_space(3.0);
 
-                        let is_edit = self.scene_state == SceneState::Edit;
+                        let is_edit = self.playback.scene_state == SceneState::Edit;
                         let has_play_button = is_edit;
                         let has_simulate_button = is_edit;
                         let has_stop_button = !is_edit;
                         let has_pause_button = !is_edit;
-                        let has_step_button = !is_edit && self.is_paused;
+                        let has_step_button = !is_edit && self.playback.paused;
 
                         let btn_size = egui::vec2(28.0, 28.0);
                         let spacing = 4.0;
@@ -1414,7 +1449,7 @@ impl GGEditor {
                             paint_stop_square(ui.painter(), rect.center());
                         }
                         if let Some((rect, ref resp)) = pause_alloc {
-                            if self.is_paused {
+                            if self.playback.paused {
                                 ui.painter().rect_filled(rect, egui::CornerRadius::same(3), pause_active_bg);
                             }
                             if resp.hovered() {
@@ -1452,10 +1487,10 @@ impl GGEditor {
 
     fn on_scene_play(&mut self) {
         self.validate_scene();
-        self.scene_state = SceneState::Play;
+        self.playback.scene_state = SceneState::Play;
         let runtime_scene = Scene::copy(&self.scene);
         let editor_scene = std::mem::replace(&mut self.scene, runtime_scene);
-        self.editor_scene = Some(editor_scene);
+        self.playback.editor_scene = Some(editor_scene);
 
         // Attach native scripts to known entities by tag name.
         // NativeScriptComponent is runtime-only (not serialized), so we bind
@@ -1467,10 +1502,10 @@ impl GGEditor {
 
     fn on_scene_simulate(&mut self) {
         self.validate_scene();
-        self.scene_state = SceneState::Simulate;
+        self.playback.scene_state = SceneState::Simulate;
         let sim_scene = Scene::copy(&self.scene);
         let editor_scene = std::mem::replace(&mut self.scene, sim_scene);
-        self.editor_scene = Some(editor_scene);
+        self.playback.editor_scene = Some(editor_scene);
         self.scene.on_simulation_start();
     }
 
@@ -1504,7 +1539,7 @@ impl GGEditor {
             if let Some(sr) = self.scene.get_component::<SpriteRendererComponent>(entity) {
                 let raw = sr.texture_handle.raw();
                 if raw != 0 {
-                    if let Some(ref am) = self.asset_manager {
+                    if let Some(ref am) = self.project_state.asset_manager {
                         let handle = Uuid::from_raw(raw);
                         if am.get_metadata(&handle).is_none() {
                             warnings.push(format!("Entity '{}' references a missing texture asset.", tag));
@@ -1517,7 +1552,7 @@ impl GGEditor {
             if let Some(ac) = self.scene.get_component::<AudioSourceComponent>(entity) {
                 let raw = ac.audio_handle.raw();
                 if raw != 0 {
-                    if let Some(ref am) = self.asset_manager {
+                    if let Some(ref am) = self.project_state.asset_manager {
                         let handle = Uuid::from_raw(raw);
                         if am.get_metadata(&handle).is_none() {
                             warnings.push(format!("Entity '{}' references a missing audio asset.", tag));
@@ -1532,34 +1567,34 @@ impl GGEditor {
             warn!("[Scene Validation] {}", w);
         }
 
-        self.scene_warnings = warnings;
+        self.scene_ctx.warnings = warnings;
     }
 
     fn on_scene_stop(&mut self) {
-        match self.scene_state {
+        match self.playback.scene_state {
             SceneState::Play => self.scene.on_runtime_stop(),
             SceneState::Simulate => self.scene.on_simulation_stop(),
             SceneState::Edit => return,
         }
 
-        self.scene_state = SceneState::Edit;
-        self.is_paused = false;
-        self.step_frames = 0;
+        self.playback.scene_state = SceneState::Edit;
+        self.playback.paused = false;
+        self.playback.step_frames = 0;
 
         // Finalize any in-progress gizmo drag so the undo system is clean.
-        if self.gizmo_editing {
+        if self.gizmo_state.editing {
             self.undo_system.end_edit();
-            self.gizmo_editing = false;
+            self.gizmo_state.editing = false;
         }
         self.tilemap_paint.painting_in_progress = false;
         self.tilemap_paint.painted_this_stroke.clear();
 
-        if let Some(editor_scene) = self.editor_scene.take() {
+        if let Some(editor_scene) = self.playback.editor_scene.take() {
             let old = std::mem::replace(&mut self.scene, editor_scene);
-            self.pending_drop_scenes.push(old);
+            self.scene_ctx.pending_drop_scenes.push(old);
             self.selection_context = None;
 
-            let (w, h) = self.viewport_size;
+            let (w, h) = self.viewport.size;
             if w > 0 && h > 0 {
                 self.scene.on_viewport_resize(w, h);
             }
@@ -1567,20 +1602,20 @@ impl GGEditor {
     }
 
     fn on_scene_pause(&mut self) {
-        if self.scene_state == SceneState::Edit {
+        if self.playback.scene_state == SceneState::Edit {
             return;
         }
-        self.is_paused = !self.is_paused;
-        if !self.is_paused {
-            self.step_frames = 0;
+        self.playback.paused = !self.playback.paused;
+        if !self.playback.paused {
+            self.playback.step_frames = 0;
         }
     }
 
     fn on_scene_step(&mut self) {
-        if !self.is_paused {
+        if !self.playback.paused {
             return;
         }
-        self.step_frames = 1;
+        self.playback.step_frames = 1;
     }
 
     /// Attach known native scripts to entities by tag name.
@@ -1629,7 +1664,7 @@ impl GGEditor {
     /// Returns true if it's safe to discard the current scene (either not dirty,
     /// or the user confirmed). Shows a native dialog when the scene has unsaved changes.
     fn confirm_discard_changes(&self) -> bool {
-        if !self.scene_dirty {
+        if !self.scene_ctx.dirty {
             return true;
         }
         gg_engine::platform_utils::confirm_dialog(
@@ -1646,7 +1681,7 @@ impl GGEditor {
                 .add(egui::Button::new("New").shortcut_text("Ctrl+N"))
                 .clicked()
             {
-                if self.scene_state != SceneState::Edit {
+                if self.playback.scene_state != SceneState::Edit {
                     self.on_scene_stop();
                 }
                 self.new_scene();
@@ -1656,7 +1691,7 @@ impl GGEditor {
                 .add(egui::Button::new("Open...").shortcut_text("Ctrl+O"))
                 .clicked()
             {
-                if self.scene_state != SceneState::Edit {
+                if self.playback.scene_state != SceneState::Edit {
                     self.on_scene_stop();
                 }
                 self.open_scene();
@@ -1666,7 +1701,7 @@ impl GGEditor {
                 .add(egui::Button::new("Save").shortcut_text("Ctrl+S"))
                 .clicked()
             {
-                if self.scene_state != SceneState::Edit {
+                if self.playback.scene_state != SceneState::Edit {
                     self.on_scene_stop();
                 }
                 self.save_scene();
@@ -1676,7 +1711,7 @@ impl GGEditor {
                 .add(egui::Button::new("Save As...").shortcut_text("Ctrl+Shift+S"))
                 .clicked()
             {
-                if self.scene_state != SceneState::Edit {
+                if self.playback.scene_state != SceneState::Edit {
                     self.on_scene_stop();
                 }
                 self.save_scene_as();
@@ -1691,7 +1726,7 @@ impl GGEditor {
                 ui.close();
             }
         });
-        let in_edit_mode = self.scene_state == SceneState::Edit;
+        let in_edit_mode = self.playback.scene_state == SceneState::Edit;
         ui.menu_button("Edit", |ui| {
             if ui
                 .add_enabled(
@@ -1726,7 +1761,7 @@ impl GGEditor {
             }
             if ui
                 .add_enabled(
-                    in_edit_mode && self.clipboard_entity_uuid.is_some(),
+                    in_edit_mode && self.ui.clipboard_entity_uuid.is_some(),
                     egui::Button::new("Paste").shortcut_text("Ctrl+V"),
                 )
                 .clicked()
@@ -1748,14 +1783,14 @@ impl GGEditor {
         });
         ui.menu_button("View", |ui| {
             if ui
-                .checkbox(&mut self.show_physics_colliders, "Show Physics Colliders")
+                .checkbox(&mut self.editor_settings.show_physics_colliders, "Show Physics Colliders")
                 .clicked()
             {
                 ui.close();
             }
             ui.separator();
             if ui.button("Reset Layout").clicked() {
-                self.dock_state = Self::default_dock_layout();
+                self.ui.dock_state = Self::default_dock_layout();
                 ui.close();
             }
         });
@@ -1772,7 +1807,7 @@ impl GGEditor {
         });
         ui.menu_button("Help", |ui| {
             if ui.button("Keyboard Shortcuts").clicked() {
-                self.show_shortcuts_dialog = true;
+                self.ui.show_shortcuts_dialog = true;
                 ui.close();
             }
         });
@@ -1782,9 +1817,9 @@ impl GGEditor {
         if !self.confirm_discard_changes() {
             return;
         }
-        if self.project.is_some() {
+        if self.project_state.project.is_some() {
             // Show naming modal — scene will be created on confirm.
-            self.new_scene_modal = Some("New Scene".into());
+            self.ui.new_scene_modal = Some("New Scene".into());
         } else {
             // No project — just create an empty unnamed scene.
             self.create_empty_scene();
@@ -1793,20 +1828,20 @@ impl GGEditor {
 
     fn create_empty_scene(&mut self) {
         let old = std::mem::replace(&mut self.scene, Scene::new());
-        self.pending_drop_scenes.push(old);
+        self.scene_ctx.pending_drop_scenes.push(old);
         self.selection_context = None;
-        self.editor_scene_path = None;
-        self.scene_dirty = false;
+        self.scene_ctx.editor_scene_path = None;
+        self.scene_ctx.dirty = false;
         self.undo_system.clear();
 
-        let (w, h) = self.viewport_size;
+        let (w, h) = self.viewport.size;
         if w > 0 && h > 0 {
             self.scene.on_viewport_resize(w, h);
         }
     }
 
     fn new_scene_modal_ui(&mut self, ctx: &egui::Context) {
-        let Some(ref mut scene_name) = self.new_scene_modal else {
+        let Some(ref mut scene_name) = self.ui.new_scene_modal else {
             return;
         };
 
@@ -1869,25 +1904,25 @@ impl GGEditor {
             });
 
         if confirmed {
-            let name = self.new_scene_modal.take().unwrap_or_default();
+            let name = self.ui.new_scene_modal.take().unwrap_or_default();
             let name = name.trim().to_string();
             if !name.is_empty() {
                 self.create_named_scene(&name);
             }
         } else if cancelled {
-            self.new_scene_modal = None;
+            self.ui.new_scene_modal = None;
         }
     }
 
     fn shortcuts_dialog_ui(&mut self, ctx: &egui::Context) {
-        if !self.show_shortcuts_dialog {
+        if !self.ui.show_shortcuts_dialog {
             return;
         }
 
         egui::Window::new("Keyboard Shortcuts")
             .collapsible(false)
             .resizable(false)
-            .open(&mut self.show_shortcuts_dialog)
+            .open(&mut self.ui.show_shortcuts_dialog)
             .show(ctx, |ui| {
                 ui.label(egui::RichText::new("General").strong());
                 egui::Grid::new("shortcuts_general")
@@ -1969,7 +2004,7 @@ impl GGEditor {
         let scene = Scene::new();
 
         // Build path: assets_root/scenes/<name>.ggscene
-        let scenes_dir = self.assets_root.join("scenes");
+        let scenes_dir = self.project_state.assets_root.join("scenes");
         let _ = std::fs::create_dir_all(&scenes_dir);
         let file_name = format!("{}.ggscene", name);
         let scene_path = scenes_dir.join(&file_name);
@@ -1980,13 +2015,13 @@ impl GGEditor {
 
         // Swap in the new scene.
         let old = std::mem::replace(&mut self.scene, scene);
-        self.pending_drop_scenes.push(old);
+        self.scene_ctx.pending_drop_scenes.push(old);
         self.selection_context = None;
-        self.editor_scene_path = Some(path_str);
-        self.scene_dirty = false;
+        self.scene_ctx.editor_scene_path = Some(path_str);
+        self.scene_ctx.dirty = false;
         self.undo_system.clear();
 
-        let (w, h) = self.viewport_size;
+        let (w, h) = self.viewport.size;
         if w > 0 && h > 0 {
             self.scene.on_viewport_resize(w, h);
         }
@@ -2010,10 +2045,10 @@ impl GGEditor {
     }
 
     fn save_scene(&mut self) {
-        if let Some(ref path) = self.editor_scene_path {
+        if let Some(ref path) = self.scene_ctx.editor_scene_path {
             if SceneSerializer::serialize(&self.scene, path, Self::scene_name_from_path(path)) {
-                self.scene_dirty = false;
-                self.autosave_timer = Self::AUTOSAVE_INTERVAL_SECS;
+                self.scene_ctx.dirty = false;
+                self.scene_ctx.autosave_timer = Self::AUTOSAVE_INTERVAL_SECS;
                 Self::remove_autosave_file(path);
             } else {
                 warn!("Failed to save scene to '{}'", path);
@@ -2026,9 +2061,9 @@ impl GGEditor {
     fn save_scene_as(&mut self) {
         if let Some(path) = FileDialogs::save_file("GGScene files", &["ggscene"]) {
             if SceneSerializer::serialize(&self.scene, &path, Self::scene_name_from_path(&path)) {
-                self.editor_scene_path = Some(path);
-                self.scene_dirty = false;
-                self.autosave_timer = Self::AUTOSAVE_INTERVAL_SECS;
+                self.scene_ctx.editor_scene_path = Some(path);
+                self.scene_ctx.dirty = false;
+                self.scene_ctx.autosave_timer = Self::AUTOSAVE_INTERVAL_SECS;
                 panels::project::invalidate_scene_cache();
             } else {
                 warn!("Failed to save scene to '{}'", path);
@@ -2038,7 +2073,7 @@ impl GGEditor {
 
     /// Auto-save the current scene to a `.autosave.ggscene` sidecar file.
     fn perform_autosave(&self) {
-        if let Some(ref path) = self.editor_scene_path {
+        if let Some(ref path) = self.scene_ctx.editor_scene_path {
             let autosave_path = Self::autosave_path_for(path);
             if SceneSerializer::serialize(&self.scene, &autosave_path, Self::scene_name_from_path(path)) {
                 info!("Auto-saved to '{}'", autosave_path);
@@ -2129,16 +2164,16 @@ impl GGEditor {
         });
         if let Some(restored) = self.undo_system.undo(&self.scene) {
             let old = std::mem::replace(&mut self.scene, restored);
-            self.pending_drop_scenes.push(old);
+            self.scene_ctx.pending_drop_scenes.push(old);
             // Restore selection by IdComponent UUID (stable across serialization).
             self.selection_context =
                 selected_uuid.and_then(|uuid| self.scene.find_entity_by_uuid(uuid));
-            let (w, h) = self.viewport_size;
+            let (w, h) = self.viewport.size;
             if w > 0 && h > 0 {
                 self.scene.on_viewport_resize(w, h);
             }
             self.queue_font_loads_from_scene();
-            self.scene_dirty = true;
+            self.scene_ctx.dirty = true;
         }
     }
 
@@ -2150,22 +2185,22 @@ impl GGEditor {
         });
         if let Some(restored) = self.undo_system.redo(&self.scene) {
             let old = std::mem::replace(&mut self.scene, restored);
-            self.pending_drop_scenes.push(old);
+            self.scene_ctx.pending_drop_scenes.push(old);
             self.selection_context =
                 selected_uuid.and_then(|uuid| self.scene.find_entity_by_uuid(uuid));
-            let (w, h) = self.viewport_size;
+            let (w, h) = self.viewport.size;
             if w > 0 && h > 0 {
                 self.scene.on_viewport_resize(w, h);
             }
             self.queue_font_loads_from_scene();
-            self.scene_dirty = true;
+            self.scene_ctx.dirty = true;
         }
     }
 
     fn on_copy_entity(&mut self) {
         if let Some(selected) = self.selection_context {
             if self.scene.is_alive(selected) {
-                self.clipboard_entity_uuid = self
+                self.ui.clipboard_entity_uuid = self
                     .scene
                     .get_component::<IdComponent>(selected)
                     .map(|id| id.id.raw());
@@ -2174,12 +2209,12 @@ impl GGEditor {
     }
 
     fn on_paste_entity(&mut self) {
-        if let Some(uuid) = self.clipboard_entity_uuid {
+        if let Some(uuid) = self.ui.clipboard_entity_uuid {
             if let Some(source) = self.scene.find_entity_by_uuid(uuid) {
                 self.undo_system.record(&self.scene);
                 let duplicate = self.scene.duplicate_entity(source);
                 self.selection_context = Some(duplicate);
-                self.scene_dirty = true;
+                self.scene_ctx.dirty = true;
             }
         }
     }
@@ -2190,7 +2225,7 @@ impl GGEditor {
                 self.undo_system.record(&self.scene);
                 let duplicate = self.scene.duplicate_entity(selected);
                 self.selection_context = Some(duplicate);
-                self.scene_dirty = true;
+                self.scene_ctx.dirty = true;
             }
         }
     }
@@ -2208,13 +2243,13 @@ impl GGEditor {
             };
 
             // Only clear state after confirming the load succeeded.
-            self.scene_dirty = recovered;
+            self.scene_ctx.dirty = recovered;
             self.undo_system.clear();
             let old = std::mem::replace(&mut self.scene, new_scene);
-            self.pending_drop_scenes.push(old);
+            self.scene_ctx.pending_drop_scenes.push(old);
             self.selection_context = None;
-            self.editor_scene_path = Some(path_str);
-            let (w, h) = self.viewport_size;
+            self.scene_ctx.editor_scene_path = Some(path_str);
+            let (w, h) = self.viewport.size;
             if w > 0 && h > 0 {
                 self.scene.on_viewport_resize(w, h);
             }
@@ -2233,7 +2268,7 @@ impl GGEditor {
                 if !tc.font_path.is_empty() && tc.font.is_none() {
                     let path = std::path::PathBuf::from(&tc.font_path);
                     if path.exists() {
-                        self.pending_font_loads.push((*entity, path));
+                        self.fonts.pending_loads.push((*entity, path));
                     } else {
                         warn!("Font not found: {}", tc.font_path);
                     }
@@ -2251,7 +2286,7 @@ impl GGEditor {
         };
 
         // Stop playback if active.
-        if self.scene_state != SceneState::Edit {
+        if self.playback.scene_state != SceneState::Edit {
             self.on_scene_stop();
         }
 
@@ -2265,13 +2300,13 @@ impl GGEditor {
         }
 
         // Update assets root.
-        self.assets_root = project.asset_directory_path();
-        self.current_directory = self.assets_root.clone();
+        self.project_state.assets_root = project.asset_directory_path();
+        self.project_state.current_directory = self.project_state.assets_root.clone();
 
         // Create and load asset manager for the new project.
-        let mut am = EditorAssetManager::new(&self.assets_root);
+        let mut am = EditorAssetManager::new(&self.project_state.assets_root);
         am.load_registry();
-        self.asset_manager = Some(am);
+        self.project_state.asset_manager = Some(am);
 
         // Load start scene.
         let start_path = project.start_scene_path();
@@ -2287,37 +2322,37 @@ impl GGEditor {
                     false
                 };
                 let old = std::mem::replace(&mut self.scene, new_scene);
-                self.pending_drop_scenes.push(old);
-                self.editor_scene_path = Some(path_str);
-                self.scene_dirty = recovered;
+                self.scene_ctx.pending_drop_scenes.push(old);
+                self.scene_ctx.editor_scene_path = Some(path_str);
+                self.scene_ctx.dirty = recovered;
                 self.queue_font_loads_from_scene();
             }
         } else {
             let old = std::mem::replace(&mut self.scene, Scene::new());
-            self.pending_drop_scenes.push(old);
-            self.editor_scene_path = None;
+            self.scene_ctx.pending_drop_scenes.push(old);
+            self.scene_ctx.editor_scene_path = None;
         }
 
         // Restart script watcher for the new project's scripts directory.
         #[cfg(feature = "lua-scripting")]
         {
             self._script_watcher = create_script_watcher(
-                &self.assets_root.join("scripts"),
+                &self.project_state.assets_root.join("scripts"),
                 &self.script_reload_pending,
             );
         }
 
         // Resize viewport for the new scene.
-        let (w, h) = self.viewport_size;
+        let (w, h) = self.viewport.size;
         if w > 0 && h > 0 {
             self.scene.on_viewport_resize(w, h);
         }
 
         // Update recent projects and editor state.
         self.editor_settings.add_recent_project(project.name(), &abs_path.to_string_lossy());
-        self.project = Some(project);
+        self.project_state.project = Some(project);
         self.selection_context = None;
-        self.scene_dirty = false;
+        self.scene_ctx.dirty = false;
         self.undo_system.clear();
         self.editor_mode = EditorMode::Editor;
 
