@@ -25,6 +25,7 @@ pub enum SwapchainError {
     FenceCreation(vk::Result),
     DepthImageCreation(vk::Result),
     DepthMemoryAllocation(String),
+    NoSupportedDepthFormat,
 }
 
 impl std::fmt::Display for SwapchainError {
@@ -46,6 +47,9 @@ impl std::fmt::Display for SwapchainError {
             Self::DepthImageCreation(e) => write!(f, "Failed to create depth image: {e}"),
             Self::DepthMemoryAllocation(e) => {
                 write!(f, "Failed to allocate depth image memory: {e}")
+            }
+            Self::NoSupportedDepthFormat => {
+                write!(f, "No supported depth format found (tried D32_SFLOAT, D32_SFLOAT_S8_UINT, D24_UNORM_S8_UINT)")
             }
         }
     }
@@ -203,7 +207,7 @@ impl Swapchain {
         );
 
         // Find a supported depth format.
-        let depth_format = find_depth_format(vk_ctx.instance(), vk_ctx.physical_device());
+        let depth_format = find_depth_format(vk_ctx.instance(), vk_ctx.physical_device())?;
 
         // Create render pass (color + depth attachments).
         let render_pass = create_render_pass(&device, format.format, depth_format)?;
@@ -528,7 +532,10 @@ impl Swapchain {
 
 /// Find a supported depth format. Prefers D32_SFLOAT, falls back to
 /// D32_SFLOAT_S8_UINT, then D24_UNORM_S8_UINT.
-fn find_depth_format(instance: &ash::Instance, physical_device: vk::PhysicalDevice) -> vk::Format {
+fn find_depth_format(
+    instance: &ash::Instance,
+    physical_device: vk::PhysicalDevice,
+) -> Result<vk::Format, SwapchainError> {
     let candidates = [
         vk::Format::D32_SFLOAT,
         vk::Format::D32_SFLOAT_S8_UINT,
@@ -541,10 +548,10 @@ fn find_depth_format(instance: &ash::Instance, physical_device: vk::PhysicalDevi
             .optimal_tiling_features
             .contains(vk::FormatFeatureFlags::DEPTH_STENCIL_ATTACHMENT)
         {
-            return format;
+            return Ok(format);
         }
     }
-    panic!("No supported depth format found");
+    Err(SwapchainError::NoSupportedDepthFormat)
 }
 
 /// Create the depth image, allocate memory via sub-allocator, create the image view.

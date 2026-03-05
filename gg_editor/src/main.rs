@@ -127,6 +127,8 @@ struct GGEditor {
     /// Mapping from opaque texture handle → egui TextureId for UI rendering.
     egui_texture_map: HashMap<u64, egui::TextureId>,
     scene_dirty: bool,
+    /// Countdown timer for auto-save (seconds). Resets on manual save.
+    autosave_timer: f32,
     undo_system: undo::UndoSystem,
     gizmo_editing: bool,
     is_paused: bool,
@@ -320,6 +322,7 @@ impl Application for GGEditor {
             viewport_mouse_pos: None,
             egui_texture_map: HashMap::new(),
             scene_dirty: false,
+            autosave_timer: Self::AUTOSAVE_INTERVAL_SECS,
             undo_system: undo::UndoSystem::new(),
             gizmo_editing: false,
             is_paused: false,
@@ -529,6 +532,15 @@ impl Application for GGEditor {
 
         if self.editor_mode == EditorMode::Hub {
             return;
+        }
+
+        // Auto-save: periodically save a backup when there are unsaved changes.
+        if self.scene_dirty && self.scene_state == SceneState::Edit {
+            self.autosave_timer -= dt.seconds();
+            if self.autosave_timer <= 0.0 {
+                self.autosave_timer = Self::AUTOSAVE_INTERVAL_SECS;
+                self.perform_autosave();
+            }
         }
 
         // Auto-reload Lua scripts when the file watcher detects changes.
@@ -989,6 +1001,9 @@ impl Application for GGEditor {
 // ---------------------------------------------------------------------------
 
 impl GGEditor {
+    /// Auto-save interval in seconds (5 minutes).
+    const AUTOSAVE_INTERVAL_SECS: f32 = 300.0;
+
     fn request_exit(&mut self) {
         // Persist camera state on exit.
         self.editor_settings.camera_state = editor_settings::CameraState {
@@ -1655,6 +1670,8 @@ impl GGEditor {
         if let Some(ref path) = self.editor_scene_path {
             if SceneSerializer::serialize(&self.scene, path, Self::scene_name_from_path(path)) {
                 self.scene_dirty = false;
+                self.autosave_timer = Self::AUTOSAVE_INTERVAL_SECS;
+                Self::remove_autosave_file(path);
             } else {
                 warn!("Failed to save scene to '{}'", path);
             }
@@ -1668,9 +1685,46 @@ impl GGEditor {
             if SceneSerializer::serialize(&self.scene, &path, Self::scene_name_from_path(&path)) {
                 self.editor_scene_path = Some(path);
                 self.scene_dirty = false;
+                self.autosave_timer = Self::AUTOSAVE_INTERVAL_SECS;
                 panels::project::invalidate_scene_cache();
             } else {
                 warn!("Failed to save scene to '{}'", path);
+            }
+        }
+    }
+
+    /// Auto-save the current scene to a `.autosave.ggscene` sidecar file.
+    fn perform_autosave(&self) {
+        if let Some(ref path) = self.editor_scene_path {
+            let autosave_path = Self::autosave_path_for(path);
+            if SceneSerializer::serialize(&self.scene, &autosave_path, Self::scene_name_from_path(path)) {
+                info!("Auto-saved to '{}'", autosave_path);
+            } else {
+                warn!("Auto-save failed for '{}'", autosave_path);
+            }
+        }
+    }
+
+    /// Build the auto-save sidecar path: `foo.ggscene` -> `foo.autosave.ggscene`.
+    fn autosave_path_for(scene_path: &str) -> String {
+        let p = std::path::Path::new(scene_path);
+        let stem = p.file_stem().and_then(|s| s.to_str()).unwrap_or("scene");
+        if let Some(parent) = p.parent() {
+            parent
+                .join(format!("{}.autosave.ggscene", stem))
+                .to_string_lossy()
+                .into_owned()
+        } else {
+            format!("{}.autosave.ggscene", stem)
+        }
+    }
+
+    /// Remove the auto-save sidecar file after a successful manual save.
+    fn remove_autosave_file(scene_path: &str) {
+        let autosave = Self::autosave_path_for(scene_path);
+        if std::path::Path::new(&autosave).exists() {
+            if let Err(e) = std::fs::remove_file(&autosave) {
+                warn!("Failed to remove auto-save file '{}': {}", autosave, e);
             }
         }
     }

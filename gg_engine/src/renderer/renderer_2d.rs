@@ -467,6 +467,13 @@ impl Renderer2DData {
             .set_layouts(&layouts);
         let ds_vec = unsafe { device.allocate_descriptor_sets(&ds_alloc_info) }
             .expect("Failed to allocate bindless descriptor sets");
+        assert_eq!(
+            ds_vec.len(),
+            FRAMES_IN_FLIGHT,
+            "Expected {} bindless descriptor sets, got {}",
+            FRAMES_IN_FLIGHT,
+            ds_vec.len()
+        );
         let bindless_ds = [ds_vec[0], ds_vec[1]];
 
         Self {

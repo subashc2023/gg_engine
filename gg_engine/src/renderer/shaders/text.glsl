@@ -43,7 +43,7 @@ float median(float r, float g, float b) {
 }
 
 void main() {
-    int index = int(v_tex_index);
+    int index = clamp(int(v_tex_index), 0, 4095);
     vec3 msdf = texture(u_textures[nonuniformEXT(index)], v_tex_coord).rgb;
     float dist = median(msdf.r, msdf.g, msdf.b);
 

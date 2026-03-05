@@ -326,8 +326,9 @@ impl Texture2D {
             .descriptor_pool(descriptor_pool)
             .set_layouts(&layouts);
 
-        let descriptor_set = unsafe { device.allocate_descriptor_sets(&ds_alloc_info) }
-            .expect("Failed to allocate descriptor set")[0];
+        let ds_vec = unsafe { device.allocate_descriptor_sets(&ds_alloc_info) }
+            .expect("Failed to allocate descriptor set");
+        let descriptor_set = ds_vec[0];
 
         let image_info_ds = vk::DescriptorImageInfo::default()
             .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)

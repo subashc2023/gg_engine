@@ -35,9 +35,9 @@ layout(location = 2) in flat float v_tex_index;
 layout(location = 0) out vec4 out_color;
 
 void main() {
-    int index = int(v_tex_index);
+    int index = clamp(int(v_tex_index), 0, 4095);
     vec4 tex_color = texture(u_textures[nonuniformEXT(index)], v_tex_coord) * v_color;
-    if (tex_color.a == 0.0)
+    if (tex_color.a < 0.01)
         discard;
     out_color = tex_color;
 }

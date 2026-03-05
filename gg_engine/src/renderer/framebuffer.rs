@@ -766,8 +766,9 @@ fn allocate_descriptor_set(
         .descriptor_pool(pool)
         .set_layouts(&layouts);
 
-    unsafe { device.allocate_descriptor_sets(&alloc_info) }
-        .expect("Failed to allocate FB descriptor set")[0]
+    let ds_vec = unsafe { device.allocate_descriptor_sets(&alloc_info) }
+        .expect("Failed to allocate FB descriptor set");
+    ds_vec[0]
 }
 
 /// Create a small HOST_VISIBLE staging buffer for pixel readback (2 × i32,
@@ -790,13 +791,15 @@ fn create_readback_staging_buffer(
         GpuAllocator::allocate_for_buffer(allocator, device, buffer, "ReadbackBuffer", MemoryLocation::GpuToCpu)
             .expect("GPU buffer allocation failed for readback buffer");
 
-    // Initialize both slots to -1.
+    // Initialize both slots to -1 (no entity).
+    // SAFETY: GpuToCpu allocation guarantees HOST_VISIBLE mapped memory.
+    // Buffer is sized for exactly 2 × i32, so both writes are in-bounds.
     let mapping = allocation
         .mapped_ptr()
-        .expect("Readback buffer must be mapped") as *mut i32;
+        .expect("Readback buffer (GpuToCpu) must be host-mapped") as *mut i32;
     unsafe {
-        *mapping = -1;
-        *mapping.add(1) = -1;
+        std::ptr::write(mapping, -1);
+        std::ptr::write(mapping.add(1), -1);
     }
 
     (buffer, allocation)
