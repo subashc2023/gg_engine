@@ -12,6 +12,7 @@ use super::shader::Shader;
 use super::texture::Texture2D;
 use crate::profiling::ProfileTimer;
 use crate::shaders;
+use log::warn;
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -26,6 +27,14 @@ const FRAMES_IN_FLIGHT: usize = MAX_FRAMES_IN_FLIGHT;
 /// Max flushes (draw calls) per frame. Sizes the vertex buffer so each flush
 /// writes to a distinct region, avoiding overwrites within a command buffer.
 const MAX_BATCHES_PER_FRAME: usize = 16;
+
+/// Per-frame vertex buffer capacities (in bytes) for overflow checks.
+const QUAD_VB_CAPACITY: usize =
+    MAX_VERTICES * MAX_BATCHES_PER_FRAME * std::mem::size_of::<BatchQuadVertex>();
+const CIRCLE_VB_CAPACITY: usize =
+    MAX_VERTICES * MAX_BATCHES_PER_FRAME * std::mem::size_of::<BatchCircleVertex>();
+const LINE_VB_CAPACITY: usize =
+    MAX_LINE_VERTICES * MAX_BATCHES_PER_FRAME * std::mem::size_of::<BatchLineVertex>();
 
 // ---------------------------------------------------------------------------
 // BatchQuadVertex — per-vertex data for quad batch rendering
@@ -329,41 +338,35 @@ impl Renderer2DData {
 
         // -- Quad Vertex layout --
         let quad_layout = batch_quad_vertex_layout();
-        let quad_vb_capacity =
-            MAX_VERTICES * MAX_BATCHES_PER_FRAME * std::mem::size_of::<BatchQuadVertex>();
 
         // -- Circle Vertex layout --
         let circle_layout = batch_circle_vertex_layout();
-        let circle_vb_capacity =
-            MAX_VERTICES * MAX_BATCHES_PER_FRAME * std::mem::size_of::<BatchCircleVertex>();
 
         // -- Per-frame-in-flight quad vertex buffers (persistently mapped) --
         let vertex_buffers = [
-            DynamicVertexBuffer::new(allocator, device, quad_vb_capacity, quad_layout.clone()),
-            DynamicVertexBuffer::new(allocator, device, quad_vb_capacity, quad_layout.clone()),
+            DynamicVertexBuffer::new(allocator, device, QUAD_VB_CAPACITY, quad_layout.clone()),
+            DynamicVertexBuffer::new(allocator, device, QUAD_VB_CAPACITY, quad_layout.clone()),
         ];
 
         // -- Per-frame-in-flight circle vertex buffers (persistently mapped) --
         let circle_vertex_buffers = [
-            DynamicVertexBuffer::new(allocator, device, circle_vb_capacity, circle_layout.clone()),
-            DynamicVertexBuffer::new(allocator, device, circle_vb_capacity, circle_layout.clone()),
+            DynamicVertexBuffer::new(allocator, device, CIRCLE_VB_CAPACITY, circle_layout.clone()),
+            DynamicVertexBuffer::new(allocator, device, CIRCLE_VB_CAPACITY, circle_layout.clone()),
         ];
 
         // -- Line Vertex layout --
         let line_layout = batch_line_vertex_layout();
-        let line_vb_capacity =
-            MAX_LINE_VERTICES * MAX_BATCHES_PER_FRAME * std::mem::size_of::<BatchLineVertex>();
 
         // -- Per-frame-in-flight line vertex buffers (persistently mapped) --
         let line_vertex_buffers = [
-            DynamicVertexBuffer::new(allocator, device, line_vb_capacity, line_layout.clone()),
-            DynamicVertexBuffer::new(allocator, device, line_vb_capacity, line_layout.clone()),
+            DynamicVertexBuffer::new(allocator, device, LINE_VB_CAPACITY, line_layout.clone()),
+            DynamicVertexBuffer::new(allocator, device, LINE_VB_CAPACITY, line_layout.clone()),
         ];
 
         // -- Per-frame-in-flight text vertex buffers (same layout as quads) --
         let text_vertex_buffers = [
-            DynamicVertexBuffer::new(allocator, device, quad_vb_capacity, quad_layout.clone()),
-            DynamicVertexBuffer::new(allocator, device, quad_vb_capacity, quad_layout.clone()),
+            DynamicVertexBuffer::new(allocator, device, QUAD_VB_CAPACITY, quad_layout.clone()),
+            DynamicVertexBuffer::new(allocator, device, QUAD_VB_CAPACITY, quad_layout.clone()),
         ];
 
         // -- Static index buffer (pre-generated quad pattern) --
@@ -526,11 +529,13 @@ impl Renderer2DData {
         } else {
             let mut next = self.next_bindless_index.borrow_mut();
             let index = *next;
-            assert!(
-                index < MAX_BINDLESS_TEXTURES,
-                "Exceeded max bindless textures ({})",
-                MAX_BINDLESS_TEXTURES
-            );
+            if index >= MAX_BINDLESS_TEXTURES {
+                warn!(
+                    "Exceeded max bindless textures ({}). Using white texture fallback.",
+                    MAX_BINDLESS_TEXTURES
+                );
+                return 0; // Fallback to white texture slot.
+            }
             *next = index + 1;
             index
         };
@@ -648,6 +653,15 @@ impl Renderer2DData {
             )
         };
         let vb_offset = batch.vb_write_offset;
+        if vb_offset + vertex_data.len() > QUAD_VB_CAPACITY {
+            warn!(
+                "Quad batch overflow: exceeded {} flushes per frame. {} quads dropped.",
+                MAX_BATCHES_PER_FRAME, batch.quad_count
+            );
+            batch.vertices.clear();
+            batch.quad_count = 0;
+            return;
+        }
         self.vertex_buffers[current_frame].write_at(vb_offset, vertex_data);
 
         // 2. Record Vulkan commands.
@@ -747,6 +761,15 @@ impl Renderer2DData {
             )
         };
         let vb_offset = batch.vb_write_offset;
+        if vb_offset + vertex_data.len() > CIRCLE_VB_CAPACITY {
+            warn!(
+                "Circle batch overflow: exceeded {} flushes per frame. {} circles dropped.",
+                MAX_BATCHES_PER_FRAME, batch.quad_count
+            );
+            batch.vertices.clear();
+            batch.quad_count = 0;
+            return;
+        }
         self.circle_vertex_buffers[current_frame].write_at(vb_offset, vertex_data);
 
         // 2. Record Vulkan commands.
@@ -855,6 +878,15 @@ impl Renderer2DData {
             )
         };
         let vb_offset = batch.vb_write_offset;
+        if vb_offset + vertex_data.len() > LINE_VB_CAPACITY {
+            warn!(
+                "Line batch overflow: exceeded {} flushes per frame. {} lines dropped.",
+                MAX_BATCHES_PER_FRAME, batch.line_count
+            );
+            batch.vertices.clear();
+            batch.line_count = 0;
+            return;
+        }
         self.line_vertex_buffers[current_frame].write_at(vb_offset, vertex_data);
 
         // 2. Record Vulkan commands.
@@ -951,6 +983,15 @@ impl Renderer2DData {
             )
         };
         let vb_offset = batch.vb_write_offset;
+        if vb_offset + vertex_data.len() > QUAD_VB_CAPACITY {
+            warn!(
+                "Text batch overflow: exceeded {} flushes per frame. {} text quads dropped.",
+                MAX_BATCHES_PER_FRAME, batch.quad_count
+            );
+            batch.vertices.clear();
+            batch.quad_count = 0;
+            return;
+        }
         self.text_vertex_buffers[current_frame].write_at(vb_offset, vertex_data);
 
         // 2. Record Vulkan commands.

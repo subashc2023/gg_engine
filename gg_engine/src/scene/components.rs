@@ -389,6 +389,12 @@ pub struct BoxCollider2DComponent {
     pub density: f32,
     pub friction: f32,
     pub restitution: f32,
+    /// Collision group membership bitmask (which groups this collider belongs to).
+    /// Default: `u32::MAX` (all groups).
+    pub collision_layer: u32,
+    /// Collision group filter bitmask (which groups this collider interacts with).
+    /// Default: `u32::MAX` (interacts with all groups).
+    pub collision_mask: u32,
     /// Runtime-only handle into the physics world. Not serialized.
     pub(crate) runtime_fixture: Option<rapier2d::geometry::ColliderHandle>,
 }
@@ -401,6 +407,8 @@ impl Clone for BoxCollider2DComponent {
             density: self.density,
             friction: self.friction,
             restitution: self.restitution,
+            collision_layer: self.collision_layer,
+            collision_mask: self.collision_mask,
             runtime_fixture: None, // Runtime-only, not copied.
         }
     }
@@ -414,6 +422,8 @@ impl Default for BoxCollider2DComponent {
             density: 1.0,
             friction: 0.5,
             restitution: 0.0,
+            collision_layer: u32::MAX,
+            collision_mask: u32::MAX,
             runtime_fixture: None,
         }
     }
@@ -430,6 +440,12 @@ pub struct CircleCollider2DComponent {
     pub density: f32,
     pub friction: f32,
     pub restitution: f32,
+    /// Collision group membership bitmask (which groups this collider belongs to).
+    /// Default: `u32::MAX` (all groups).
+    pub collision_layer: u32,
+    /// Collision group filter bitmask (which groups this collider interacts with).
+    /// Default: `u32::MAX` (interacts with all groups).
+    pub collision_mask: u32,
     /// Runtime-only handle into the physics world. Not serialized.
     pub(crate) runtime_fixture: Option<rapier2d::geometry::ColliderHandle>,
 }
@@ -442,6 +458,8 @@ impl Clone for CircleCollider2DComponent {
             density: self.density,
             friction: self.friction,
             restitution: self.restitution,
+            collision_layer: self.collision_layer,
+            collision_mask: self.collision_mask,
             runtime_fixture: None, // Runtime-only, not copied.
         }
     }
@@ -455,6 +473,8 @@ impl Default for CircleCollider2DComponent {
             density: 1.0,
             friction: 0.5,
             restitution: 0.0,
+            collision_layer: u32::MAX,
+            collision_mask: u32::MAX,
             runtime_fixture: None,
         }
     }
@@ -626,6 +646,9 @@ pub struct LuaScriptComponent {
     /// Runtime-only flag indicating whether the script has been loaded.
     /// Reset on clone (same pattern as physics handles).
     pub(crate) loaded: bool,
+    /// Runtime-only flag set when script loading fails (e.g. file not found).
+    /// Prevents infinite retry every frame. Reset on clone and hot-reload.
+    pub(crate) load_failed: bool,
 }
 
 #[cfg(feature = "lua-scripting")]
@@ -635,6 +658,7 @@ impl LuaScriptComponent {
             script_path: script_path.into(),
             field_overrides: std::collections::HashMap::new(),
             loaded: false,
+            load_failed: false,
         }
     }
 }
@@ -645,7 +669,8 @@ impl Clone for LuaScriptComponent {
         Self {
             script_path: self.script_path.clone(),
             field_overrides: self.field_overrides.clone(),
-            loaded: false, // Runtime-only, not copied.
+            loaded: false,      // Runtime-only, not copied.
+            load_failed: false, // Runtime-only, not copied.
         }
     }
 }

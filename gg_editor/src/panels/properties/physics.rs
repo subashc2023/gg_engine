@@ -96,7 +96,7 @@ pub(crate) fn draw_box_collider2d_component(
         .id_salt(("box_collider_2d", entity.id()))
         .default_open(true)
         .show(ui, |ui| {
-            let (mut offset, mut size, mut density, mut friction, mut restitution) = {
+            let (mut offset, mut size, mut density, mut friction, mut restitution, mut collision_layer, mut collision_mask) = {
                 let bc = scene
                     .get_component::<BoxCollider2DComponent>(entity)
                     .unwrap();
@@ -106,6 +106,8 @@ pub(crate) fn draw_box_collider2d_component(
                     bc.density,
                     bc.friction,
                     bc.restitution,
+                    bc.collision_layer,
+                    bc.collision_mask,
                 )
             };
 
@@ -186,6 +188,20 @@ pub(crate) fn draw_box_collider2d_component(
                     .changed();
             });
 
+            ui.horizontal(|ui| {
+                ui.label("Collision Layer");
+                changed |= ui
+                    .add(egui::DragValue::new(&mut collision_layer).hexadecimal(8, false, true))
+                    .changed();
+            });
+
+            ui.horizontal(|ui| {
+                ui.label("Collision Mask");
+                changed |= ui
+                    .add(egui::DragValue::new(&mut collision_mask).hexadecimal(8, false, true))
+                    .changed();
+            });
+
             if changed {
                 if let Some(mut bc) =
                     scene.get_component_mut::<BoxCollider2DComponent>(entity)
@@ -195,6 +211,8 @@ pub(crate) fn draw_box_collider2d_component(
                     bc.density = density;
                     bc.friction = friction;
                     bc.restitution = restitution;
+                    bc.collision_layer = collision_layer;
+                    bc.collision_mask = collision_mask;
                 }
                 *scene_dirty = true;
             }
@@ -229,7 +247,7 @@ pub(crate) fn draw_circle_collider2d_component(
         .id_salt(("circle_collider_2d", entity.id()))
         .default_open(true)
         .show(ui, |ui| {
-            let (mut offset, mut radius, mut density, mut friction, mut restitution) = {
+            let (mut offset, mut radius, mut density, mut friction, mut restitution, mut collision_layer, mut collision_mask) = {
                 let cc = scene
                     .get_component::<CircleCollider2DComponent>(entity)
                     .unwrap();
@@ -239,6 +257,8 @@ pub(crate) fn draw_circle_collider2d_component(
                     cc.density,
                     cc.friction,
                     cc.restitution,
+                    cc.collision_layer,
+                    cc.collision_mask,
                 )
             };
 
@@ -304,6 +324,20 @@ pub(crate) fn draw_circle_collider2d_component(
                     .changed();
             });
 
+            ui.horizontal(|ui| {
+                ui.label("Collision Layer");
+                changed |= ui
+                    .add(egui::DragValue::new(&mut collision_layer).hexadecimal(8, false, true))
+                    .changed();
+            });
+
+            ui.horizontal(|ui| {
+                ui.label("Collision Mask");
+                changed |= ui
+                    .add(egui::DragValue::new(&mut collision_mask).hexadecimal(8, false, true))
+                    .changed();
+            });
+
             if changed {
                 if let Some(mut cc) =
                     scene.get_component_mut::<CircleCollider2DComponent>(entity)
@@ -313,6 +347,8 @@ pub(crate) fn draw_circle_collider2d_component(
                     cc.density = density;
                     cc.friction = friction;
                     cc.restitution = restitution;
+                    cc.collision_layer = collision_layer;
+                    cc.collision_mask = collision_mask;
                 }
                 *scene_dirty = true;
             }

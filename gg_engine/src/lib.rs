@@ -34,7 +34,7 @@ pub use log;
 pub use logging::init as log_init;
 pub use orthographic_camera_controller::OrthographicCameraController;
 pub use particle_system::{ParticleProps, ParticleSystem};
-pub use platform_utils::FileDialogs;
+pub use platform_utils::{error_dialog, FileDialogs};
 pub use project::Project;
 pub use renderer::shaders;
 pub use renderer::{
@@ -70,7 +70,7 @@ pub mod prelude {
     pub use crate::layer::{Layer, LayerStack};
     pub use crate::orthographic_camera_controller::OrthographicCameraController;
     pub use crate::particle_system::{ParticleProps, ParticleSystem};
-    pub use crate::platform_utils::FileDialogs;
+    pub use crate::platform_utils::{error_dialog, FileDialogs};
     pub use crate::project::Project;
     pub use crate::profiling::{
         begin_session, drain_profile_results, end_session, is_session_active, ProfileResult,

@@ -1079,6 +1079,8 @@ impl Scene {
         let mut physics = PhysicsWorld2D::new(0.0, -9.81);
 
         // Snapshot entities with RigidBody2DComponent to avoid borrow conflicts.
+        // Skip parented entities — physics bodies ignore parent transforms, so
+        // allowing them would cause confusing mismatches between visual and physics position.
         let body_entities: Vec<(hecs::Entity, u64, glam::Vec3, glam::Vec3, glam::Vec3, RigidBody2DType, bool)> = self
             .world
             .query::<(
@@ -1086,10 +1088,19 @@ impl Scene {
                 &IdComponent,
                 &TransformComponent,
                 &RigidBody2DComponent,
+                &RelationshipComponent,
             )>()
             .iter()
-            .map(|(handle, id, transform, rb)| {
-                (
+            .filter_map(|(handle, id, transform, rb, rel)| {
+                if rel.parent.is_some() {
+                    log::warn!(
+                        "Entity UUID {} has RigidBody2D but is parented — skipping physics body creation. \
+                         Detach from parent or remove the RigidBody2D component.",
+                        id.id.raw(),
+                    );
+                    return None;
+                }
+                Some((
                     handle,
                     id.id.raw(),
                     transform.translation,
@@ -1097,7 +1108,7 @@ impl Scene {
                     transform.scale,
                     rb.body_type,
                     rb.fixed_rotation,
-                )
+                ))
             })
             .collect();
 
@@ -1141,6 +1152,10 @@ impl Scene {
                             bc.offset.x * scale.x.abs(),
                             bc.offset.y * scale.y.abs(),
                         ))
+                        .collision_groups(rapier2d::geometry::InteractionGroups::new(
+                            bc.collision_layer.into(),
+                            bc.collision_mask.into(),
+                        ))
                         .active_events(rapier2d::prelude::ActiveEvents::COLLISION_EVENTS);
                     // When friction is 0, use Min combine rule so the zero
                     // wins against any surface (prevents wall sticking).
@@ -1179,6 +1194,10 @@ impl Scene {
                         .translation(na::Vector2::new(
                             cc.offset.x * scale.x.abs(),
                             cc.offset.y * scale.y.abs(),
+                        ))
+                        .collision_groups(rapier2d::geometry::InteractionGroups::new(
+                            cc.collision_layer.into(),
+                            cc.collision_mask.into(),
                         ))
                         .active_events(rapier2d::prelude::ActiveEvents::COLLISION_EVENTS);
                     if friction == 0.0 {
@@ -2132,6 +2151,8 @@ impl Scene {
                 if let Ok(mut lsc) = self.world.get::<&mut LuaScriptComponent>(*handle) {
                     lsc.loaded = true;
                 }
+            } else if let Ok(mut lsc) = self.world.get::<&mut LuaScriptComponent>(*handle) {
+                lsc.load_failed = true;
             }
         }
 
@@ -2174,9 +2195,10 @@ impl Scene {
         let mut engine = match self.script_engine.take() {
             Some(e) => e,
             None => {
-                // No engine — just reset loaded flags.
+                // No engine — just reset loaded/failed flags.
                 for lsc in self.world.query_mut::<&mut LuaScriptComponent>() {
                     lsc.loaded = false;
+                    lsc.load_failed = false;
                 }
                 return;
             }
@@ -2206,10 +2228,11 @@ impl Scene {
         // Clear context — engine is dropped after this block.
         engine.lua().remove_app_data::<SceneScriptContext>();
 
-        // Reset loaded flags via raw pointer.
+        // Reset loaded/failed flags via raw pointer.
         unsafe {
             for lsc in (*scene_ptr).world.query_mut::<&mut LuaScriptComponent>() {
                 lsc.loaded = false;
+                lsc.load_failed = false;
             }
         }
     }
@@ -2265,7 +2288,7 @@ impl Scene {
             .world
             .query::<(hecs::Entity, &IdComponent, &LuaScriptComponent)>()
             .iter()
-            .filter(|(_, _, lsc)| !lsc.loaded && !lsc.script_path.is_empty())
+            .filter(|(_, _, lsc)| !lsc.loaded && !lsc.load_failed && !lsc.script_path.is_empty())
             .map(|(handle, id, lsc)| (handle, id.id.raw(), lsc.script_path.clone()))
             .collect();
 
@@ -2281,6 +2304,8 @@ impl Scene {
                     if let Ok(mut lsc) = self.world.get::<&mut LuaScriptComponent>(*handle) {
                         lsc.loaded = true;
                     }
+                } else if let Ok(mut lsc) = self.world.get::<&mut LuaScriptComponent>(*handle) {
+                    lsc.load_failed = true;
                 }
             }
         }

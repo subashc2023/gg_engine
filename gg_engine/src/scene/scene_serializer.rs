@@ -13,6 +13,11 @@ use crate::scene::{
 };
 #[cfg(feature = "lua-scripting")]
 use crate::scene::LuaScriptComponent;
+
+/// Default value for collision layer/mask fields — all bits set (collides with everything).
+fn default_collision_bits() -> u32 {
+    u32::MAX
+}
 use crate::uuid::Uuid;
 
 // ---------------------------------------------------------------------------
@@ -236,6 +241,10 @@ struct BoxCollider2DData {
     friction: f32,
     #[serde(rename = "Restitution")]
     restitution: f32,
+    #[serde(rename = "CollisionLayer", default = "default_collision_bits")]
+    collision_layer: u32,
+    #[serde(rename = "CollisionMask", default = "default_collision_bits")]
+    collision_mask: u32,
     /// Legacy field, ignored on load — rapier2d has no restitution threshold.
     #[serde(rename = "RestitutionThreshold", default, skip_serializing)]
     _restitution_threshold: f32,
@@ -253,6 +262,10 @@ struct CircleCollider2DData {
     friction: f32,
     #[serde(rename = "Restitution")]
     restitution: f32,
+    #[serde(rename = "CollisionLayer", default = "default_collision_bits")]
+    collision_layer: u32,
+    #[serde(rename = "CollisionMask", default = "default_collision_bits")]
+    collision_mask: u32,
     /// Legacy field, ignored on load — rapier2d has no restitution threshold.
     #[serde(rename = "RestitutionThreshold", default, skip_serializing)]
     _restitution_threshold: f32,
@@ -593,6 +606,8 @@ impl SceneSerializer {
                         density: bc.density,
                         friction: bc.friction,
                         restitution: bc.restitution,
+                        collision_layer: bc.collision_layer,
+                        collision_mask: bc.collision_mask,
                         _restitution_threshold: 0.0,
                     });
 
@@ -605,6 +620,8 @@ impl SceneSerializer {
                         density: cc.density,
                         friction: cc.friction,
                         restitution: cc.restitution,
+                        collision_layer: cc.collision_layer,
+                        collision_mask: cc.collision_mask,
                         _restitution_threshold: 0.0,
                     });
 
@@ -818,6 +835,8 @@ impl SceneSerializer {
                         density: bcd.density,
                         friction: bcd.friction,
                         restitution: bcd.restitution,
+                        collision_layer: bcd.collision_layer,
+                        collision_mask: bcd.collision_mask,
                         runtime_fixture: None,
                     },
                 );
@@ -833,6 +852,8 @@ impl SceneSerializer {
                         density: ccd.density,
                         friction: ccd.friction,
                         restitution: ccd.restitution,
+                        collision_layer: ccd.collision_layer,
+                        collision_mask: ccd.collision_mask,
                         runtime_fixture: None,
                     },
                 );
@@ -1092,17 +1113,17 @@ mod tests {
             SceneSerializer::deserialize_from_string(&mut scene, yaml),
             "Failed to deserialize tilemap_test scene"
         );
-        assert_eq!(scene.entity_count(), 3);
+        assert_eq!(scene.entity_count(), 2);
 
         let entities = scene.each_entity_with_tag();
-        let (tm_ent, _) = entities.iter().find(|(_, n)| n == "Tilemap").unwrap();
+        let (tm_ent, _) = entities.iter().find(|(_, n)| n == "Empty Entity").unwrap();
         let tm = scene
             .get_component::<crate::scene::TilemapComponent>(*tm_ent)
             .unwrap();
-        assert_eq!(tm.width, 10);
-        assert_eq!(tm.height, 10);
-        assert_eq!(tm.tiles.len(), 100);
-        assert_eq!(tm.texture_handle.raw(), 2001);
+        assert_eq!(tm.width, 20);
+        assert_eq!(tm.height, 17);
+        assert_eq!(tm.tiles.len(), 340);
+        assert_eq!(tm.texture_handle.raw(), 2841034490373146);
     }
 
     #[test]

@@ -137,14 +137,25 @@ impl Application for GGPlayer {
             })
             .or_else(find_project_path_auto)
             .unwrap_or_else(|| {
-                panic!(
-                    "No .ggproject file found. Pass a path as a CLI argument \
-                     or place the player executable next to a .ggproject file."
+                error_dialog(
+                    "GGPlayer — No Project Found",
+                    "No .ggproject file found.\n\n\
+                     Pass a path as a CLI argument or place the player \
+                     executable next to a .ggproject file.",
                 );
+                std::process::exit(1);
             });
 
-        let project = Project::load(&project_path)
-            .unwrap_or_else(|| panic!("Failed to load project: {}", project_path));
+        let project = match Project::load(&project_path) {
+            Some(p) => p,
+            None => {
+                error_dialog(
+                    "GGPlayer — Project Load Failed",
+                    &format!("Failed to load project:\n{}", project_path),
+                );
+                std::process::exit(1);
+            }
+        };
 
         let project_name = project.name().to_string();
 
@@ -162,12 +173,20 @@ impl Application for GGPlayer {
         let path_str = start_scene_path.to_string_lossy().to_string();
 
         if !start_scene_path.exists() {
-            panic!("Start scene not found: {}", path_str);
+            error_dialog(
+                "GGPlayer — Scene Not Found",
+                &format!("Start scene not found:\n{}", path_str),
+            );
+            std::process::exit(1);
         }
 
         let mut scene = Scene::new();
         if !SceneSerializer::deserialize(&mut scene, &path_str) {
-            panic!("Failed to deserialize scene: {}", path_str);
+            error_dialog(
+                "GGPlayer — Scene Load Failed",
+                &format!("Failed to deserialize scene:\n{}", path_str),
+            );
+            std::process::exit(1);
         }
 
         // Create asset manager and load registry.

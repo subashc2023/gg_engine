@@ -30,6 +30,16 @@ pub fn atomic_write(path: impl AsRef<Path>, data: &str) -> std::io::Result<()> {
 /// On Linux it uses GTK / kdialog / zenity.
 pub struct FileDialogs;
 
+/// Show an error dialog with a single OK button, then return.
+pub fn error_dialog(title: &str, message: &str) {
+    rfd::MessageDialog::new()
+        .set_title(title)
+        .set_description(message)
+        .set_level(rfd::MessageLevel::Error)
+        .set_buttons(rfd::MessageButtons::Ok)
+        .show();
+}
+
 /// Show a Yes/No confirmation dialog. Returns `true` if the user clicks Yes.
 pub fn confirm_dialog(title: &str, message: &str) -> bool {
     rfd::MessageDialog::new()

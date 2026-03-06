@@ -39,7 +39,7 @@ impl SceneScriptContext {
     /// # Safety
     /// Caller must ensure the pointer is valid and no other alias exists.
     #[inline]
-    unsafe fn scene_mut(&self) -> &mut Scene {
+    unsafe fn scene_mut(&mut self) -> &mut Scene {
         debug_assert!(!self.scene.is_null(), "SceneScriptContext::scene is null");
         &mut *self.scene
     }
@@ -250,7 +250,7 @@ fn mouse_button_name_to_enum(name: &str) -> Option<MouseButton> {
 
 /// `Engine.get_translation(entity_id)` — returns `(x, y, z)` from the entity's TransformComponent.
 fn get_translation(lua: &Lua, entity_id: u64) -> LuaResult<(f32, f32, f32)> {
-    let ctx = match lua.app_data_ref::<SceneScriptContext>() {
+    let ctx = match lua.app_data_mut::<SceneScriptContext>() {
         Some(ctx) => ctx,
         None => return Ok((0.0, 0.0, 0.0)),
     };
@@ -267,7 +267,7 @@ fn get_translation(lua: &Lua, entity_id: u64) -> LuaResult<(f32, f32, f32)> {
 
 /// `Engine.set_translation(entity_id, x, y, z)` — writes to the entity's TransformComponent.
 fn set_translation(lua: &Lua, (entity_id, x, y, z): (u64, f32, f32, f32)) -> LuaResult<()> {
-    let ctx = match lua.app_data_ref::<SceneScriptContext>() {
+    let mut ctx = match lua.app_data_mut::<SceneScriptContext>() {
         Some(ctx) => ctx,
         None => return Ok(()),
     };
@@ -286,7 +286,7 @@ fn set_translation(lua: &Lua, (entity_id, x, y, z): (u64, f32, f32, f32)) -> Lua
 
 /// `Engine.is_key_down(key_name)` — returns true if the named key is currently pressed.
 fn is_key_down(lua: &Lua, key_name: String) -> LuaResult<bool> {
-    let ctx = match lua.app_data_ref::<SceneScriptContext>() {
+    let ctx = match lua.app_data_mut::<SceneScriptContext>() {
         Some(ctx) => ctx,
         None => return Ok(false),
     };
@@ -306,7 +306,7 @@ fn is_key_down(lua: &Lua, key_name: String) -> LuaResult<bool> {
 
 /// `Engine.is_key_pressed(key_name)` — returns true only on the first frame the key is pressed.
 fn is_key_just_pressed(lua: &Lua, key_name: String) -> LuaResult<bool> {
-    let ctx = match lua.app_data_ref::<SceneScriptContext>() {
+    let ctx = match lua.app_data_mut::<SceneScriptContext>() {
         Some(ctx) => ctx,
         None => return Ok(false),
     };
@@ -326,7 +326,7 @@ fn is_key_just_pressed(lua: &Lua, key_name: String) -> LuaResult<bool> {
 
 /// `Engine.is_mouse_button_down(button_name)` — returns true if the named mouse button is currently pressed.
 fn is_mouse_button_down(lua: &Lua, button_name: String) -> LuaResult<bool> {
-    let ctx = match lua.app_data_ref::<SceneScriptContext>() {
+    let ctx = match lua.app_data_mut::<SceneScriptContext>() {
         Some(ctx) => ctx,
         None => return Ok(false),
     };
@@ -346,7 +346,7 @@ fn is_mouse_button_down(lua: &Lua, button_name: String) -> LuaResult<bool> {
 
 /// `Engine.is_mouse_button_pressed(button_name)` — returns true only on the first frame the button is pressed.
 fn is_mouse_button_just_pressed(lua: &Lua, button_name: String) -> LuaResult<bool> {
-    let ctx = match lua.app_data_ref::<SceneScriptContext>() {
+    let ctx = match lua.app_data_mut::<SceneScriptContext>() {
         Some(ctx) => ctx,
         None => return Ok(false),
     };
@@ -366,7 +366,7 @@ fn is_mouse_button_just_pressed(lua: &Lua, button_name: String) -> LuaResult<boo
 
 /// `Engine.get_mouse_position()` — returns `(x, y)` screen-space mouse position.
 fn get_mouse_position(lua: &Lua, _: ()) -> LuaResult<(f64, f64)> {
-    let ctx = match lua.app_data_ref::<SceneScriptContext>() {
+    let ctx = match lua.app_data_mut::<SceneScriptContext>() {
         Some(ctx) => ctx,
         None => return Ok((0.0, 0.0)),
     };
@@ -385,7 +385,7 @@ fn get_mouse_position(lua: &Lua, _: ()) -> LuaResult<(f64, f64)> {
 
 /// `Engine.get_rotation(entity_id)` — returns `(rx, ry, rz)` in radians.
 fn get_rotation(lua: &Lua, entity_id: u64) -> LuaResult<(f32, f32, f32)> {
-    let ctx = match lua.app_data_ref::<SceneScriptContext>() {
+    let ctx = match lua.app_data_mut::<SceneScriptContext>() {
         Some(ctx) => ctx,
         None => return Ok((0.0, 0.0, 0.0)),
     };
@@ -402,7 +402,7 @@ fn get_rotation(lua: &Lua, entity_id: u64) -> LuaResult<(f32, f32, f32)> {
 
 /// `Engine.set_rotation(entity_id, rx, ry, rz)` — sets rotation in radians.
 fn set_rotation(lua: &Lua, (entity_id, rx, ry, rz): (u64, f32, f32, f32)) -> LuaResult<()> {
-    let ctx = match lua.app_data_ref::<SceneScriptContext>() {
+    let mut ctx = match lua.app_data_mut::<SceneScriptContext>() {
         Some(ctx) => ctx,
         None => return Ok(()),
     };
@@ -421,7 +421,7 @@ fn set_rotation(lua: &Lua, (entity_id, rx, ry, rz): (u64, f32, f32, f32)) -> Lua
 
 /// `Engine.get_scale(entity_id)` — returns `(sx, sy, sz)`.
 fn get_scale(lua: &Lua, entity_id: u64) -> LuaResult<(f32, f32, f32)> {
-    let ctx = match lua.app_data_ref::<SceneScriptContext>() {
+    let ctx = match lua.app_data_mut::<SceneScriptContext>() {
         Some(ctx) => ctx,
         None => return Ok((1.0, 1.0, 1.0)),
     };
@@ -438,7 +438,7 @@ fn get_scale(lua: &Lua, entity_id: u64) -> LuaResult<(f32, f32, f32)> {
 
 /// `Engine.set_scale(entity_id, sx, sy, sz)` — sets scale.
 fn set_scale(lua: &Lua, (entity_id, sx, sy, sz): (u64, f32, f32, f32)) -> LuaResult<()> {
-    let ctx = match lua.app_data_ref::<SceneScriptContext>() {
+    let mut ctx = match lua.app_data_mut::<SceneScriptContext>() {
         Some(ctx) => ctx,
         None => return Ok(()),
     };
@@ -461,7 +461,7 @@ fn set_scale(lua: &Lua, (entity_id, sx, sy, sz): (u64, f32, f32, f32)) -> LuaRes
 
 /// `Engine.has_component(entity_id, component_name)` — string-based component check.
 fn has_component(lua: &Lua, (entity_id, name): (u64, String)) -> LuaResult<bool> {
-    let ctx = match lua.app_data_ref::<SceneScriptContext>() {
+    let ctx = match lua.app_data_mut::<SceneScriptContext>() {
         Some(ctx) => ctx,
         None => return Ok(false),
     };
@@ -505,7 +505,7 @@ fn has_component(lua: &Lua, (entity_id, name): (u64, String)) -> LuaResult<bool>
 /// `Engine.find_entity_by_name(name)` — returns the UUID of the first entity
 /// with the given tag name, or `nil` if not found.
 fn find_entity_by_name(lua: &Lua, name: String) -> LuaResult<LuaValue> {
-    let ctx = match lua.app_data_ref::<SceneScriptContext>() {
+    let mut ctx = match lua.app_data_mut::<SceneScriptContext>() {
         Some(ctx) => ctx,
         None => return Ok(LuaValue::Nil),
     };
@@ -588,7 +588,7 @@ fn set_script_field(lua: &Lua, (entity_id, field_name, value): (u64, String, Lua
 
 /// `Engine.create_entity(name)` — create a new entity with the given name, returns its UUID.
 fn lua_create_entity(lua: &Lua, name: String) -> LuaResult<LuaValue> {
-    let ctx = match lua.app_data_ref::<SceneScriptContext>() {
+    let mut ctx = match lua.app_data_mut::<SceneScriptContext>() {
         Some(ctx) => ctx,
         None => return Ok(LuaValue::Integer(0)),
     };
@@ -604,7 +604,7 @@ fn lua_create_entity(lua: &Lua, name: String) -> LuaResult<LuaValue> {
 
 /// `Engine.destroy_entity(uuid)` — queue an entity for deferred destruction.
 fn lua_destroy_entity(lua: &Lua, uuid: u64) -> LuaResult<()> {
-    let ctx = match lua.app_data_ref::<SceneScriptContext>() {
+    let mut ctx = match lua.app_data_mut::<SceneScriptContext>() {
         Some(ctx) => ctx,
         None => return Ok(()),
     };
@@ -616,7 +616,7 @@ fn lua_destroy_entity(lua: &Lua, uuid: u64) -> LuaResult<()> {
 
 /// `Engine.get_entity_name(uuid)` — returns the entity's tag name, or nil.
 fn lua_get_entity_name(lua: &Lua, uuid: u64) -> LuaResult<LuaValue> {
-    let ctx = match lua.app_data_ref::<SceneScriptContext>() {
+    let ctx = match lua.app_data_mut::<SceneScriptContext>() {
         Some(ctx) => ctx,
         None => return Ok(LuaValue::Nil),
     };
@@ -637,7 +637,7 @@ fn lua_get_entity_name(lua: &Lua, uuid: u64) -> LuaResult<LuaValue> {
 /// `Engine.set_parent(child_id, parent_id)` — reparent an entity, preserving world transform.
 /// Returns `true` on success, `false` if either entity not found or cycle detected.
 fn lua_set_parent(lua: &Lua, (child_id, parent_id): (u64, u64)) -> LuaResult<bool> {
-    let ctx = match lua.app_data_ref::<SceneScriptContext>() {
+    let mut ctx = match lua.app_data_mut::<SceneScriptContext>() {
         Some(ctx) => ctx,
         None => return Ok(false),
     };
@@ -657,7 +657,7 @@ fn lua_set_parent(lua: &Lua, (child_id, parent_id): (u64, u64)) -> LuaResult<boo
 
 /// `Engine.detach_from_parent(entity_id)` — make an entity a root entity, preserving world transform.
 fn lua_detach_from_parent(lua: &Lua, entity_id: u64) -> LuaResult<()> {
-    let ctx = match lua.app_data_ref::<SceneScriptContext>() {
+    let mut ctx = match lua.app_data_mut::<SceneScriptContext>() {
         Some(ctx) => ctx,
         None => return Ok(()),
     };
@@ -672,7 +672,7 @@ fn lua_detach_from_parent(lua: &Lua, entity_id: u64) -> LuaResult<()> {
 
 /// `Engine.get_parent(entity_id)` — returns parent UUID as integer, or `nil` if root entity.
 fn lua_get_parent(lua: &Lua, entity_id: u64) -> LuaResult<LuaValue> {
-    let ctx = match lua.app_data_ref::<SceneScriptContext>() {
+    let ctx = match lua.app_data_mut::<SceneScriptContext>() {
         Some(ctx) => ctx,
         None => return Ok(LuaValue::Nil),
     };
@@ -690,7 +690,7 @@ fn lua_get_parent(lua: &Lua, entity_id: u64) -> LuaResult<LuaValue> {
 
 /// `Engine.get_children(entity_id)` — returns a Lua table (1-indexed array) of child UUIDs.
 fn lua_get_children(lua: &Lua, entity_id: u64) -> LuaResult<LuaValue> {
-    let ctx = match lua.app_data_ref::<SceneScriptContext>() {
+    let ctx = match lua.app_data_mut::<SceneScriptContext>() {
         Some(ctx) => ctx,
         None => {
             let empty = lua.create_table()?;
@@ -715,7 +715,7 @@ fn lua_get_children(lua: &Lua, entity_id: u64) -> LuaResult<LuaValue> {
 
 /// `Engine.play_animation(entity_id, name)` — play an animation clip by name. Returns true if found.
 fn lua_play_animation(lua: &Lua, (entity_id, name): (u64, String)) -> LuaResult<bool> {
-    let ctx = match lua.app_data_ref::<SceneScriptContext>() {
+    let mut ctx = match lua.app_data_mut::<SceneScriptContext>() {
         Some(ctx) => ctx,
         None => return Ok(false),
     };
@@ -731,7 +731,7 @@ fn lua_play_animation(lua: &Lua, (entity_id, name): (u64, String)) -> LuaResult<
 
 /// `Engine.stop_animation(entity_id)` — stop the current animation.
 fn lua_stop_animation(lua: &Lua, entity_id: u64) -> LuaResult<()> {
-    let ctx = match lua.app_data_ref::<SceneScriptContext>() {
+    let mut ctx = match lua.app_data_mut::<SceneScriptContext>() {
         Some(ctx) => ctx,
         None => return Ok(()),
     };
@@ -747,7 +747,7 @@ fn lua_stop_animation(lua: &Lua, entity_id: u64) -> LuaResult<()> {
 
 /// `Engine.is_animation_playing(entity_id)` — returns true if an animation is currently playing.
 fn lua_is_animation_playing(lua: &Lua, entity_id: u64) -> LuaResult<bool> {
-    let ctx = match lua.app_data_ref::<SceneScriptContext>() {
+    let ctx = match lua.app_data_mut::<SceneScriptContext>() {
         Some(ctx) => ctx,
         None => return Ok(false),
     };
@@ -767,7 +767,7 @@ fn lua_is_animation_playing(lua: &Lua, entity_id: u64) -> LuaResult<bool> {
 
 /// `Engine.play_sound(entity_id)` — play the entity's audio source.
 fn lua_play_sound(lua: &Lua, entity_id: u64) -> LuaResult<()> {
-    let ctx = match lua.app_data_ref::<SceneScriptContext>() {
+    let mut ctx = match lua.app_data_mut::<SceneScriptContext>() {
         Some(ctx) => ctx,
         None => return Ok(()),
     };
@@ -782,7 +782,7 @@ fn lua_play_sound(lua: &Lua, entity_id: u64) -> LuaResult<()> {
 
 /// `Engine.stop_sound(entity_id)` — stop the entity's audio playback.
 fn lua_stop_sound(lua: &Lua, entity_id: u64) -> LuaResult<()> {
-    let ctx = match lua.app_data_ref::<SceneScriptContext>() {
+    let mut ctx = match lua.app_data_mut::<SceneScriptContext>() {
         Some(ctx) => ctx,
         None => return Ok(()),
     };
@@ -797,7 +797,7 @@ fn lua_stop_sound(lua: &Lua, entity_id: u64) -> LuaResult<()> {
 
 /// `Engine.set_volume(entity_id, volume)` — adjust volume at runtime.
 fn lua_set_volume(lua: &Lua, (entity_id, volume): (u64, f32)) -> LuaResult<()> {
-    let ctx = match lua.app_data_ref::<SceneScriptContext>() {
+    let mut ctx = match lua.app_data_mut::<SceneScriptContext>() {
         Some(ctx) => ctx,
         None => return Ok(()),
     };
@@ -816,7 +816,7 @@ fn lua_set_volume(lua: &Lua, (entity_id, volume): (u64, f32)) -> LuaResult<()> {
 
 /// `Engine.set_tile(entity_id, x, y, tile_id)` — set tile at grid position.
 fn lua_set_tile(lua: &Lua, (entity_id, x, y, tile_id): (u64, u32, u32, i32)) -> LuaResult<()> {
-    let ctx = match lua.app_data_ref::<SceneScriptContext>() {
+    let mut ctx = match lua.app_data_mut::<SceneScriptContext>() {
         Some(ctx) => ctx,
         None => return Ok(()),
     };
@@ -833,7 +833,7 @@ fn lua_set_tile(lua: &Lua, (entity_id, x, y, tile_id): (u64, u32, u32, i32)) -> 
 
 /// `Engine.get_tile(entity_id, x, y)` — returns tile ID at grid position, -1 if empty/OOB.
 fn lua_get_tile(lua: &Lua, (entity_id, x, y): (u64, u32, u32)) -> LuaResult<i32> {
-    let ctx = match lua.app_data_ref::<SceneScriptContext>() {
+    let ctx = match lua.app_data_mut::<SceneScriptContext>() {
         Some(ctx) => ctx,
         None => return Ok(-1),
     };
@@ -854,7 +854,7 @@ fn lua_get_tile(lua: &Lua, (entity_id, x, y): (u64, u32, u32)) -> LuaResult<i32>
 
 /// `Engine.apply_impulse(entity_id, ix, iy)`
 fn lua_apply_impulse(lua: &Lua, (entity_id, ix, iy): (u64, f32, f32)) -> LuaResult<()> {
-    let ctx = match lua.app_data_ref::<SceneScriptContext>() {
+    let mut ctx = match lua.app_data_mut::<SceneScriptContext>() {
         Some(ctx) => ctx,
         None => return Ok(()),
     };
@@ -872,7 +872,7 @@ fn lua_apply_impulse_at_point(
     lua: &Lua,
     (entity_id, ix, iy, px, py): (u64, f32, f32, f32, f32),
 ) -> LuaResult<()> {
-    let ctx = match lua.app_data_ref::<SceneScriptContext>() {
+    let mut ctx = match lua.app_data_mut::<SceneScriptContext>() {
         Some(ctx) => ctx,
         None => return Ok(()),
     };
@@ -887,7 +887,7 @@ fn lua_apply_impulse_at_point(
 
 /// `Engine.apply_force(entity_id, fx, fy)`
 fn lua_apply_force(lua: &Lua, (entity_id, fx, fy): (u64, f32, f32)) -> LuaResult<()> {
-    let ctx = match lua.app_data_ref::<SceneScriptContext>() {
+    let mut ctx = match lua.app_data_mut::<SceneScriptContext>() {
         Some(ctx) => ctx,
         None => return Ok(()),
     };
@@ -902,7 +902,7 @@ fn lua_apply_force(lua: &Lua, (entity_id, fx, fy): (u64, f32, f32)) -> LuaResult
 
 /// `Engine.get_linear_velocity(entity_id)` — returns `(vx, vy)`.
 fn lua_get_linear_velocity(lua: &Lua, entity_id: u64) -> LuaResult<(f32, f32)> {
-    let ctx = match lua.app_data_ref::<SceneScriptContext>() {
+    let ctx = match lua.app_data_mut::<SceneScriptContext>() {
         Some(ctx) => ctx,
         None => return Ok((0.0, 0.0)),
     };
@@ -919,7 +919,7 @@ fn lua_get_linear_velocity(lua: &Lua, entity_id: u64) -> LuaResult<(f32, f32)> {
 
 /// `Engine.set_linear_velocity(entity_id, vx, vy)`
 fn lua_set_linear_velocity(lua: &Lua, (entity_id, vx, vy): (u64, f32, f32)) -> LuaResult<()> {
-    let ctx = match lua.app_data_ref::<SceneScriptContext>() {
+    let mut ctx = match lua.app_data_mut::<SceneScriptContext>() {
         Some(ctx) => ctx,
         None => return Ok(()),
     };
@@ -934,7 +934,7 @@ fn lua_set_linear_velocity(lua: &Lua, (entity_id, vx, vy): (u64, f32, f32)) -> L
 
 /// `Engine.get_angular_velocity(entity_id)` — returns angular velocity in rad/s.
 fn lua_get_angular_velocity(lua: &Lua, entity_id: u64) -> LuaResult<f32> {
-    let ctx = match lua.app_data_ref::<SceneScriptContext>() {
+    let ctx = match lua.app_data_mut::<SceneScriptContext>() {
         Some(ctx) => ctx,
         None => return Ok(0.0),
     };
@@ -951,7 +951,7 @@ fn lua_get_angular_velocity(lua: &Lua, entity_id: u64) -> LuaResult<f32> {
 
 /// `Engine.set_angular_velocity(entity_id, omega)`
 fn lua_set_angular_velocity(lua: &Lua, (entity_id, omega): (u64, f32)) -> LuaResult<()> {
-    let ctx = match lua.app_data_ref::<SceneScriptContext>() {
+    let mut ctx = match lua.app_data_mut::<SceneScriptContext>() {
         Some(ctx) => ctx,
         None => return Ok(()),
     };
@@ -972,7 +972,7 @@ fn lua_raycast(
     lua: &Lua,
     (ox, oy, dx, dy, max_dist, exclude_id): (f32, f32, f32, f32, f32, Option<u64>),
 ) -> LuaResult<(Option<u64>, f32, f32, f32, f32, f32)> {
-    let ctx = match lua.app_data_ref::<SceneScriptContext>() {
+    let ctx = match lua.app_data_mut::<SceneScriptContext>() {
         Some(ctx) => ctx,
         None => return Ok((None, 0.0, 0.0, 0.0, 0.0, 0.0)),
     };
