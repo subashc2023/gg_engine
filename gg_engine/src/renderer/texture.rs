@@ -10,6 +10,221 @@ use super::RendererResources;
 use crate::profiling::ProfileTimer;
 
 // ---------------------------------------------------------------------------
+// TransferBatch — batches GPU upload commands with fence-based tracking
+// ---------------------------------------------------------------------------
+
+/// A submitted batch of transfer commands tracked by a Vulkan fence.
+struct PendingTransfer {
+    fence: vk::Fence,
+    command_buffer: vk::CommandBuffer,
+    /// Staging buffers + allocations kept alive until the fence signals.
+    staging_resources: Vec<(vk::Buffer, GpuAllocation)>,
+}
+
+/// Batches texture/font upload commands into single command buffer submissions,
+/// using fences instead of `queue_wait_idle()` to track completion.
+///
+/// Staging buffers are kept alive until their fence signals, then freed in bulk.
+/// Since all submissions go to the same graphics queue, pipeline barriers ensure
+/// that uploaded textures are usable for rendering immediately after submission.
+pub(crate) struct TransferBatch {
+    device: ash::Device,
+    command_pool: vk::CommandPool,
+    graphics_queue: vk::Queue,
+
+    /// Command buffer being recorded (None if no uploads pending).
+    active_cmd_buf: Option<vk::CommandBuffer>,
+    /// Staging resources for the active (not yet submitted) batch.
+    active_staging: Vec<(vk::Buffer, GpuAllocation)>,
+
+    /// Submitted batches waiting for fence completion.
+    pending: Vec<PendingTransfer>,
+}
+
+impl TransferBatch {
+    pub fn new(
+        device: &ash::Device,
+        command_pool: vk::CommandPool,
+        graphics_queue: vk::Queue,
+    ) -> Self {
+        Self {
+            device: device.clone(),
+            command_pool,
+            graphics_queue,
+            active_cmd_buf: None,
+            active_staging: Vec::new(),
+            pending: Vec::new(),
+        }
+    }
+
+    /// Ensure a command buffer is being recorded. Allocates one lazily.
+    fn ensure_active(&mut self) {
+        if self.active_cmd_buf.is_some() {
+            return;
+        }
+        let alloc_info = vk::CommandBufferAllocateInfo::default()
+            .level(vk::CommandBufferLevel::PRIMARY)
+            .command_pool(self.command_pool)
+            .command_buffer_count(1);
+
+        let cmd_buf = unsafe { self.device.allocate_command_buffers(&alloc_info) }
+            .expect("Failed to allocate transfer command buffer")[0];
+
+        let begin_info = vk::CommandBufferBeginInfo::default()
+            .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT);
+
+        unsafe {
+            self.device
+                .begin_command_buffer(cmd_buf, &begin_info)
+                .expect("Failed to begin transfer command buffer");
+        }
+
+        self.active_cmd_buf = Some(cmd_buf);
+    }
+
+    /// Record a staging-buffer-to-image copy with layout transitions.
+    /// The staging buffer and allocation are held until the fence signals.
+    pub fn record_image_upload(
+        &mut self,
+        image: vk::Image,
+        staging_buffer: vk::Buffer,
+        staging_alloc: GpuAllocation,
+        width: u32,
+        height: u32,
+    ) {
+        self.ensure_active();
+        let cmd_buf = self.active_cmd_buf.unwrap();
+
+        transition_image_layout(
+            &self.device,
+            cmd_buf,
+            image,
+            vk::ImageLayout::UNDEFINED,
+            vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+        );
+
+        let region = vk::BufferImageCopy {
+            buffer_offset: 0,
+            buffer_row_length: 0,
+            buffer_image_height: 0,
+            image_subresource: vk::ImageSubresourceLayers {
+                aspect_mask: vk::ImageAspectFlags::COLOR,
+                mip_level: 0,
+                base_array_layer: 0,
+                layer_count: 1,
+            },
+            image_offset: vk::Offset3D { x: 0, y: 0, z: 0 },
+            image_extent: vk::Extent3D {
+                width,
+                height,
+                depth: 1,
+            },
+        };
+
+        unsafe {
+            self.device.cmd_copy_buffer_to_image(
+                cmd_buf,
+                staging_buffer,
+                image,
+                vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+                &[region],
+            );
+        }
+
+        transition_image_layout(
+            &self.device,
+            cmd_buf,
+            image,
+            vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+            vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
+        );
+
+        self.active_staging.push((staging_buffer, staging_alloc));
+    }
+
+    /// Submit the active command buffer with a fence. No-op if nothing recorded.
+    pub fn submit(&mut self) {
+        let cmd_buf = match self.active_cmd_buf.take() {
+            Some(cb) => cb,
+            None => return,
+        };
+
+        let fence_info = vk::FenceCreateInfo::default();
+        let fence = unsafe { self.device.create_fence(&fence_info, None) }
+            .expect("Failed to create transfer fence");
+
+        unsafe {
+            self.device
+                .end_command_buffer(cmd_buf)
+                .expect("Failed to end transfer command buffer");
+
+            let cmd_bufs = [cmd_buf];
+            let submit_info = vk::SubmitInfo::default().command_buffers(&cmd_bufs);
+            self.device
+                .queue_submit(self.graphics_queue, &[submit_info], fence)
+                .expect("Failed to submit transfer batch");
+        }
+
+        let staging = std::mem::take(&mut self.active_staging);
+        self.pending.push(PendingTransfer {
+            fence,
+            command_buffer: cmd_buf,
+            staging_resources: staging,
+        });
+    }
+
+    /// Poll all pending fences. Free staging resources for completed batches.
+    pub fn poll(&mut self) {
+        self.pending.retain_mut(|transfer| {
+            let signaled = unsafe {
+                self.device.get_fence_status(transfer.fence).unwrap_or(false)
+            };
+            if signaled {
+                // Free staging buffers (GpuAllocation auto-frees on drop).
+                for (buffer, _alloc) in transfer.staging_resources.drain(..) {
+                    unsafe { self.device.destroy_buffer(buffer, None); }
+                }
+                unsafe {
+                    self.device.destroy_fence(transfer.fence, None);
+                    self.device
+                        .free_command_buffers(self.command_pool, &[transfer.command_buffer]);
+                }
+                false // remove from pending
+            } else {
+                true // keep waiting
+            }
+        });
+    }
+
+    /// Wait for all pending transfers to complete (used at shutdown).
+    pub fn wait_all(&mut self) {
+        // Submit any active batch first.
+        self.submit();
+
+        if self.pending.is_empty() {
+            return;
+        }
+
+        let fences: Vec<vk::Fence> = self.pending.iter().map(|t| t.fence).collect();
+        unsafe {
+            let _ = self.device.wait_for_fences(&fences, true, u64::MAX);
+        }
+
+        // Clean up all pending transfers.
+        for transfer in self.pending.drain(..) {
+            for (buffer, _alloc) in transfer.staging_resources {
+                unsafe { self.device.destroy_buffer(buffer, None); }
+            }
+            unsafe {
+                self.device.destroy_fence(transfer.fence, None);
+                self.device
+                    .free_command_buffers(self.command_pool, &[transfer.command_buffer]);
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // ImageFormat — pixel format enum
 // ---------------------------------------------------------------------------
 
@@ -126,15 +341,6 @@ impl Texture2D {
             pixels: rgba.into_raw(),
             spec,
         })
-    }
-
-    /// Create a texture from pre-loaded CPU data (GPU upload only).
-    pub(crate) fn from_cpu_data(
-        res: &RendererResources<'_>,
-        allocator: &Arc<Mutex<GpuAllocator>>,
-        data: &TextureCpuData,
-    ) -> Self {
-        Self::from_rgba8_with_spec(res, allocator, data.width, data.height, &data.pixels, &data.spec)
     }
 
     /// Load a texture from an image file (PNG, JPEG, etc).
@@ -395,6 +601,157 @@ impl Texture2D {
     /// Set the bindless descriptor array index (called by Renderer after registration).
     pub(crate) fn set_bindless_index(&mut self, index: u32) {
         self.bindless_index = index;
+    }
+
+    /// Create a texture from pre-loaded CPU data, recording the upload into a
+    /// [`TransferBatch`] instead of blocking on `queue_wait_idle`.
+    pub(crate) fn from_cpu_data_batched(
+        res: &RendererResources<'_>,
+        allocator: &Arc<Mutex<GpuAllocator>>,
+        data: &TextureCpuData,
+        batch: &mut TransferBatch,
+    ) -> Self {
+        Self::from_rgba8_with_spec_batched(
+            res, allocator, data.width, data.height, &data.pixels, &data.spec, batch,
+        )
+    }
+
+    /// Create a texture from raw RGBA8 pixel data, recording the staging copy
+    /// into a [`TransferBatch`] for deferred, fence-tracked submission.
+    ///
+    /// The returned texture is usable for rendering after [`TransferBatch::submit`]
+    /// because subsequent draw commands on the same queue are serialized behind
+    /// the pipeline barriers recorded here.
+    pub(crate) fn from_rgba8_with_spec_batched(
+        res: &RendererResources<'_>,
+        allocator: &Arc<Mutex<GpuAllocator>>,
+        width: u32,
+        height: u32,
+        pixels: &[u8],
+        spec: &TextureSpecification,
+        batch: &mut TransferBatch,
+    ) -> Self {
+        let _timer = ProfileTimer::new("Texture2D::from_rgba8_with_spec_batched");
+        let image_size = (width * height * 4) as vk::DeviceSize;
+        assert_eq!(pixels.len() as vk::DeviceSize, image_size);
+
+        let device = res.device;
+        let descriptor_pool = res.descriptor_pool;
+        let descriptor_set_layout = res.texture_ds_layout;
+
+        let vk_format = spec.format.to_vk();
+
+        // 1. Create staging buffer with pixel data.
+        let (staging_buffer, staging_alloc) =
+            create_staging_buffer(allocator, device, pixels);
+
+        // 2. Create Vulkan image.
+        let image_info = vk::ImageCreateInfo::default()
+            .image_type(vk::ImageType::TYPE_2D)
+            .extent(vk::Extent3D {
+                width,
+                height,
+                depth: 1,
+            })
+            .mip_levels(1)
+            .array_layers(1)
+            .format(vk_format)
+            .tiling(vk::ImageTiling::OPTIMAL)
+            .initial_layout(vk::ImageLayout::UNDEFINED)
+            .usage(vk::ImageUsageFlags::TRANSFER_DST | vk::ImageUsageFlags::SAMPLED)
+            .sharing_mode(vk::SharingMode::EXCLUSIVE)
+            .samples(vk::SampleCountFlags::TYPE_1);
+
+        let image =
+            unsafe { device.create_image(&image_info, None) }.expect("Failed to create image");
+
+        // 3. Allocate and bind DEVICE_LOCAL memory via sub-allocator.
+        let allocation =
+            GpuAllocator::allocate_for_image(allocator, device, image, "Texture2D", MemoryLocation::GpuOnly)
+                .expect("GPU image allocation failed for Texture2D");
+
+        // 4. Record the staging copy + layout transitions into the batch.
+        batch.record_image_upload(image, staging_buffer, staging_alloc, width, height);
+
+        // 5. Create image view.
+        let view_info = vk::ImageViewCreateInfo::default()
+            .image(image)
+            .view_type(vk::ImageViewType::TYPE_2D)
+            .format(vk_format)
+            .subresource_range(vk::ImageSubresourceRange {
+                aspect_mask: vk::ImageAspectFlags::COLOR,
+                base_mip_level: 0,
+                level_count: 1,
+                base_array_layer: 0,
+                layer_count: 1,
+            });
+
+        let image_view = unsafe { device.create_image_view(&view_info, None) }
+            .expect("Failed to create image view");
+
+        // 6. Create sampler.
+        let mipmap_mode = match spec.filter {
+            vk::Filter::LINEAR => vk::SamplerMipmapMode::LINEAR,
+            _ => vk::SamplerMipmapMode::NEAREST,
+        };
+
+        let sampler_info = vk::SamplerCreateInfo::default()
+            .mag_filter(spec.filter)
+            .min_filter(spec.filter)
+            .address_mode_u(spec.address_mode)
+            .address_mode_v(spec.address_mode)
+            .address_mode_w(spec.address_mode)
+            .anisotropy_enable(spec.anisotropy)
+            .max_anisotropy(spec.max_anisotropy)
+            .border_color(vk::BorderColor::FLOAT_TRANSPARENT_BLACK)
+            .unnormalized_coordinates(false)
+            .compare_enable(false)
+            .mipmap_mode(mipmap_mode)
+            .mip_lod_bias(0.0)
+            .min_lod(0.0)
+            .max_lod(0.0);
+
+        let sampler = unsafe { device.create_sampler(&sampler_info, None) }
+            .expect("Failed to create sampler");
+
+        // 7. Allocate descriptor set and write combined image sampler.
+        let layouts = [descriptor_set_layout];
+        let ds_alloc_info = vk::DescriptorSetAllocateInfo::default()
+            .descriptor_pool(descriptor_pool)
+            .set_layouts(&layouts);
+
+        let ds_vec = unsafe { device.allocate_descriptor_sets(&ds_alloc_info) }
+            .expect("Failed to allocate descriptor set");
+        let descriptor_set = ds_vec[0];
+
+        let image_info_ds = vk::DescriptorImageInfo::default()
+            .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
+            .image_view(image_view)
+            .sampler(sampler);
+
+        let write = vk::WriteDescriptorSet::default()
+            .dst_set(descriptor_set)
+            .dst_binding(0)
+            .dst_array_element(0)
+            .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+            .image_info(std::slice::from_ref(&image_info_ds));
+
+        unsafe {
+            device.update_descriptor_sets(&[write], &[]);
+        }
+
+        Self {
+            image,
+            _allocation: allocation,
+            image_view,
+            sampler,
+            descriptor_set,
+            descriptor_pool,
+            bindless_index: 0,
+            _width: width,
+            _height: height,
+            device: device.clone(),
+        }
     }
 }
 

@@ -18,7 +18,7 @@ use super::renderer_2d::{
 use super::renderer_api::{RendererAPI, VulkanRendererAPI};
 use super::shader::Shader;
 use super::sub_texture::SubTexture2D;
-use super::texture::Texture2D;
+use super::texture::{Texture2D, TransferBatch};
 use super::uniform_buffer::{CameraData, UniformBuffer};
 use super::vertex_array::VertexArray;
 use super::VulkanContext;
@@ -86,6 +86,9 @@ pub struct Renderer {
 
     // Stats from the previous frame (snapshotted at end_scene).
     last_stats_2d: Renderer2DStats,
+
+    // Batched async texture/font upload system (fence-tracked, no queue_wait_idle).
+    transfer_batch: TransferBatch,
 }
 
 impl Renderer {
@@ -181,6 +184,12 @@ impl Renderer {
         let pipeline_cache = unsafe { device.create_pipeline_cache(&cache_create_info, None) }
             .expect("Failed to create pipeline cache");
 
+        let transfer_batch = TransferBatch::new(
+            device,
+            command_pool,
+            vk_ctx.graphics_queue(),
+        );
+
         Self {
             api,
             draw_context: None,
@@ -201,6 +210,7 @@ impl Renderer {
             renderer_2d: None,
             line_width: 4.0,
             last_stats_2d: Renderer2DStats::default(),
+            transfer_batch,
         }
     }
 
@@ -339,9 +349,21 @@ impl Renderer {
     }
 
     /// Upload a texture from pre-loaded CPU data (async path).
-    /// Performs GPU upload and registers in the bindless array.
-    pub fn upload_texture(&self, data: &TextureCpuData) -> Texture2D {
-        let mut texture = Texture2D::from_cpu_data(&self.resources(), &self.allocator, data);
+    /// Records the staging copy into the internal [`TransferBatch`] — call
+    /// [`flush_transfers`] before rendering to submit the batch.
+    pub fn upload_texture(&mut self, data: &TextureCpuData) -> Texture2D {
+        let res = super::RendererResources {
+            device: &self.device,
+            graphics_queue: self.graphics_queue,
+            command_pool: self.command_pool,
+            descriptor_pool: self.descriptor_pool,
+            texture_ds_layout: self.texture_descriptor_set_layout,
+            color_format: self.color_format,
+            depth_format: self.depth_format,
+        };
+        let mut texture = Texture2D::from_cpu_data_batched(
+            &res, &self.allocator, data, &mut self.transfer_batch,
+        );
         if let Some(r2d) = &self.renderer_2d {
             let index = r2d.register_texture(&texture);
             texture.set_bindless_index(index);
@@ -350,14 +372,38 @@ impl Renderer {
     }
 
     /// Upload a font from pre-generated CPU data (async path).
-    /// Performs GPU upload of the atlas and registers in the bindless array.
-    pub fn upload_font(&self, data: FontCpuData) -> Font {
-        let mut font = Font::from_cpu_data(&self.resources(), &self.allocator, data);
+    /// Records the atlas upload into the internal [`TransferBatch`].
+    pub fn upload_font(&mut self, data: FontCpuData) -> Font {
+        let res = super::RendererResources {
+            device: &self.device,
+            graphics_queue: self.graphics_queue,
+            command_pool: self.command_pool,
+            descriptor_pool: self.descriptor_pool,
+            texture_ds_layout: self.texture_descriptor_set_layout,
+            color_format: self.color_format,
+            depth_format: self.depth_format,
+        };
+        let mut font = Font::from_cpu_data_batched(
+            &res, &self.allocator, data, &mut self.transfer_batch,
+        );
         if let Some(r2d) = &self.renderer_2d {
             let index = r2d.register_texture(&font.atlas_texture);
             font.atlas_texture.set_bindless_index(index);
         }
         font
+    }
+
+    /// Submit any pending texture/font uploads as a single command buffer with
+    /// a fence. Call this before rendering to ensure uploaded textures are
+    /// available. No-op if nothing is pending.
+    pub fn flush_transfers(&mut self) {
+        self.transfer_batch.submit();
+    }
+
+    /// Poll completed transfer fences and free their staging buffers.
+    /// Call once per frame (e.g., at the start of the update loop).
+    pub fn poll_transfers(&mut self) {
+        self.transfer_batch.poll();
     }
 
     /// Return a texture's bindless slot to the free-list for reuse.
@@ -1430,6 +1476,8 @@ impl Renderer {
 
 impl Drop for Renderer {
     fn drop(&mut self) {
+        // Wait for any pending async texture uploads before tearing down.
+        self.transfer_batch.wait_all();
         self.save_pipeline_cache();
         // Drop Renderer2DData (owns white_texture) before destroying the
         // descriptor pool, so Texture2D::Drop can still free its descriptor set.

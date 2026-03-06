@@ -699,6 +699,9 @@ impl Application for GGEditor {
             self.scene_ctx.pending_drop_scenes.clear();
         }
 
+        // Poll completed transfer fences and free staging buffers from previous frames.
+        renderer.poll_transfers();
+
         if self.editor_mode == EditorMode::Hub {
             return;
         }
@@ -720,6 +723,9 @@ impl Application for GGEditor {
                 }
             }
         }
+
+        // Submit any batched texture/font uploads before rendering.
+        renderer.flush_transfers();
 
         // Step 2: Resolve texture handles (async — requests loads, assigns ready textures).
         if let Some(ref mut am) = self.project_state.asset_manager {

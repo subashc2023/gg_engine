@@ -4,7 +4,7 @@ use std::sync::{Arc, Mutex};
 
 use super::gpu_allocation::GpuAllocator;
 use super::msdf;
-use super::texture::{Texture2D, TextureSpecification};
+use super::texture::{Texture2D, TextureSpecification, TransferBatch};
 use super::RendererResources;
 use crate::profiling::ProfileTimer;
 
@@ -340,6 +340,36 @@ impl Font {
             data.atlas_height,
             &data.atlas_pixels,
             &TextureSpecification::font_atlas(),
+        );
+
+        Self {
+            atlas_texture,
+            glyphs: data.glyphs,
+            kerning_pairs: data.kerning_pairs,
+            line_height: data.line_height,
+            ascender: data.ascender,
+            descender: data.descender,
+            atlas_width: data.atlas_width,
+            atlas_height: data.atlas_height,
+        }
+    }
+
+    /// Create a Font from pre-generated CPU data, recording the atlas upload
+    /// into a [`TransferBatch`] for deferred, fence-tracked submission.
+    pub(crate) fn from_cpu_data_batched(
+        res: &RendererResources<'_>,
+        allocator: &Arc<Mutex<GpuAllocator>>,
+        data: FontCpuData,
+        batch: &mut TransferBatch,
+    ) -> Self {
+        let atlas_texture = Texture2D::from_rgba8_with_spec_batched(
+            res,
+            allocator,
+            data.atlas_width,
+            data.atlas_height,
+            &data.atlas_pixels,
+            &TextureSpecification::font_atlas(),
+            batch,
         );
 
         Self {

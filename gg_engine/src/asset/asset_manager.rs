@@ -307,7 +307,7 @@ impl EditorAssetManager {
     /// Poll completed async loads, perform GPU upload for textures,
     /// and store them in `loaded_assets`. Returns any font results for
     /// the caller to process.
-    pub fn poll_loaded(&mut self, renderer: &Renderer) -> Vec<LoadResult> {
+    pub fn poll_loaded(&mut self, renderer: &mut Renderer) -> Vec<LoadResult> {
         let results = self.loader.poll_results();
         let mut font_results = Vec::new();
 
