@@ -64,7 +64,7 @@ pub trait Application {
 
     /// Called once after the renderer is initialized. Use this to create
     /// rendering resources (shaders, buffers, vertex arrays, pipelines).
-    fn on_attach(&mut self, _renderer: &Renderer) {}
+    fn on_attach(&mut self, _renderer: &mut Renderer) {}
 
     fn on_event(&mut self, event: &Event, _input: &Input) {
         log::trace!("{event}");
@@ -358,7 +358,7 @@ impl<T: Application> ApplicationHandler for EngineRunner<T> {
                                         }
 
                                         // Notify the application that the renderer is ready.
-                                        if let Some(renderer) = &self.renderer {
+                                        if let Some(renderer) = &mut self.renderer {
                                             self.app.on_attach(renderer);
                                         }
 
@@ -728,6 +728,7 @@ impl<T: Application> ApplicationHandler for EngineRunner<T> {
                 full_output.pixels_per_point,
                 scene_fb_info,
                 &scene_clear_values,
+                dt.seconds(),
             );
 
             // Handle fatal GPU device lost.
@@ -811,6 +812,7 @@ fn render_frame<T: Application>(
     pixels_per_point: f32,
     scene_fb: Option<SceneFbInfo>,
     scene_clear_values: &[vk::ClearValue],
+    dt_seconds: f32,
 ) -> FrameResult {
     let _total = ProfileTimer::new("render_frame");
     let device = vk_ctx.device();
@@ -883,6 +885,9 @@ fn render_frame<T: Application>(
             .begin_command_buffer(cmd_buf, &vk::CommandBufferBeginInfo::default())
             .expect("Failed to begin command buffer");
     }
+
+    // Dispatch GPU particle compute (before any render pass).
+    renderer.dispatch_particle_compute(cmd_buf, swapchain.current_frame(), dt_seconds);
 
     if let Some(fb) = scene_fb {
         // --- Dual-pass path: offscreen scene + swapchain egui ---

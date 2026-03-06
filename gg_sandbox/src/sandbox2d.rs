@@ -56,8 +56,8 @@ pub struct Sandbox2D {
     last_dt: f32,
     last_stats: Cell<Renderer2DStats>,
 
-    particle_system: ParticleSystem,
     particle_props: ParticleProps,
+    emit_rate: u32,
     window_width: u32,
     window_height: u32,
 
@@ -79,8 +79,8 @@ impl Application for Sandbox2D {
             last_dt: 0.0,
             last_stats: Cell::new(Renderer2DStats::default()),
 
-            particle_system: ParticleSystem::new(10_000),
             particle_props: ParticleProps::default(),
+            emit_rate: 5,
             window_width: 1280,
             window_height: 720,
 
@@ -90,7 +90,7 @@ impl Application for Sandbox2D {
         }
     }
 
-    fn on_attach(&mut self, _renderer: &Renderer) {
+    fn on_attach(&mut self, renderer: &mut Renderer) {
         profile_scope!("Sandbox2D::on_attach");
 
         self.map_height = MAP_TILES.len() as u32 / self.map_width;
@@ -102,6 +102,11 @@ impl Application for Sandbox2D {
             .insert('D', Vec4::new(0.706, 0.510, 0.275, 1.0)); // Dirt  (brown)
         self.tile_colors
             .insert('G', Vec4::new(0.196, 0.706, 0.196, 1.0)); // Grass (green)
+
+        // Create GPU particle system (100K max particles).
+        if let Err(e) = renderer.create_gpu_particle_system(100_000) {
+            error!("Failed to create GPU particle system: {e}");
+        }
 
         info!(
             "Tilemap loaded: {}x{} ({} tiles)",
@@ -141,22 +146,13 @@ impl Application for Sandbox2D {
         profile_scope!("Sandbox2D::on_update");
         self.last_dt = dt.seconds();
         self.camera_controller.on_update(dt, input);
-
-        // Continuously emit particles at the origin.
-        self.particle_props.position = Vec2::ZERO;
-        for _ in 0..5 {
-            self.particle_system.emit(&self.particle_props);
-        }
-
-        self.particle_system.on_update(dt);
     }
 
     fn on_render(&mut self, renderer: &mut Renderer) {
         profile_scope!("Sandbox2D::on_render");
         self.last_stats.set(renderer.stats_2d());
 
-        // Render tilemap. Inner loop iterates X (contiguous in memory) for cache
-        // friendliness. Y is flipped so row 0 of the string is the top of the map.
+        // Render tilemap.
         let half_w = self.map_width as f32 * 0.5;
         let half_h = self.map_height as f32 * 0.5;
         let bytes = MAP_TILES.as_bytes();
@@ -178,8 +174,14 @@ impl Application for Sandbox2D {
             }
         }
 
-        // Render particles (z = -0.1, in front of scene geometry).
-        self.particle_system.on_render(renderer);
+        // Emit GPU particles at the origin.
+        self.particle_props.position = Vec2::ZERO;
+        for _ in 0..self.emit_rate {
+            renderer.emit_particles(&self.particle_props);
+        }
+
+        // Render GPU particles (instanced draw, indirect).
+        renderer.render_gpu_particles();
     }
 
     fn on_egui(&mut self, ctx: &gg_engine::egui::Context, _window: &gg_engine::winit::window::Window) {
@@ -213,8 +215,15 @@ impl Application for Sandbox2D {
             ui.label("Scroll: Zoom");
         });
 
-        gg_engine::egui::Window::new("Particles").show(ctx, |ui| {
-            ui.label(format!("Active: {}", self.particle_system.active_count()));
+        gg_engine::egui::Window::new("GPU Particles").show(ctx, |ui| {
+            ui.label("Compute shader simulation + instanced rendering");
+
+            ui.separator();
+            ui.strong("Emission");
+            ui.add(
+                gg_engine::egui::Slider::new(&mut self.emit_rate, 0..=100)
+                    .text("Per frame"),
+            );
 
             ui.separator();
             ui.strong("Velocity");

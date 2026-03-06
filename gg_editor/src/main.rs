@@ -409,7 +409,7 @@ impl Application for GGEditor {
         }
     }
 
-    fn on_attach(&mut self, renderer: &Renderer) {
+    fn on_attach(&mut self, renderer: &mut Renderer) {
         match renderer.create_framebuffer(FramebufferSpec {
             width: 800,
             height: 600,

@@ -1,8 +1,10 @@
 mod buffer;
+mod compute;
 mod draw_context;
 mod editor_camera;
 mod font;
 pub(crate) mod gpu_allocation;
+mod gpu_particle_system;
 mod msdf;
 mod framebuffer;
 mod orthographic_camera;

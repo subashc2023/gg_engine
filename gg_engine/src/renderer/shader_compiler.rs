@@ -12,6 +12,12 @@ pub(crate) struct CompiledShader {
     pub frag_spv: Vec<u8>,
 }
 
+/// Compiled SPIR-V bytecode for a compute shader.
+#[allow(dead_code)]
+pub(crate) struct CompiledComputeShader {
+    pub comp_spv: Vec<u8>,
+}
+
 /// Compile a `.glsl` source file into vertex and fragment SPIR-V bytecode.
 ///
 /// The source must contain `#type vertex` and `#type fragment` markers
@@ -52,6 +58,38 @@ pub(crate) fn compile_glsl(path: &Path) -> Result<CompiledShader, String> {
     Ok(CompiledShader { vert_spv, frag_spv })
 }
 
+/// Compile a `.glsl` compute shader source file into SPIR-V bytecode.
+///
+/// The source must contain a `#type compute` marker.
+#[allow(dead_code)]
+pub(crate) fn compile_compute_glsl(path: &Path) -> Result<CompiledComputeShader, String> {
+    let source = std::fs::read_to_string(path)
+        .map_err(|e| format!("Cannot read '{}': {e}", path.display()))?;
+
+    let comp_src = extract_compute_source(&source, path)?;
+
+    let temp_dir = std::env::temp_dir().join("gg_shader_hotreload");
+    std::fs::create_dir_all(&temp_dir)
+        .map_err(|e| format!("Cannot create temp dir: {e}"))?;
+
+    let stem = path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .ok_or_else(|| format!("Invalid shader path: {}", path.display()))?;
+
+    let comp_tmp = temp_dir.join(format!("{stem}.comp"));
+    std::fs::write(&comp_tmp, &comp_src)
+        .map_err(|e| format!("Cannot write temp comp: {e}"))?;
+
+    let comp_spv_path = temp_dir.join(format!("{stem}_comp.spv"));
+    run_glslc(&comp_tmp, &comp_spv_path)?;
+
+    let comp_spv = std::fs::read(&comp_spv_path)
+        .map_err(|e| format!("Cannot read compiled comp SPIR-V: {e}"))?;
+
+    Ok(CompiledComputeShader { comp_spv })
+}
+
 fn split_glsl_source(source: &str, path: &Path) -> Result<(String, String), String> {
     let mut vert_lines: Vec<&str> = Vec::new();
     let mut frag_lines: Vec<&str> = Vec::new();
@@ -86,6 +124,29 @@ fn split_glsl_source(source: &str, path: &Path) -> Result<(String, String), Stri
     }
 
     Ok((vert_lines.join("\n"), frag_lines.join("\n")))
+}
+
+fn extract_compute_source(source: &str, path: &Path) -> Result<String, String> {
+    let mut comp_lines: Vec<&str> = Vec::new();
+    let mut in_compute = false;
+
+    for line in source.lines() {
+        let trimmed = line.trim();
+        if trimmed == "#type compute" {
+            in_compute = true;
+        } else if in_compute {
+            comp_lines.push(line);
+        }
+    }
+
+    if comp_lines.is_empty() {
+        return Err(format!(
+            "'{}': has '#type compute' marker but no source code",
+            path.display()
+        ));
+    }
+
+    Ok(comp_lines.join("\n"))
 }
 
 fn run_glslc(input: &Path, output: &Path) -> Result<(), String> {

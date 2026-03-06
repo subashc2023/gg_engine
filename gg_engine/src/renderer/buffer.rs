@@ -177,16 +177,36 @@ impl BufferLayout {
         }
     }
 
+    /// Generate a Vulkan vertex input binding description with per-instance rate.
+    pub fn vk_binding_description_instanced(&self, binding: u32) -> vk::VertexInputBindingDescription {
+        vk::VertexInputBindingDescription {
+            binding,
+            stride: self.stride,
+            input_rate: vk::VertexInputRate::INSTANCE,
+        }
+    }
+
     /// Generate Vulkan vertex input attribute descriptions for this layout.
     pub fn vk_attribute_descriptions(
         &self,
         binding: u32,
     ) -> Vec<vk::VertexInputAttributeDescription> {
+        self.vk_attribute_descriptions_at(binding, 0)
+    }
+
+    /// Generate Vulkan vertex input attribute descriptions starting at a
+    /// given location offset. Used when multiple bindings share the same
+    /// location namespace (e.g. per-vertex at 0..N, per-instance at N..).
+    pub fn vk_attribute_descriptions_at(
+        &self,
+        binding: u32,
+        location_offset: u32,
+    ) -> Vec<vk::VertexInputAttributeDescription> {
         self.elements
             .iter()
             .enumerate()
-            .map(|(location, elem)| vk::VertexInputAttributeDescription {
-                location: location as u32,
+            .map(|(i, elem)| vk::VertexInputAttributeDescription {
+                location: location_offset + i as u32,
                 binding,
                 format: elem.data_type.to_vk_format(),
                 offset: elem.offset,
@@ -435,6 +455,30 @@ pub(super) fn create_buffer_with_allocation(
 
     let allocation =
         GpuAllocator::allocate_for_buffer(allocator, device, buffer, name, MemoryLocation::CpuToGpu)?;
+
+    Ok((buffer, allocation))
+}
+
+/// Create a buffer with a specific memory location (e.g., GpuOnly vs CpuToGpu).
+pub(super) fn create_buffer_with_location(
+    allocator: &Arc<Mutex<GpuAllocator>>,
+    device: &ash::Device,
+    size: vk::DeviceSize,
+    usage: vk::BufferUsageFlags,
+    name: &str,
+    location: MemoryLocation,
+) -> Result<(vk::Buffer, GpuAllocation), String> {
+    let buffer_info = vk::BufferCreateInfo::default()
+        .size(size)
+        .usage(usage)
+        .sharing_mode(vk::SharingMode::EXCLUSIVE);
+
+    let buffer =
+        unsafe { device.create_buffer(&buffer_info, None) }
+            .map_err(|e| format!("Failed to create {name} buffer: {e}"))?;
+
+    let allocation =
+        GpuAllocator::allocate_for_buffer(allocator, device, buffer, name, location)?;
 
     Ok((buffer, allocation))
 }

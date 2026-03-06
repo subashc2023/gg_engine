@@ -31,6 +31,9 @@ const FRAMES_IN_FLIGHT: usize = MAX_FRAMES_IN_FLIGHT;
 /// writes to a distinct region, avoiding overwrites within a command buffer.
 const MAX_BATCHES_PER_FRAME: usize = 16;
 
+/// Maximum sprite instances per instanced draw call.
+const MAX_INSTANCES: usize = 10_000;
+
 /// Per-frame vertex buffer capacities (in bytes) for overflow checks.
 const QUAD_VB_CAPACITY: usize =
     MAX_VERTICES * MAX_BATCHES_PER_FRAME * std::mem::size_of::<BatchQuadVertex>();
@@ -38,6 +41,8 @@ const CIRCLE_VB_CAPACITY: usize =
     MAX_VERTICES * MAX_BATCHES_PER_FRAME * std::mem::size_of::<BatchCircleVertex>();
 const LINE_VB_CAPACITY: usize =
     MAX_LINE_VERTICES * MAX_BATCHES_PER_FRAME * std::mem::size_of::<BatchLineVertex>();
+const INSTANCE_VB_CAPACITY: usize =
+    MAX_INSTANCES * MAX_BATCHES_PER_FRAME * std::mem::size_of::<SpriteInstanceData>();
 
 // ---------------------------------------------------------------------------
 // BatchQuadVertex — per-vertex data for quad batch rendering
@@ -109,6 +114,63 @@ fn batch_line_vertex_layout() -> BufferLayout {
         BufferElement::new(ShaderDataType::Float3, "a_position"),
         BufferElement::new(ShaderDataType::Float4, "a_color"),
         BufferElement::new(ShaderDataType::Int, "a_entity_id"),
+    ])
+}
+
+// ---------------------------------------------------------------------------
+// UnitQuadVertex — per-vertex data for the shared unit quad (instanced path)
+// ---------------------------------------------------------------------------
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct UnitQuadVertex {
+    pub position: [f32; 3],
+    pub tex_coord: [f32; 2],
+}
+
+/// Buffer layout for the static unit quad (binding 0, per-vertex).
+fn unit_quad_vertex_layout() -> BufferLayout {
+    BufferLayout::new(&[
+        BufferElement::new(ShaderDataType::Float3, "a_position"),
+        BufferElement::new(ShaderDataType::Float2, "a_tex_coord"),
+    ])
+}
+
+// ---------------------------------------------------------------------------
+// SpriteInstanceData — per-instance data for instanced sprite rendering
+// ---------------------------------------------------------------------------
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub(super) struct SpriteInstanceData {
+    pub transform_col0: [f32; 4],
+    pub transform_col1: [f32; 4],
+    pub transform_col2: [f32; 4],
+    pub transform_col3: [f32; 4],
+    pub color: [f32; 4],
+    pub uv_min: [f32; 2],
+    pub uv_max: [f32; 2],
+    pub tex_index: f32,
+    pub tiling_factor: f32,
+    pub entity_id: i32,
+    pub _pad: i32,
+}
+// Size: 4×16 + 16 + 8 + 8 + 4 + 4 + 4 + 4 = 112 bytes
+
+/// Buffer layout for per-instance data (binding 1, per-instance).
+fn sprite_instance_layout() -> BufferLayout {
+    BufferLayout::new(&[
+        BufferElement::new(ShaderDataType::Float4, "a_transform_col0"),
+        BufferElement::new(ShaderDataType::Float4, "a_transform_col1"),
+        BufferElement::new(ShaderDataType::Float4, "a_transform_col2"),
+        BufferElement::new(ShaderDataType::Float4, "a_transform_col3"),
+        BufferElement::new(ShaderDataType::Float4, "a_color"),
+        BufferElement::new(ShaderDataType::Float2, "a_uv_min"),
+        BufferElement::new(ShaderDataType::Float2, "a_uv_max"),
+        BufferElement::new(ShaderDataType::Float, "a_tex_index"),
+        BufferElement::new(ShaderDataType::Float, "a_tiling_factor"),
+        BufferElement::new(ShaderDataType::Int, "a_entity_id"),
+        BufferElement::new(ShaderDataType::Int, "a_pad"),
     ])
 }
 
@@ -198,6 +260,29 @@ impl LineBatchState {
 }
 
 // ---------------------------------------------------------------------------
+// InstanceBatchState — per-instance data for instanced sprite rendering
+// ---------------------------------------------------------------------------
+
+struct InstanceBatchState {
+    instances: Vec<SpriteInstanceData>,
+    instance_count: usize,
+    /// Byte offset into the instance buffer for the next flush.
+    vb_write_offset: usize,
+    stats: Renderer2DStats,
+}
+
+impl InstanceBatchState {
+    fn new() -> Self {
+        Self {
+            instances: Vec::with_capacity(MAX_INSTANCES),
+            instance_count: 0,
+            vb_write_offset: 0,
+            stats: Renderer2DStats::default(),
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // TextBatchState — same vertex layout as quads, different shader (MSDF)
 // ---------------------------------------------------------------------------
 
@@ -261,6 +346,22 @@ pub(super) struct Renderer2DData {
     text_vertex_buffers: [DynamicVertexBuffer; FRAMES_IN_FLIGHT],
     // Text reuses the same index_buffer (identical quad topology).
     text_batch: RefCell<TextBatchState>,
+
+    // -- Instanced sprite rendering resources --
+    instance_swapchain_shader: Arc<Shader>,
+    instance_offscreen_shader: Arc<Shader>,
+    instance_pipeline: Arc<Pipeline>,
+    instance_offscreen_pipeline: Option<Arc<Pipeline>>,
+    /// Per-frame instance data buffers (binding 1, per-instance rate).
+    instance_buffers: [DynamicVertexBuffer; FRAMES_IN_FLIGHT],
+    /// Static unit quad vertex buffer (binding 0, shared by all instances).
+    unit_quad_vb: DynamicVertexBuffer,
+    /// Small index buffer for the single unit quad (6 indices).
+    unit_quad_ib: IndexBuffer,
+    /// Cached layouts for pipeline rebuilds.
+    unit_quad_layout: BufferLayout,
+    instance_layout: BufferLayout,
+    instance_batch: RefCell<InstanceBatchState>,
 
     // -- Shared resources --
     bindless_pool: vk::DescriptorPool,
@@ -350,6 +451,20 @@ impl Renderer2DData {
             shaders::TEXT_FRAG_SPV,
         )?);
 
+        // -- Instance Shaders --
+        let instance_swapchain_shader = Arc::new(Shader::new(
+            device,
+            "instance_swapchain",
+            shaders::INSTANCE_SWAPCHAIN_VERT_SPV,
+            shaders::INSTANCE_SWAPCHAIN_FRAG_SPV,
+        )?);
+        let instance_shader = Arc::new(Shader::new(
+            device,
+            "instance",
+            shaders::INSTANCE_VERT_SPV,
+            shaders::INSTANCE_FRAG_SPV,
+        )?);
+
         // -- Quad Vertex layout --
         let quad_layout = batch_quad_vertex_layout();
 
@@ -381,6 +496,37 @@ impl Renderer2DData {
         let text_vertex_buffers = [
             DynamicVertexBuffer::new(allocator, device, QUAD_VB_CAPACITY, quad_layout.clone())?,
             DynamicVertexBuffer::new(allocator, device, QUAD_VB_CAPACITY, quad_layout.clone())?,
+        ];
+
+        // -- Instance layouts and buffers --
+        let uq_layout = unit_quad_vertex_layout();
+        let inst_layout = sprite_instance_layout();
+
+        // Static unit quad vertex buffer (4 vertices, never changes).
+        let unit_quad_vertices = [
+            UnitQuadVertex { position: [-0.5,  0.5, 0.0], tex_coord: [0.0, 0.0] }, // TL
+            UnitQuadVertex { position: [ 0.5,  0.5, 0.0], tex_coord: [1.0, 0.0] }, // TR
+            UnitQuadVertex { position: [ 0.5, -0.5, 0.0], tex_coord: [1.0, 1.0] }, // BR
+            UnitQuadVertex { position: [-0.5, -0.5, 0.0], tex_coord: [0.0, 1.0] }, // BL
+        ];
+        let uq_bytes = unsafe {
+            std::slice::from_raw_parts(
+                unit_quad_vertices.as_ptr() as *const u8,
+                std::mem::size_of_val(&unit_quad_vertices),
+            )
+        };
+        let unit_quad_vb = DynamicVertexBuffer::new(
+            allocator, device, uq_bytes.len(), uq_layout.clone(),
+        )?;
+        unit_quad_vb.write_at(0, uq_bytes);
+
+        // Small index buffer for the unit quad (6 indices: 0,1,2, 2,3,0).
+        let unit_quad_ib = IndexBuffer::new(allocator, device, &[0, 1, 2, 2, 3, 0])?;
+
+        // Per-frame instance data buffers (persistently mapped).
+        let instance_buffers = [
+            DynamicVertexBuffer::new(allocator, device, INSTANCE_VB_CAPACITY, inst_layout.clone())?,
+            DynamicVertexBuffer::new(allocator, device, INSTANCE_VB_CAPACITY, inst_layout.clone())?,
         ];
 
         // -- Static index buffer (pre-generated quad pattern) --
@@ -466,6 +612,19 @@ impl Renderer2DData {
             pipeline_cache,
         )?);
 
+        // -- Instanced Sprite Pipeline (swapchain: 1 color attachment) --
+        let instance_pipeline = Arc::new(pipeline::create_instanced_batch_pipeline(
+            device,
+            &instance_swapchain_shader,
+            &uq_layout,
+            &inst_layout,
+            render_pass,
+            camera_ubo_ds_layout,
+            &[bindless_ds_layout],
+            1,
+            pipeline_cache,
+        )?);
+
         // -- Bindless descriptor pool (UPDATE_AFTER_BIND) --
         let pool_size = vk::DescriptorPoolSize {
             ty: vk::DescriptorType::COMBINED_IMAGE_SAMPLER,
@@ -524,6 +683,17 @@ impl Renderer2DData {
             text_offscreen_pipeline: None,
             text_vertex_buffers,
             text_batch: RefCell::new(TextBatchState::new()),
+
+            instance_swapchain_shader,
+            instance_offscreen_shader: instance_shader,
+            instance_pipeline,
+            instance_offscreen_pipeline: None,
+            instance_buffers,
+            unit_quad_vb,
+            unit_quad_ib,
+            unit_quad_layout: uq_layout,
+            instance_layout: inst_layout,
+            instance_batch: RefCell::new(InstanceBatchState::new()),
 
             bindless_pool,
             bindless_ds_layout,
@@ -629,6 +799,14 @@ impl Renderer2DData {
             let mut batch = self.text_batch.borrow_mut();
             batch.vertices.clear();
             batch.quad_count = 0;
+            batch.vb_write_offset = 0;
+            batch.stats = Renderer2DStats::default();
+        }
+        // Reset instance batch.
+        {
+            let mut batch = self.instance_batch.borrow_mut();
+            batch.instances.clear();
+            batch.instance_count = 0;
             batch.vb_write_offset = 0;
             batch.stats = Renderer2DStats::default();
         }
@@ -1076,6 +1254,122 @@ impl Renderer2DData {
         self.text_batch.borrow().stats
     }
 
+    // -- Instanced sprite batch operations --
+
+    /// Push a sprite instance into the current instance batch.
+    /// Returns false if the batch was full and a flush is needed first.
+    pub(super) fn push_instance(&self, instance: SpriteInstanceData) -> bool {
+        let mut batch = self.instance_batch.borrow_mut();
+        if batch.instance_count >= MAX_INSTANCES {
+            return false;
+        }
+        batch.instances.push(instance);
+        batch.instance_count += 1;
+        true
+    }
+
+    /// Returns true if there are sprite instances to flush.
+    pub(super) fn has_pending_instances(&self) -> bool {
+        self.instance_batch.borrow().instance_count > 0
+    }
+
+    /// Flush the current instance batch: write instance data to GPU, bind the
+    /// unit quad + instance buffer, and issue an instanced draw call.
+    pub(super) fn flush_instances(
+        &self,
+        cmd_buf: vk::CommandBuffer,
+        camera_ubo_ds: vk::DescriptorSet,
+        current_frame: usize,
+    ) {
+        let mut batch = self.instance_batch.borrow_mut();
+        if batch.instance_count == 0 {
+            return;
+        }
+
+        let _timer = ProfileTimer::new("Renderer2D::flush_instances");
+
+        // 1. Copy instance data to the mapped instance buffer at the current write offset.
+        let instance_data = unsafe {
+            std::slice::from_raw_parts(
+                batch.instances.as_ptr() as *const u8,
+                batch.instances.len() * std::mem::size_of::<SpriteInstanceData>(),
+            )
+        };
+        let ib_offset = batch.vb_write_offset;
+        if ib_offset + instance_data.len() > INSTANCE_VB_CAPACITY {
+            warn!(
+                "Instance batch overflow: exceeded {} flushes per frame. {} instances dropped.",
+                MAX_BATCHES_PER_FRAME, batch.instance_count
+            );
+            batch.instances.clear();
+            batch.instance_count = 0;
+            return;
+        }
+        self.instance_buffers[current_frame].write_at(ib_offset, instance_data);
+
+        // 2. Record Vulkan commands.
+        let instance_count = batch.instance_count as u32;
+        let active_pipeline = if self.use_offscreen {
+            self.instance_offscreen_pipeline
+                .as_ref()
+                .unwrap_or(&self.instance_pipeline)
+        } else {
+            &self.instance_pipeline
+        };
+        let pipeline = active_pipeline.pipeline();
+        let layout = active_pipeline.layout();
+
+        unsafe {
+            self.device
+                .cmd_bind_pipeline(cmd_buf, vk::PipelineBindPoint::GRAPHICS, pipeline);
+
+            // Bind camera UBO (set 0) and bindless textures (set 1).
+            self.device.cmd_bind_descriptor_sets(
+                cmd_buf,
+                vk::PipelineBindPoint::GRAPHICS,
+                layout,
+                0,
+                &[camera_ubo_ds, self.bindless_ds[current_frame]],
+                &[],
+            );
+
+            // Bind vertex buffers: binding 0 = unit quad (static, offset 0),
+            //                      binding 1 = instance data (at this batch's offset).
+            let uq_handle = self.unit_quad_vb.handle();
+            let inst_handle = self.instance_buffers[current_frame].handle();
+            self.device.cmd_bind_vertex_buffers(
+                cmd_buf,
+                0,
+                &[uq_handle, inst_handle],
+                &[0, ib_offset as u64],
+            );
+
+            // Bind index buffer (unit quad: 6 indices).
+            self.device.cmd_bind_index_buffer(
+                cmd_buf,
+                self.unit_quad_ib.buffer(),
+                0,
+                vk::IndexType::UINT32,
+            );
+
+            // Draw instanced! 6 indices per quad, N instances.
+            self.device.cmd_draw_indexed(cmd_buf, 6, instance_count, 0, 0, 0);
+        }
+
+        // 3. Update stats, advance write offset, and reset instances for next batch.
+        batch.stats.draw_calls += 1;
+        batch.stats.quad_count += batch.instance_count as u32;
+        batch.vb_write_offset = ib_offset + instance_data.len();
+
+        batch.instances.clear();
+        batch.instance_count = 0;
+    }
+
+    /// Get the accumulated instance statistics for this frame.
+    pub(super) fn instance_stats(&self) -> Renderer2DStats {
+        self.instance_batch.borrow().stats
+    }
+
     /// Create offscreen batch pipelines compatible with a multi-attachment
     /// render pass (e.g. framebuffer with 2 color attachments for picking).
     pub(super) fn create_offscreen_pipeline(
@@ -1147,6 +1441,19 @@ impl Renderer2DData {
             pipeline_cache,
         )?));
 
+        // Instanced sprite offscreen pipeline.
+        self.instance_offscreen_pipeline = Some(Arc::new(pipeline::create_instanced_batch_pipeline(
+            device,
+            &self.instance_offscreen_shader,
+            &self.unit_quad_layout,
+            &self.instance_layout,
+            render_pass,
+            camera_ubo_ds_layout,
+            &[self.bindless_ds_layout],
+            color_attachment_count,
+            pipeline_cache,
+        )?));
+
         Ok(())
     }
 
@@ -1198,6 +1505,8 @@ impl Renderer2DData {
                 "line" => self.line_offscreen_shader = shader.clone(),
                 "text_swapchain" => self.text_swapchain_shader = shader.clone(),
                 "text" => self.text_offscreen_shader = shader.clone(),
+                "instance_swapchain" => self.instance_swapchain_shader = shader.clone(),
+                "instance" => self.instance_offscreen_shader = shader.clone(),
                 _ => {} // Unknown shader (e.g. legacy/) — skip.
             }
         }
@@ -1246,6 +1555,18 @@ impl Renderer2DData {
             self.pipeline_cache,
         )?);
 
+        self.instance_pipeline = Arc::new(pipeline::create_instanced_batch_pipeline(
+            &self.device,
+            &self.instance_swapchain_shader,
+            &self.unit_quad_layout,
+            &self.instance_layout,
+            self.swapchain_render_pass,
+            self.camera_ubo_ds_layout,
+            &[self.bindless_ds_layout],
+            1,
+            self.pipeline_cache,
+        )?);
+
         // Rebuild offscreen pipelines if they exist.
         if let Some(offscreen_rp) = self.offscreen_render_pass {
             self.rebuild_offscreen_pipelines(
@@ -1260,6 +1581,34 @@ impl Renderer2DData {
         let count = new_shaders.len() as u32;
         log::info!(target: "gg_engine", "Hot-reloaded {} shaders", count);
         Ok(count)
+    }
+
+    // -- Accessors for GpuParticleSystem rendering ----------------------------
+
+    /// Get the currently active instanced pipeline (offscreen or swapchain).
+    pub(super) fn active_instance_pipeline(&self) -> &Arc<Pipeline> {
+        if self.use_offscreen {
+            self.instance_offscreen_pipeline
+                .as_ref()
+                .unwrap_or(&self.instance_pipeline)
+        } else {
+            &self.instance_pipeline
+        }
+    }
+
+    /// Get the bindless descriptor set for a given frame.
+    pub(super) fn bindless_descriptor_set(&self, frame: usize) -> vk::DescriptorSet {
+        self.bindless_ds[frame]
+    }
+
+    /// Get the unit quad vertex buffer handle.
+    pub(super) fn unit_quad_vb_handle(&self) -> vk::Buffer {
+        self.unit_quad_vb.handle()
+    }
+
+    /// Get the unit quad index buffer handle.
+    pub(super) fn unit_quad_ib_buffer(&self) -> vk::Buffer {
+        self.unit_quad_ib.buffer()
     }
 }
 

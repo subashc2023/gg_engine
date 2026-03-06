@@ -12,8 +12,10 @@ use super::framebuffer::{Framebuffer, FramebufferSpec};
 use super::gpu_allocation::GpuAllocator;
 use super::pipeline::{self, Pipeline};
 use super::render_command::RenderCommand;
+use super::gpu_particle_system::GpuParticleSystem;
 use super::renderer_2d::{
     BatchCircleVertex, BatchLineVertex, BatchQuadVertex, Renderer2DData, Renderer2DStats,
+    SpriteInstanceData,
 };
 use super::renderer_api::{RendererAPI, VulkanRendererAPI};
 use super::shader::Shader;
@@ -89,6 +91,9 @@ pub struct Renderer {
 
     // Batched async texture/font upload system (fence-tracked, no queue_wait_idle).
     transfer_batch: TransferBatch,
+
+    // GPU-driven particle system (compute shader simulation + instanced rendering).
+    gpu_particles: Option<GpuParticleSystem>,
 }
 
 impl Renderer {
@@ -211,6 +216,7 @@ impl Renderer {
             line_width: 4.0,
             last_stats_2d: Renderer2DStats::default(),
             transfer_batch,
+            gpu_particles: None,
         })
     }
 
@@ -669,6 +675,82 @@ impl Renderer {
         );
     }
 
+    // -- Internal: push a sprite instance into the instanced batch -----------
+
+    fn push_sprite_instance(
+        &self,
+        transform: &Mat4,
+        color: Vec4,
+        tex_index: f32,
+        tiling_factor: f32,
+        entity_id: i32,
+    ) {
+        self.push_sprite_instance_uv(
+            transform,
+            color,
+            tex_index,
+            tiling_factor,
+            [0.0, 0.0],
+            [1.0, 1.0],
+            entity_id,
+        );
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn push_sprite_instance_uv(
+        &self,
+        transform: &Mat4,
+        color: Vec4,
+        tex_index: f32,
+        tiling_factor: f32,
+        uv_min: [f32; 2],
+        uv_max: [f32; 2],
+        entity_id: i32,
+    ) {
+        let data = self
+            .renderer_2d
+            .as_ref()
+            .expect("Renderer2D not initialized — call init_2d first");
+
+        let cols = transform.to_cols_array_2d();
+        let instance = SpriteInstanceData {
+            transform_col0: cols[0],
+            transform_col1: cols[1],
+            transform_col2: cols[2],
+            transform_col3: cols[3],
+            color: [color.x, color.y, color.z, color.w],
+            uv_min,
+            uv_max,
+            tex_index,
+            tiling_factor,
+            entity_id,
+            _pad: 0,
+        };
+
+        if !data.push_instance(instance) {
+            // Batch full — flush and retry.
+            self.flush_instance_batch();
+            data.push_instance(instance);
+        }
+    }
+
+    /// Flush the current instance batch (if any instances are pending).
+    fn flush_instance_batch(&self) {
+        let data = self
+            .renderer_2d
+            .as_ref()
+            .expect("Renderer2D not initialized — call init_2d first");
+        let ctx = self
+            .draw_context
+            .expect("flush_instance_batch called outside begin_scene/end_scene");
+
+        data.flush_instances(
+            ctx.cmd_buf,
+            self.camera_ubo_ds[ctx.current_frame],
+            ctx.current_frame,
+        );
+    }
+
     // -- Transform-based quads (raw Mat4) ------------------------------------
 
     /// Draw a flat-colored quad with a pre-built transform matrix.
@@ -709,13 +791,12 @@ impl Renderer {
         sprite: &SpriteRendererComponent,
         entity_id: i32,
     ) {
-
         let tex_index = sprite
             .texture
             .as_ref()
             .map(|t| t.bindless_index() as f32)
             .unwrap_or(0.0); // 0 = white texture
-        self.push_quad_to_batch(
+        self.push_sprite_instance(
             transform,
             sprite.color,
             tex_index,
@@ -917,12 +998,15 @@ impl Renderer {
         tint_color: Vec4,
         entity_id: i32,
     ) {
-        self.push_quad_to_batch_uv(
+        let tc = sub_texture.tex_coords();
+        // tc[0] = (min_u, min_v), tc[2] = (max_u, max_v)
+        self.push_sprite_instance_uv(
             transform,
             tint_color,
             sub_texture.bindless_index() as f32,
-            sub_texture.tex_coords(),
             1.0,
+            tc[0],
+            tc[2],
             entity_id,
         );
     }
@@ -1423,21 +1507,32 @@ impl Renderer {
                         ctx.current_frame,
                     );
                 }
+                // Flush any remaining sprite instances.
+                if data.has_pending_instances() {
+                    data.flush_instances(
+                        ctx.cmd_buf,
+                        self.camera_ubo_ds[ctx.current_frame],
+                        ctx.current_frame,
+                    );
+                }
             }
             // Snapshot stats for this frame (available via stats_2d() until next end_scene).
             let quad_stats = data.quad_stats();
             let circle_stats = data.circle_stats();
             let line_stats = data.line_stats();
             let text_stats = data.text_stats();
+            let instance_stats = data.instance_stats();
             self.last_stats_2d = Renderer2DStats {
                 draw_calls: quad_stats.draw_calls
                     + circle_stats.draw_calls
                     + line_stats.draw_calls
-                    + text_stats.draw_calls,
+                    + text_stats.draw_calls
+                    + instance_stats.draw_calls,
                 quad_count: quad_stats.quad_count
                     + circle_stats.quad_count
                     + line_stats.quad_count
-                    + text_stats.quad_count,
+                    + text_stats.quad_count
+                    + instance_stats.quad_count,
             };
         }
         self.draw_context = None;
@@ -1491,6 +1586,64 @@ impl Renderer {
             None,
             Some(texture.descriptor_set()),
         );
+    }
+
+    // -- GPU Particle System ------------------------------------------------
+
+    /// Create a GPU-driven particle system with the given maximum particle count.
+    /// Uses a compute shader for simulation and instanced rendering for drawing.
+    pub fn create_gpu_particle_system(&mut self, max_particles: u32) -> Result<(), String> {
+        let system = GpuParticleSystem::new(
+            &self.allocator,
+            &self.device,
+            max_particles,
+            self.pipeline_cache,
+        )?;
+        self.gpu_particles = Some(system);
+        Ok(())
+    }
+
+    /// Queue a particle emission for the GPU particle system.
+    /// Emissions are processed during the next compute dispatch (1-frame latency).
+    pub fn emit_particles(&mut self, props: &crate::particle_system::ParticleProps) {
+        if let Some(ps) = &mut self.gpu_particles {
+            ps.emit(props);
+        }
+    }
+
+    /// Record compute dispatch commands for the GPU particle system.
+    /// Must be called OUTSIDE a render pass (before `begin_scene`).
+    pub(crate) fn dispatch_particle_compute(
+        &mut self,
+        cmd_buf: vk::CommandBuffer,
+        current_frame: usize,
+        dt: f32,
+    ) {
+        if let Some(ps) = &mut self.gpu_particles {
+            ps.dispatch(cmd_buf, current_frame, dt);
+        }
+    }
+
+    /// Render GPU particles using the instanced sprite pipeline.
+    /// Must be called INSIDE a render pass (between `begin_scene`/`end_scene`).
+    pub fn render_gpu_particles(&self) {
+        let (Some(ps), Some(data)) = (&self.gpu_particles, &self.renderer_2d) else {
+            return;
+        };
+        let ctx = self
+            .draw_context
+            .expect("render_gpu_particles called outside begin_scene/end_scene");
+        ps.render(
+            ctx.cmd_buf,
+            ctx.current_frame,
+            self.camera_ubo_ds[ctx.current_frame],
+            data,
+        );
+    }
+
+    /// Returns true if a GPU particle system has been created.
+    pub fn has_gpu_particles(&self) -> bool {
+        self.gpu_particles.is_some()
     }
 }
 
