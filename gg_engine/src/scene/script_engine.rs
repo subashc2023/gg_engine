@@ -980,7 +980,7 @@ end
     fn script_field_value_serde_round_trip() {
         let values = vec![
             ScriptFieldValue::Bool(true),
-            ScriptFieldValue::Float(3.14),
+            ScriptFieldValue::Float(3.15),
             ScriptFieldValue::String("hello".into()),
         ];
 

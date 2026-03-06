@@ -3110,9 +3110,7 @@ mod tests {
         let handle = crate::uuid::Uuid::from_raw(42);
 
         let e = scene.create_entity_with_tag("Player");
-        let mut sprite = SpriteRendererComponent::default();
-        sprite.texture_handle = handle;
-        scene.add_component(e, sprite);
+        scene.add_component(e, SpriteRendererComponent { texture_handle: handle, ..Default::default() });
 
         let refs = scene.find_asset_references(handle);
         assert_eq!(refs.len(), 1);
@@ -3126,9 +3124,7 @@ mod tests {
         let handle = crate::uuid::Uuid::from_raw(99);
 
         let e = scene.create_entity_with_tag("BGM");
-        let mut asc = AudioSourceComponent::default();
-        asc.audio_handle = handle;
-        scene.add_component(e, asc);
+        scene.add_component(e, AudioSourceComponent { audio_handle: handle, ..Default::default() });
 
         let refs = scene.find_asset_references(handle);
         assert_eq!(refs.len(), 1);
@@ -3142,9 +3138,7 @@ mod tests {
         let handle = crate::uuid::Uuid::from_raw(77);
 
         let e = scene.create_entity_with_tag("Level");
-        let mut tm = TilemapComponent::default();
-        tm.texture_handle = handle;
-        scene.add_component(e, tm);
+        scene.add_component(e, TilemapComponent { texture_handle: handle, ..Default::default() });
 
         let refs = scene.find_asset_references(handle);
         assert_eq!(refs.len(), 1);
@@ -3167,14 +3161,10 @@ mod tests {
         let handle = crate::uuid::Uuid::from_raw(55);
 
         let e1 = scene.create_entity_with_tag("A");
-        let mut s1 = SpriteRendererComponent::default();
-        s1.texture_handle = handle;
-        scene.add_component(e1, s1);
+        scene.add_component(e1, SpriteRendererComponent { texture_handle: handle, ..Default::default() });
 
         let e2 = scene.create_entity_with_tag("B");
-        let mut s2 = SpriteRendererComponent::default();
-        s2.texture_handle = handle;
-        scene.add_component(e2, s2);
+        scene.add_component(e2, SpriteRendererComponent { texture_handle: handle, ..Default::default() });
 
         let refs = scene.find_asset_references(handle);
         assert_eq!(refs.len(), 2);

@@ -25,7 +25,7 @@ fn generate_checkerboard(out: &Path) {
     let size = 256u32;
     let cell = size / 2;
     let img = ImageBuffer::from_fn(size, size, |x, y| {
-        let checker = ((x / cell) + (y / cell)) % 2 == 0;
+        let checker = ((x / cell) + (y / cell)).is_multiple_of(2);
         if checker {
             Rgba([255u8, 255, 255, 255])
         } else {
@@ -70,7 +70,7 @@ fn generate_default_placeholder(out: &Path) {
     let size = 64u32;
     let cell = size / 2;
     let img = ImageBuffer::from_fn(size, size, |x, y| {
-        let checker = ((x / cell) + (y / cell)) % 2 == 0;
+        let checker = ((x / cell) + (y / cell)).is_multiple_of(2);
         if checker {
             Rgba([255u8, 0, 255, 255]) // magenta
         } else {

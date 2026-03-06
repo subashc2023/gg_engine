@@ -1432,16 +1432,18 @@ mod tests {
     fn tilemap_round_trip() {
         let mut scene = Scene::new();
         let e = scene.create_entity_with_tag("Tilemap");
-        let mut tilemap = crate::scene::TilemapComponent::default();
-        tilemap.width = 3;
-        tilemap.height = 2;
-        tilemap.tile_size = Vec2::new(1.5, 1.5);
-        tilemap.tileset_columns = 4;
-        tilemap.cell_size = Vec2::new(16.0, 16.0);
-        tilemap.spacing = Vec2::new(2.0, 2.0);
-        tilemap.margin = Vec2::new(1.0, 1.0);
-        tilemap.tiles = vec![0, 1, -1, 3, -1, 2];
-        tilemap.texture_handle = crate::uuid::Uuid::from_raw(99999);
+        let tilemap = crate::scene::TilemapComponent {
+            width: 3,
+            height: 2,
+            tile_size: Vec2::new(1.5, 1.5),
+            tileset_columns: 4,
+            cell_size: Vec2::new(16.0, 16.0),
+            spacing: Vec2::new(2.0, 2.0),
+            margin: Vec2::new(1.0, 1.0),
+            tiles: vec![0, 1, -1, 3, -1, 2],
+            texture_handle: crate::uuid::Uuid::from_raw(99999),
+            ..Default::default()
+        };
         scene.add_component(e, tilemap);
 
         let yaml = SceneSerializer::serialize_to_string(&scene).unwrap();

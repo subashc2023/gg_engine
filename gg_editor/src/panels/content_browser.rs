@@ -41,8 +41,9 @@ thread_local! {
     static DELETE_CONFIRM: std::cell::RefCell<Option<std::path::PathBuf>> =
         const { std::cell::RefCell::new(None) };
     /// Pending asset removal: (handle, list of referencing entity descriptions).
+    #[allow(clippy::type_complexity)]
     static ASSET_REMOVE_CONFIRM: std::cell::RefCell<Option<(Uuid, Vec<(String, &'static str)>)>> =
-        std::cell::RefCell::new(None);
+        const { std::cell::RefCell::new(None) };
 }
 
 /// Clear the search filter string.
@@ -352,7 +353,7 @@ fn file_browser_ui(
                 if !is_renaming {
                     response.inner.context_menu(|ui| {
                         if let Some(am) = asset_manager.as_mut() {
-                            let rel_path = super::relative_asset_path(&path, am.asset_directory());
+                            let rel_path = super::relative_asset_path(path, am.asset_directory());
                             let already_imported = am.is_imported(&rel_path);
                             if already_imported {
                                 ui.label("Already imported");

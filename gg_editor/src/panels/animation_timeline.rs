@@ -46,9 +46,9 @@ enum TimelineDrag {
 
 thread_local! {
     static SELECTED_CLIP: Cell<Option<usize>> = const { Cell::new(None) };
-    static ZOOM: Cell<f32> = Cell::new(20.0);
+    static ZOOM: Cell<f32> = const { Cell::new(20.0) };
     static SCROLL_X: Cell<f32> = const { Cell::new(0.0) };
-    static GRID_CELL_SIZE: Cell<f32> = Cell::new(DEFAULT_GRID_CELL_DISPLAY);
+    static GRID_CELL_SIZE: Cell<f32> = const { Cell::new(DEFAULT_GRID_CELL_DISPLAY) };
     static TRACKED_ENTITY: Cell<u64> = const { Cell::new(0) };
     static ACTIVE_DRAG: RefCell<Option<TimelineDrag>> = const { RefCell::new(None) };
     static HOVERED_FRAME: Cell<Option<u32>> = const { Cell::new(None) };
@@ -615,8 +615,8 @@ fn draw_timeline(
             continue;
         }
 
-        let is_major = f % major_interval as i32 == 0;
-        let is_tick = f % tick_interval as i32 == 0;
+        let is_major = f % major_interval == 0;
+        let is_tick = f % tick_interval == 0;
 
         if is_major {
             painter.line_segment(
@@ -963,19 +963,17 @@ fn draw_timeline(
                     ui.close();
                 }
             }
-        } else {
-            if ui.button("Add Clip").clicked() {
-                if let Some(mut sa) = scene.get_component_mut::<SpriteAnimatorComponent>(entity) {
-                    let idx = sa.clips.len();
-                    sa.clips.push(AnimationClip {
-                        name: format!("clip_{}", idx),
-                        ..Default::default()
-                    });
-                    SELECTED_CLIP.set(Some(idx));
-                    *scene_dirty = true;
-                }
-                ui.close();
+        } else if ui.button("Add Clip").clicked() {
+            if let Some(mut sa) = scene.get_component_mut::<SpriteAnimatorComponent>(entity) {
+                let idx = sa.clips.len();
+                sa.clips.push(AnimationClip {
+                    name: format!("clip_{}", idx),
+                    ..Default::default()
+                });
+                SELECTED_CLIP.set(Some(idx));
+                *scene_dirty = true;
             }
+            ui.close();
         }
     });
 
