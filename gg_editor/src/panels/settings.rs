@@ -32,22 +32,20 @@ pub(crate) fn settings_ui(
     ui.label(format!("FPS: {:.0}", fps));
     ui.label(format!("Draw calls: {}", render_stats.draw_calls));
     ui.label(format!("Quads: {}", render_stats.quad_count));
-    ui.label(format!(
-        "Vertices: {}",
-        render_stats.total_vertex_count()
-    ));
-    ui.label(format!(
-        "Indices: {}",
-        render_stats.total_index_count()
-    ));
+    ui.label(format!("Vertices: {}", render_stats.total_vertex_count()));
+    ui.label(format!("Indices: {}", render_stats.total_index_count()));
 
     ui.add_space(8.0);
     ui.checkbox(vsync, "VSync");
 
     ui.add_space(4.0);
-    if ui.button("Reload Shaders").on_hover_text(
-        "Recompile .glsl sources and rebuild all pipelines.\nRequires glslc on PATH.",
-    ).clicked() {
+    if ui
+        .button("Reload Shaders")
+        .on_hover_text(
+            "Recompile .glsl sources and rebuild all pipelines.\nRequires glslc on PATH.",
+        )
+        .clicked()
+    {
         *reload_shaders_requested = true;
     }
 
@@ -113,7 +111,11 @@ pub(crate) fn settings_ui(
 
     // On-demand Chrome Tracing capture for gg_tools analysis.
     let recording = gg_engine::profiling::is_session_active();
-    let label = if recording { "Stop Capture" } else { "Capture Trace" };
+    let label = if recording {
+        "Stop Capture"
+    } else {
+        "Capture Trace"
+    };
     if ui.button(label).clicked() {
         if recording {
             gg_engine::profiling::end_session();

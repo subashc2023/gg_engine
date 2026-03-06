@@ -18,17 +18,16 @@ impl GpuAllocator {
         device: &ash::Device,
         physical_device: vk::PhysicalDevice,
     ) -> Result<Self, String> {
-        let inner = gpu_allocator::vulkan::Allocator::new(
-            &gpu_allocator::vulkan::AllocatorCreateDesc {
+        let inner =
+            gpu_allocator::vulkan::Allocator::new(&gpu_allocator::vulkan::AllocatorCreateDesc {
                 instance: instance.clone(),
                 device: device.clone(),
                 physical_device,
                 debug_settings: gpu_allocator::AllocatorDebugSettings::default(),
                 buffer_device_address: false,
                 allocation_sizes: gpu_allocator::AllocationSizes::default(),
-            },
-        )
-        .map_err(|e| format!("Failed to create GPU allocator: {e}"))?;
+            })
+            .map_err(|e| format!("Failed to create GPU allocator: {e}"))?;
 
         log::info!(target: "gg_engine", "GPU sub-allocator initialized");
 

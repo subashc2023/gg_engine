@@ -273,10 +273,7 @@ struct FlameSpan {
 /// Build call stack spans from trace events by using timestamps to determine nesting.
 fn build_flame_spans(events: &[TraceEvent]) -> Vec<FlameSpan> {
     // Filter to events that have both ts and dur > 0.
-    let mut timed: Vec<&TraceEvent> = events
-        .iter()
-        .filter(|e| e.dur > 0 && e.ts > 0)
-        .collect();
+    let mut timed: Vec<&TraceEvent> = events.iter().filter(|e| e.dur > 0 && e.ts > 0).collect();
 
     if timed.is_empty() {
         // Fall back: include events with ts == 0 if they have dur.

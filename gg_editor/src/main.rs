@@ -18,9 +18,9 @@ use transform_gizmo_egui::Gizmo;
 use camera_controller::NativeCameraFollow;
 use editor_settings::EditorSettings;
 use gizmo::GizmoOperation;
-use physics_player::PhysicsPlayer;
 use panels::content_browser::{render_dnd_ghost, ASSETS_DIR};
 use panels::{EditorTabViewer, ProjectContext, Tab, TilesetPreviewInfo, ViewportState};
+use physics_player::PhysicsPlayer;
 
 // ---------------------------------------------------------------------------
 // Scene state (edit vs play mode)
@@ -204,18 +204,15 @@ impl Application for GGEditor {
         info!("GGEditor initialized");
 
         // -- Project loading (CLI arg) --
-        let project = std::env::args()
-            .nth(1)
-            .and_then(|arg| {
-                if arg.ends_with(".ggproject") {
-                    // Canonicalize the path so project_directory is absolute.
-                    let abs_path = std::fs::canonicalize(&arg)
-                        .unwrap_or_else(|_| PathBuf::from(&arg));
-                    Project::load(&abs_path.to_string_lossy())
-                } else {
-                    None
-                }
-            });
+        let project = std::env::args().nth(1).and_then(|arg| {
+            if arg.ends_with(".ggproject") {
+                // Canonicalize the path so project_directory is absolute.
+                let abs_path = std::fs::canonicalize(&arg).unwrap_or_else(|_| PathBuf::from(&arg));
+                Project::load(&abs_path.to_string_lossy())
+            } else {
+                None
+            }
+        });
 
         // If a project is loaded, set CWD to the project directory.
         if let Some(ref proj) = project {
@@ -226,7 +223,10 @@ impl Application for GGEditor {
                     e
                 );
             } else {
-                info!("CWD set to project directory: {}", proj.project_directory().display());
+                info!(
+                    "CWD set to project directory: {}",
+                    proj.project_directory().display()
+                );
             }
         }
 
@@ -274,7 +274,10 @@ impl Application for GGEditor {
                     (Scene::new(), None, false)
                 }
             } else {
-                info!("Start scene '{}' not found, creating empty scene", start_path.display());
+                info!(
+                    "Start scene '{}' not found, creating empty scene",
+                    start_path.display()
+                );
                 (Scene::new(), None, false)
             }
         } else {
@@ -284,25 +287,20 @@ impl Application for GGEditor {
         // Record CLI-loaded project in recent projects.
         if let Some(ref proj) = project {
             if let Some(arg) = std::env::args().nth(1) {
-                let abs_path = std::fs::canonicalize(&arg)
-                    .unwrap_or_else(|_| PathBuf::from(&arg));
+                let abs_path = std::fs::canonicalize(&arg).unwrap_or_else(|_| PathBuf::from(&arg));
                 editor_settings.add_recent_project(proj.name(), &abs_path.to_string_lossy());
             }
         }
 
         // --- File watcher for automatic Lua script reloading ---------------
         #[cfg(feature = "lua-scripting")]
-        let script_reload_pending =
-            std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let script_reload_pending = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
 
         // Only create the file watcher in Editor mode (not Hub mode) to
         // avoid an OS-level filesystem monitor thread sitting idle.
         #[cfg(feature = "lua-scripting")]
         let _script_watcher = if editor_mode == EditorMode::Editor {
-            create_script_watcher(
-                &assets_root.join("scripts"),
-                &script_reload_pending,
-            )
+            create_script_watcher(&assets_root.join("scripts"), &script_reload_pending)
         } else {
             None
         };
@@ -540,8 +538,11 @@ impl Application for GGEditor {
                 }
 
                 // Delete selected entity — edit mode only, not while typing.
-                KeyCode::Delete if !ctrl && !shift && !self.ui.egui_wants_keyboard
-                    && self.playback.scene_state == SceneState::Edit =>
+                KeyCode::Delete
+                    if !ctrl
+                        && !shift
+                        && !self.ui.egui_wants_keyboard
+                        && self.playback.scene_state == SceneState::Edit =>
                 {
                     if let Some(entity) = self.selection_context.take() {
                         self.undo_system.record(&self.scene);
@@ -552,8 +553,11 @@ impl Application for GGEditor {
                 }
 
                 // Escape — clear brush first, then clear selection (edit mode only).
-                KeyCode::Escape if !ctrl && !shift && !self.ui.egui_wants_keyboard
-                    && self.playback.scene_state == SceneState::Edit =>
+                KeyCode::Escape
+                    if !ctrl
+                        && !shift
+                        && !self.ui.egui_wants_keyboard
+                        && self.playback.scene_state == SceneState::Edit =>
                 {
                     if self.tilemap_paint.is_active() {
                         self.tilemap_paint.clear_brush();
@@ -563,8 +567,11 @@ impl Application for GGEditor {
                 }
 
                 // X — toggle eraser mode (edit mode only, not while typing).
-                KeyCode::X if !ctrl && !shift && !self.ui.egui_wants_keyboard
-                    && self.playback.scene_state == SceneState::Edit =>
+                KeyCode::X
+                    if !ctrl
+                        && !shift
+                        && !self.ui.egui_wants_keyboard
+                        && self.playback.scene_state == SceneState::Edit =>
                 {
                     if self.tilemap_paint.brush_tile_id == -1 {
                         self.tilemap_paint.clear_brush();
@@ -574,23 +581,35 @@ impl Application for GGEditor {
                 }
 
                 // Gizmo shortcuts (Q/W/E/R) — edit mode only, not while typing.
-                KeyCode::Q if !ctrl && !shift && !self.ui.egui_wants_keyboard
-                    && self.playback.scene_state == SceneState::Edit =>
+                KeyCode::Q
+                    if !ctrl
+                        && !shift
+                        && !self.ui.egui_wants_keyboard
+                        && self.playback.scene_state == SceneState::Edit =>
                 {
                     self.gizmo_state.operation = GizmoOperation::None;
                 }
-                KeyCode::W if !ctrl && !shift && !self.ui.egui_wants_keyboard
-                    && self.playback.scene_state == SceneState::Edit =>
+                KeyCode::W
+                    if !ctrl
+                        && !shift
+                        && !self.ui.egui_wants_keyboard
+                        && self.playback.scene_state == SceneState::Edit =>
                 {
                     self.gizmo_state.operation = GizmoOperation::Translate;
                 }
-                KeyCode::E if !ctrl && !shift && !self.ui.egui_wants_keyboard
-                    && self.playback.scene_state == SceneState::Edit =>
+                KeyCode::E
+                    if !ctrl
+                        && !shift
+                        && !self.ui.egui_wants_keyboard
+                        && self.playback.scene_state == SceneState::Edit =>
                 {
                     self.gizmo_state.operation = GizmoOperation::Rotate;
                 }
-                KeyCode::R if !ctrl && !shift && !self.ui.egui_wants_keyboard
-                    && self.playback.scene_state == SceneState::Edit =>
+                KeyCode::R
+                    if !ctrl
+                        && !shift
+                        && !self.ui.egui_wants_keyboard
+                        && self.playback.scene_state == SceneState::Edit =>
                 {
                     self.gizmo_state.operation = GizmoOperation::Scale;
                 }
@@ -692,7 +711,8 @@ impl Application for GGEditor {
 
         // Read latest pixel readback result.
         self.viewport.hovered_entity = self
-            .viewport.scene_fb
+            .viewport
+            .scene_fb
             .as_ref()
             .map(|fb| fb.hovered_entity())
             .unwrap_or(-1);
@@ -723,7 +743,10 @@ impl Application for GGEditor {
                 .join("shaders");
             match renderer.reload_shaders(&shader_dir) {
                 Ok(count) => {
-                    info!("Shader hot-reload: {} shaders recompiled successfully", count);
+                    info!(
+                        "Shader hot-reload: {} shaders recompiled successfully",
+                        count
+                    );
                 }
                 Err(e) => {
                     error!("Shader hot-reload failed: {}", e);
@@ -742,16 +765,14 @@ impl Application for GGEditor {
             for result in font_results {
                 if let gg_engine::asset::LoadResult::Font { font_key, data } = result {
                     match data {
-                        Ok(cpu_data) => {
-                            match renderer.upload_font(cpu_data) {
-                                Ok(font) => {
-                                    self.fonts.cache.insert(font_key, Ref::new(font));
-                                }
-                                Err(e) => {
-                                    warn!("Font GPU upload failed: {e}");
-                                }
+                        Ok(cpu_data) => match renderer.upload_font(cpu_data) {
+                            Ok(font) => {
+                                self.fonts.cache.insert(font_key, Ref::new(font));
                             }
-                        }
+                            Err(e) => {
+                                warn!("Font GPU upload failed: {e}");
+                            }
+                        },
                         Err(e) => {
                             warn!("Async font load failed: {e}");
                         }
@@ -842,7 +863,9 @@ impl Application for GGEditor {
 
     fn on_egui(&mut self, ctx: &egui::Context, window: &Window) {
         // Apply saved theme on first frame (engine defaults to Dark).
-        if self.ui.prev_window_title.is_empty() && self.editor_settings.theme != gg_engine::ui_theme::EditorTheme::Dark {
+        if self.ui.prev_window_title.is_empty()
+            && self.editor_settings.theme != gg_engine::ui_theme::EditorTheme::Dark
+        {
             gg_engine::ui_theme::apply_theme(ctx, self.editor_settings.theme);
         }
 
@@ -922,34 +945,37 @@ impl Application for GGEditor {
                 SceneState::Simulate => title_bar::PlayState::Simulate,
             };
             let project_title = match &self.project_state.project {
-                Some(proj) => {
-                    match &self.scene_ctx.editor_scene_path {
-                        Some(path) => {
-                            let scene_name = std::path::Path::new(path)
-                                .file_name()
-                                .map(|n| n.to_string_lossy().to_string())
-                                .unwrap_or_default();
-                            format!("GGEngine - {} - {}", proj.name(), scene_name)
-                        }
-                        None => format!("GGEngine - {}", proj.name()),
+                Some(proj) => match &self.scene_ctx.editor_scene_path {
+                    Some(path) => {
+                        let scene_name = std::path::Path::new(path)
+                            .file_name()
+                            .map(|n| n.to_string_lossy().to_string())
+                            .unwrap_or_default();
+                        format!("GGEngine - {} - {}", proj.name(), scene_name)
                     }
-                }
-                None => {
-                    match &self.scene_ctx.editor_scene_path {
-                        Some(path) => {
-                            let scene_name = std::path::Path::new(path)
-                                .file_name()
-                                .map(|n| n.to_string_lossy().to_string())
-                                .unwrap_or_default();
-                            format!("GGEngine - {}", scene_name)
-                        }
-                        None => "GGEngine".into(),
+                    None => format!("GGEngine - {}", proj.name()),
+                },
+                None => match &self.scene_ctx.editor_scene_path {
+                    Some(path) => {
+                        let scene_name = std::path::Path::new(path)
+                            .file_name()
+                            .map(|n| n.to_string_lossy().to_string())
+                            .unwrap_or_default();
+                        format!("GGEngine - {}", scene_name)
                     }
-                }
+                    None => "GGEngine".into(),
+                },
             };
-            let response = title_bar::title_bar_ui(ctx, window, play_state, self.playback.paused, &project_title, |ui| {
-                self.menu_bar_contents(ui);
-            });
+            let response = title_bar::title_bar_ui(
+                ctx,
+                window,
+                play_state,
+                self.playback.paused,
+                &project_title,
+                |ui| {
+                    self.menu_bar_contents(ui);
+                },
+            );
             if response.close_requested {
                 self.request_exit();
             }
@@ -993,7 +1019,11 @@ impl Application for GGEditor {
             self.toolbar_ui(ctx);
         }
 
-        let fb_tex_id = self.viewport.scene_fb.as_ref().and_then(|fb| fb.egui_texture_id());
+        let fb_tex_id = self
+            .viewport
+            .scene_fb
+            .as_ref()
+            .and_then(|fb| fb.egui_texture_id());
 
         let mut dock_style = egui_dock::Style::from_egui(ctx.style().as_ref());
 
@@ -1061,11 +1091,12 @@ impl Application for GGEditor {
         {
             let current_snap_to_grid = self.editor_settings.snap_to_grid;
             let current_grid_size = self.editor_settings.grid_size;
+            let mut hierarchy_action = None;
             let mut viewer = EditorTabViewer {
                 scene: &mut self.scene,
                 selection_context: &mut self.selection_context,
                 pending_open_path: &mut self.ui.pending_open_path,
-                is_playing: self.playback.scene_state == SceneState::Play,  // Simulate still uses editor camera + gizmos
+                is_playing: self.playback.scene_state == SceneState::Play, // Simulate still uses editor camera + gizmos
                 scene_dirty: &mut self.scene_ctx.dirty,
                 undo_system: &mut self.undo_system,
                 hierarchy_filter: &mut self.ui.hierarchy_filter,
@@ -1105,11 +1136,18 @@ impl Application for GGEditor {
                     editor_scene_path: self.scene_ctx.editor_scene_path.as_deref(),
                     egui_texture_map: &self.ui.egui_texture_map,
                 },
+                hierarchy_action: &mut hierarchy_action,
             };
 
             egui_dock::DockArea::new(&mut self.ui.dock_state)
                 .style(dock_style)
                 .show(ctx, &mut viewer);
+
+            // Handle hierarchy external actions (prefab save/instantiate).
+            // Drop viewer to release mutable borrows before handle_hierarchy_action.
+            #[allow(clippy::drop_non_drop)]
+            drop(viewer);
+            self.handle_hierarchy_action(hierarchy_action);
         }
 
         // Sync gizmo operation back to settings (lives in gizmo_state, not settings).
@@ -1166,6 +1204,23 @@ impl Application for GGEditor {
                 handles.push(tex.egui_handle());
             }
         }
+
+        // Register sprite sheet textures for the selected entity (animation timeline panel).
+        if let Some(entity) = self.selection_context {
+            if let Some(sprite) = self.scene.get_component::<SpriteRendererComponent>(entity) {
+                if let Some(ref tex) = sprite.texture {
+                    handles.push(tex.egui_handle());
+                }
+            }
+            if let Some(animator) = self.scene.get_component::<SpriteAnimatorComponent>(entity) {
+                for clip in &animator.clips {
+                    if let Some(ref tex) = clip.texture {
+                        handles.push(tex.egui_handle());
+                    }
+                }
+            }
+        }
+
         handles
     }
 
@@ -1213,14 +1268,24 @@ impl GGEditor {
         for i in x_min..=x_max {
             let x = i as f32 * grid_size;
             let color = if i == 0 { axis_color_y } else { grid_color };
-            renderer.draw_line(Vec3::new(x, lo_y, -0.01), Vec3::new(x, hi_y, -0.01), color, -1);
+            renderer.draw_line(
+                Vec3::new(x, lo_y, -0.01),
+                Vec3::new(x, hi_y, -0.01),
+                color,
+                -1,
+            );
         }
 
         // Horizontal lines (constant Y).
         for j in y_min..=y_max {
             let y = j as f32 * grid_size;
             let color = if j == 0 { axis_color_x } else { grid_color };
-            renderer.draw_line(Vec3::new(lo_x, y, -0.01), Vec3::new(hi_x, y, -0.01), color, -1);
+            renderer.draw_line(
+                Vec3::new(lo_x, y, -0.01),
+                Vec3::new(hi_x, y, -0.01),
+                color,
+                -1,
+            );
         }
     }
 
@@ -1251,7 +1316,8 @@ impl GGEditor {
         let root = egui_dock::NodeIndex::root();
         let [left, right] = surface.split_right(root, 0.77, vec![Tab::SceneHierarchy]);
         surface.split_below(right, 0.5, vec![Tab::Properties]);
-        let [top_left, _bottom_left] = surface.split_below(left, 0.7, vec![Tab::ContentBrowser, Tab::Console]);
+        let [top_left, _bottom_left] =
+            surface.split_below(left, 0.7, vec![Tab::ContentBrowser, Tab::Console, Tab::AnimationTimeline]);
         let [left_sidebar, _viewport] = surface.split_right(top_left, 0.20, vec![Tab::Viewport]);
         surface.split_below(left_sidebar, 0.5, vec![Tab::Settings]);
         dock_state
@@ -1289,22 +1355,21 @@ impl GGEditor {
             let collider_color = Vec4::new(0.0, 1.0, 0.0, 1.0);
 
             // Collect entities with colliders (need owned data to avoid borrow conflicts).
-            let circle_entities: Vec<_> = self.scene.each_entity_with_tag()
+            let circle_entities: Vec<_> = self
+                .scene
+                .each_entity_with_tag()
                 .iter()
                 .filter_map(|(entity, _)| {
-                    self.scene.get_component::<CircleCollider2DComponent>(*entity)
+                    self.scene
+                        .get_component::<CircleCollider2DComponent>(*entity)
                         .map(|cc| (*entity, cc.offset, cc.radius))
                 })
                 .collect();
             for (entity, offset, radius) in circle_entities {
                 let world = self.scene.get_world_transform(entity);
-                let (world_scale, world_rot, world_trans) =
-                    world.to_scale_rotation_translation();
-                let rotated_offset = world_rot * Vec3::new(
-                    offset.x * world_scale.x,
-                    offset.y * world_scale.y,
-                    0.0,
-                );
+                let (world_scale, world_rot, world_trans) = world.to_scale_rotation_translation();
+                let rotated_offset =
+                    world_rot * Vec3::new(offset.x * world_scale.x, offset.y * world_scale.y, 0.0);
                 let translation = Vec3::new(
                     world_trans.x + rotated_offset.x,
                     world_trans.y + rotated_offset.y,
@@ -1319,22 +1384,21 @@ impl GGEditor {
                 renderer.draw_circle(&collider_transform, collider_color, 0.01, 0.005, -1);
             }
 
-            let box_entities: Vec<_> = self.scene.each_entity_with_tag()
+            let box_entities: Vec<_> = self
+                .scene
+                .each_entity_with_tag()
                 .iter()
                 .filter_map(|(entity, _)| {
-                    self.scene.get_component::<BoxCollider2DComponent>(*entity)
+                    self.scene
+                        .get_component::<BoxCollider2DComponent>(*entity)
                         .map(|bc| (*entity, bc.offset, bc.size))
                 })
                 .collect();
             for (entity, offset, size) in box_entities {
                 let world = self.scene.get_world_transform(entity);
-                let (world_scale, world_rot, world_trans) =
-                    world.to_scale_rotation_translation();
-                let rotated_offset = world_rot * Vec3::new(
-                    offset.x * world_scale.x,
-                    offset.y * world_scale.y,
-                    0.0,
-                );
+                let (world_scale, world_rot, world_trans) = world.to_scale_rotation_translation();
+                let rotated_offset =
+                    world_rot * Vec3::new(offset.x * world_scale.x, offset.y * world_scale.y, 0.0);
                 let translation = Vec3::new(
                     world_trans.x + rotated_offset.x,
                     world_trans.y + rotated_offset.y,
@@ -1345,18 +1409,17 @@ impl GGEditor {
                     world_scale.y * size.y * 2.0,
                     1.0,
                 );
-                let collider_transform = Mat4::from_scale_rotation_translation(
-                    scale,
-                    world_rot,
-                    translation,
-                );
+                let collider_transform =
+                    Mat4::from_scale_rotation_translation(scale, world_rot, translation);
                 renderer.draw_rect_transform(&collider_transform, collider_color, -1);
             }
 
             // Velocity arrows (only during play/simulate when physics is active).
             if self.playback.scene_state != SceneState::Edit {
                 let velocity_color = Vec4::new(1.0, 0.4, 0.1, 1.0);
-                let rb_entities: Vec<_> = self.scene.each_entity_with_tag()
+                let rb_entities: Vec<_> = self
+                    .scene
+                    .each_entity_with_tag()
                     .iter()
                     .filter_map(|(entity, _)| {
                         self.scene.get_component::<RigidBody2DComponent>(*entity)?;
@@ -1384,25 +1447,26 @@ impl GGEditor {
         if let Some(selected) = self.selection_context {
             if let Some(transform) = self.scene.get_component::<TransformComponent>(selected) {
                 let outline_color = Vec4::new(1.0, 0.5, 0.0, 1.0);
-                let outline_transform = if let Some(tm) = self.scene.get_component::<TilemapComponent>(selected) {
-                    // Expand outline to cover the full tilemap grid.
-                    transform.get_transform()
-                        * Mat4::from_scale_rotation_translation(
-                            Vec3::new(
-                                tm.width as f32 * tm.tile_size.x,
-                                tm.height as f32 * tm.tile_size.y,
-                                1.0,
-                            ),
-                            Quat::IDENTITY,
-                            Vec3::new(
-                                (tm.width as f32 - 1.0) * tm.tile_size.x * 0.5,
-                                (tm.height as f32 - 1.0) * tm.tile_size.y * 0.5,
-                                0.0,
-                            ),
-                        )
-                } else {
-                    transform.get_transform()
-                };
+                let outline_transform =
+                    if let Some(tm) = self.scene.get_component::<TilemapComponent>(selected) {
+                        // Expand outline to cover the full tilemap grid.
+                        transform.get_transform()
+                            * Mat4::from_scale_rotation_translation(
+                                Vec3::new(
+                                    tm.width as f32 * tm.tile_size.x,
+                                    tm.height as f32 * tm.tile_size.y,
+                                    1.0,
+                                ),
+                                Quat::IDENTITY,
+                                Vec3::new(
+                                    (tm.width as f32 - 1.0) * tm.tile_size.x * 0.5,
+                                    (tm.height as f32 - 1.0) * tm.tile_size.y * 0.5,
+                                    0.0,
+                                ),
+                            )
+                    } else {
+                        transform.get_transform()
+                    };
                 renderer.draw_rect_transform(&outline_transform, outline_color, -1);
             }
         }
@@ -1414,22 +1478,35 @@ impl GGEditor {
                     if let Some((px, py)) = self.viewport.mouse_pos {
                         let vp = self.editor_camera.view_projection();
                         let world_transform = self.scene.get_world_transform(entity);
-                        let tilemap_z = self.scene.get_component::<TransformComponent>(entity)
+                        let tilemap_z = self
+                            .scene
+                            .get_component::<TransformComponent>(entity)
                             .map(|tc| tc.translation.z)
                             .unwrap_or(0.0);
                         let (tile_size, grid_w, grid_h) = {
-                            let tm = self.scene.get_component::<TilemapComponent>(entity).unwrap();
+                            let tm = self
+                                .scene
+                                .get_component::<TilemapComponent>(entity)
+                                .unwrap();
                             (tm.tile_size, tm.width, tm.height)
                         };
 
                         if let Some((col, row)) = panels::viewport::screen_to_tile_grid(
-                            px, py, self.viewport.size, &vp, &world_transform,
-                            tilemap_z, tile_size, grid_w, grid_h,
+                            px,
+                            py,
+                            self.viewport.size,
+                            &vp,
+                            &world_transform,
+                            tilemap_z,
+                            tile_size,
+                            grid_w,
+                            grid_h,
                         ) {
                             // Compute world position of this tile cell.
                             let local_x = col as f32 * tile_size.x;
                             let local_y = row as f32 * tile_size.y;
-                            let tile_world = world_transform * Vec4::new(local_x, local_y, 0.0, 1.0);
+                            let tile_world =
+                                world_transform * Vec4::new(local_x, local_y, 0.0, 1.0);
                             let tile_transform = Mat4::from_scale_rotation_translation(
                                 Vec3::new(tile_size.x, tile_size.y, 1.0),
                                 Quat::IDENTITY,
@@ -1476,8 +1553,7 @@ impl GGEditor {
                 );
 
                 ui.with_layout(
-                    egui::Layout::left_to_right(egui::Align::Center)
-                        .with_main_justify(true),
+                    egui::Layout::left_to_right(egui::Align::Center).with_main_justify(true),
                     |ui| {
                         ui.add_space(3.0);
 
@@ -1490,11 +1566,18 @@ impl GGEditor {
 
                         let btn_size = egui::vec2(28.0, 28.0);
                         let spacing = 4.0;
-                        let button_count = [has_play_button, has_simulate_button, has_stop_button, has_pause_button, has_step_button]
-                            .iter()
-                            .filter(|&&b| b)
-                            .count() as f32;
-                        let total_width = btn_size.x * button_count + spacing * (button_count - 1.0).max(0.0);
+                        let button_count = [
+                            has_play_button,
+                            has_simulate_button,
+                            has_stop_button,
+                            has_pause_button,
+                            has_step_button,
+                        ]
+                        .iter()
+                        .filter(|&&b| b)
+                        .count() as f32;
+                        let total_width =
+                            btn_size.x * button_count + spacing * (button_count - 1.0).max(0.0);
                         let avail = ui.available_width();
                         ui.add_space((avail - total_width) / 2.0);
 
@@ -1507,9 +1590,8 @@ impl GGEditor {
                             ui.add_space(spacing);
                             a
                         });
-                        let sim_alloc = has_simulate_button.then(|| {
-                            ui.allocate_exact_size(btn_size, egui::Sense::click())
-                        });
+                        let sim_alloc = has_simulate_button
+                            .then(|| ui.allocate_exact_size(btn_size, egui::Sense::click()));
                         let stop_alloc = has_stop_button.then(|| {
                             let a = ui.allocate_exact_size(btn_size, egui::Sense::click());
                             ui.add_space(spacing);
@@ -1517,63 +1599,98 @@ impl GGEditor {
                         });
                         let pause_alloc = has_pause_button.then(|| {
                             let a = ui.allocate_exact_size(btn_size, egui::Sense::click());
-                            if has_step_button { ui.add_space(spacing); }
+                            if has_step_button {
+                                ui.add_space(spacing);
+                            }
                             a
                         });
-                        let step_alloc = has_step_button.then(|| {
-                            ui.allocate_exact_size(btn_size, egui::Sense::click())
-                        });
+                        let step_alloc = has_step_button
+                            .then(|| ui.allocate_exact_size(btn_size, egui::Sense::click()));
 
                         // Paint icons.
                         if let Some((rect, ref resp)) = play_alloc {
                             if resp.hovered() {
-                                ui.painter().rect_filled(rect, egui::CornerRadius::same(3), hover_bg);
+                                ui.painter().rect_filled(
+                                    rect,
+                                    egui::CornerRadius::same(3),
+                                    hover_bg,
+                                );
                             }
                             paint_play_triangle(ui.painter(), rect.center());
                         }
                         if let Some((rect, ref resp)) = sim_alloc {
                             if resp.hovered() {
-                                ui.painter().rect_filled(rect, egui::CornerRadius::same(3), hover_bg);
+                                ui.painter().rect_filled(
+                                    rect,
+                                    egui::CornerRadius::same(3),
+                                    hover_bg,
+                                );
                             }
                             paint_gear_icon(ui.painter(), rect.center(), 8.0);
                         }
                         if let Some((rect, ref resp)) = stop_alloc {
                             if resp.hovered() {
-                                ui.painter().rect_filled(rect, egui::CornerRadius::same(3), hover_bg);
+                                ui.painter().rect_filled(
+                                    rect,
+                                    egui::CornerRadius::same(3),
+                                    hover_bg,
+                                );
                             }
                             paint_stop_square(ui.painter(), rect.center());
                         }
                         if let Some((rect, ref resp)) = pause_alloc {
                             if self.playback.paused {
-                                ui.painter().rect_filled(rect, egui::CornerRadius::same(3), pause_active_bg);
+                                ui.painter().rect_filled(
+                                    rect,
+                                    egui::CornerRadius::same(3),
+                                    pause_active_bg,
+                                );
                             }
                             if resp.hovered() {
-                                ui.painter().rect_filled(rect, egui::CornerRadius::same(3), hover_bg);
+                                ui.painter().rect_filled(
+                                    rect,
+                                    egui::CornerRadius::same(3),
+                                    hover_bg,
+                                );
                             }
                             paint_pause_icon(ui.painter(), rect.center());
                         }
                         if let Some((rect, ref resp)) = step_alloc {
                             if resp.hovered() {
-                                ui.painter().rect_filled(rect, egui::CornerRadius::same(3), hover_bg);
+                                ui.painter().rect_filled(
+                                    rect,
+                                    egui::CornerRadius::same(3),
+                                    hover_bg,
+                                );
                             }
                             paint_step_icon(ui.painter(), rect.center());
                         }
 
                         // Handle clicks.
                         if let Some((_, ref resp)) = play_alloc {
-                            if resp.clicked() { self.on_scene_play(); }
+                            if resp.clicked() {
+                                self.on_scene_play();
+                            }
                         }
                         if let Some((_, ref resp)) = sim_alloc {
-                            if resp.clicked() { self.on_scene_simulate(); }
+                            if resp.clicked() {
+                                self.on_scene_simulate();
+                            }
                         }
                         if let Some((_, ref resp)) = stop_alloc {
-                            if resp.clicked() { self.on_scene_stop(); }
+                            if resp.clicked() {
+                                self.on_scene_stop();
+                            }
                         }
                         if let Some((_, ref resp)) = pause_alloc {
-                            if resp.clicked() { self.on_scene_pause(); }
+                            if resp.clicked() {
+                                self.on_scene_pause();
+                            }
                         }
                         if let Some((_, ref resp)) = step_alloc {
-                            if resp.clicked() { self.on_scene_step(); }
+                            if resp.clicked() {
+                                self.on_scene_step();
+                            }
                         }
                     },
                 );
@@ -1610,7 +1727,10 @@ impl GGEditor {
 
         // 1. Check for primary camera.
         if self.scene.get_primary_camera_entity().is_none() {
-            warnings.push("No primary camera found. The scene will not render correctly at runtime.".to_string());
+            warnings.push(
+                "No primary camera found. The scene will not render correctly at runtime."
+                    .to_string(),
+            );
         }
 
         // Iterate all entities once, checking component-based validations.
@@ -1622,12 +1742,20 @@ impl GGEditor {
             if self.scene.has_component::<BoxCollider2DComponent>(entity)
                 && !self.scene.has_component::<RigidBody2DComponent>(entity)
             {
-                warnings.push(format!("Entity '{}' has BoxCollider2D but no RigidBody2D.", tag));
+                warnings.push(format!(
+                    "Entity '{}' has BoxCollider2D but no RigidBody2D.",
+                    tag
+                ));
             }
-            if self.scene.has_component::<CircleCollider2DComponent>(entity)
+            if self
+                .scene
+                .has_component::<CircleCollider2DComponent>(entity)
                 && !self.scene.has_component::<RigidBody2DComponent>(entity)
             {
-                warnings.push(format!("Entity '{}' has CircleCollider2D but no RigidBody2D.", tag));
+                warnings.push(format!(
+                    "Entity '{}' has CircleCollider2D but no RigidBody2D.",
+                    tag
+                ));
             }
 
             // 3. Missing texture assets.
@@ -1637,7 +1765,10 @@ impl GGEditor {
                     if let Some(ref am) = self.project_state.asset_manager {
                         let handle = Uuid::from_raw(raw);
                         if am.get_metadata(&handle).is_none() {
-                            warnings.push(format!("Entity '{}' references a missing texture asset.", tag));
+                            warnings.push(format!(
+                                "Entity '{}' references a missing texture asset.",
+                                tag
+                            ));
                         }
                     }
                 }
@@ -1650,7 +1781,10 @@ impl GGEditor {
                     if let Some(ref am) = self.project_state.asset_manager {
                         let handle = Uuid::from_raw(raw);
                         if am.get_metadata(&handle).is_none() {
-                            warnings.push(format!("Entity '{}' references a missing audio asset.", tag));
+                            warnings.push(format!(
+                                "Entity '{}' references a missing audio asset.",
+                                tag
+                            ));
                         }
                     }
                 }
@@ -1726,12 +1860,17 @@ impl GGEditor {
             if let Some((entity, _)) = self.scene.find_entity_by_name(name) {
                 let has_lua = {
                     #[cfg(feature = "lua-scripting")]
-                    { self.scene.has_component::<LuaScriptComponent>(entity) }
+                    {
+                        self.scene.has_component::<LuaScriptComponent>(entity)
+                    }
                     #[cfg(not(feature = "lua-scripting"))]
-                    { false }
+                    {
+                        false
+                    }
                 };
                 if !has_lua && !self.scene.has_component::<NativeScriptComponent>(entity) {
-                    self.scene.add_component(entity, NativeScriptComponent::bind::<PhysicsPlayer>());
+                    self.scene
+                        .add_component(entity, NativeScriptComponent::bind::<PhysicsPlayer>());
                 }
             }
         }
@@ -1740,12 +1879,17 @@ impl GGEditor {
         if let Some((camera, _)) = self.scene.find_entity_by_name("Camera") {
             let has_lua = {
                 #[cfg(feature = "lua-scripting")]
-                { self.scene.has_component::<LuaScriptComponent>(camera) }
+                {
+                    self.scene.has_component::<LuaScriptComponent>(camera)
+                }
                 #[cfg(not(feature = "lua-scripting"))]
-                { false }
+                {
+                    false
+                }
             };
             if !has_lua && !self.scene.has_component::<NativeScriptComponent>(camera) {
-                self.scene.add_component(camera, NativeScriptComponent::bind::<NativeCameraFollow>());
+                self.scene
+                    .add_component(camera, NativeScriptComponent::bind::<NativeCameraFollow>());
             }
         }
     }
@@ -1813,10 +1957,7 @@ impl GGEditor {
                 ui.close();
             }
             ui.separator();
-            if ui
-                .add(egui::Button::new("Open Project..."))
-                .clicked()
-            {
+            if ui.add(egui::Button::new("Open Project...")).clicked() {
                 self.open_project();
                 ui.close();
             }
@@ -1884,7 +2025,10 @@ impl GGEditor {
                 ui.close();
             }
             if ui
-                .checkbox(&mut self.editor_settings.show_physics_colliders, "Show Physics Colliders")
+                .checkbox(
+                    &mut self.editor_settings.show_physics_colliders,
+                    "Show Physics Colliders",
+                )
                 .clicked()
             {
                 ui.close();
@@ -1955,11 +2099,8 @@ impl GGEditor {
             .fixed_pos(screen_rect.left_top())
             .show(ctx, |ui| {
                 ui.allocate_response(screen_rect.size(), egui::Sense::click());
-                ui.painter().rect_filled(
-                    screen_rect,
-                    0.0,
-                    egui::Color32::from_black_alpha(128),
-                );
+                ui.painter()
+                    .rect_filled(screen_rect, 0.0, egui::Color32::from_black_alpha(128));
             });
 
         egui::Window::new("New Scene")
@@ -1977,9 +2118,7 @@ impl GGEditor {
                 }
 
                 // Enter confirms.
-                if text_edit.lost_focus()
-                    && ui.input(|i| i.key_pressed(egui::Key::Enter))
-                {
+                if text_edit.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
                     confirmed = true;
                 }
 
@@ -2176,7 +2315,11 @@ impl GGEditor {
     fn perform_autosave(&self) {
         if let Some(ref path) = self.scene_ctx.editor_scene_path {
             let autosave_path = Self::autosave_path_for(path);
-            if SceneSerializer::serialize(&self.scene, &autosave_path, Self::scene_name_from_path(path)) {
+            if SceneSerializer::serialize(
+                &self.scene,
+                &autosave_path,
+                Self::scene_name_from_path(path),
+            ) {
                 info!("Auto-saved to '{}'", autosave_path);
             } else {
                 warn!("Auto-save failed for '{}'", autosave_path);
@@ -2221,7 +2364,9 @@ impl GGEditor {
         }
 
         // Only offer recovery if the auto-save is newer than the original.
-        let orig_modified = std::fs::metadata(scene_path).and_then(|m| m.modified()).ok();
+        let orig_modified = std::fs::metadata(scene_path)
+            .and_then(|m| m.modified())
+            .ok();
         let auto_modified = std::fs::metadata(&autosave).and_then(|m| m.modified()).ok();
 
         let is_newer = match (orig_modified, auto_modified) {
@@ -2331,6 +2476,49 @@ impl GGEditor {
         }
     }
 
+    fn handle_hierarchy_action(
+        &mut self,
+        action: Option<panels::scene_hierarchy::HierarchyExternalAction>,
+    ) {
+        use panels::scene_hierarchy::HierarchyExternalAction;
+        let Some(action) = action else { return };
+        match action {
+            HierarchyExternalAction::SaveAsPrefab(entity) => {
+                if !self.scene.is_alive(entity) {
+                    return;
+                }
+                if let Some(path_str) = FileDialogs::save_file("GG Prefab", &["ggprefab"]) {
+                    if SceneSerializer::serialize_prefab(&self.scene, entity, &path_str) {
+                        // Auto-import to asset registry if inside assets directory.
+                        let path = Path::new(&path_str);
+                        if let Ok(rel) = path.strip_prefix(&self.project_state.assets_root) {
+                            let rel_str = rel.to_string_lossy().replace('\\', "/");
+                            if let Some(ref mut am) = self.project_state.asset_manager {
+                                am.import_asset(&rel_str);
+                            }
+                        }
+                        panels::content_browser::invalidate_dir_cache();
+                    }
+                }
+            }
+            HierarchyExternalAction::InstantiatePrefab { path, parent } => {
+                let path_str = path.to_string_lossy().to_string();
+                self.undo_system.record(&self.scene);
+                if let Some(root) = SceneSerializer::instantiate_prefab(&mut self.scene, &path_str)
+                {
+                    if let Some(parent_entity) = parent {
+                        if self.scene.is_alive(parent_entity) {
+                            self.scene.set_parent(root, parent_entity, false);
+                        }
+                    }
+                    self.selection_context = Some(root);
+                    self.scene_ctx.dirty = true;
+                    self.queue_font_loads_from_scene();
+                }
+            }
+        }
+    }
+
     fn open_scene_from_path(&mut self, path: &std::path::Path) {
         let path_str = path.to_string_lossy().to_string();
         let mut new_scene = Scene::new();
@@ -2379,8 +2567,8 @@ impl GGEditor {
     }
 
     fn load_project_from_path(&mut self, project_path: &std::path::Path) {
-        let abs_path = std::fs::canonicalize(project_path)
-            .unwrap_or_else(|_| project_path.to_path_buf());
+        let abs_path =
+            std::fs::canonicalize(project_path).unwrap_or_else(|_| project_path.to_path_buf());
         let Some(project) = Project::load(&abs_path.to_string_lossy()) else {
             warn!("Failed to load project: {}", abs_path.display());
             return;
@@ -2450,7 +2638,8 @@ impl GGEditor {
         }
 
         // Update recent projects and editor state.
-        self.editor_settings.add_recent_project(project.name(), &abs_path.to_string_lossy());
+        self.editor_settings
+            .add_recent_project(project.name(), &abs_path.to_string_lossy());
         self.project_state.project = Some(project);
         self.selection_context = None;
         self.scene_ctx.dirty = false;
@@ -2475,7 +2664,11 @@ impl GGEditor {
         if let Some(parent) = path.parent() {
             if !parent.exists() {
                 if let Err(e) = std::fs::create_dir_all(parent) {
-                    error!("Failed to create project directory {}: {}", parent.display(), e);
+                    error!(
+                        "Failed to create project directory {}: {}",
+                        parent.display(),
+                        e
+                    );
                     return;
                 }
             }
@@ -2563,10 +2756,7 @@ fn paint_step_icon(painter: &egui::Painter, center: egui::Pos2) {
     ));
     let bar_x = center.x + half * 0.7;
     painter.rect_filled(
-        egui::Rect::from_center_size(
-            egui::pos2(bar_x, center.y),
-            egui::vec2(2.5, half * 2.0),
-        ),
+        egui::Rect::from_center_size(egui::pos2(bar_x, center.y), egui::vec2(2.5, half * 2.0)),
         0.0,
         color,
     );

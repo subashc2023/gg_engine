@@ -2,7 +2,10 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use super::asset_loader::{AssetLoader, LoadResult};
-use super::{asset_type_from_extension, validate_asset_path, AssetHandle, AssetMetadata, AssetRegistry, AssetType};
+use super::{
+    asset_type_from_extension, validate_asset_path, AssetHandle, AssetMetadata, AssetRegistry,
+    AssetType,
+};
 use crate::renderer::{Renderer, Texture2D, TextureSpecification};
 use crate::uuid::Uuid;
 use crate::Ref;
@@ -56,7 +59,10 @@ impl EditorAssetManager {
                 self.registry = reg;
             }
         } else {
-            log::info!("No asset registry found at '{}', starting empty", registry_path.display());
+            log::info!(
+                "No asset registry found at '{}', starting empty",
+                registry_path.display()
+            );
         }
     }
 
@@ -164,7 +170,10 @@ impl EditorAssetManager {
         };
 
         if !validate_asset_path(&metadata.file_path) {
-            log::warn!("Rejected unsafe asset path in registry: '{}'", metadata.file_path);
+            log::warn!(
+                "Rejected unsafe asset path in registry: '{}'",
+                metadata.file_path
+            );
             return false;
         }
 
@@ -177,12 +186,18 @@ impl EditorAssetManager {
                             .insert(*handle, AssetData::Texture(Ref::new(texture)));
                         true
                     } else {
-                        log::warn!("Failed to load texture '{}', using fallback", abs_path.display());
+                        log::warn!(
+                            "Failed to load texture '{}', using fallback",
+                            abs_path.display()
+                        );
                         self.store_fallback(*handle, renderer);
                         true
                     }
                 } else {
-                    log::warn!("Texture file not found '{}', using fallback", abs_path.display());
+                    log::warn!(
+                        "Texture file not found '{}', using fallback",
+                        abs_path.display()
+                    );
                     self.store_fallback(*handle, renderer);
                     true
                 }
@@ -201,6 +216,10 @@ impl EditorAssetManager {
                     log::warn!("Audio file not found: {}", abs_path.display());
                     false
                 }
+            }
+            AssetType::Prefab => {
+                // Prefabs are instantiated on demand, not cached.
+                true
             }
             AssetType::None => false,
         }
@@ -297,7 +316,10 @@ impl EditorAssetManager {
         }
 
         if !validate_asset_path(&metadata.file_path) {
-            log::warn!("Rejected unsafe asset path in registry: '{}'", metadata.file_path);
+            log::warn!(
+                "Rejected unsafe asset path in registry: '{}'",
+                metadata.file_path
+            );
             return;
         }
 
@@ -307,7 +329,8 @@ impl EditorAssetManager {
             return;
         }
 
-        self.loader.request_texture(*handle, abs_path, TextureSpecification::default());
+        self.loader
+            .request_texture(*handle, abs_path, TextureSpecification::default());
     }
 
     /// Poll completed async loads, perform GPU upload for textures,
@@ -323,22 +346,23 @@ impl EditorAssetManager {
                     self.access_counter += 1;
                     self.access_times.insert(handle, self.access_counter);
                     match data {
-                        Ok(cpu_data) => {
-                            match renderer.upload_texture(&cpu_data) {
-                                Ok(tex) => {
-                                    self.loaded_assets.insert(handle, AssetData::Texture(Ref::new(tex)));
-                                }
-                                Err(e) => {
-                                    log::warn!("Texture GPU upload failed: {e}, using fallback");
-                                    let fallback = self.get_fallback_texture(renderer);
-                                    self.loaded_assets.insert(handle, AssetData::Texture(fallback));
-                                }
+                        Ok(cpu_data) => match renderer.upload_texture(&cpu_data) {
+                            Ok(tex) => {
+                                self.loaded_assets
+                                    .insert(handle, AssetData::Texture(Ref::new(tex)));
                             }
-                        }
+                            Err(e) => {
+                                log::warn!("Texture GPU upload failed: {e}, using fallback");
+                                let fallback = self.get_fallback_texture(renderer);
+                                self.loaded_assets
+                                    .insert(handle, AssetData::Texture(fallback));
+                            }
+                        },
                         Err(e) => {
                             log::warn!("Async texture load failed: {e}, using fallback");
                             let fallback = self.get_fallback_texture(renderer);
-                            self.loaded_assets.insert(handle, AssetData::Texture(fallback));
+                            self.loaded_assets
+                                .insert(handle, AssetData::Texture(fallback));
                         }
                     }
                 }

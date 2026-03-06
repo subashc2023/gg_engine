@@ -99,11 +99,7 @@ pub(crate) fn hub_ui(ctx: &egui::Context, settings: &mut EditorSettings) -> HubR
 }
 
 /// The main hub view with Open/New buttons and recent projects list.
-fn main_hub_ui(
-    ui: &mut egui::Ui,
-    settings: &mut EditorSettings,
-    response: &mut HubResponse,
-) {
+fn main_hub_ui(ui: &mut egui::Ui, settings: &mut EditorSettings, response: &mut HubResponse) {
     // Action buttons
     ui.horizontal(|ui| {
         if ui.button("Open Project...").clicked() {
@@ -158,19 +154,16 @@ fn main_hub_ui(
                     to_open = Some(PathBuf::from(&recent.path));
                 }
 
-                ui.with_layout(
-                    egui::Layout::right_to_left(egui::Align::Center),
-                    |ui| {
-                        if ui.small_button("x").clicked() {
-                            to_remove = Some(recent.path.clone());
-                        }
-                        ui.label(
-                            egui::RichText::new(&recent.path)
-                                .color(egui::Color32::from_rgb(0x55, 0x55, 0x55))
-                                .small(),
-                        );
-                    },
-                );
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if ui.small_button("x").clicked() {
+                        to_remove = Some(recent.path.clone());
+                    }
+                    ui.label(
+                        egui::RichText::new(&recent.path)
+                            .color(egui::Color32::from_rgb(0x55, 0x55, 0x55))
+                            .small(),
+                    );
+                });
             });
         }
 
@@ -194,11 +187,10 @@ fn main_hub_ui(
 /// Inline new-project wizard form.
 fn new_project_wizard_ui(ui: &mut egui::Ui, response: &mut HubResponse) {
     // Read current state for rendering.
-    let (mut project_name, mut location) =
-        WIZARD_STATE.with(|s| {
-            let st = s.borrow();
-            (st.project_name.clone(), st.location.clone())
-        });
+    let (mut project_name, mut location) = WIZARD_STATE.with(|s| {
+        let st = s.borrow();
+        (st.project_name.clone(), st.location.clone())
+    });
 
     // Section header
     ui.label(
@@ -226,9 +218,11 @@ fn new_project_wizard_ui(ui: &mut egui::Ui, response: &mut HubResponse) {
     if !project_name.is_empty() && !name_valid {
         ui.add_space(2.0);
         ui.label(
-            egui::RichText::new("Name may only contain letters, digits, spaces, hyphens, and underscores.")
-                .color(egui::Color32::from_rgb(0xF4, 0x80, 0x71))
-                .small(),
+            egui::RichText::new(
+                "Name may only contain letters, digits, spaces, hyphens, and underscores.",
+            )
+            .color(egui::Color32::from_rgb(0xF4, 0x80, 0x71))
+            .small(),
         );
     }
 
@@ -278,10 +272,9 @@ fn new_project_wizard_ui(ui: &mut egui::Ui, response: &mut HubResponse) {
 
     // -- Create / Cancel --
     ui.horizontal(|ui| {
-        let create_btn = egui::Button::new(
-            egui::RichText::new("Create").color(egui::Color32::WHITE),
-        )
-        .fill(egui::Color32::from_rgb(0x00, 0x7A, 0xCC));
+        let create_btn =
+            egui::Button::new(egui::RichText::new("Create").color(egui::Color32::WHITE))
+                .fill(egui::Color32::from_rgb(0x00, 0x7A, 0xCC));
 
         if ui.add_enabled(can_create, create_btn).clicked() && can_create {
             let resolved = PathBuf::from(&location)

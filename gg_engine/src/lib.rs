@@ -27,11 +27,12 @@ pub use asset::{AssetHandle, AssetMetadata, AssetRegistry, AssetType, EditorAsse
 pub use egui;
 pub use glam;
 pub use hecs;
-pub use winit;
 pub use input::Input;
 pub use layer::{Layer, LayerStack};
 pub use log;
-pub use logging::{init as log_init, clear_log_buffer, with_log_buffer, LogEntry};
+pub use logging::{clear_log_buffer, init as log_init, with_log_buffer, LogEntry};
+#[cfg(feature = "lua-scripting")]
+pub use mlua;
 pub use orthographic_camera_controller::OrthographicCameraController;
 pub use particle_system::{ParticleProps, ParticleSystem};
 pub use platform_utils::{error_dialog, FileDialogs};
@@ -54,10 +55,9 @@ pub use scene::{
 };
 #[cfg(feature = "lua-scripting")]
 pub use scene::{LuaScriptComponent, ScriptEngine, ScriptFieldValue};
-#[cfg(feature = "lua-scripting")]
-pub use mlua;
 pub use timestep::Timestep;
 pub use uuid::Uuid;
+pub use winit;
 
 pub fn engine_version() -> &'static str {
     env!("CARGO_PKG_VERSION")
@@ -65,17 +65,18 @@ pub fn engine_version() -> &'static str {
 
 /// Convenience re-exports for client applications.
 pub mod prelude {
+    pub use crate::asset::{AssetHandle, AssetType, EditorAssetManager};
     pub use crate::events::{Event, KeyCode, KeyEvent, MouseButton, MouseEvent, WindowEvent};
     pub use crate::input::Input;
     pub use crate::layer::{Layer, LayerStack};
     pub use crate::orthographic_camera_controller::OrthographicCameraController;
     pub use crate::particle_system::{ParticleProps, ParticleSystem};
     pub use crate::platform_utils::{error_dialog, FileDialogs};
-    pub use crate::project::Project;
     pub use crate::profiling::{
         begin_session, drain_profile_results, end_session, is_session_active, ProfileResult,
         ProfileTimer,
     };
+    pub use crate::project::Project;
     pub use crate::renderer::{
         as_bytes, BufferElement, BufferLayout, EditorCamera, Font, Framebuffer, FramebufferSpec,
         FramebufferTextureFormat, FramebufferTextureSpec, IndexBuffer, OrthographicCamera,
@@ -93,10 +94,9 @@ pub mod prelude {
     };
     #[cfg(feature = "lua-scripting")]
     pub use crate::scene::{LuaScriptComponent, ScriptEngine, ScriptFieldValue};
-    pub use crate::asset::{AssetHandle, AssetType, EditorAssetManager};
     pub use crate::timestep::Timestep;
-    pub use crate::uuid::Uuid;
     pub use crate::ui_theme::BOLD_FONT;
+    pub use crate::uuid::Uuid;
     pub use crate::{profile_scope, run, Application, Ref, Scope, WindowConfig};
     pub use glam::{Mat3, Mat4, Quat, Vec2, Vec3, Vec4};
     pub use log::{debug, error, info, trace, warn};

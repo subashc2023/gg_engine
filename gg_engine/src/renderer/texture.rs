@@ -180,12 +180,16 @@ impl TransferBatch {
     pub fn poll(&mut self) {
         self.pending.retain_mut(|transfer| {
             let signaled = unsafe {
-                self.device.get_fence_status(transfer.fence).unwrap_or(false)
+                self.device
+                    .get_fence_status(transfer.fence)
+                    .unwrap_or(false)
             };
             if signaled {
                 // Free staging buffers (GpuAllocation auto-frees on drop).
                 for (buffer, _alloc) in transfer.staging_resources.drain(..) {
-                    unsafe { self.device.destroy_buffer(buffer, None); }
+                    unsafe {
+                        self.device.destroy_buffer(buffer, None);
+                    }
                 }
                 unsafe {
                     self.device.destroy_fence(transfer.fence, None);
@@ -218,7 +222,9 @@ impl TransferBatch {
         // Clean up all pending transfers.
         for transfer in self.pending.drain(..) {
             for (buffer, _alloc) in transfer.staging_resources {
-                unsafe { self.device.destroy_buffer(buffer, None); }
+                unsafe {
+                    self.device.destroy_buffer(buffer, None);
+                }
             }
             unsafe {
                 self.device.destroy_fence(transfer.fence, None);
@@ -335,7 +341,10 @@ pub struct Texture2D {
 impl Texture2D {
     /// Load an image file and return CPU-side pixel data (no GPU work).
     /// Suitable for calling on a background thread.
-    pub(crate) fn load_cpu_data(path: &Path, spec: TextureSpecification) -> Result<TextureCpuData, String> {
+    pub(crate) fn load_cpu_data(
+        path: &Path,
+        spec: TextureSpecification,
+    ) -> Result<TextureCpuData, String> {
         let img = image::open(path)
             .map_err(|e| format!("Failed to load texture '{}': {e}", path.display()))?;
         let rgba = img.to_rgba8();
@@ -385,7 +394,14 @@ impl Texture2D {
         height: u32,
         pixels: &[u8],
     ) -> Result<Self, String> {
-        Self::from_rgba8_with_spec(res, allocator, width, height, pixels, &TextureSpecification::default())
+        Self::from_rgba8_with_spec(
+            res,
+            allocator,
+            width,
+            height,
+            pixels,
+            &TextureSpecification::default(),
+        )
     }
 
     /// Create a texture from raw RGBA8 pixel data with a custom specification.
@@ -410,8 +426,7 @@ impl Texture2D {
         let vk_format = spec.format.to_vk();
 
         // 1. Create staging buffer with pixel data.
-        let (staging_buffer, _staging_alloc) =
-            create_staging_buffer(allocator, device, pixels)?;
+        let (staging_buffer, _staging_alloc) = create_staging_buffer(allocator, device, pixels)?;
 
         // 2. Create Vulkan image.
         let image_info = vk::ImageCreateInfo::default()
@@ -430,13 +445,17 @@ impl Texture2D {
             .sharing_mode(vk::SharingMode::EXCLUSIVE)
             .samples(vk::SampleCountFlags::TYPE_1);
 
-        let image =
-            unsafe { device.create_image(&image_info, None) }
-                .map_err(|e| format!("Failed to create texture image: {e}"))?;
+        let image = unsafe { device.create_image(&image_info, None) }
+            .map_err(|e| format!("Failed to create texture image: {e}"))?;
 
         // 3. Allocate and bind DEVICE_LOCAL memory via sub-allocator.
-        let allocation =
-            GpuAllocator::allocate_for_image(allocator, device, image, "Texture2D", MemoryLocation::GpuOnly)?;
+        let allocation = GpuAllocator::allocate_for_image(
+            allocator,
+            device,
+            image,
+            "Texture2D",
+            MemoryLocation::GpuOnly,
+        )?;
 
         // 4. One-shot command buffer: transition + copy + transition.
         execute_one_shot(device, command_pool, graphics_queue, |cmd_buf| {
@@ -623,7 +642,13 @@ impl Texture2D {
         batch: &mut TransferBatch,
     ) -> Result<Self, String> {
         Self::from_rgba8_with_spec_batched(
-            res, allocator, data.width, data.height, &data.pixels, &data.spec, batch,
+            res,
+            allocator,
+            data.width,
+            data.height,
+            &data.pixels,
+            &data.spec,
+            batch,
         )
     }
 
@@ -653,8 +678,7 @@ impl Texture2D {
         let vk_format = spec.format.to_vk();
 
         // 1. Create staging buffer with pixel data.
-        let (staging_buffer, staging_alloc) =
-            create_staging_buffer(allocator, device, pixels)?;
+        let (staging_buffer, staging_alloc) = create_staging_buffer(allocator, device, pixels)?;
 
         // 2. Create Vulkan image.
         let image_info = vk::ImageCreateInfo::default()
@@ -673,13 +697,17 @@ impl Texture2D {
             .sharing_mode(vk::SharingMode::EXCLUSIVE)
             .samples(vk::SampleCountFlags::TYPE_1);
 
-        let image =
-            unsafe { device.create_image(&image_info, None) }
-                .map_err(|e| format!("Failed to create texture image: {e}"))?;
+        let image = unsafe { device.create_image(&image_info, None) }
+            .map_err(|e| format!("Failed to create texture image: {e}"))?;
 
         // 3. Allocate and bind DEVICE_LOCAL memory via sub-allocator.
-        let allocation =
-            GpuAllocator::allocate_for_image(allocator, device, image, "Texture2D", MemoryLocation::GpuOnly)?;
+        let allocation = GpuAllocator::allocate_for_image(
+            allocator,
+            device,
+            image,
+            "Texture2D",
+            MemoryLocation::GpuOnly,
+        )?;
 
         // 4. Record the staging copy + layout transitions into the batch.
         batch.record_image_upload(image, staging_buffer, staging_alloc, width, height)?;

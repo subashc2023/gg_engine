@@ -99,7 +99,8 @@ impl Input {
     /// Call at the end of each frame, after all updates and rendering.
     pub(crate) fn end_frame(&mut self) {
         self.keys_prev.clone_from(&self.keys_pressed);
-        self.mouse_buttons_prev.clone_from(&self.mouse_buttons_pressed);
+        self.mouse_buttons_prev
+            .clone_from(&self.mouse_buttons_pressed);
     }
 }
 
@@ -152,7 +153,7 @@ mod tests {
         input.end_frame();
 
         // Frame 2: A still held.
-        assert!(input.is_key_pressed(KeyCode::A));       // held → true
+        assert!(input.is_key_pressed(KeyCode::A)); // held → true
         assert!(!input.is_key_just_pressed(KeyCode::A)); // not first frame → false
         input.end_frame();
 

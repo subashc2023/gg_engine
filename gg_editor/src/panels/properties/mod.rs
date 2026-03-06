@@ -28,7 +28,18 @@ pub(crate) fn properties_ui(
 ) {
     if let Some(entity) = *selection_context {
         if scene.is_alive(entity) {
-            draw_components(ui, scene, entity, asset_manager, is_playing, assets_root, scene_dirty, undo_system, tilemap_paint, egui_texture_map);
+            draw_components(
+                ui,
+                scene,
+                entity,
+                asset_manager,
+                is_playing,
+                assets_root,
+                scene_dirty,
+                undo_system,
+                tilemap_paint,
+                egui_texture_map,
+            );
         } else {
             *selection_context = None;
         }
@@ -252,9 +263,7 @@ fn draw_components(
                     scene.add_component(entity, SpriteAnimatorComponent::default());
                     *scene_dirty = true;
                 }
-                if !scene.has_component::<TextComponent>(entity)
-                    && ui.button("Text").clicked()
-                {
+                if !scene.has_component::<TextComponent>(entity) && ui.button("Text").clicked() {
                     undo_system.record(scene);
                     scene.add_component(entity, TextComponent::default());
                     *scene_dirty = true;
@@ -372,73 +381,168 @@ fn draw_components(
         *scene_dirty = true;
     }
 
-    if sprite::draw_sprite_renderer_component(ui, scene, entity, &bold_family, asset_manager, assets_root, scene_dirty, undo_system) {
+    if sprite::draw_sprite_renderer_component(
+        ui,
+        scene,
+        entity,
+        &bold_family,
+        asset_manager,
+        assets_root,
+        scene_dirty,
+        undo_system,
+    ) {
         undo_system.record(scene);
         scene.remove_component::<SpriteRendererComponent>(entity);
         *scene_dirty = true;
     }
 
-    if sprite::draw_sprite_animator_component(ui, scene, entity, &bold_family, asset_manager, assets_root, scene_dirty, undo_system) {
+    if sprite::draw_sprite_animator_component(
+        ui,
+        scene,
+        entity,
+        &bold_family,
+        asset_manager,
+        assets_root,
+        scene_dirty,
+        undo_system,
+    ) {
         undo_system.record(scene);
         scene.remove_component::<SpriteAnimatorComponent>(entity);
         *scene_dirty = true;
     }
 
-    if sprite::draw_circle_renderer_component(ui, scene, entity, &bold_family, scene_dirty, undo_system) {
+    if sprite::draw_circle_renderer_component(
+        ui,
+        scene,
+        entity,
+        &bold_family,
+        scene_dirty,
+        undo_system,
+    ) {
         undo_system.record(scene);
         scene.remove_component::<CircleRendererComponent>(entity);
         *scene_dirty = true;
     }
 
-    if text::draw_text_component(ui, scene, entity, &bold_family, assets_root, scene_dirty, undo_system) {
+    if text::draw_text_component(
+        ui,
+        scene,
+        entity,
+        &bold_family,
+        assets_root,
+        scene_dirty,
+        undo_system,
+    ) {
         undo_system.record(scene);
         scene.remove_component::<TextComponent>(entity);
         *scene_dirty = true;
     }
 
-    if physics::draw_rigidbody2d_component(ui, scene, entity, &bold_family, scene_dirty, undo_system) {
+    if physics::draw_rigidbody2d_component(
+        ui,
+        scene,
+        entity,
+        &bold_family,
+        scene_dirty,
+        undo_system,
+    ) {
         undo_system.record(scene);
         scene.remove_component::<RigidBody2DComponent>(entity);
         *scene_dirty = true;
     }
 
-    if physics::draw_box_collider2d_component(ui, scene, entity, &bold_family, scene_dirty, undo_system) {
+    if physics::draw_box_collider2d_component(
+        ui,
+        scene,
+        entity,
+        &bold_family,
+        scene_dirty,
+        undo_system,
+    ) {
         undo_system.record(scene);
         scene.remove_component::<BoxCollider2DComponent>(entity);
         *scene_dirty = true;
     }
 
-    if physics::draw_circle_collider2d_component(ui, scene, entity, &bold_family, scene_dirty, undo_system) {
+    if physics::draw_circle_collider2d_component(
+        ui,
+        scene,
+        entity,
+        &bold_family,
+        scene_dirty,
+        undo_system,
+    ) {
         undo_system.record(scene);
         scene.remove_component::<CircleCollider2DComponent>(entity);
         *scene_dirty = true;
     }
 
-    if scripting::draw_native_script_component(ui, scene, entity, &bold_family, scene_dirty, undo_system) {
+    if scripting::draw_native_script_component(
+        ui,
+        scene,
+        entity,
+        &bold_family,
+        scene_dirty,
+        undo_system,
+    ) {
         undo_system.record(scene);
         scene.remove_component::<NativeScriptComponent>(entity);
         *scene_dirty = true;
     }
 
-    if audio::draw_audio_source_component(ui, scene, entity, &bold_family, asset_manager, assets_root, scene_dirty, undo_system) {
+    if audio::draw_audio_source_component(
+        ui,
+        scene,
+        entity,
+        &bold_family,
+        asset_manager,
+        assets_root,
+        scene_dirty,
+        undo_system,
+    ) {
         undo_system.record(scene);
         scene.remove_component::<AudioSourceComponent>(entity);
         *scene_dirty = true;
     }
 
-    if audio::draw_audio_listener_component(ui, scene, entity, &bold_family, scene_dirty, undo_system) {
+    if audio::draw_audio_listener_component(
+        ui,
+        scene,
+        entity,
+        &bold_family,
+        scene_dirty,
+        undo_system,
+    ) {
         undo_system.record(scene);
         scene.remove_component::<AudioListenerComponent>(entity);
         *scene_dirty = true;
     }
 
-    if particles::draw_particle_emitter_component(ui, scene, entity, &bold_family, scene_dirty, undo_system) {
+    if particles::draw_particle_emitter_component(
+        ui,
+        scene,
+        entity,
+        &bold_family,
+        scene_dirty,
+        undo_system,
+    ) {
         undo_system.record(scene);
         scene.remove_component::<ParticleEmitterComponent>(entity);
         *scene_dirty = true;
     }
 
-    if tilemap::draw_tilemap_component(ui, scene, entity, &bold_family, asset_manager, assets_root, scene_dirty, undo_system, tilemap_paint, egui_texture_map) {
+    if tilemap::draw_tilemap_component(
+        ui,
+        scene,
+        entity,
+        &bold_family,
+        asset_manager,
+        assets_root,
+        scene_dirty,
+        undo_system,
+        tilemap_paint,
+        egui_texture_map,
+    ) {
         undo_system.record(scene);
         scene.remove_component::<TilemapComponent>(entity);
         *scene_dirty = true;
@@ -446,7 +550,16 @@ fn draw_components(
 
     #[cfg(feature = "lua-scripting")]
     {
-        if scripting::draw_lua_script_component(ui, scene, entity, &bold_family, assets_root, is_playing, scene_dirty, undo_system) {
+        if scripting::draw_lua_script_component(
+            ui,
+            scene,
+            entity,
+            &bold_family,
+            assets_root,
+            is_playing,
+            scene_dirty,
+            undo_system,
+        ) {
             undo_system.record(scene);
             scene.remove_component::<LuaScriptComponent>(entity);
             *scene_dirty = true;

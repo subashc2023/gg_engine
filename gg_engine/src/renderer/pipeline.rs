@@ -186,13 +186,14 @@ pub(crate) fn create_pipeline(
         .render_pass(render_pass)
         .subpass(0);
 
-    let pipeline = unsafe {
-        device.create_graphics_pipelines(pipeline_cache, &[pipeline_info], None)
-    }
-    .map_err(|(_, e)| {
-        unsafe { device.destroy_pipeline_layout(pipeline_layout, None); }
-        format!("Failed to create graphics pipeline: {e}")
-    })?[0];
+    let pipeline =
+        unsafe { device.create_graphics_pipelines(pipeline_cache, &[pipeline_info], None) }
+            .map_err(|(_, e)| {
+                unsafe {
+                    device.destroy_pipeline_layout(pipeline_layout, None);
+                }
+                format!("Failed to create graphics pipeline: {e}")
+            })?[0];
 
     Ok(Pipeline {
         pipeline,
@@ -318,13 +319,14 @@ pub(crate) fn create_batch_pipeline(
         .render_pass(render_pass)
         .subpass(0);
 
-    let pipeline = unsafe {
-        device.create_graphics_pipelines(pipeline_cache, &[pipeline_info], None)
-    }
-    .map_err(|(_, e)| {
-        unsafe { device.destroy_pipeline_layout(pipeline_layout, None); }
-        format!("Failed to create batch graphics pipeline: {e}")
-    })?[0];
+    let pipeline =
+        unsafe { device.create_graphics_pipelines(pipeline_cache, &[pipeline_info], None) }
+            .map_err(|(_, e)| {
+                unsafe {
+                    device.destroy_pipeline_layout(pipeline_layout, None);
+                }
+                format!("Failed to create batch graphics pipeline: {e}")
+            })?[0];
 
     Ok(Pipeline {
         pipeline,
@@ -453,13 +455,14 @@ pub(crate) fn create_instanced_batch_pipeline(
         .render_pass(render_pass)
         .subpass(0);
 
-    let pipeline = unsafe {
-        device.create_graphics_pipelines(pipeline_cache, &[pipeline_info], None)
-    }
-    .map_err(|(_, e)| {
-        unsafe { device.destroy_pipeline_layout(pipeline_layout, None); }
-        format!("Failed to create instanced batch graphics pipeline: {e}")
-    })?[0];
+    let pipeline =
+        unsafe { device.create_graphics_pipelines(pipeline_cache, &[pipeline_info], None) }
+            .map_err(|(_, e)| {
+                unsafe {
+                    device.destroy_pipeline_layout(pipeline_layout, None);
+                }
+                format!("Failed to create instanced batch graphics pipeline: {e}")
+            })?[0];
 
     Ok(Pipeline {
         pipeline,
@@ -585,13 +588,14 @@ pub(crate) fn create_line_batch_pipeline(
         .render_pass(render_pass)
         .subpass(0);
 
-    let pipeline = unsafe {
-        device.create_graphics_pipelines(pipeline_cache, &[pipeline_info], None)
-    }
-    .map_err(|(_, e)| {
-        unsafe { device.destroy_pipeline_layout(pipeline_layout, None); }
-        format!("Failed to create line batch graphics pipeline: {e}")
-    })?[0];
+    let pipeline =
+        unsafe { device.create_graphics_pipelines(pipeline_cache, &[pipeline_info], None) }
+            .map_err(|(_, e)| {
+                unsafe {
+                    device.destroy_pipeline_layout(pipeline_layout, None);
+                }
+                format!("Failed to create line batch graphics pipeline: {e}")
+            })?[0];
 
     Ok(Pipeline {
         pipeline,

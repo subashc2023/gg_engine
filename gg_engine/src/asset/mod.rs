@@ -18,6 +18,7 @@ pub enum AssetType {
     Scene,
     Texture2D,
     Audio,
+    Prefab,
 }
 
 impl AssetType {
@@ -27,6 +28,7 @@ impl AssetType {
             AssetType::Scene => "Scene",
             AssetType::Texture2D => "Texture2D",
             AssetType::Audio => "Audio",
+            AssetType::Prefab => "Prefab",
         }
     }
 
@@ -35,6 +37,7 @@ impl AssetType {
             "Scene" => AssetType::Scene,
             "Texture2D" => AssetType::Texture2D,
             "Audio" => AssetType::Audio,
+            "Prefab" => AssetType::Prefab,
             _ => AssetType::None,
         }
     }
@@ -86,6 +89,7 @@ pub fn asset_type_from_extension(ext: &str) -> AssetType {
         "png" | "jpg" | "jpeg" => AssetType::Texture2D,
         "ggscene" => AssetType::Scene,
         "wav" | "ogg" | "mp3" | "flac" => AssetType::Audio,
+        "ggprefab" => AssetType::Prefab,
         _ => AssetType::None,
     }
 }
@@ -96,7 +100,13 @@ mod tests {
 
     #[test]
     fn asset_type_round_trip() {
-        for ty in [AssetType::None, AssetType::Scene, AssetType::Texture2D, AssetType::Audio] {
+        for ty in [
+            AssetType::None,
+            AssetType::Scene,
+            AssetType::Texture2D,
+            AssetType::Audio,
+            AssetType::Prefab,
+        ] {
             assert_eq!(AssetType::parse_str(ty.as_str()), ty);
         }
     }
@@ -112,6 +122,7 @@ mod tests {
         assert_eq!(format!("{}", AssetType::Texture2D), "Texture2D");
         assert_eq!(format!("{}", AssetType::Scene), "Scene");
         assert_eq!(format!("{}", AssetType::Audio), "Audio");
+        assert_eq!(format!("{}", AssetType::Prefab), "Prefab");
         assert_eq!(format!("{}", AssetType::None), "None");
     }
 
@@ -135,6 +146,11 @@ mod tests {
         assert_eq!(asset_type_from_extension("ogg"), AssetType::Audio);
         assert_eq!(asset_type_from_extension("mp3"), AssetType::Audio);
         assert_eq!(asset_type_from_extension("flac"), AssetType::Audio);
+    }
+
+    #[test]
+    fn extension_to_type_prefab() {
+        assert_eq!(asset_type_from_extension("ggprefab"), AssetType::Prefab);
     }
 
     #[test]

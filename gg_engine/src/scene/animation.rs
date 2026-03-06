@@ -173,9 +173,25 @@ impl SpriteAnimatorComponent {
         clip.texture.as_ref()
     }
 
+    /// Returns the current frame index.
+    pub fn current_frame(&self) -> u32 {
+        self.current_frame
+    }
+
+    /// Set the current frame and reset the frame timer.
+    pub fn set_current_frame(&mut self, frame: u32) {
+        self.current_frame = frame;
+        self.frame_timer = 0.0;
+    }
+
     /// Returns the current clip index, or `None` if no clip is selected.
     pub fn current_clip_index(&self) -> Option<usize> {
         self.current_clip_index
+    }
+
+    /// Set the current clip index directly. Use `play()` for normal playback.
+    pub fn set_current_clip_index(&mut self, index: Option<usize>) {
+        self.current_clip_index = index;
     }
 
     /// Whether the editor preview is active.

@@ -37,7 +37,10 @@ pub(crate) struct PhysicsWorld2D {
 
 impl PhysicsWorld2D {
     pub(crate) fn new(gravity_x: f32, gravity_y: f32) -> Self {
-        let params = IntegrationParameters { dt: FIXED_TIMESTEP, ..Default::default() };
+        let params = IntegrationParameters {
+            dt: FIXED_TIMESTEP,
+            ..Default::default()
+        };
         Self {
             gravity: na::Vector2::new(gravity_x, gravity_y),
             pipeline: PhysicsPipeline::new(),

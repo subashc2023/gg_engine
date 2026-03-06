@@ -367,10 +367,12 @@ impl<T: Application> ApplicationHandler for EngineRunner<T> {
                                         if let Some(fb) = self.app.scene_framebuffer() {
                                             if fb.color_attachment_count() > 1 {
                                                 if let Some(renderer) = &mut self.renderer {
-                                                    if let Err(e) = renderer.create_offscreen_batch_pipeline(
-                                                        fb.render_pass(),
-                                                        fb.color_attachment_count() as u32,
-                                                    ) {
+                                                    if let Err(e) = renderer
+                                                        .create_offscreen_batch_pipeline(
+                                                            fb.render_pass(),
+                                                            fb.color_attachment_count() as u32,
+                                                        )
+                                                    {
                                                         log::error!(target: "gg_engine", "Offscreen pipeline init failed: {e}");
                                                     }
                                                 }
@@ -626,32 +628,28 @@ impl<T: Application> ApplicationHandler for EngineRunner<T> {
             }
 
             // Register/unregister app-provided user textures with egui.
+            // Stale textures are collected but NOT removed yet — the
+            // tessellated primitives from this frame's on_egui may still
+            // reference them.  Removal is deferred to after render_frame.
+            let stale_user_textures: Vec<(u64, egui::TextureId)>;
             {
                 let wanted: Vec<u64> = self.app.egui_user_textures();
-                let wanted_set: std::collections::HashSet<u64> =
-                    wanted.iter().copied().collect();
+                let wanted_set: std::collections::HashSet<u64> = wanted.iter().copied().collect();
 
-                // Remove stale registrations.
-                let stale: Vec<u64> = self
+                // Collect stale registrations (deferred removal).
+                stale_user_textures = self
                     .user_textures
-                    .keys()
-                    .filter(|h| !wanted_set.contains(h))
-                    .copied()
+                    .iter()
+                    .filter(|(h, _)| !wanted_set.contains(h))
+                    .map(|(h, id)| (*h, *id))
                     .collect();
-                for h in stale {
-                    if let Some(tex_id) = self.user_textures.remove(&h) {
-                        egui_renderer.remove_user_texture(tex_id);
-                    }
-                }
 
                 // Register new ones (handle is a raw vk::DescriptorSet).
                 for h in wanted {
-                    self.user_textures
-                        .entry(h)
-                        .or_insert_with(|| {
-                            let ds = vk::DescriptorSet::from_raw(h);
-                            egui_renderer.add_user_texture(ds)
-                        });
+                    self.user_textures.entry(h).or_insert_with(|| {
+                        let ds = vk::DescriptorSet::from_raw(h);
+                        egui_renderer.add_user_texture(ds)
+                    });
                 }
 
                 // Provide the mapping to the app.
@@ -744,6 +742,13 @@ impl<T: Application> ApplicationHandler for EngineRunner<T> {
             // Advance to the next frame's sync primitives.
             swapchain.advance_frame();
 
+            // Now that rendering is complete, remove stale user textures
+            // that were deferred from earlier in this frame.
+            for (h, tex_id) in stale_user_textures {
+                self.user_textures.remove(&h);
+                egui_renderer.remove_user_texture(tex_id);
+            }
+
             // Free textures that are no longer needed.
             if !full_output.textures_delta.free.is_empty() {
                 egui_renderer
@@ -821,9 +826,9 @@ fn render_frame<T: Application>(
     // Wait for this frame-slot's fence (still signaled from the previous use).
     {
         let _t = ProfileTimer::new("render_frame::wait_fence");
-        if let Err(e) = unsafe {
-            device.wait_for_fences(&[swapchain.in_flight_fence()], true, u64::MAX)
-        } {
+        if let Err(e) =
+            unsafe { device.wait_for_fences(&[swapchain.in_flight_fence()], true, u64::MAX) }
+        {
             log::error!("Failed to wait for fence: {e}");
             return FrameResult::DeviceLost;
         }

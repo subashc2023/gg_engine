@@ -108,7 +108,12 @@ mod tests {
             let uuid = Uuid::new();
             let as_f64 = uuid.raw() as f64;
             let back = as_f64 as u64;
-            assert_eq!(uuid.raw(), back, "UUID {} lost precision via f64", uuid.raw());
+            assert_eq!(
+                uuid.raw(),
+                back,
+                "UUID {} lost precision via f64",
+                uuid.raw()
+            );
         }
     }
 }

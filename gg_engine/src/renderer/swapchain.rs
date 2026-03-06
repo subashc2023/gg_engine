@@ -212,12 +212,8 @@ impl Swapchain {
         let render_pass = create_render_pass(&device, format.format, depth_format)?;
 
         // Create depth buffer resources.
-        let (depth_image, depth_allocation, depth_image_view) = create_depth_resources(
-            allocator,
-            &device,
-            extent,
-            depth_format,
-        )?;
+        let (depth_image, depth_allocation, depth_image_view) =
+            create_depth_resources(allocator, &device, extent, depth_format)?;
 
         // Create framebuffers (color + depth).
         let framebuffers =
@@ -419,12 +415,8 @@ impl Swapchain {
             })
             .collect::<Result<Vec<_>, _>>()?;
 
-        let (depth_image, depth_allocation, depth_image_view) = create_depth_resources(
-            &self.allocator,
-            &self.device,
-            extent,
-            self.depth_format,
-        )?;
+        let (depth_image, depth_allocation, depth_image_view) =
+            create_depth_resources(&self.allocator, &self.device, extent, self.depth_format)?;
         self.depth_image = depth_image;
         self.depth_allocation = Some(depth_allocation);
         self.depth_image_view = depth_image_view;
@@ -605,7 +597,6 @@ fn create_depth_resources(
 
     Ok((depth_image, allocation, depth_image_view))
 }
-
 
 // ---------------------------------------------------------------------------
 // Render pass helper

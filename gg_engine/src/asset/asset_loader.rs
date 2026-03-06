@@ -4,7 +4,9 @@ use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 
-use crate::renderer::{generate_font_cpu_data, FontCpuData, Texture2D, TextureCpuData, TextureSpecification};
+use crate::renderer::{
+    generate_font_cpu_data, FontCpuData, Texture2D, TextureCpuData, TextureSpecification,
+};
 use crate::uuid::Uuid;
 
 // ---------------------------------------------------------------------------
@@ -93,12 +95,19 @@ impl AssetLoader {
     }
 
     /// Request async texture loading. Returns false if already pending.
-    pub fn request_texture(&mut self, handle: Uuid, path: PathBuf, spec: TextureSpecification) -> bool {
+    pub fn request_texture(
+        &mut self,
+        handle: Uuid,
+        path: PathBuf,
+        spec: TextureSpecification,
+    ) -> bool {
         if !self.pending_textures.insert(handle) {
             return false;
         }
         let inner = self.ensure_started();
-        let _ = inner.request_tx.send(LoadRequest::Texture { handle, path, spec });
+        let _ = inner
+            .request_tx
+            .send(LoadRequest::Texture { handle, path, spec });
         true
     }
 

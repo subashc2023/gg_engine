@@ -736,8 +736,7 @@ impl TilemapComponent {
         let copy_h = self.height.min(new_height);
         for y in 0..copy_h {
             for x in 0..copy_w {
-                new_tiles[(y * new_width + x) as usize] =
-                    self.tiles[(y * self.width + x) as usize];
+                new_tiles[(y * new_width + x) as usize] = self.tiles[(y * self.width + x) as usize];
             }
         }
         self.width = new_width;
@@ -817,7 +816,6 @@ impl Clone for LuaScriptComponent {
         }
     }
 }
-
 
 #[cfg(test)]
 mod tests {

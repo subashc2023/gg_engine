@@ -6,12 +6,15 @@ pub mod native_script;
 mod physics_2d;
 mod scene_serializer;
 #[cfg(feature = "lua-scripting")]
-mod script_glue;
-#[cfg(feature = "lua-scripting")]
 pub(crate) mod script_engine;
+#[cfg(feature = "lua-scripting")]
+mod script_glue;
 
 use crate::renderer::Font;
 
+pub use animation::{AnimationClip, SpriteAnimatorComponent};
+#[cfg(feature = "lua-scripting")]
+pub use components::LuaScriptComponent;
 pub use components::{
     AudioListenerComponent, AudioSourceComponent, BoxCollider2DComponent, CameraComponent,
     CircleCollider2DComponent, CircleRendererComponent, IdComponent, NativeScriptComponent,
@@ -19,9 +22,6 @@ pub use components::{
     SpriteRendererComponent, TagComponent, TextComponent, TilemapComponent, TransformComponent,
     TILE_FLIP_H, TILE_FLIP_V, TILE_ID_MASK,
 };
-#[cfg(feature = "lua-scripting")]
-pub use components::LuaScriptComponent;
-pub use animation::{AnimationClip, SpriteAnimatorComponent};
 pub use entity::Entity;
 pub use native_script::NativeScript;
 pub use scene_serializer::SceneSerializer;
@@ -43,7 +43,10 @@ fn validate_physics_value(value: f32, min: f32, name: &str, entity_uuid: u64) ->
     if value < min {
         log::warn!(
             "Entity {}: negative {} ({:.3}), clamped to {}",
-            entity_uuid, name, value, min
+            entity_uuid,
+            name,
+            value,
+            min
         );
         min
     } else {
@@ -178,7 +181,10 @@ impl Scene {
         // Detach from parent.
         if let (Some(my_uuid), Some(parent_uuid)) = (uuid, parent_uuid) {
             if let Some(parent_entity) = self.find_entity_by_uuid(parent_uuid) {
-                if let Ok(mut rel) = self.world.get::<&mut RelationshipComponent>(parent_entity.handle()) {
+                if let Ok(mut rel) = self
+                    .world
+                    .get::<&mut RelationshipComponent>(parent_entity.handle())
+                {
                     rel.children.retain(|&c| c != my_uuid);
                 }
             }
@@ -524,10 +530,7 @@ impl Scene {
     ///
     /// O(1) lookup via internal cache maintained on entity create/destroy.
     pub fn find_entity_by_uuid(&self, uuid: u64) -> Option<Entity> {
-        self.uuid_cache
-            .get(&uuid)
-            .copied()
-            .map(Entity::new)
+        self.uuid_cache.get(&uuid).copied().map(Entity::new)
     }
 
     /// Number of living entities in the scene.
@@ -630,9 +633,7 @@ impl Scene {
 
         // Warn if physics entity is parented.
         if self.has_component::<RigidBody2DComponent>(child) {
-            log::warn!(
-                "Entity with RigidBody2D parented — physics may not behave correctly"
-            );
+            log::warn!("Entity with RigidBody2D parented — physics may not behave correctly");
         }
 
         true
@@ -673,9 +674,7 @@ impl Scene {
 
         // Remove from parent's children list.
         if let Some(parent_entity) = self.find_entity_by_uuid(parent_uuid) {
-            if let Some(mut rel) =
-                self.get_component_mut::<RelationshipComponent>(parent_entity)
-            {
+            if let Some(mut rel) = self.get_component_mut::<RelationshipComponent>(parent_entity) {
                 rel.children.retain(|&c| c != entity_uuid);
             }
         }
@@ -760,11 +759,7 @@ impl Scene {
     /// walks (O(n) total instead of O(n·d) where d is hierarchy depth).
     fn build_world_transform_cache(&self) -> HashMap<hecs::Entity, glam::Mat4> {
         let mut cache = HashMap::with_capacity(self.world.len() as usize);
-        let entities: Vec<hecs::Entity> = self
-            .world
-            .query::<hecs::Entity>()
-            .iter()
-            .collect();
+        let entities: Vec<hecs::Entity> = self.world.query::<hecs::Entity>().iter().collect();
         for handle in entities {
             self.get_world_transform_cached(Entity::new(handle), &mut cache);
         }
@@ -906,11 +901,7 @@ impl Scene {
         {
             animator.update(dt);
             if let Some(clip_name) = animator.finished_clip_name.take() {
-                finished_events.push((
-                    id_comp.id.raw(),
-                    clip_name,
-                    animator.default_clip.clone(),
-                ));
+                finished_events.push((id_comp.id.raw(), clip_name, animator.default_clip.clone()));
             }
         }
 
@@ -1139,9 +1130,7 @@ impl Scene {
                 asset_manager.load_asset(&asset_handle, r);
             }
             if let Some(texture) = asset_manager.get_texture(&asset_handle) {
-                if let Ok(mut animator) =
-                    self.world.get::<&mut SpriteAnimatorComponent>(entity)
-                {
+                if let Ok(mut animator) = self.world.get::<&mut SpriteAnimatorComponent>(entity) {
                     if let Some(clip) = animator.clips.get_mut(clip_idx) {
                         clip.texture = Some(texture);
                     }
@@ -1238,7 +1227,9 @@ impl Scene {
             })
             .collect();
 
-        for (handle, entity_uuid, translation, rotation, scale, body_type, fixed_rotation) in body_entities {
+        for (handle, entity_uuid, translation, rotation, scale, body_type, fixed_rotation) in
+            body_entities
+        {
             // Create rapier rigid body.
             let mut body_builder = rapier2d::dynamics::RigidBodyBuilder::new(body_type.to_rapier())
                 .translation(na::Vector2::new(translation.x, translation.y))
@@ -1263,12 +1254,16 @@ impl Scene {
                 if half_x <= 0.0 || half_y <= 0.0 {
                     log::warn!(
                         "Entity {} has zero-size box collider ({} x {}), skipping",
-                        entity_uuid, half_x * 2.0, half_y * 2.0
+                        entity_uuid,
+                        half_x * 2.0,
+                        half_y * 2.0
                     );
                 } else {
                     let density = validate_physics_value(bc.density, 0.0, "density", entity_uuid);
-                    let friction = validate_physics_value(bc.friction, 0.0, "friction", entity_uuid);
-                    let restitution = validate_physics_value(bc.restitution, 0.0, "restitution", entity_uuid);
+                    let friction =
+                        validate_physics_value(bc.friction, 0.0, "friction", entity_uuid);
+                    let restitution =
+                        validate_physics_value(bc.restitution, 0.0, "restitution", entity_uuid);
 
                     let mut builder = rapier2d::geometry::ColliderBuilder::cuboid(half_x, half_y)
                         .density(density)
@@ -1286,14 +1281,16 @@ impl Scene {
                     // When friction is 0, use Min combine rule so the zero
                     // wins against any surface (prevents wall sticking).
                     if friction == 0.0 {
-                        builder = builder.friction_combine_rule(rapier2d::prelude::CoefficientCombineRule::Min);
+                        builder = builder
+                            .friction_combine_rule(rapier2d::prelude::CoefficientCombineRule::Min);
                     }
                     let collider = builder.build();
 
-                    let collider_handle =
-                        physics
-                            .colliders
-                            .insert_with_parent(collider, body_handle, &mut physics.bodies);
+                    let collider_handle = physics.colliders.insert_with_parent(
+                        collider,
+                        body_handle,
+                        &mut physics.bodies,
+                    );
                     bc.runtime_fixture = Some(collider_handle);
                     physics.register_collider(collider_handle, entity_uuid);
                 }
@@ -1310,8 +1307,10 @@ impl Scene {
                     );
                 } else {
                     let density = validate_physics_value(cc.density, 0.0, "density", entity_uuid);
-                    let friction = validate_physics_value(cc.friction, 0.0, "friction", entity_uuid);
-                    let restitution = validate_physics_value(cc.restitution, 0.0, "restitution", entity_uuid);
+                    let friction =
+                        validate_physics_value(cc.friction, 0.0, "friction", entity_uuid);
+                    let restitution =
+                        validate_physics_value(cc.restitution, 0.0, "restitution", entity_uuid);
 
                     let mut builder = rapier2d::geometry::ColliderBuilder::ball(scaled_radius)
                         .density(density)
@@ -1327,14 +1326,16 @@ impl Scene {
                         ))
                         .active_events(rapier2d::prelude::ActiveEvents::COLLISION_EVENTS);
                     if friction == 0.0 {
-                        builder = builder.friction_combine_rule(rapier2d::prelude::CoefficientCombineRule::Min);
+                        builder = builder
+                            .friction_combine_rule(rapier2d::prelude::CoefficientCombineRule::Min);
                     }
                     let collider = builder.build();
 
-                    let collider_handle =
-                        physics
-                            .colliders
-                            .insert_with_parent(collider, body_handle, &mut physics.bodies);
+                    let collider_handle = physics.colliders.insert_with_parent(
+                        collider,
+                        body_handle,
+                        &mut physics.bodies,
+                    );
                     cc.runtime_fixture = Some(collider_handle);
                     physics.register_collider(collider_handle, entity_uuid);
                 }
@@ -1409,10 +1410,7 @@ impl Scene {
     }
 
     /// Resolve audio handles to file paths via the asset manager.
-    pub fn resolve_audio_handles(
-        &mut self,
-        asset_manager: &mut crate::asset::EditorAssetManager,
-    ) {
+    pub fn resolve_audio_handles(&mut self, asset_manager: &mut crate::asset::EditorAssetManager) {
         let needs_resolve: Vec<(hecs::Entity, crate::uuid::Uuid)> = self
             .world
             .query::<(hecs::Entity, &AudioSourceComponent)>()
@@ -1446,22 +1444,37 @@ impl Scene {
     ///
     /// Returns a list of `(entity_name, component_kind)` pairs describing
     /// each reference, e.g. `("Player", "Sprite")`.
-    pub fn find_asset_references(&self, asset_handle: crate::uuid::Uuid) -> Vec<(String, &'static str)> {
+    pub fn find_asset_references(
+        &self,
+        asset_handle: crate::uuid::Uuid,
+    ) -> Vec<(String, &'static str)> {
         let mut refs = Vec::new();
 
-        for (tag, sprite) in self.world.query::<(&TagComponent, &SpriteRendererComponent)>().iter() {
+        for (tag, sprite) in self
+            .world
+            .query::<(&TagComponent, &SpriteRendererComponent)>()
+            .iter()
+        {
             if sprite.texture_handle == asset_handle {
                 refs.push((tag.tag.clone(), "Sprite"));
             }
         }
 
-        for (tag, tilemap) in self.world.query::<(&TagComponent, &TilemapComponent)>().iter() {
+        for (tag, tilemap) in self
+            .world
+            .query::<(&TagComponent, &TilemapComponent)>()
+            .iter()
+        {
             if tilemap.texture_handle == asset_handle {
                 refs.push((tag.tag.clone(), "Tilemap"));
             }
         }
 
-        for (tag, asc) in self.world.query::<(&TagComponent, &AudioSourceComponent)>().iter() {
+        for (tag, asc) in self
+            .world
+            .query::<(&TagComponent, &AudioSourceComponent)>()
+            .iter()
+        {
             if asc.audio_handle == asset_handle {
                 refs.push((tag.tag.clone(), "Audio"));
             }
@@ -1716,9 +1729,8 @@ impl Scene {
         exclude_entity: Option<Entity>,
     ) -> Option<(u64, f32, f32, f32, f32, f32)> {
         use rapier2d::na;
-        let exclude_uuid = exclude_entity.and_then(|e| {
-            self.get_component::<IdComponent>(e).map(|id| id.id.raw())
-        });
+        let exclude_uuid =
+            exclude_entity.and_then(|e| self.get_component::<IdComponent>(e).map(|id| id.id.raw()));
         if let Some(ref physics) = self.physics_world {
             physics.raycast(
                 na::Point2::new(origin.x, origin.y),
@@ -1870,17 +1882,15 @@ impl Scene {
                     let cur_pos = body.translation();
                     let cur_angle = body.rotation().angle();
 
-                    if let Some((prev_x, prev_y, prev_angle)) =
-                        physics.prev_transform(body_handle)
+                    if let Some((prev_x, prev_y, prev_angle)) = physics.prev_transform(body_handle)
                     {
-                        transform.translation.x =
-                            prev_x + (cur_pos.x - prev_x) * alpha;
-                        transform.translation.y =
-                            prev_y + (cur_pos.y - prev_y) * alpha;
+                        transform.translation.x = prev_x + (cur_pos.x - prev_x) * alpha;
+                        transform.translation.y = prev_y + (cur_pos.y - prev_y) * alpha;
                         // Shortest-path angle interpolation to avoid
                         // flipping through the wrong direction on wrap.
                         let mut angle_diff = cur_angle - prev_angle;
-                        angle_diff = angle_diff - (angle_diff / std::f32::consts::TAU).round() * std::f32::consts::TAU;
+                        angle_diff = angle_diff
+                            - (angle_diff / std::f32::consts::TAU).round() * std::f32::consts::TAU;
                         transform.rotation.z = prev_angle + angle_diff * alpha;
                     } else {
                         // First frame — no previous, use current directly.
@@ -2127,10 +2137,7 @@ impl Scene {
             .query::<(hecs::Entity, &SpriteRendererComponent)>()
             .iter()
         {
-            let z = wt_cache
-                .get(&handle)
-                .map(|m| m.w_axis.z)
-                .unwrap_or(0.0);
+            let z = wt_cache.get(&handle).map(|m| m.w_axis.z).unwrap_or(0.0);
             renderables.push((sprite.sorting_layer, sprite.order_in_layer, z, 0, handle));
         }
 
@@ -2139,22 +2146,12 @@ impl Scene {
             .query::<(hecs::Entity, &CircleRendererComponent)>()
             .iter()
         {
-            let z = wt_cache
-                .get(&handle)
-                .map(|m| m.w_axis.z)
-                .unwrap_or(0.0);
+            let z = wt_cache.get(&handle).map(|m| m.w_axis.z).unwrap_or(0.0);
             renderables.push((circle.sorting_layer, circle.order_in_layer, z, 1, handle));
         }
 
-        for (handle, text) in self
-            .world
-            .query::<(hecs::Entity, &TextComponent)>()
-            .iter()
-        {
-            let z = wt_cache
-                .get(&handle)
-                .map(|m| m.w_axis.z)
-                .unwrap_or(0.0);
+        for (handle, text) in self.world.query::<(hecs::Entity, &TextComponent)>().iter() {
+            let z = wt_cache.get(&handle).map(|m| m.w_axis.z).unwrap_or(0.0);
             renderables.push((text.sorting_layer, text.order_in_layer, z, 2, handle));
         }
 
@@ -2163,10 +2160,7 @@ impl Scene {
             .query::<(hecs::Entity, &TilemapComponent)>()
             .iter()
         {
-            let z = wt_cache
-                .get(&handle)
-                .map(|m| m.w_axis.z)
-                .unwrap_or(0.0);
+            let z = wt_cache.get(&handle).map(|m| m.w_axis.z).unwrap_or(0.0);
             renderables.push((tilemap.sorting_layer, tilemap.order_in_layer, z, 3, handle));
         }
 
@@ -2182,7 +2176,10 @@ impl Scene {
 
         // Render in sorted order.
         for &(_, _, _, kind, handle) in &renderables {
-            let world_transform = wt_cache.get(&handle).copied().unwrap_or(glam::Mat4::IDENTITY);
+            let world_transform = wt_cache
+                .get(&handle)
+                .copied()
+                .unwrap_or(glam::Mat4::IDENTITY);
             match kind {
                 0 => {
                     // Sprite
@@ -2194,9 +2191,8 @@ impl Scene {
                         .and_then(|anim| {
                             let (col, row) = anim.current_grid_coords()?;
                             // Per-clip texture takes priority over the sprite's texture.
-                            let texture = anim
-                                .current_clip_texture()
-                                .or(sprite.texture.as_ref())?;
+                            let texture =
+                                anim.current_clip_texture().or(sprite.texture.as_ref())?;
                             Some(SubTexture2D::from_coords(
                                 texture,
                                 glam::Vec2::new(col as f32, row as f32),
@@ -2213,7 +2209,8 @@ impl Scene {
                         );
                     } else if sprite.is_atlas() {
                         if let Some(ref tex) = sprite.texture {
-                            let sub_tex = SubTexture2D::new(tex, sprite.atlas_min, sprite.atlas_max);
+                            let sub_tex =
+                                SubTexture2D::new(tex, sprite.atlas_min, sprite.atlas_max);
                             renderer.draw_sub_textured_quad_transformed(
                                 &world_transform,
                                 &sub_tex,
@@ -2221,37 +2218,21 @@ impl Scene {
                                 handle.id() as i32,
                             );
                         } else {
-                            renderer.draw_sprite(
-                                &world_transform,
-                                &sprite,
-                                handle.id() as i32,
-                            );
+                            renderer.draw_sprite(&world_transform, &sprite, handle.id() as i32);
                         }
                     } else {
-                        renderer.draw_sprite(
-                            &world_transform,
-                            &sprite,
-                            handle.id() as i32,
-                        );
+                        renderer.draw_sprite(&world_transform, &sprite, handle.id() as i32);
                     }
                 }
                 1 => {
                     // Circle
                     let circle = self.world.get::<&CircleRendererComponent>(handle).unwrap();
-                    renderer.draw_circle_component(
-                        &world_transform,
-                        &circle,
-                        handle.id() as i32,
-                    );
+                    renderer.draw_circle_component(&world_transform, &circle, handle.id() as i32);
                 }
                 2 => {
                     // Text
                     let text = self.world.get::<&TextComponent>(handle).unwrap();
-                    renderer.draw_text_component(
-                        &world_transform,
-                        &text,
-                        handle.id() as i32,
-                    );
+                    renderer.draw_text_component(&world_transform, &text, handle.id() as i32);
                 }
                 3 => {
                     // Tilemap — frustum culled + precomputed transforms.
@@ -2263,9 +2244,13 @@ impl Scene {
                     let tile_cols = tilemap.tileset_columns.max(1);
                     let tw = texture.width() as f32;
                     let th = texture.height() as f32;
-                    if tw == 0.0 || th == 0.0 { continue; }
+                    if tw == 0.0 || th == 0.0 {
+                        continue;
+                    }
                     let tile_size = tilemap.tile_size;
-                    if tile_size.x <= 0.0 || tile_size.y <= 0.0 { continue; }
+                    if tile_size.x <= 0.0 || tile_size.y <= 0.0 {
+                        continue;
+                    }
                     let tex_idx = texture.bindless_index() as f32;
                     let eid = handle.id() as i32;
 
@@ -2285,9 +2270,9 @@ impl Scene {
                     let mut local_max = glam::Vec2::splat(f32::NEG_INFINITY);
                     for ndc in [
                         glam::Vec3::new(-1.0, -1.0, 0.0),
-                        glam::Vec3::new( 1.0, -1.0, 0.0),
-                        glam::Vec3::new( 1.0,  1.0, 0.0),
-                        glam::Vec3::new(-1.0,  1.0, 0.0),
+                        glam::Vec3::new(1.0, -1.0, 0.0),
+                        glam::Vec3::new(1.0, 1.0, 0.0),
+                        glam::Vec3::new(-1.0, 1.0, 0.0),
                     ] {
                         let p = ndc_to_local.project_point3(ndc);
                         local_min = local_min.min(p.truncate());
@@ -2319,7 +2304,9 @@ impl Scene {
                         let row_w = base_w + row as f32 * scaled_y;
                         for col in min_col..max_col {
                             let raw = tilemap.tiles[(row * tilemap.width + col) as usize];
-                            if raw < 0 { continue; }
+                            if raw < 0 {
+                                continue;
+                            }
                             let flip_h = raw & TILE_FLIP_H != 0;
                             let flip_v = raw & TILE_FLIP_V != 0;
                             let tile_id = raw & TILE_ID_MASK;
@@ -2333,17 +2320,23 @@ impl Scene {
                             let mut max_u = (px + cell_w) * inv_tw;
                             let mut max_v = (py + cell_h) * inv_th;
 
-                            if flip_h { std::mem::swap(&mut min_u, &mut max_u); }
-                            if flip_v { std::mem::swap(&mut min_v, &mut max_v); }
+                            if flip_h {
+                                std::mem::swap(&mut min_u, &mut max_u);
+                            }
+                            if flip_v {
+                                std::mem::swap(&mut min_v, &mut max_v);
+                            }
 
                             let col3 = row_w + col as f32 * scaled_x;
-                            let tile_transform = glam::Mat4::from_cols(
-                                scaled_x, scaled_y, const_col2, col3,
-                            );
+                            let tile_transform =
+                                glam::Mat4::from_cols(scaled_x, scaled_y, const_col2, col3);
                             renderer.draw_textured_quad_transformed_uv(
-                                &tile_transform, tex_idx,
-                                [min_u, min_v], [max_u, max_v],
-                                glam::Vec4::ONE, eid,
+                                &tile_transform,
+                                tex_idx,
+                                [min_u, min_v],
+                                [max_u, max_v],
+                                glam::Vec4::ONE,
+                                eid,
                             );
                         }
                     }
@@ -2420,8 +2413,7 @@ impl Scene {
             if camera.primary {
                 // VP = projection * inverse(camera_world_transform)
                 let world = self.get_world_transform(Entity::new(handle));
-                main_camera_vp =
-                    Some(*camera.camera.projection() * world.inverse());
+                main_camera_vp = Some(*camera.camera.projection() * world.inverse());
                 break;
             }
         }

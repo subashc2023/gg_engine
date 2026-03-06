@@ -504,10 +504,22 @@ impl Renderer2DData {
 
         // Static unit quad vertex buffer (4 vertices, never changes).
         let unit_quad_vertices = [
-            UnitQuadVertex { position: [-0.5,  0.5, 0.0], tex_coord: [0.0, 0.0] }, // TL
-            UnitQuadVertex { position: [ 0.5,  0.5, 0.0], tex_coord: [1.0, 0.0] }, // TR
-            UnitQuadVertex { position: [ 0.5, -0.5, 0.0], tex_coord: [1.0, 1.0] }, // BR
-            UnitQuadVertex { position: [-0.5, -0.5, 0.0], tex_coord: [0.0, 1.0] }, // BL
+            UnitQuadVertex {
+                position: [-0.5, 0.5, 0.0],
+                tex_coord: [0.0, 0.0],
+            }, // TL
+            UnitQuadVertex {
+                position: [0.5, 0.5, 0.0],
+                tex_coord: [1.0, 0.0],
+            }, // TR
+            UnitQuadVertex {
+                position: [0.5, -0.5, 0.0],
+                tex_coord: [1.0, 1.0],
+            }, // BR
+            UnitQuadVertex {
+                position: [-0.5, -0.5, 0.0],
+                tex_coord: [0.0, 1.0],
+            }, // BL
         ];
         let uq_bytes = unsafe {
             std::slice::from_raw_parts(
@@ -515,9 +527,8 @@ impl Renderer2DData {
                 std::mem::size_of_val(&unit_quad_vertices),
             )
         };
-        let unit_quad_vb = DynamicVertexBuffer::new(
-            allocator, device, uq_bytes.len(), uq_layout.clone(),
-        )?;
+        let unit_quad_vb =
+            DynamicVertexBuffer::new(allocator, device, uq_bytes.len(), uq_layout.clone())?;
         unit_quad_vb.write_at(0, uq_bytes);
 
         // Small index buffer for the unit quad (6 indices: 0,1,2, 2,3,0).
@@ -1353,7 +1364,8 @@ impl Renderer2DData {
             );
 
             // Draw instanced! 6 indices per quad, N instances.
-            self.device.cmd_draw_indexed(cmd_buf, 6, instance_count, 0, 0, 0);
+            self.device
+                .cmd_draw_indexed(cmd_buf, 6, instance_count, 0, 0, 0);
         }
 
         // 3. Update stats, advance write offset, and reset instances for next batch.
@@ -1383,7 +1395,13 @@ impl Renderer2DData {
         self.offscreen_render_pass = Some(render_pass);
         self.offscreen_color_attachment_count = color_attachment_count;
 
-        self.rebuild_offscreen_pipelines(device, render_pass, camera_ubo_ds_layout, color_attachment_count, pipeline_cache)
+        self.rebuild_offscreen_pipelines(
+            device,
+            render_pass,
+            camera_ubo_ds_layout,
+            color_attachment_count,
+            pipeline_cache,
+        )
     }
 
     fn rebuild_offscreen_pipelines(
@@ -1442,17 +1460,18 @@ impl Renderer2DData {
         )?));
 
         // Instanced sprite offscreen pipeline.
-        self.instance_offscreen_pipeline = Some(Arc::new(pipeline::create_instanced_batch_pipeline(
-            device,
-            &self.instance_offscreen_shader,
-            &self.unit_quad_layout,
-            &self.instance_layout,
-            render_pass,
-            camera_ubo_ds_layout,
-            &[self.bindless_ds_layout],
-            color_attachment_count,
-            pipeline_cache,
-        )?));
+        self.instance_offscreen_pipeline =
+            Some(Arc::new(pipeline::create_instanced_batch_pipeline(
+                device,
+                &self.instance_offscreen_shader,
+                &self.unit_quad_layout,
+                &self.instance_layout,
+                render_pass,
+                camera_ubo_ds_layout,
+                &[self.bindless_ds_layout],
+                color_attachment_count,
+                pipeline_cache,
+            )?));
 
         Ok(())
     }
@@ -1476,7 +1495,10 @@ impl Renderer2DData {
             .collect();
 
         if entries.is_empty() {
-            return Err(format!("No .glsl files found in '{}'", shader_dir.display()));
+            return Err(format!(
+                "No .glsl files found in '{}'",
+                shader_dir.display()
+            ));
         }
 
         // Phase 1: Compile all shaders. If any fail, abort before touching state.

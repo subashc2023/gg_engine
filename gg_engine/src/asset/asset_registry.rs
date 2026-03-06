@@ -92,7 +92,11 @@ impl AssetRegistry {
         let contents = match fs::read_to_string(file_path) {
             Ok(s) => s,
             Err(e) => {
-                log::warn!("Failed to read registry file '{}': {}", file_path.display(), e);
+                log::warn!(
+                    "Failed to read registry file '{}': {}",
+                    file_path.display(),
+                    e
+                );
                 return None;
             }
         };
@@ -100,7 +104,11 @@ impl AssetRegistry {
         let file_data: RegistryFileData = match serde_yaml_ng::from_str(&contents) {
             Ok(d) => d,
             Err(e) => {
-                log::error!("Failed to parse registry file '{}': {}", file_path.display(), e);
+                log::error!(
+                    "Failed to parse registry file '{}': {}",
+                    file_path.display(),
+                    e
+                );
                 return None;
             }
         };
@@ -146,7 +154,11 @@ impl AssetRegistry {
         match serde_yaml_ng::to_string(&file_data) {
             Ok(yaml) => {
                 if let Err(e) = crate::platform_utils::atomic_write(file_path, &yaml) {
-                    log::error!("Failed to write registry file '{}': {}", file_path.display(), e);
+                    log::error!(
+                        "Failed to write registry file '{}': {}",
+                        file_path.display(),
+                        e
+                    );
                     false
                 } else {
                     log::info!("Asset registry saved to '{}'", file_path.display());
@@ -222,7 +234,10 @@ mod tests {
     fn find_by_path() {
         let mut reg = AssetRegistry::new();
         let handle = Uuid::new();
-        reg.insert(handle, make_metadata("scenes/main.ggscene", AssetType::Scene));
+        reg.insert(
+            handle,
+            make_metadata("scenes/main.ggscene", AssetType::Scene),
+        );
 
         assert_eq!(reg.find_by_path("scenes/main.ggscene"), Some(handle));
         assert_eq!(reg.find_by_path("scenes/nonexistent.ggscene"), None);
@@ -232,12 +247,21 @@ mod tests {
     fn find_by_path_normalizes_backslashes() {
         let mut reg = AssetRegistry::new();
         let handle = Uuid::new();
-        reg.insert(handle, make_metadata("textures\\sprites\\player.png", AssetType::Texture2D));
+        reg.insert(
+            handle,
+            make_metadata("textures\\sprites\\player.png", AssetType::Texture2D),
+        );
 
         // Lookup with forward slashes should work.
-        assert_eq!(reg.find_by_path("textures/sprites/player.png"), Some(handle));
+        assert_eq!(
+            reg.find_by_path("textures/sprites/player.png"),
+            Some(handle)
+        );
         // Lookup with backslashes should also work.
-        assert_eq!(reg.find_by_path("textures\\sprites\\player.png"), Some(handle));
+        assert_eq!(
+            reg.find_by_path("textures\\sprites\\player.png"),
+            Some(handle)
+        );
     }
 
     #[test]
@@ -340,8 +364,14 @@ mod tests {
     #[test]
     fn save_produces_stable_sorted_output() {
         let mut reg = AssetRegistry::new();
-        reg.insert(Uuid::from_raw(999), make_metadata("z_last.png", AssetType::Texture2D));
-        reg.insert(Uuid::from_raw(111), make_metadata("a_first.png", AssetType::Texture2D));
+        reg.insert(
+            Uuid::from_raw(999),
+            make_metadata("z_last.png", AssetType::Texture2D),
+        );
+        reg.insert(
+            Uuid::from_raw(111),
+            make_metadata("a_first.png", AssetType::Texture2D),
+        );
 
         let dir = std::env::temp_dir().join("gg_asset_test_sorted");
         let _ = std::fs::create_dir_all(&dir);
@@ -353,7 +383,10 @@ mod tests {
         // a_first.png should appear before z_last.png in the output.
         let pos_a = contents.find("a_first.png").unwrap();
         let pos_z = contents.find("z_last.png").unwrap();
-        assert!(pos_a < pos_z, "Registry output should be sorted by file path");
+        assert!(
+            pos_a < pos_z,
+            "Registry output should be sorted by file path"
+        );
 
         let _ = std::fs::remove_dir_all(&dir);
     }

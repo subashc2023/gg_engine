@@ -66,10 +66,7 @@ pub(crate) fn draw_audio_source_component(
                             FileDialogs::open_file_in("Audio files", &["wav", "ogg", "mp3", "flac"], &audio_dir_str)
                         {
                             let abs_path = std::path::PathBuf::from(&path_str);
-                            let rel_path = abs_path
-                                .strip_prefix(am.asset_directory())
-                                .map(|p| p.to_string_lossy().to_string())
-                                .unwrap_or(path_str);
+                            let rel_path = crate::panels::relative_asset_path(&abs_path, am.asset_directory());
                             let handle = am.import_asset(&rel_path);
                             if let Some(mut ac) =
                                 scene.get_component_mut::<AudioSourceComponent>(entity)
@@ -93,10 +90,7 @@ pub(crate) fn draw_audio_source_component(
                             .to_lowercase();
                         if matches!(ext.as_str(), "wav" | "ogg" | "mp3" | "flac") {
                             if let Some(am) = asset_manager.as_mut() {
-                                let rel_path = payload.path
-                                    .strip_prefix(am.asset_directory())
-                                    .map(|p| p.to_string_lossy().to_string())
-                                    .unwrap_or_else(|_| payload.path.to_string_lossy().to_string());
+                                let rel_path = crate::panels::relative_asset_path(&payload.path, am.asset_directory());
                                 let handle = am.import_asset(&rel_path);
                                 if let Some(mut ac) =
                                     scene.get_component_mut::<AudioSourceComponent>(entity)
@@ -258,11 +252,16 @@ pub(crate) fn draw_audio_listener_component(
                 .unwrap_or(true);
 
             ui.horizontal(|ui| {
-                if ui.checkbox(&mut active, "Active").on_hover_text(
-                    "When active, this entity's position is used as the\n\
+                if ui
+                    .checkbox(&mut active, "Active")
+                    .on_hover_text(
+                        "When active, this entity's position is used as the\n\
                      spatial audio listener instead of the primary camera.",
-                ).changed() {
-                    if let Some(mut al) = scene.get_component_mut::<AudioListenerComponent>(entity) {
+                    )
+                    .changed()
+                {
+                    if let Some(mut al) = scene.get_component_mut::<AudioListenerComponent>(entity)
+                    {
                         al.active = active;
                     }
                     *scene_dirty = true;

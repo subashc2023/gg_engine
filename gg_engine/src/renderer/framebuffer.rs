@@ -330,12 +330,19 @@ impl Framebuffer {
             .iter()
             .map(|cs| {
                 let vk_fmt = resolve_vk_format(cs.format, self.color_format, self.depth_format);
-                create_color_attachment(&self.allocator, &self.device, &self.spec, vk_fmt, cs.format)
+                create_color_attachment(
+                    &self.allocator,
+                    &self.device,
+                    &self.spec,
+                    vk_fmt,
+                    cs.format,
+                )
             })
             .collect::<Result<Vec<_>, _>>()?;
 
         // Recreate depth attachment at new size if present.
-        self.depth_attachment = self.depth_attachment_spec
+        self.depth_attachment = self
+            .depth_attachment_spec
             .map(|ds| {
                 let vk_fmt = resolve_vk_format(ds.format, self.color_format, self.depth_format);
                 create_depth_attachment(&self.allocator, &self.device, &self.spec, vk_fmt)
@@ -354,8 +361,7 @@ impl Framebuffer {
         )?;
 
         // Recreate readback staging buffer.
-        let (rb_buf, rb_alloc) =
-            create_readback_staging_buffer(&self.allocator, &self.device)?;
+        let (rb_buf, rb_alloc) = create_readback_staging_buffer(&self.allocator, &self.device)?;
         // Drop old readback allocation (the buffer was already destroyed above).
         let old_readback_alloc = std::mem::replace(&mut self.readback_allocation, rb_alloc);
         drop(old_readback_alloc);
@@ -639,12 +645,16 @@ fn create_color_attachment(
         .sharing_mode(vk::SharingMode::EXCLUSIVE)
         .samples(vk::SampleCountFlags::TYPE_1);
 
-    let image =
-        unsafe { device.create_image(&image_info, None) }
-            .map_err(|e| format!("Failed to create FB color image: {e}"))?;
+    let image = unsafe { device.create_image(&image_info, None) }
+        .map_err(|e| format!("Failed to create FB color image: {e}"))?;
 
-    let allocation =
-        GpuAllocator::allocate_for_image(allocator, device, image, "FB_Color", MemoryLocation::GpuOnly)?;
+    let allocation = GpuAllocator::allocate_for_image(
+        allocator,
+        device,
+        image,
+        "FB_Color",
+        MemoryLocation::GpuOnly,
+    )?;
 
     let view_info = vk::ImageViewCreateInfo::default()
         .image(image)
@@ -691,12 +701,16 @@ fn create_depth_attachment(
         .sharing_mode(vk::SharingMode::EXCLUSIVE)
         .samples(vk::SampleCountFlags::TYPE_1);
 
-    let image =
-        unsafe { device.create_image(&image_info, None) }
-            .map_err(|e| format!("Failed to create FB depth image: {e}"))?;
+    let image = unsafe { device.create_image(&image_info, None) }
+        .map_err(|e| format!("Failed to create FB depth image: {e}"))?;
 
-    let allocation =
-        GpuAllocator::allocate_for_image(allocator, device, image, "FB_Depth", MemoryLocation::GpuOnly)?;
+    let allocation = GpuAllocator::allocate_for_image(
+        allocator,
+        device,
+        image,
+        "FB_Depth",
+        MemoryLocation::GpuOnly,
+    )?;
 
     let view_info = vk::ImageViewCreateInfo::default()
         .image(image)
@@ -791,12 +805,16 @@ fn create_readback_staging_buffer(
         .usage(vk::BufferUsageFlags::TRANSFER_DST)
         .sharing_mode(vk::SharingMode::EXCLUSIVE);
 
-    let buffer =
-        unsafe { device.create_buffer(&buf_info, None) }
-            .map_err(|e| format!("Failed to create readback buffer: {e}"))?;
+    let buffer = unsafe { device.create_buffer(&buf_info, None) }
+        .map_err(|e| format!("Failed to create readback buffer: {e}"))?;
 
-    let allocation =
-        GpuAllocator::allocate_for_buffer(allocator, device, buffer, "ReadbackBuffer", MemoryLocation::GpuToCpu)?;
+    let allocation = GpuAllocator::allocate_for_buffer(
+        allocator,
+        device,
+        buffer,
+        "ReadbackBuffer",
+        MemoryLocation::GpuToCpu,
+    )?;
 
     // Initialize both slots to -1 (no entity).
     // SAFETY: GpuToCpu allocation guarantees HOST_VISIBLE mapped memory.

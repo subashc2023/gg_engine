@@ -1,9 +1,9 @@
 use std::collections::HashMap;
 
-use kira::{AudioManager, AudioManagerSettings, Decibels, DefaultBackend, Panning, Tween};
 use kira::sound::static_sound::{StaticSoundData, StaticSoundHandle, StaticSoundSettings};
 use kira::sound::streaming::{StreamingSoundData, StreamingSoundHandle};
 use kira::sound::{FromFileError, PlaybackState};
+use kira::{AudioManager, AudioManagerSettings, Decibels, DefaultBackend, Panning, Tween};
 
 /// Unified handle for both static and streaming sounds.
 enum SoundHandle {
@@ -104,18 +104,16 @@ impl AudioEngine {
         // Load or retrieve cached sound data.
         let sound_data = match self.sound_cache.get(path) {
             Some(data) => data.clone(),
-            None => {
-                match StaticSoundData::from_file(path) {
-                    Ok(data) => {
-                        self.sound_cache.insert(path.to_string(), data.clone());
-                        data
-                    }
-                    Err(e) => {
-                        log::error!("Failed to load audio file '{}': {}", path, e);
-                        return;
-                    }
+            None => match StaticSoundData::from_file(path) {
+                Ok(data) => {
+                    self.sound_cache.insert(path.to_string(), data.clone());
+                    data
                 }
-            }
+                Err(e) => {
+                    log::error!("Failed to load audio file '{}': {}", path, e);
+                    return;
+                }
+            },
         };
 
         let mut settings = StaticSoundSettings::new()
@@ -154,9 +152,7 @@ impl AudioEngine {
             }
         };
 
-        let mut data = sound_data
-            .volume(volume)
-            .playback_rate(pitch as f64);
+        let mut data = sound_data.volume(volume).playback_rate(pitch as f64);
         if looping {
             data = data.loop_region(..);
         }
@@ -169,7 +165,11 @@ impl AudioEngine {
                     .push(SoundHandle::Streaming(handle));
             }
             Err(e) => {
-                log::error!("Failed to play streaming sound for entity {}: {}", entity_uuid, e);
+                log::error!(
+                    "Failed to play streaming sound for entity {}: {}",
+                    entity_uuid,
+                    e
+                );
             }
         }
     }

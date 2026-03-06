@@ -229,7 +229,9 @@ pub fn begin_session(_name: &str, _filepath: &str) {}
 pub fn end_session() {}
 
 #[cfg(not(feature = "profiling"))]
-pub fn is_session_active() -> bool { false }
+pub fn is_session_active() -> bool {
+    false
+}
 
 #[cfg(not(feature = "profiling"))]
 pub struct ProfileTimer;

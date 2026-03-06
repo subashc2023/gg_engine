@@ -66,10 +66,7 @@ pub(crate) fn generate_font_cpu_data(path: &Path) -> Result<FontCpuData, String>
     let line_height = ascender - descender + line_gap;
 
     // Character set ranges (Basic Latin + Latin-1 Supplement).
-    const CHAR_RANGES: &[(u32, u32)] = &[
-        (0x0020, 0x007E),
-        (0x00A0, 0x00FF),
-    ];
+    const CHAR_RANGES: &[(u32, u32)] = &[(0x0020, 0x007E), (0x00A0, 0x00FF)];
 
     let mut chars: Vec<char> = Vec::new();
     for &(start, end) in CHAR_RANGES {
@@ -139,8 +136,16 @@ pub(crate) fn generate_font_cpu_data(path: &Path) -> Result<FontCpuData, String>
         let (scale, translate) = frame.unwrap();
 
         let (min_x, min_y, max_x, max_y) = msdf::shape_bounds(&shape).unwrap();
-        let range_fu_x = if scale.x.abs() > 1e-10 { MSDF_RANGE_PX / scale.x } else { 0.0 };
-        let range_fu_y = if scale.y.abs() > 1e-10 { MSDF_RANGE_PX / scale.y } else { 0.0 };
+        let range_fu_x = if scale.x.abs() > 1e-10 {
+            MSDF_RANGE_PX / scale.x
+        } else {
+            0.0
+        };
+        let range_fu_y = if scale.y.abs() > 1e-10 {
+            MSDF_RANGE_PX / scale.y
+        } else {
+            0.0
+        };
 
         let bearing_x = (min_x - range_fu_x) / units_per_em;
         let bearing_y = (max_y + range_fu_y) / units_per_em;
@@ -176,8 +181,16 @@ pub(crate) fn generate_font_cpu_data(path: &Path) -> Result<FontCpuData, String>
     let cell_w = MSDF_GLYPH_SIZE + GLYPH_PADDING * 2;
     let cell_h = MSDF_GLYPH_SIZE + GLYPH_PADDING * 2;
     let visible_count = msdf_glyphs.iter().filter(|g| g.bitmap.is_some()).count() as u32;
-    let cols = if visible_count == 0 { 1 } else { (visible_count as f64).sqrt().ceil() as u32 };
-    let rows = if visible_count == 0 { 1 } else { visible_count.div_ceil(cols) };
+    let cols = if visible_count == 0 {
+        1
+    } else {
+        (visible_count as f64).sqrt().ceil() as u32
+    };
+    let rows = if visible_count == 0 {
+        1
+    } else {
+        visible_count.div_ceil(cols)
+    };
     let atlas_width = (cols * cell_w).max(1);
     let atlas_height = (rows * cell_h).max(1);
 
@@ -217,12 +230,7 @@ pub(crate) fn generate_font_cpu_data(path: &Path) -> Result<FontCpuData, String>
             glyphs.insert(
                 glyph.ch,
                 GlyphInfo {
-                    tex_coords: [
-                        [u0, v0],
-                        [u1, v0],
-                        [u1, v1],
-                        [u0, v1],
-                    ],
+                    tex_coords: [[u0, v0], [u1, v0], [u1, v1], [u0, v1]],
                     advance_x: glyph.advance_x as f32,
                     bearing_x: glyph.bearing_x as f32,
                     bearing_y: glyph.bearing_y as f32,
@@ -386,7 +394,11 @@ impl Font {
 
     /// Load a font from a TTF file and generate an MSDF atlas (synchronous).
     /// Calls [`generate_font_cpu_data`] then [`Font::from_cpu_data`].
-    pub(crate) fn load(res: &RendererResources<'_>, allocator: &Arc<Mutex<GpuAllocator>>, path: &Path) -> Option<Self> {
+    pub(crate) fn load(
+        res: &RendererResources<'_>,
+        allocator: &Arc<Mutex<GpuAllocator>>,
+        path: &Path,
+    ) -> Option<Self> {
         let cpu_data = match generate_font_cpu_data(path) {
             Ok(data) => data,
             Err(e) => {
@@ -397,7 +409,10 @@ impl Font {
         match Self::from_cpu_data(res, allocator, cpu_data) {
             Ok(font) => Some(font),
             Err(e) => {
-                log::error!("Failed to create font GPU resources for '{}': {e}", path.display());
+                log::error!(
+                    "Failed to create font GPU resources for '{}': {e}",
+                    path.display()
+                );
                 None
             }
         }
@@ -411,7 +426,10 @@ impl Font {
     /// Get the kerning offset between two characters (in normalized font units).
     /// Returns 0.0 if no kerning pair exists.
     pub fn kerning(&self, left: char, right: char) -> f32 {
-        self.kerning_pairs.get(&(left, right)).copied().unwrap_or(0.0)
+        self.kerning_pairs
+            .get(&(left, right))
+            .copied()
+            .unwrap_or(0.0)
     }
 
     /// The bindless texture index for the font atlas.

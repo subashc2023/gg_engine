@@ -19,7 +19,12 @@ pub struct Shader {
 
 impl Shader {
     /// Create a shader from pre-compiled SPIR-V bytecode.
-    pub(crate) fn new(device: &ash::Device, name: &str, vert_spv: &[u8], frag_spv: &[u8]) -> Result<Self, String> {
+    pub(crate) fn new(
+        device: &ash::Device,
+        name: &str,
+        vert_spv: &[u8],
+        frag_spv: &[u8],
+    ) -> Result<Self, String> {
         let _timer = ProfileTimer::new("Shader::new");
         let vert_module = create_shader_module(device, vert_spv)
             .map_err(|e| format!("Failed to create vertex shader module for '{name}': {e}"))?;
@@ -62,7 +67,10 @@ impl Drop for Shader {
 // Helpers
 // ---------------------------------------------------------------------------
 
-fn create_shader_module(device: &ash::Device, spv_bytes: &[u8]) -> Result<vk::ShaderModule, vk::Result> {
+fn create_shader_module(
+    device: &ash::Device,
+    spv_bytes: &[u8],
+) -> Result<vk::ShaderModule, vk::Result> {
     // SPIR-V is a stream of u32 words. ash requires &[u32].
     let spv_u32: Vec<u32> = spv_bytes
         .chunks_exact(4)

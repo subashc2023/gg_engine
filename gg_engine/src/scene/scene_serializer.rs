@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
 
@@ -5,6 +6,9 @@ use glam::{Vec2, Vec3, Vec4};
 use serde::{Deserialize, Serialize};
 
 use crate::renderer::{ProjectionType, SceneCamera};
+use crate::scene::entity::Entity;
+#[cfg(feature = "lua-scripting")]
+use crate::scene::LuaScriptComponent;
 use crate::scene::{
     AnimationClip, AudioListenerComponent, AudioSourceComponent, BoxCollider2DComponent,
     CameraComponent, CircleCollider2DComponent, CircleRendererComponent, IdComponent,
@@ -12,8 +16,6 @@ use crate::scene::{
     SpriteAnimatorComponent, SpriteRendererComponent, TagComponent, TextComponent,
     TilemapComponent, TransformComponent,
 };
-#[cfg(feature = "lua-scripting")]
-use crate::scene::LuaScriptComponent;
 
 /// Default value for collision layer/mask fields — all bits set (collides with everything).
 fn default_collision_bits() -> u32 {
@@ -36,6 +38,16 @@ struct SceneData {
     #[serde(rename = "Version", default = "default_scene_version")]
     version: u32,
     #[serde(rename = "Scene")]
+    name: String,
+    #[serde(rename = "Entities")]
+    entities: Vec<EntityData>,
+}
+
+#[derive(Serialize, Deserialize)]
+struct PrefabData {
+    #[serde(rename = "Version", default = "default_scene_version")]
+    version: u32,
+    #[serde(rename = "Prefab")]
     name: String,
     #[serde(rename = "Entities")]
     entities: Vec<EntityData>,
@@ -180,7 +192,11 @@ struct SpriteData {
     color: [f32; 4],
     #[serde(rename = "TilingFactor", default = "default_tiling_factor")]
     tiling_factor: f32,
-    #[serde(rename = "TextureHandle", default, skip_serializing_if = "is_zero_handle")]
+    #[serde(
+        rename = "TextureHandle",
+        default,
+        skip_serializing_if = "is_zero_handle"
+    )]
     texture_handle: u64,
     #[serde(rename = "SortingLayer", default)]
     sorting_layer: i32,
@@ -188,7 +204,11 @@ struct SpriteData {
     order_in_layer: i32,
     #[serde(rename = "AtlasMin", default, skip_serializing_if = "is_zero_vec2")]
     atlas_min: [f32; 2],
-    #[serde(rename = "AtlasMax", default = "default_one_vec2", skip_serializing_if = "is_one_vec2")]
+    #[serde(
+        rename = "AtlasMax",
+        default = "default_one_vec2",
+        skip_serializing_if = "is_one_vec2"
+    )]
     atlas_max: [f32; 2],
 }
 
@@ -340,7 +360,11 @@ struct AnimationClipData {
     fps: f32,
     #[serde(rename = "Looping", default = "default_true")]
     looping: bool,
-    #[serde(rename = "TextureHandle", default, skip_serializing_if = "is_zero_uuid")]
+    #[serde(
+        rename = "TextureHandle",
+        default,
+        skip_serializing_if = "is_zero_uuid"
+    )]
     texture_handle: u64,
 }
 
@@ -352,7 +376,11 @@ struct SpriteAnimatorData {
     columns: u32,
     #[serde(rename = "Clips", default)]
     clips: Vec<AnimationClipData>,
-    #[serde(rename = "DefaultClip", default, skip_serializing_if = "String::is_empty")]
+    #[serde(
+        rename = "DefaultClip",
+        default,
+        skip_serializing_if = "String::is_empty"
+    )]
     default_clip: String,
 }
 
@@ -384,15 +412,27 @@ struct TilemapData {
     height: u32,
     #[serde(rename = "TileSize")]
     tile_size: [f32; 2],
-    #[serde(rename = "TextureHandle", default, skip_serializing_if = "is_zero_handle")]
+    #[serde(
+        rename = "TextureHandle",
+        default,
+        skip_serializing_if = "is_zero_handle"
+    )]
     texture_handle: u64,
     #[serde(rename = "TilesetColumns", default = "default_tileset_columns")]
     tileset_columns: u32,
     #[serde(rename = "CellSize")]
     cell_size: [f32; 2],
-    #[serde(rename = "Spacing", default = "default_zero_vec2", skip_serializing_if = "is_zero_vec2")]
+    #[serde(
+        rename = "Spacing",
+        default = "default_zero_vec2",
+        skip_serializing_if = "is_zero_vec2"
+    )]
     spacing: [f32; 2],
-    #[serde(rename = "Margin", default = "default_zero_vec2", skip_serializing_if = "is_zero_vec2")]
+    #[serde(
+        rename = "Margin",
+        default = "default_zero_vec2",
+        skip_serializing_if = "is_zero_vec2"
+    )]
     margin: [f32; 2],
     #[serde(rename = "Tiles")]
     tiles: Vec<i32>,
@@ -404,7 +444,11 @@ struct TilemapData {
 
 #[derive(Serialize, Deserialize)]
 struct AudioSourceData {
-    #[serde(rename = "AudioHandle", default, skip_serializing_if = "is_zero_handle")]
+    #[serde(
+        rename = "AudioHandle",
+        default,
+        skip_serializing_if = "is_zero_handle"
+    )]
     audio_handle: u64,
     #[serde(rename = "Volume", default = "default_volume")]
     volume: f32,
@@ -418,9 +462,17 @@ struct AudioSourceData {
     streaming: bool,
     #[serde(rename = "Spatial", default)]
     spatial: bool,
-    #[serde(rename = "MinDistance", default = "default_min_distance", skip_serializing_if = "is_default_min_distance")]
+    #[serde(
+        rename = "MinDistance",
+        default = "default_min_distance",
+        skip_serializing_if = "is_default_min_distance"
+    )]
     min_distance: f32,
-    #[serde(rename = "MaxDistance", default = "default_max_distance", skip_serializing_if = "is_default_max_distance")]
+    #[serde(
+        rename = "MaxDistance",
+        default = "default_max_distance",
+        skip_serializing_if = "is_default_max_distance"
+    )]
     max_distance: f32,
 }
 
@@ -480,12 +532,24 @@ struct ParticleEmitterData {
     lifetime: f32,
 }
 
-fn default_emit_rate() -> u32 { 5 }
-fn default_max_particles() -> u32 { 100_000 }
-fn default_velocity_variation() -> [f32; 2] { [3.0, 3.0] }
-fn default_size_begin() -> f32 { 0.1 }
-fn default_size_variation() -> f32 { 0.05 }
-fn default_lifetime() -> f32 { 5.0 }
+fn default_emit_rate() -> u32 {
+    5
+}
+fn default_max_particles() -> u32 {
+    100_000
+}
+fn default_velocity_variation() -> [f32; 2] {
+    [3.0, 3.0]
+}
+fn default_size_begin() -> f32 {
+    0.1
+}
+fn default_size_variation() -> f32 {
+    0.05
+}
+fn default_lifetime() -> f32 {
+    5.0
+}
 
 fn default_tileset_columns() -> u32 {
     1
@@ -626,143 +690,306 @@ impl SceneSerializer {
         true
     }
 
+    // -- Prefab serialization -------------------------------------------------
+
+    /// Serialize an entity (and its children) to a `.ggprefab` YAML file.
+    ///
+    /// The root entity's parent reference is stripped — the prefab root is
+    /// always a root-level entity when saved.
+    pub fn serialize_prefab(scene: &Scene, root: Entity, file_path: &str) -> bool {
+        let name = scene
+            .get_component::<TagComponent>(root)
+            .map(|t| t.tag.clone())
+            .unwrap_or_else(|| "Prefab".into());
+
+        let entities = Self::collect_hierarchy(scene, root);
+        let mut entities_data: Vec<EntityData> = entities
+            .iter()
+            .map(|&e| Self::entity_to_data(scene, e))
+            .collect();
+
+        // Strip the root entity's parent reference.
+        if let Some(first) = entities_data.first_mut() {
+            if let Some(ref mut rel) = first.relationship {
+                rel.parent = None;
+            }
+        }
+
+        let prefab_data = PrefabData {
+            version: SCENE_VERSION,
+            name,
+            entities: entities_data,
+        };
+
+        if let Some(parent) = Path::new(file_path).parent() {
+            if !parent.as_os_str().is_empty() {
+                if let Err(e) = fs::create_dir_all(parent) {
+                    log::error!("Failed to create directories for '{}': {}", file_path, e);
+                    return false;
+                }
+            }
+        }
+
+        match serde_yaml_ng::to_string(&prefab_data) {
+            Ok(yaml) => {
+                if let Err(e) = crate::platform_utils::atomic_write(file_path, &yaml) {
+                    log::error!("Failed to write prefab file '{}': {}", file_path, e);
+                    false
+                } else {
+                    log::info!("Prefab serialized to '{}'", file_path);
+                    true
+                }
+            }
+            Err(e) => {
+                log::error!("Failed to serialize prefab: {}", e);
+                false
+            }
+        }
+    }
+
+    /// Instantiate a prefab from a `.ggprefab` file, creating entities with
+    /// fresh UUIDs. Returns the root entity on success.
+    pub fn instantiate_prefab(scene: &mut Scene, file_path: &str) -> Option<Entity> {
+        let contents = match fs::read_to_string(file_path) {
+            Ok(s) => s,
+            Err(e) => {
+                log::error!("Failed to read prefab file '{}': {}", file_path, e);
+                return None;
+            }
+        };
+        Self::instantiate_prefab_from_string(scene, &contents)
+    }
+
+    /// Instantiate a prefab from a YAML string, creating entities with
+    /// fresh UUIDs. Returns the root entity on success.
+    pub fn instantiate_prefab_from_string(scene: &mut Scene, yaml: &str) -> Option<Entity> {
+        let prefab_data: PrefabData = match serde_yaml_ng::from_str(yaml) {
+            Ok(d) => d,
+            Err(e) => {
+                log::error!("Failed to parse prefab: {}", e);
+                return None;
+            }
+        };
+
+        if prefab_data.entities.is_empty() {
+            log::warn!("Prefab contains no entities");
+            return None;
+        }
+
+        Self::instantiate_prefab_entities(scene, &prefab_data.entities)
+    }
+
+    /// Core prefab instantiation: creates entities from `EntityData` with fresh
+    /// UUIDs, remapping all internal references (parent/children).
+    fn instantiate_prefab_entities(
+        scene: &mut Scene,
+        entities_data: &[EntityData],
+    ) -> Option<Entity> {
+        // Build UUID remap: old → new.
+        let mut uuid_remap: HashMap<u64, u64> = HashMap::new();
+        for ed in entities_data {
+            uuid_remap.insert(ed.id, Uuid::new().raw());
+        }
+
+        let mut root_entity = None;
+
+        for entity_data in entities_data {
+            let new_uuid = uuid_remap[&entity_data.id];
+            let name = entity_data
+                .tag
+                .as_ref()
+                .map(|t| t.tag.as_str())
+                .unwrap_or("Entity");
+
+            let entity = scene.create_entity_with_uuid(Uuid::from_raw(new_uuid), name);
+            if root_entity.is_none() {
+                root_entity = Some(entity);
+            }
+
+            Self::apply_entity_data(scene, entity, entity_data);
+
+            // Remap relationship UUIDs.
+            if let Some(ref rd) = entity_data.relationship {
+                let remapped_parent = rd.parent.and_then(|p| uuid_remap.get(&p).copied());
+                let remapped_children: Vec<u64> = rd
+                    .children
+                    .iter()
+                    .filter_map(|c| uuid_remap.get(c).copied())
+                    .collect();
+                if remapped_parent.is_some() || !remapped_children.is_empty() {
+                    scene.add_component(
+                        entity,
+                        RelationshipComponent {
+                            parent: remapped_parent,
+                            children: remapped_children,
+                        },
+                    );
+                }
+            }
+        }
+
+        root_entity
+    }
+
+    /// Collect an entity and all its descendants in hierarchy order (BFS).
+    fn collect_hierarchy(scene: &Scene, root: Entity) -> Vec<Entity> {
+        let mut result = vec![root];
+        let mut i = 0;
+        while i < result.len() {
+            let entity = result[i];
+            for child_uuid in scene.get_children(entity) {
+                if let Some(child) = scene.find_entity_by_uuid(child_uuid) {
+                    result.push(child);
+                }
+            }
+            i += 1;
+        }
+        result
+    }
+
     // -- Shared helpers -------------------------------------------------------
 
     fn scene_to_data(scene: &Scene, scene_name: Option<&str>) -> SceneData {
-        let mut entities_data = Vec::new();
+        let entities_data: Vec<EntityData> = scene
+            .each_entity_with_tag()
+            .iter()
+            .map(|(entity, _name)| Self::entity_to_data(scene, *entity))
+            .collect();
 
-        for (entity, _name) in scene.each_entity_with_tag() {
-            let tag_data = scene
-                .get_component::<TagComponent>(entity)
-                .map(|tag| TagData {
-                    tag: tag.tag.clone(),
+        SceneData {
+            version: SCENE_VERSION,
+            name: scene_name.unwrap_or("Untitled").to_string(),
+            entities: entities_data,
+        }
+    }
+
+    /// Convert a single entity's components into serializable `EntityData`.
+    fn entity_to_data(scene: &Scene, entity: Entity) -> EntityData {
+        let tag_data = scene
+            .get_component::<TagComponent>(entity)
+            .map(|tag| TagData {
+                tag: tag.tag.clone(),
+            });
+
+        let transform_data =
+            scene
+                .get_component::<TransformComponent>(entity)
+                .map(|tc| TransformData {
+                    translation: tc.translation.into(),
+                    rotation: tc.rotation.into(),
+                    scale: tc.scale.into(),
                 });
 
-            let transform_data =
-                scene
-                    .get_component::<TransformComponent>(entity)
-                    .map(|tc| TransformData {
-                        translation: tc.translation.into(),
-                        rotation: tc.rotation.into(),
-                        scale: tc.scale.into(),
-                    });
+        let camera_data = scene
+            .get_component::<CameraComponent>(entity)
+            .map(|cam| CameraData {
+                camera: SceneCameraData {
+                    projection_type: cam.camera.projection_type() as u32,
+                    perspective_fov: cam.camera.perspective_vertical_fov(),
+                    perspective_near: cam.camera.perspective_near(),
+                    perspective_far: cam.camera.perspective_far(),
+                    orthographic_size: cam.camera.orthographic_size(),
+                    orthographic_near: cam.camera.orthographic_near(),
+                    orthographic_far: cam.camera.orthographic_far(),
+                },
+                primary: cam.primary,
+                fixed_aspect_ratio: cam.fixed_aspect_ratio,
+            });
 
-            let camera_data =
-                scene
-                    .get_component::<CameraComponent>(entity)
-                    .map(|cam| CameraData {
-                        camera: SceneCameraData {
-                            projection_type: cam.camera.projection_type() as u32,
-                            perspective_fov: cam.camera.perspective_vertical_fov(),
-                            perspective_near: cam.camera.perspective_near(),
-                            perspective_far: cam.camera.perspective_far(),
-                            orthographic_size: cam.camera.orthographic_size(),
-                            orthographic_near: cam.camera.orthographic_near(),
-                            orthographic_far: cam.camera.orthographic_far(),
-                        },
-                        primary: cam.primary,
-                        fixed_aspect_ratio: cam.fixed_aspect_ratio,
-                    });
+        let sprite_data = scene
+            .get_component::<SpriteRendererComponent>(entity)
+            .map(|sprite| SpriteData {
+                color: sprite.color.into(),
+                tiling_factor: sprite.tiling_factor,
+                texture_handle: sprite.texture_handle.raw(),
+                sorting_layer: sprite.sorting_layer,
+                order_in_layer: sprite.order_in_layer,
+                atlas_min: sprite.atlas_min.into(),
+                atlas_max: sprite.atlas_max.into(),
+            });
 
-            let sprite_data =
-                scene
-                    .get_component::<SpriteRendererComponent>(entity)
-                    .map(|sprite| SpriteData {
-                        color: sprite.color.into(),
-                        tiling_factor: sprite.tiling_factor,
-                        texture_handle: sprite.texture_handle.raw(),
-                        sorting_layer: sprite.sorting_layer,
-                        order_in_layer: sprite.order_in_layer,
-                        atlas_min: sprite.atlas_min.into(),
-                        atlas_max: sprite.atlas_max.into(),
-                    });
+        let circle_data = scene
+            .get_component::<CircleRendererComponent>(entity)
+            .map(|circle| CircleData {
+                color: circle.color.into(),
+                thickness: circle.thickness,
+                fade: circle.fade,
+                sorting_layer: circle.sorting_layer,
+                order_in_layer: circle.order_in_layer,
+            });
 
-            let circle_data =
-                scene
-                    .get_component::<CircleRendererComponent>(entity)
-                    .map(|circle| CircleData {
-                        color: circle.color.into(),
-                        thickness: circle.thickness,
-                        fade: circle.fade,
-                        sorting_layer: circle.sorting_layer,
-                        order_in_layer: circle.order_in_layer,
-                    });
+        let text_data = scene
+            .get_component::<TextComponent>(entity)
+            .map(|tc| TextData {
+                text: tc.text.clone(),
+                font_path: tc.font_path.clone(),
+                font_size: tc.font_size,
+                color: tc.color.into(),
+                line_spacing: tc.line_spacing,
+                kerning: tc.kerning,
+                sorting_layer: tc.sorting_layer,
+                order_in_layer: tc.order_in_layer,
+            });
 
-            let text_data =
-                scene
-                    .get_component::<TextComponent>(entity)
-                    .map(|tc| TextData {
-                        text: tc.text.clone(),
-                        font_path: tc.font_path.clone(),
-                        font_size: tc.font_size,
-                        color: tc.color.into(),
-                        line_spacing: tc.line_spacing,
-                        kerning: tc.kerning,
-                        sorting_layer: tc.sorting_layer,
-                        order_in_layer: tc.order_in_layer,
-                    });
+        let rigidbody_2d_data = scene
+            .get_component::<RigidBody2DComponent>(entity)
+            .map(|rb| {
+                let body_type_str = match rb.body_type {
+                    RigidBody2DType::Static => "Static",
+                    RigidBody2DType::Dynamic => "Dynamic",
+                    RigidBody2DType::Kinematic => "Kinematic",
+                };
+                RigidBody2DData {
+                    body_type: body_type_str.to_string(),
+                    fixed_rotation: rb.fixed_rotation,
+                }
+            });
 
-            let rigidbody_2d_data =
-                scene
-                    .get_component::<RigidBody2DComponent>(entity)
-                    .map(|rb| {
-                        let body_type_str = match rb.body_type {
-                            RigidBody2DType::Static => "Static",
-                            RigidBody2DType::Dynamic => "Dynamic",
-                            RigidBody2DType::Kinematic => "Kinematic",
-                        };
-                        RigidBody2DData {
-                            body_type: body_type_str.to_string(),
-                            fixed_rotation: rb.fixed_rotation,
-                        }
-                    });
+        let box_collider_2d_data =
+            scene
+                .get_component::<BoxCollider2DComponent>(entity)
+                .map(|bc| BoxCollider2DData {
+                    offset: bc.offset.into(),
+                    size: bc.size.into(),
+                    density: bc.density,
+                    friction: bc.friction,
+                    restitution: bc.restitution,
+                    collision_layer: bc.collision_layer,
+                    collision_mask: bc.collision_mask,
+                    _restitution_threshold: 0.0,
+                });
 
-            let box_collider_2d_data =
-                scene
-                    .get_component::<BoxCollider2DComponent>(entity)
-                    .map(|bc| BoxCollider2DData {
-                        offset: bc.offset.into(),
-                        size: bc.size.into(),
-                        density: bc.density,
-                        friction: bc.friction,
-                        restitution: bc.restitution,
-                        collision_layer: bc.collision_layer,
-                        collision_mask: bc.collision_mask,
-                        _restitution_threshold: 0.0,
-                    });
+        let circle_collider_2d_data = scene
+            .get_component::<CircleCollider2DComponent>(entity)
+            .map(|cc| CircleCollider2DData {
+                offset: cc.offset.into(),
+                radius: cc.radius,
+                density: cc.density,
+                friction: cc.friction,
+                restitution: cc.restitution,
+                collision_layer: cc.collision_layer,
+                collision_mask: cc.collision_mask,
+                _restitution_threshold: 0.0,
+            });
 
-            let circle_collider_2d_data =
-                scene
-                    .get_component::<CircleCollider2DComponent>(entity)
-                    .map(|cc| CircleCollider2DData {
-                        offset: cc.offset.into(),
-                        radius: cc.radius,
-                        density: cc.density,
-                        friction: cc.friction,
-                        restitution: cc.restitution,
-                        collision_layer: cc.collision_layer,
-                        collision_mask: cc.collision_mask,
-                        _restitution_threshold: 0.0,
-                    });
-
-            #[cfg(feature = "lua-scripting")]
-            let lua_script_data =
-                scene
-                    .get_component::<LuaScriptComponent>(entity)
-                    .map(|lsc| {
-                        let fields = if lsc.field_overrides.is_empty() {
-                            None
-                        } else {
-                            Some(lsc.field_overrides.clone())
-                        };
-                        LuaScriptData {
-                            script_path: lsc.script_path.clone(),
-                            fields,
-                        }
-                    });
-            #[cfg(not(feature = "lua-scripting"))]
-            let lua_script_data: Option<LuaScriptData> = None;
-            let sprite_animator_data = scene
+        #[cfg(feature = "lua-scripting")]
+        let lua_script_data = scene
+            .get_component::<LuaScriptComponent>(entity)
+            .map(|lsc| {
+                let fields = if lsc.field_overrides.is_empty() {
+                    None
+                } else {
+                    Some(lsc.field_overrides.clone())
+                };
+                LuaScriptData {
+                    script_path: lsc.script_path.clone(),
+                    fields,
+                }
+            });
+        #[cfg(not(feature = "lua-scripting"))]
+        let lua_script_data: Option<LuaScriptData> = None;
+        let sprite_animator_data =
+            scene
                 .get_component::<SpriteAnimatorComponent>(entity)
                 .map(|sa| SpriteAnimatorData {
                     cell_size: sa.cell_size.into(),
@@ -782,94 +1009,85 @@ impl SceneSerializer {
                     default_clip: sa.default_clip.clone(),
                 });
 
-            let relationship_data = scene
-                .get_component::<RelationshipComponent>(entity)
-                .filter(|r| r.has_relationships())
-                .map(|r| RelationshipData {
-                    parent: r.parent,
-                    children: r.children.clone(),
-                });
-
-            let audio_source_data = scene
-                .get_component::<AudioSourceComponent>(entity)
-                .map(|asc| AudioSourceData {
-                    audio_handle: asc.audio_handle.raw(),
-                    volume: asc.volume,
-                    pitch: asc.pitch,
-                    looping: asc.looping,
-                    play_on_start: asc.play_on_start,
-                    streaming: asc.streaming,
-                    spatial: asc.spatial,
-                    min_distance: asc.min_distance,
-                    max_distance: asc.max_distance,
-                });
-
-            let audio_listener_data = scene
-                .get_component::<AudioListenerComponent>(entity)
-                .map(|al| AudioListenerData {
-                    active: al.active,
-                });
-
-            let tilemap_data = scene
-                .get_component::<TilemapComponent>(entity)
-                .map(|tm| TilemapData {
-                    width: tm.width,
-                    height: tm.height,
-                    tile_size: tm.tile_size.into(),
-                    texture_handle: tm.texture_handle.raw(),
-                    tileset_columns: tm.tileset_columns,
-                    cell_size: tm.cell_size.into(),
-                    spacing: tm.spacing.into(),
-                    margin: tm.margin.into(),
-                    tiles: tm.tiles.clone(),
-                    sorting_layer: tm.sorting_layer,
-                    order_in_layer: tm.order_in_layer,
-                });
-
-            let uuid = scene
-                .get_component::<IdComponent>(entity)
-                .map(|id| id.id.raw())
-                .unwrap_or(0);
-
-            entities_data.push(EntityData {
-                id: uuid,
-                tag: tag_data,
-                transform: transform_data,
-                camera: camera_data,
-                sprite: sprite_data,
-                circle: circle_data,
-                text: text_data,
-                rigidbody_2d: rigidbody_2d_data,
-                box_collider_2d: box_collider_2d_data,
-                circle_collider_2d: circle_collider_2d_data,
-                lua_script: lua_script_data,
-                sprite_animator: sprite_animator_data,
-                relationship: relationship_data,
-                tilemap: tilemap_data,
-                audio_source: audio_source_data,
-                audio_listener: audio_listener_data,
-                particle_emitter: scene
-                    .get_component::<ParticleEmitterComponent>(entity)
-                    .map(|pe| ParticleEmitterData {
-                        emit_rate: pe.emit_rate,
-                        max_particles: pe.max_particles,
-                        playing: pe.playing,
-                        velocity: pe.velocity.into(),
-                        velocity_variation: pe.velocity_variation.into(),
-                        color_begin: pe.color_begin.into(),
-                        color_end: pe.color_end.into(),
-                        size_begin: pe.size_begin,
-                        size_end: pe.size_end,
-                        size_variation: pe.size_variation,
-                        lifetime: pe.lifetime,
-                    }),
+        let relationship_data = scene
+            .get_component::<RelationshipComponent>(entity)
+            .filter(|r| r.has_relationships())
+            .map(|r| RelationshipData {
+                parent: r.parent,
+                children: r.children.clone(),
             });
-        }
 
-        SceneData {
-            version: SCENE_VERSION,
-            name: scene_name.unwrap_or("Untitled").to_string(),
-            entities: entities_data,
+        let audio_source_data = scene
+            .get_component::<AudioSourceComponent>(entity)
+            .map(|asc| AudioSourceData {
+                audio_handle: asc.audio_handle.raw(),
+                volume: asc.volume,
+                pitch: asc.pitch,
+                looping: asc.looping,
+                play_on_start: asc.play_on_start,
+                streaming: asc.streaming,
+                spatial: asc.spatial,
+                min_distance: asc.min_distance,
+                max_distance: asc.max_distance,
+            });
+
+        let audio_listener_data = scene
+            .get_component::<AudioListenerComponent>(entity)
+            .map(|al| AudioListenerData { active: al.active });
+
+        let tilemap_data = scene
+            .get_component::<TilemapComponent>(entity)
+            .map(|tm| TilemapData {
+                width: tm.width,
+                height: tm.height,
+                tile_size: tm.tile_size.into(),
+                texture_handle: tm.texture_handle.raw(),
+                tileset_columns: tm.tileset_columns,
+                cell_size: tm.cell_size.into(),
+                spacing: tm.spacing.into(),
+                margin: tm.margin.into(),
+                tiles: tm.tiles.clone(),
+                sorting_layer: tm.sorting_layer,
+                order_in_layer: tm.order_in_layer,
+            });
+
+        let uuid = scene
+            .get_component::<IdComponent>(entity)
+            .map(|id| id.id.raw())
+            .unwrap_or(0);
+
+        EntityData {
+            id: uuid,
+            tag: tag_data,
+            transform: transform_data,
+            camera: camera_data,
+            sprite: sprite_data,
+            circle: circle_data,
+            text: text_data,
+            rigidbody_2d: rigidbody_2d_data,
+            box_collider_2d: box_collider_2d_data,
+            circle_collider_2d: circle_collider_2d_data,
+            lua_script: lua_script_data,
+            sprite_animator: sprite_animator_data,
+            relationship: relationship_data,
+            tilemap: tilemap_data,
+            audio_source: audio_source_data,
+            audio_listener: audio_listener_data,
+            particle_emitter: scene
+                .get_component::<ParticleEmitterComponent>(entity)
+                .map(|pe| ParticleEmitterData {
+                    emit_rate: pe.emit_rate,
+                    max_particles: pe.max_particles,
+                    playing: pe.playing,
+                    velocity: pe.velocity.into(),
+                    velocity_variation: pe.velocity_variation.into(),
+                    color_begin: pe.color_begin.into(),
+                    color_end: pe.color_end.into(),
+                    size_begin: pe.size_begin,
+                    size_end: pe.size_end,
+                    size_variation: pe.size_variation,
+                    lifetime: pe.lifetime,
+                }),
         }
     }
 
@@ -884,175 +1102,7 @@ impl SceneSerializer {
             let uuid = Uuid::from_raw(entity_data.id);
             let entity = scene.create_entity_with_uuid(uuid, name);
 
-            // TransformComponent — always present on newly created entities,
-            // so we just update the values.
-            if let Some(ref td) = entity_data.transform {
-                if let Some(mut tc) = scene.get_component_mut::<TransformComponent>(entity) {
-                    tc.translation = Vec3::from(td.translation);
-                    tc.rotation = Vec3::from(td.rotation);
-                    tc.scale = Vec3::from(td.scale);
-                }
-            }
-
-            // CameraComponent — added only if present in the file.
-            if let Some(ref cd) = entity_data.camera {
-                let mut cam = SceneCamera::default();
-
-                let proj_type = match cd.camera.projection_type {
-                    0 => ProjectionType::Perspective,
-                    _ => ProjectionType::Orthographic,
-                };
-
-                // Set both parameter sets so switching projection type preserves values.
-                cam.set_orthographic(
-                    cd.camera.orthographic_size,
-                    cd.camera.orthographic_near,
-                    cd.camera.orthographic_far,
-                );
-                cam.set_perspective(
-                    cd.camera.perspective_fov,
-                    cd.camera.perspective_near,
-                    cd.camera.perspective_far,
-                );
-                // Final projection type (recalculates the active projection).
-                cam.set_projection_type(proj_type);
-
-                scene.add_component(
-                    entity,
-                    CameraComponent {
-                        camera: cam,
-                        primary: cd.primary,
-                        fixed_aspect_ratio: cd.fixed_aspect_ratio,
-                    },
-                );
-            }
-
-            // SpriteRendererComponent — added only if present in the file.
-            if let Some(ref sd) = entity_data.sprite {
-                let mut sprite = SpriteRendererComponent::new(Vec4::from(sd.color));
-                sprite.tiling_factor = sd.tiling_factor;
-                sprite.texture_handle = Uuid::from_raw(sd.texture_handle);
-                sprite.sorting_layer = sd.sorting_layer;
-                sprite.order_in_layer = sd.order_in_layer;
-                sprite.atlas_min = Vec2::from(sd.atlas_min);
-                sprite.atlas_max = Vec2::from(sd.atlas_max);
-                scene.add_component(entity, sprite);
-            }
-
-            // CircleRendererComponent — added only if present in the file.
-            if let Some(ref cd) = entity_data.circle {
-                scene.add_component(
-                    entity,
-                    CircleRendererComponent {
-                        color: Vec4::from(cd.color),
-                        thickness: cd.thickness,
-                        fade: cd.fade,
-                        sorting_layer: cd.sorting_layer,
-                        order_in_layer: cd.order_in_layer,
-                    },
-                );
-            }
-
-            // TextComponent — added only if present in the file.
-            if let Some(ref td) = entity_data.text {
-                scene.add_component(
-                    entity,
-                    TextComponent {
-                        text: td.text.clone(),
-                        font_path: td.font_path.clone(),
-                        font: None, // Loaded at runtime.
-                        font_size: td.font_size,
-                        color: Vec4::from(td.color),
-                        line_spacing: td.line_spacing,
-                        kerning: td.kerning,
-                        sorting_layer: td.sorting_layer,
-                        order_in_layer: td.order_in_layer,
-                    },
-                );
-            }
-
-            // RigidBody2DComponent — added only if present in the file.
-            if let Some(ref rbd) = entity_data.rigidbody_2d {
-                let body_type = match rbd.body_type.as_str() {
-                    "Dynamic" => RigidBody2DType::Dynamic,
-                    "Kinematic" => RigidBody2DType::Kinematic,
-                    _ => RigidBody2DType::Static,
-                };
-                let mut rb = RigidBody2DComponent::new(body_type);
-                rb.fixed_rotation = rbd.fixed_rotation;
-                scene.add_component(entity, rb);
-            }
-
-            // BoxCollider2DComponent — added only if present in the file.
-            if let Some(ref bcd) = entity_data.box_collider_2d {
-                scene.add_component(
-                    entity,
-                    BoxCollider2DComponent {
-                        offset: Vec2::from(bcd.offset),
-                        size: Vec2::from(bcd.size),
-                        density: bcd.density,
-                        friction: bcd.friction,
-                        restitution: bcd.restitution,
-                        collision_layer: bcd.collision_layer,
-                        collision_mask: bcd.collision_mask,
-                        runtime_fixture: None,
-                    },
-                );
-            }
-
-            // CircleCollider2DComponent — added only if present in the file.
-            if let Some(ref ccd) = entity_data.circle_collider_2d {
-                scene.add_component(
-                    entity,
-                    CircleCollider2DComponent {
-                        offset: Vec2::from(ccd.offset),
-                        radius: ccd.radius,
-                        density: ccd.density,
-                        friction: ccd.friction,
-                        restitution: ccd.restitution,
-                        collision_layer: ccd.collision_layer,
-                        collision_mask: ccd.collision_mask,
-                        runtime_fixture: None,
-                    },
-                );
-            }
-
-            // LuaScriptComponent — added only if present in the file.
-            #[cfg(feature = "lua-scripting")]
-            if let Some(ref lsd) = entity_data.lua_script {
-                let mut lsc = LuaScriptComponent::new(&lsd.script_path);
-                if let Some(ref fields) = lsd.fields {
-                    lsc.field_overrides = fields.clone();
-                }
-                scene.add_component(entity, lsc);
-            }
-
-            // SpriteAnimatorComponent — added only if present in the file.
-            if let Some(ref sad) = entity_data.sprite_animator {
-                let clips = sad
-                    .clips
-                    .iter()
-                    .map(|c| AnimationClip {
-                        name: c.name.clone(),
-                        start_frame: c.start_frame,
-                        end_frame: c.end_frame,
-                        fps: c.fps,
-                        looping: c.looping,
-                        texture_handle: Uuid::from_raw(c.texture_handle),
-                        texture: None,
-                    })
-                    .collect();
-                scene.add_component(
-                    entity,
-                    SpriteAnimatorComponent {
-                        cell_size: Vec2::from(sad.cell_size),
-                        columns: sad.columns,
-                        clips,
-                        default_clip: sad.default_clip.clone(),
-                        ..Default::default()
-                    },
-                );
-            }
+            Self::apply_entity_data(scene, entity, entity_data);
 
             // RelationshipComponent — applied only if present in the file.
             if let Some(ref rd) = entity_data.relationship {
@@ -1064,76 +1114,243 @@ impl SceneSerializer {
                     },
                 );
             }
+        }
+    }
 
-            // AudioSourceComponent — added only if present in the file.
-            if let Some(ref asd) = entity_data.audio_source {
-                scene.add_component(
-                    entity,
-                    AudioSourceComponent {
-                        audio_handle: Uuid::from_raw(asd.audio_handle),
-                        volume: asd.volume,
-                        pitch: asd.pitch,
-                        looping: asd.looping,
-                        play_on_start: asd.play_on_start,
-                        streaming: asd.streaming,
-                        spatial: asd.spatial,
-                        min_distance: asd.min_distance,
-                        max_distance: asd.max_distance,
-                        resolved_path: None,
-                    },
-                );
+    /// Apply component data from `EntityData` onto an already-created entity.
+    ///
+    /// Does NOT apply `RelationshipComponent` — callers handle relationships
+    /// separately (scene deserialization uses raw UUIDs, prefab instantiation
+    /// remaps them).
+    fn apply_entity_data(scene: &mut Scene, entity: Entity, entity_data: &EntityData) {
+        // TransformComponent — always present on newly created entities,
+        // so we just update the values.
+        if let Some(ref td) = entity_data.transform {
+            if let Some(mut tc) = scene.get_component_mut::<TransformComponent>(entity) {
+                tc.translation = Vec3::from(td.translation);
+                tc.rotation = Vec3::from(td.rotation);
+                tc.scale = Vec3::from(td.scale);
             }
+        }
 
-            // TilemapComponent — added only if present in the file.
-            if let Some(ref td) = entity_data.tilemap {
-                scene.add_component(
-                    entity,
-                    TilemapComponent {
-                        width: td.width,
-                        height: td.height,
-                        tile_size: Vec2::from(td.tile_size),
-                        texture_handle: Uuid::from_raw(td.texture_handle),
-                        texture: None,
-                        tileset_columns: td.tileset_columns,
-                        cell_size: Vec2::from(td.cell_size),
-                        spacing: Vec2::from(td.spacing),
-                        margin: Vec2::from(td.margin),
-                        tiles: td.tiles.clone(),
-                        sorting_layer: td.sorting_layer,
-                        order_in_layer: td.order_in_layer,
-                    },
-                );
-            }
+        // CameraComponent
+        if let Some(ref cd) = entity_data.camera {
+            let mut cam = SceneCamera::default();
+            let proj_type = match cd.camera.projection_type {
+                0 => ProjectionType::Perspective,
+                _ => ProjectionType::Orthographic,
+            };
+            cam.set_orthographic(
+                cd.camera.orthographic_size,
+                cd.camera.orthographic_near,
+                cd.camera.orthographic_far,
+            );
+            cam.set_perspective(
+                cd.camera.perspective_fov,
+                cd.camera.perspective_near,
+                cd.camera.perspective_far,
+            );
+            cam.set_projection_type(proj_type);
+            scene.add_component(
+                entity,
+                CameraComponent {
+                    camera: cam,
+                    primary: cd.primary,
+                    fixed_aspect_ratio: cd.fixed_aspect_ratio,
+                },
+            );
+        }
 
-            // AudioListenerComponent — added only if present in the file.
-            if let Some(ref ald) = entity_data.audio_listener {
-                scene.add_component(
-                    entity,
-                    AudioListenerComponent {
-                        active: ald.active,
-                    },
-                );
-            }
+        // SpriteRendererComponent
+        if let Some(ref sd) = entity_data.sprite {
+            let mut sprite = SpriteRendererComponent::new(Vec4::from(sd.color));
+            sprite.tiling_factor = sd.tiling_factor;
+            sprite.texture_handle = Uuid::from_raw(sd.texture_handle);
+            sprite.sorting_layer = sd.sorting_layer;
+            sprite.order_in_layer = sd.order_in_layer;
+            sprite.atlas_min = Vec2::from(sd.atlas_min);
+            sprite.atlas_max = Vec2::from(sd.atlas_max);
+            scene.add_component(entity, sprite);
+        }
 
-            // ParticleEmitterComponent — added only if present in the file.
-            if let Some(ref ped) = entity_data.particle_emitter {
-                scene.add_component(
-                    entity,
-                    ParticleEmitterComponent {
-                        emit_rate: ped.emit_rate,
-                        max_particles: ped.max_particles,
-                        playing: ped.playing,
-                        velocity: Vec2::from(ped.velocity),
-                        velocity_variation: Vec2::from(ped.velocity_variation),
-                        color_begin: Vec4::from(ped.color_begin),
-                        color_end: Vec4::from(ped.color_end),
-                        size_begin: ped.size_begin,
-                        size_end: ped.size_end,
-                        size_variation: ped.size_variation,
-                        lifetime: ped.lifetime,
-                    },
-                );
+        // CircleRendererComponent
+        if let Some(ref cd) = entity_data.circle {
+            scene.add_component(
+                entity,
+                CircleRendererComponent {
+                    color: Vec4::from(cd.color),
+                    thickness: cd.thickness,
+                    fade: cd.fade,
+                    sorting_layer: cd.sorting_layer,
+                    order_in_layer: cd.order_in_layer,
+                },
+            );
+        }
+
+        // TextComponent
+        if let Some(ref td) = entity_data.text {
+            scene.add_component(
+                entity,
+                TextComponent {
+                    text: td.text.clone(),
+                    font_path: td.font_path.clone(),
+                    font: None,
+                    font_size: td.font_size,
+                    color: Vec4::from(td.color),
+                    line_spacing: td.line_spacing,
+                    kerning: td.kerning,
+                    sorting_layer: td.sorting_layer,
+                    order_in_layer: td.order_in_layer,
+                },
+            );
+        }
+
+        // RigidBody2DComponent
+        if let Some(ref rbd) = entity_data.rigidbody_2d {
+            let body_type = match rbd.body_type.as_str() {
+                "Dynamic" => RigidBody2DType::Dynamic,
+                "Kinematic" => RigidBody2DType::Kinematic,
+                _ => RigidBody2DType::Static,
+            };
+            let mut rb = RigidBody2DComponent::new(body_type);
+            rb.fixed_rotation = rbd.fixed_rotation;
+            scene.add_component(entity, rb);
+        }
+
+        // BoxCollider2DComponent
+        if let Some(ref bcd) = entity_data.box_collider_2d {
+            scene.add_component(
+                entity,
+                BoxCollider2DComponent {
+                    offset: Vec2::from(bcd.offset),
+                    size: Vec2::from(bcd.size),
+                    density: bcd.density,
+                    friction: bcd.friction,
+                    restitution: bcd.restitution,
+                    collision_layer: bcd.collision_layer,
+                    collision_mask: bcd.collision_mask,
+                    runtime_fixture: None,
+                },
+            );
+        }
+
+        // CircleCollider2DComponent
+        if let Some(ref ccd) = entity_data.circle_collider_2d {
+            scene.add_component(
+                entity,
+                CircleCollider2DComponent {
+                    offset: Vec2::from(ccd.offset),
+                    radius: ccd.radius,
+                    density: ccd.density,
+                    friction: ccd.friction,
+                    restitution: ccd.restitution,
+                    collision_layer: ccd.collision_layer,
+                    collision_mask: ccd.collision_mask,
+                    runtime_fixture: None,
+                },
+            );
+        }
+
+        // LuaScriptComponent
+        #[cfg(feature = "lua-scripting")]
+        if let Some(ref lsd) = entity_data.lua_script {
+            let mut lsc = LuaScriptComponent::new(&lsd.script_path);
+            if let Some(ref fields) = lsd.fields {
+                lsc.field_overrides = fields.clone();
             }
+            scene.add_component(entity, lsc);
+        }
+
+        // SpriteAnimatorComponent
+        if let Some(ref sad) = entity_data.sprite_animator {
+            let clips = sad
+                .clips
+                .iter()
+                .map(|c| AnimationClip {
+                    name: c.name.clone(),
+                    start_frame: c.start_frame,
+                    end_frame: c.end_frame,
+                    fps: c.fps,
+                    looping: c.looping,
+                    texture_handle: Uuid::from_raw(c.texture_handle),
+                    texture: None,
+                })
+                .collect();
+            scene.add_component(
+                entity,
+                SpriteAnimatorComponent {
+                    cell_size: Vec2::from(sad.cell_size),
+                    columns: sad.columns,
+                    clips,
+                    default_clip: sad.default_clip.clone(),
+                    ..Default::default()
+                },
+            );
+        }
+
+        // AudioSourceComponent
+        if let Some(ref asd) = entity_data.audio_source {
+            scene.add_component(
+                entity,
+                AudioSourceComponent {
+                    audio_handle: Uuid::from_raw(asd.audio_handle),
+                    volume: asd.volume,
+                    pitch: asd.pitch,
+                    looping: asd.looping,
+                    play_on_start: asd.play_on_start,
+                    streaming: asd.streaming,
+                    spatial: asd.spatial,
+                    min_distance: asd.min_distance,
+                    max_distance: asd.max_distance,
+                    resolved_path: None,
+                },
+            );
+        }
+
+        // TilemapComponent
+        if let Some(ref td) = entity_data.tilemap {
+            scene.add_component(
+                entity,
+                TilemapComponent {
+                    width: td.width,
+                    height: td.height,
+                    tile_size: Vec2::from(td.tile_size),
+                    texture_handle: Uuid::from_raw(td.texture_handle),
+                    texture: None,
+                    tileset_columns: td.tileset_columns,
+                    cell_size: Vec2::from(td.cell_size),
+                    spacing: Vec2::from(td.spacing),
+                    margin: Vec2::from(td.margin),
+                    tiles: td.tiles.clone(),
+                    sorting_layer: td.sorting_layer,
+                    order_in_layer: td.order_in_layer,
+                },
+            );
+        }
+
+        // AudioListenerComponent
+        if let Some(ref ald) = entity_data.audio_listener {
+            scene.add_component(entity, AudioListenerComponent { active: ald.active });
+        }
+
+        // ParticleEmitterComponent
+        if let Some(ref ped) = entity_data.particle_emitter {
+            scene.add_component(
+                entity,
+                ParticleEmitterComponent {
+                    emit_rate: ped.emit_rate,
+                    max_particles: ped.max_particles,
+                    playing: ped.playing,
+                    velocity: Vec2::from(ped.velocity),
+                    velocity_variation: Vec2::from(ped.velocity_variation),
+                    color_begin: Vec4::from(ped.color_begin),
+                    color_end: Vec4::from(ped.color_end),
+                    size_begin: ped.size_begin,
+                    size_end: ped.size_end,
+                    size_variation: ped.size_variation,
+                    lifetime: ped.lifetime,
+                },
+            );
         }
     }
 }
@@ -1166,7 +1383,11 @@ mod tests {
             .join("gg_test_scene.ggscene")
             .to_string_lossy()
             .to_string();
-        assert!(SceneSerializer::serialize(&scene, &path, Some("gg_test_scene")));
+        assert!(SceneSerializer::serialize(
+            &scene,
+            &path,
+            Some("gg_test_scene")
+        ));
 
         // Deserialize into a fresh scene.
         let mut loaded = Scene::new();
@@ -1361,5 +1582,88 @@ mod tests {
         assert!(!ac2.looping);
         assert!((ac2.pitch - 1.5).abs() < 0.001);
         assert!((ac2.volume - 0.3).abs() < 0.001);
+    }
+
+    #[test]
+    fn prefab_round_trip() {
+        // Build a scene with a parent + child hierarchy.
+        let mut scene = Scene::new();
+        let parent = scene.create_entity_with_tag("Parent");
+        if let Some(mut tc) = scene.get_component_mut::<TransformComponent>(parent) {
+            tc.translation = Vec3::new(5.0, 10.0, 0.0);
+        }
+        let mut sprite = SpriteRendererComponent::new(Vec4::new(1.0, 0.0, 0.0, 1.0));
+        sprite.texture_handle = crate::uuid::Uuid::from_raw(42);
+        scene.add_component(parent, sprite);
+
+        let child = scene.create_entity_with_tag("Child");
+        if let Some(mut tc) = scene.get_component_mut::<TransformComponent>(child) {
+            tc.translation = Vec3::new(1.0, 2.0, 0.0);
+        }
+        scene.add_component(
+            child,
+            CircleRendererComponent {
+                color: Vec4::new(0.0, 1.0, 0.0, 1.0),
+                thickness: 0.5,
+                fade: 0.01,
+                sorting_layer: 0,
+                order_in_layer: 0,
+            },
+        );
+        scene.set_parent(child, parent, false);
+
+        let parent_uuid = scene.get_component::<IdComponent>(parent).unwrap().id.raw();
+        let child_uuid = scene.get_component::<IdComponent>(child).unwrap().id.raw();
+
+        // Serialize to prefab file.
+        let path = std::env::temp_dir()
+            .join("gg_test.ggprefab")
+            .to_string_lossy()
+            .to_string();
+        assert!(SceneSerializer::serialize_prefab(&scene, parent, &path));
+
+        // Instantiate prefab in a fresh scene.
+        let mut loaded = Scene::new();
+        let root = SceneSerializer::instantiate_prefab(&mut loaded, &path).unwrap();
+        assert_eq!(loaded.entity_count(), 2);
+
+        // Root entity should have fresh UUID (not the original).
+        let new_root_uuid = loaded.get_component::<IdComponent>(root).unwrap().id.raw();
+        assert_ne!(new_root_uuid, parent_uuid);
+
+        // Verify root tag and transform.
+        let root_tag = loaded.get_component::<TagComponent>(root).unwrap();
+        assert_eq!(root_tag.tag, "Parent");
+        let root_tc = loaded.get_component::<TransformComponent>(root).unwrap();
+        assert_eq!(root_tc.translation, Vec3::new(5.0, 10.0, 0.0));
+
+        // Verify sprite on root.
+        let root_sprite = loaded
+            .get_component::<SpriteRendererComponent>(root)
+            .unwrap();
+        assert_eq!(root_sprite.texture_handle.raw(), 42);
+
+        // Verify child exists with remapped UUID.
+        let children = loaded.get_children(root);
+        assert_eq!(children.len(), 1);
+        let new_child_uuid = children[0];
+        assert_ne!(new_child_uuid, child_uuid);
+
+        let child_ent = loaded.find_entity_by_uuid(new_child_uuid).unwrap();
+        let child_tag = loaded.get_component::<TagComponent>(child_ent).unwrap();
+        assert_eq!(child_tag.tag, "Child");
+
+        // Verify child has circle renderer.
+        let circle = loaded
+            .get_component::<CircleRendererComponent>(child_ent)
+            .unwrap();
+        assert_eq!(circle.color, Vec4::new(0.0, 1.0, 0.0, 1.0));
+        assert!((circle.thickness - 0.5).abs() < f32::EPSILON);
+
+        // Verify root has no parent (prefab root is always root-level).
+        assert!(loaded.get_parent(root).is_none());
+
+        // Clean up.
+        let _ = std::fs::remove_file(&path);
     }
 }

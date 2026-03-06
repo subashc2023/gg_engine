@@ -6,9 +6,9 @@
 
 use mlua::prelude::*;
 
+use super::Scene;
 use crate::events::{KeyCode, MouseButton};
 use crate::input::Input;
-use super::Scene;
 
 /// Runtime context set as Lua `app_data` during script execution.
 ///
@@ -82,15 +82,27 @@ pub fn register_all(lua: &Lua) -> LuaResult<()> {
     // Input
     engine.set("is_key_down", lua.create_function(is_key_down)?)?;
     engine.set("is_key_pressed", lua.create_function(is_key_just_pressed)?)?;
-    engine.set("is_mouse_button_down", lua.create_function(is_mouse_button_down)?)?;
-    engine.set("is_mouse_button_pressed", lua.create_function(is_mouse_button_just_pressed)?)?;
-    engine.set("get_mouse_position", lua.create_function(get_mouse_position)?)?;
+    engine.set(
+        "is_mouse_button_down",
+        lua.create_function(is_mouse_button_down)?,
+    )?;
+    engine.set(
+        "is_mouse_button_pressed",
+        lua.create_function(is_mouse_button_just_pressed)?,
+    )?;
+    engine.set(
+        "get_mouse_position",
+        lua.create_function(get_mouse_position)?,
+    )?;
 
     // Component queries
     engine.set("has_component", lua.create_function(has_component)?)?;
 
     // Entity lookup / cross-entity scripting
-    engine.set("find_entity_by_name", lua.create_function(find_entity_by_name)?)?;
+    engine.set(
+        "find_entity_by_name",
+        lua.create_function(find_entity_by_name)?,
+    )?;
     engine.set("get_script_field", lua.create_function(get_script_field)?)?;
     engine.set("set_script_field", lua.create_function(set_script_field)?)?;
 
@@ -101,14 +113,20 @@ pub fn register_all(lua: &Lua) -> LuaResult<()> {
 
     // Hierarchy
     engine.set("set_parent", lua.create_function(lua_set_parent)?)?;
-    engine.set("detach_from_parent", lua.create_function(lua_detach_from_parent)?)?;
+    engine.set(
+        "detach_from_parent",
+        lua.create_function(lua_detach_from_parent)?,
+    )?;
     engine.set("get_parent", lua.create_function(lua_get_parent)?)?;
     engine.set("get_children", lua.create_function(lua_get_children)?)?;
 
     // Animation
     engine.set("play_animation", lua.create_function(lua_play_animation)?)?;
     engine.set("stop_animation", lua.create_function(lua_stop_animation)?)?;
-    engine.set("is_animation_playing", lua.create_function(lua_is_animation_playing)?)?;
+    engine.set(
+        "is_animation_playing",
+        lua.create_function(lua_is_animation_playing)?,
+    )?;
 
     // Audio
     engine.set("play_sound", lua.create_function(lua_play_sound)?)?;
@@ -125,21 +143,48 @@ pub fn register_all(lua: &Lua) -> LuaResult<()> {
 
     // Physics
     engine.set("apply_impulse", lua.create_function(lua_apply_impulse)?)?;
-    engine.set("apply_impulse_at_point", lua.create_function(lua_apply_impulse_at_point)?)?;
+    engine.set(
+        "apply_impulse_at_point",
+        lua.create_function(lua_apply_impulse_at_point)?,
+    )?;
     engine.set("apply_force", lua.create_function(lua_apply_force)?)?;
-    engine.set("get_linear_velocity", lua.create_function(lua_get_linear_velocity)?)?;
-    engine.set("set_linear_velocity", lua.create_function(lua_set_linear_velocity)?)?;
-    engine.set("get_angular_velocity", lua.create_function(lua_get_angular_velocity)?)?;
-    engine.set("set_angular_velocity", lua.create_function(lua_set_angular_velocity)?)?;
+    engine.set(
+        "get_linear_velocity",
+        lua.create_function(lua_get_linear_velocity)?,
+    )?;
+    engine.set(
+        "set_linear_velocity",
+        lua.create_function(lua_set_linear_velocity)?,
+    )?;
+    engine.set(
+        "get_angular_velocity",
+        lua.create_function(lua_get_angular_velocity)?,
+    )?;
+    engine.set(
+        "set_angular_velocity",
+        lua.create_function(lua_set_angular_velocity)?,
+    )?;
     engine.set("raycast", lua.create_function(lua_raycast)?)?;
 
     // Entity queries
-    engine.set("find_entities_with_component", lua.create_function(lua_find_entities_with_component)?)?;
+    engine.set(
+        "find_entities_with_component",
+        lua.create_function(lua_find_entities_with_component)?,
+    )?;
 
     // Component access (sprite, circle, text)
-    engine.set("get_sprite_color", lua.create_function(lua_get_sprite_color)?)?;
-    engine.set("set_sprite_color", lua.create_function(lua_set_sprite_color)?)?;
-    engine.set("set_sprite_texture", lua.create_function(lua_set_sprite_texture)?)?;
+    engine.set(
+        "get_sprite_color",
+        lua.create_function(lua_get_sprite_color)?,
+    )?;
+    engine.set(
+        "set_sprite_color",
+        lua.create_function(lua_set_sprite_color)?,
+    )?;
+    engine.set(
+        "set_sprite_texture",
+        lua.create_function(lua_set_sprite_texture)?,
+    )?;
     engine.set("get_text", lua.create_function(lua_get_text)?)?;
     engine.set("set_text", lua.create_function(lua_set_text)?)?;
 
@@ -505,9 +550,13 @@ fn has_component(lua: &Lua, (entity_id, name): (u64, String)) -> LuaResult<bool>
         "SpriteAnimator" => scene.has_component::<super::SpriteAnimatorComponent>(entity),
         "LuaScript" => {
             #[cfg(feature = "lua-scripting")]
-            { scene.has_component::<super::LuaScriptComponent>(entity) }
+            {
+                scene.has_component::<super::LuaScriptComponent>(entity)
+            }
             #[cfg(not(feature = "lua-scripting"))]
-            { false }
+            {
+                false
+            }
         }
         _ => {
             log::warn!("ScriptGlue: unknown component name '{}'", name);
@@ -569,12 +618,16 @@ fn get_script_field(lua: &Lua, (entity_id, field_name): (u64, String)) -> LuaRes
 /// Accesses entity environments directly from the Lua-side registry table
 /// (`__gg_entity_envs`) — no ScriptEngine pointer needed.
 /// Only Bool, Integer, Number, and String values are accepted.
-fn set_script_field(lua: &Lua, (entity_id, field_name, value): (u64, String, LuaValue)) -> LuaResult<()> {
+fn set_script_field(
+    lua: &Lua,
+    (entity_id, field_name, value): (u64, String, LuaValue),
+) -> LuaResult<()> {
     use super::script_engine::ENTITY_ENVS_REGISTRY_KEY;
 
     // Validate value type before touching the env table.
     match &value {
-        LuaValue::Boolean(_) | LuaValue::Integer(_) | LuaValue::Number(_) | LuaValue::String(_) => {}
+        LuaValue::Boolean(_) | LuaValue::Integer(_) | LuaValue::Number(_) | LuaValue::String(_) => {
+        }
         _ => {
             log::warn!(
                 "ScriptGlue: set_script_field unsupported value type for field '{}'",
@@ -742,7 +795,9 @@ fn lua_play_animation(lua: &Lua, (entity_id, name): (u64, String)) -> LuaResult<
 
     let scene = unsafe { ctx.scene_mut() };
     if let Some(entity) = scene.find_entity_by_uuid(entity_id) {
-        if let Some(mut animator) = scene.get_component_mut::<super::SpriteAnimatorComponent>(entity) {
+        if let Some(mut animator) =
+            scene.get_component_mut::<super::SpriteAnimatorComponent>(entity)
+        {
             return Ok(animator.play(&name));
         }
     }
@@ -758,7 +813,9 @@ fn lua_stop_animation(lua: &Lua, entity_id: u64) -> LuaResult<()> {
 
     let scene = unsafe { ctx.scene_mut() };
     if let Some(entity) = scene.find_entity_by_uuid(entity_id) {
-        if let Some(mut animator) = scene.get_component_mut::<super::SpriteAnimatorComponent>(entity) {
+        if let Some(mut animator) =
+            scene.get_component_mut::<super::SpriteAnimatorComponent>(entity)
+        {
             animator.stop();
         }
     }
@@ -1053,7 +1110,10 @@ fn native_log_vector(_lua: &Lua, (x, y, z): (f32, f32, f32)) -> LuaResult<()> {
 }
 
 /// `Engine.vector_dot(x1,y1,z1, x2,y2,z2)` — returns dot product as f32.
-fn vector_dot(_lua: &Lua, (x1, y1, z1, x2, y2, z2): (f32, f32, f32, f32, f32, f32)) -> LuaResult<f32> {
+fn vector_dot(
+    _lua: &Lua,
+    (x1, y1, z1, x2, y2, z2): (f32, f32, f32, f32, f32, f32),
+) -> LuaResult<f32> {
     let a = glam::Vec3::new(x1, y1, z1);
     let b = glam::Vec3::new(x2, y2, z2);
     Ok(a.dot(b))
@@ -1146,7 +1206,9 @@ fn lua_find_entities_with_component(lua: &Lua, name: String) -> LuaResult<LuaTab
 
     macro_rules! collect_uuids {
         ($comp_type:ty) => {{
-            for (id,) in scene.world().query::<(&super::IdComponent,)>()
+            for (id,) in scene
+                .world()
+                .query::<(&super::IdComponent,)>()
                 .with::<&$comp_type>()
                 .iter()
             {
@@ -1169,7 +1231,10 @@ fn lua_find_entities_with_component(lua: &Lua, name: String) -> LuaResult<LuaTab
         #[cfg(feature = "lua-scripting")]
         "LuaScript" => collect_uuids!(super::LuaScriptComponent),
         _ => {
-            log::warn!("ScriptGlue: unknown component name '{}' in find_entities_with_component", name);
+            log::warn!(
+                "ScriptGlue: unknown component name '{}' in find_entities_with_component",
+                name
+            );
         }
     }
 
@@ -1192,21 +1257,30 @@ fn lua_get_sprite_color(lua: &Lua, entity_id: u64) -> LuaResult<(f32, f32, f32, 
     let scene = unsafe { ctx.scene() };
     if let Some(entity) = scene.find_entity_by_uuid(entity_id) {
         if let Some(sprite) = scene.get_component::<super::SpriteRendererComponent>(entity) {
-            return Ok((sprite.color.x, sprite.color.y, sprite.color.z, sprite.color.w));
+            return Ok((
+                sprite.color.x,
+                sprite.color.y,
+                sprite.color.z,
+                sprite.color.w,
+            ));
         }
     }
     Ok((1.0, 1.0, 1.0, 1.0))
 }
 
 /// `Engine.set_sprite_color(entity_id, r, g, b, a)` — set sprite tint color.
-fn lua_set_sprite_color(lua: &Lua, (entity_id, r, g, b, a): (u64, f32, f32, f32, f32)) -> LuaResult<()> {
+fn lua_set_sprite_color(
+    lua: &Lua,
+    (entity_id, r, g, b, a): (u64, f32, f32, f32, f32),
+) -> LuaResult<()> {
     let mut ctx = match lua.app_data_mut::<SceneScriptContext>() {
         Some(ctx) => ctx,
         None => return Ok(()),
     };
     let scene = unsafe { ctx.scene_mut() };
     if let Some(entity) = scene.find_entity_by_uuid(entity_id) {
-        if let Some(mut sprite) = scene.get_component_mut::<super::SpriteRendererComponent>(entity) {
+        if let Some(mut sprite) = scene.get_component_mut::<super::SpriteRendererComponent>(entity)
+        {
             sprite.color = glam::Vec4::new(r, g, b, a);
         }
     }
@@ -1225,7 +1299,8 @@ fn lua_set_sprite_texture(lua: &Lua, (entity_id, handle_raw): (u64, u64)) -> Lua
     };
     let scene = unsafe { ctx.scene_mut() };
     if let Some(entity) = scene.find_entity_by_uuid(entity_id) {
-        if let Some(mut sprite) = scene.get_component_mut::<super::SpriteRendererComponent>(entity) {
+        if let Some(mut sprite) = scene.get_component_mut::<super::SpriteRendererComponent>(entity)
+        {
             let uuid = crate::uuid::Uuid::from_raw(handle_raw);
             sprite.texture_handle = uuid;
             // Clear the loaded texture so it gets re-resolved next frame.
@@ -1278,7 +1353,10 @@ mod tests {
     #[test]
     fn engine_table_exists() {
         let lua = setup();
-        let engine: LuaTable = lua.globals().get("Engine").expect("Engine table should exist");
+        let engine: LuaTable = lua
+            .globals()
+            .get("Engine")
+            .expect("Engine table should exist");
         // Utility / debug
         assert!(engine.get::<LuaFunction>("rust_function").is_ok());
         assert!(engine.get::<LuaFunction>("native_log").is_ok());
@@ -1344,7 +1422,9 @@ mod tests {
     #[test]
     fn rust_function_runs() {
         let lua = setup();
-        lua.load("Engine.rust_function()").exec().expect("rust_function should not error");
+        lua.load("Engine.rust_function()")
+            .exec()
+            .expect("rust_function should not error");
     }
 
     #[test]
@@ -1531,9 +1611,15 @@ mod tests {
     fn mouse_button_name_mapping() {
         assert_eq!(mouse_button_name_to_enum("Left"), Some(MouseButton::Left));
         assert_eq!(mouse_button_name_to_enum("Right"), Some(MouseButton::Right));
-        assert_eq!(mouse_button_name_to_enum("Middle"), Some(MouseButton::Middle));
+        assert_eq!(
+            mouse_button_name_to_enum("Middle"),
+            Some(MouseButton::Middle)
+        );
         assert_eq!(mouse_button_name_to_enum("Back"), Some(MouseButton::Back));
-        assert_eq!(mouse_button_name_to_enum("Forward"), Some(MouseButton::Forward));
+        assert_eq!(
+            mouse_button_name_to_enum("Forward"),
+            Some(MouseButton::Forward)
+        );
         assert_eq!(mouse_button_name_to_enum("bogus"), None);
     }
 
@@ -1572,9 +1658,7 @@ mod tests {
     #[test]
     fn destroy_entity_no_context_no_error() {
         let lua = setup();
-        lua.load("Engine.destroy_entity(12345)")
-            .exec()
-            .unwrap();
+        lua.load("Engine.destroy_entity(12345)").exec().unwrap();
     }
 
     #[test]
@@ -1590,9 +1674,7 @@ mod tests {
     #[test]
     fn set_tile_no_context_no_error() {
         let lua = setup();
-        lua.load("Engine.set_tile(12345, 0, 0, 1)")
-            .exec()
-            .unwrap();
+        lua.load("Engine.set_tile(12345, 0, 0, 1)").exec().unwrap();
     }
 
     #[test]
@@ -1618,9 +1700,7 @@ mod tests {
     #[test]
     fn stop_animation_no_context_no_error() {
         let lua = setup();
-        lua.load("Engine.stop_animation(12345)")
-            .exec()
-            .unwrap();
+        lua.load("Engine.stop_animation(12345)").exec().unwrap();
     }
 
     #[test]
@@ -1678,9 +1758,7 @@ mod tests {
     #[test]
     fn detach_from_parent_no_context_no_error() {
         let lua = setup();
-        lua.load("Engine.detach_from_parent(12345)")
-            .exec()
-            .unwrap();
+        lua.load("Engine.detach_from_parent(12345)").exec().unwrap();
     }
 
     #[test]

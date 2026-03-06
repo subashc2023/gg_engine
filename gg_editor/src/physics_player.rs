@@ -44,7 +44,9 @@ impl NativeScript for PhysicsPlayer {
         // Ground check: short downward raycast from entity center.
         let grounded = if let Some(tc) = scene.get_component::<TransformComponent>(entity) {
             let pos = Vec2::new(tc.translation.x, tc.translation.y);
-            scene.raycast(pos, Vec2::new(0.0, -1.0), 0.55, Some(entity)).is_some()
+            scene
+                .raycast(pos, Vec2::new(0.0, -1.0), 0.55, Some(entity))
+                .is_some()
         } else {
             false
         };

@@ -90,10 +90,16 @@ pub(crate) fn content_browser_ui(
     // Mode toggle (File / Asset).
     let mut mode = BROWSER_MODE.with(|m| m.get());
     ui.horizontal(|ui| {
-        if ui.selectable_label(mode == ContentBrowserMode::FileSystem, "File").clicked() {
+        if ui
+            .selectable_label(mode == ContentBrowserMode::FileSystem, "File")
+            .clicked()
+        {
             mode = ContentBrowserMode::FileSystem;
         }
-        if ui.selectable_label(mode == ContentBrowserMode::Asset, "Asset").clicked() {
+        if ui
+            .selectable_label(mode == ContentBrowserMode::Asset, "Asset")
+            .clicked()
+        {
             mode = ContentBrowserMode::Asset;
         }
     });
@@ -107,7 +113,10 @@ pub(crate) fn content_browser_ui(
                 .desired_width(ui.available_width() - 22.0)
                 .hint_text("Search...");
             ui.add(te);
-            if ui.add_enabled(!filter.is_empty(), egui::Button::new("\u{2715}").small()).clicked() {
+            if ui
+                .add_enabled(!filter.is_empty(), egui::Button::new("\u{2715}").small())
+                .clicked()
+            {
                 filter.clear();
             }
         });
@@ -139,8 +148,7 @@ fn file_browser_ui(
 
     // Back button — only when deeper than the assets root.
     if *current_directory != assets_root {
-        let (rect, response) =
-            ui.allocate_exact_size(egui::vec2(24.0, 24.0), egui::Sense::click());
+        let (rect, response) = ui.allocate_exact_size(egui::vec2(24.0, 24.0), egui::Sense::click());
         if ui.is_rect_visible(rect) {
             let hovered = response.hovered();
             let color = if hovered {
@@ -220,8 +228,7 @@ fn file_browser_ui(
     let mut deferred_mkdir: Option<String> = None;
 
     // Check if we're currently in rename mode for any item.
-    let rename_path =
-        RENAME_STATE.with(|s| s.borrow().as_ref().map(|(p, _, _)| p.clone()));
+    let rename_path = RENAME_STATE.with(|s| s.borrow().as_ref().map(|(p, _, _)| p.clone()));
 
     egui::ScrollArea::vertical().show(ui, |ui| {
         let available_width = ui.available_width();
@@ -345,10 +352,7 @@ fn file_browser_ui(
                 if !is_renaming {
                     response.inner.context_menu(|ui| {
                         if let Some(am) = asset_manager.as_mut() {
-                            let rel_path = path
-                                .strip_prefix(am.asset_directory())
-                                .map(|p| p.to_string_lossy().to_string())
-                                .unwrap_or_else(|_| path.to_string_lossy().to_string());
+                            let rel_path = super::relative_asset_path(&path, am.asset_directory());
                             let already_imported = am.is_imported(&rel_path);
                             if already_imported {
                                 ui.label("Already imported");
@@ -383,8 +387,7 @@ fn file_browser_ui(
 
         // Blank space context menu — create new files/folders.
         let remaining = ui.available_rect_before_wrap();
-        let bg_response =
-            ui.allocate_rect(remaining, egui::Sense::click());
+        let bg_response = ui.allocate_rect(remaining, egui::Sense::click());
         bg_response.context_menu(|ui| {
             if ui.button("New Folder").clicked() {
                 deferred_mkdir = Some("New Folder".to_string());
@@ -778,17 +781,17 @@ pub(crate) fn render_dnd_ghost(ctx: &egui::Context) {
         .interactable(false)
         .show(ctx, |ui| {
             egui::Frame::popup(ui.style())
-                .fill(egui::Color32::from_rgba_unmultiplied(0x2A, 0x2A, 0x2A, 0xE0))
+                .fill(egui::Color32::from_rgba_unmultiplied(
+                    0x2A, 0x2A, 0x2A, 0xE0,
+                ))
                 .corner_radius(egui::CornerRadius::same(4))
                 .inner_margin(egui::Margin::same(6))
                 .show(ui, |ui| {
                     ui.set_max_width(200.0);
                     ui.horizontal(|ui| {
                         ui.spacing_mut().item_spacing.x = 6.0;
-                        let (icon_rect, _) = ui.allocate_exact_size(
-                            egui::vec2(16.0, 16.0),
-                            egui::Sense::hover(),
-                        );
+                        let (icon_rect, _) =
+                            ui.allocate_exact_size(egui::vec2(16.0, 16.0), egui::Sense::hover());
                         if payload.is_directory {
                             paint_folder_icon(ui.painter(), icon_rect);
                         } else {
@@ -797,10 +800,7 @@ pub(crate) fn render_dnd_ghost(ctx: &egui::Context) {
                         ui.add(
                             egui::Label::new(
                                 egui::RichText::new(&payload.name)
-                                    .font(egui::FontId::new(
-                                        11.0,
-                                        egui::FontFamily::Proportional,
-                                    ))
+                                    .font(egui::FontId::new(11.0, egui::FontFamily::Proportional))
                                     .color(egui::Color32::from_rgb(0xCC, 0xCC, 0xCC)),
                             )
                             .truncate(),

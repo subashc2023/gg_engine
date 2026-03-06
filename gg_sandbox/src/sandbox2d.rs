@@ -184,7 +184,11 @@ impl Application for Sandbox2D {
         renderer.render_gpu_particles();
     }
 
-    fn on_egui(&mut self, ctx: &gg_engine::egui::Context, _window: &gg_engine::winit::window::Window) {
+    fn on_egui(
+        &mut self,
+        ctx: &gg_engine::egui::Context,
+        _window: &gg_engine::winit::window::Window,
+    ) {
         let dt_ms = self.last_dt * 1000.0;
         let fps = if self.last_dt > 0.0 {
             1.0 / self.last_dt
@@ -220,10 +224,7 @@ impl Application for Sandbox2D {
 
             ui.separator();
             ui.strong("Emission");
-            ui.add(
-                gg_engine::egui::Slider::new(&mut self.emit_rate, 0..=100)
-                    .text("Per frame"),
-            );
+            ui.add(gg_engine::egui::Slider::new(&mut self.emit_rate, 0..=100).text("Per frame"));
 
             ui.separator();
             ui.strong("Velocity");

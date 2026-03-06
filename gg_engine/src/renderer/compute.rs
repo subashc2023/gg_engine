@@ -62,8 +62,7 @@ impl Drop for ComputePipeline {
     fn drop(&mut self) {
         unsafe {
             self.device.destroy_pipeline(self.pipeline, None);
-            self.device
-                .destroy_pipeline_layout(self.layout, None);
+            self.device.destroy_pipeline_layout(self.layout, None);
         }
     }
 }
@@ -109,10 +108,9 @@ pub(crate) fn create_compute_pipeline(
         .stage(stage)
         .layout(layout);
 
-    let pipelines = unsafe {
-        device.create_compute_pipelines(pipeline_cache, &[create_info], None)
-    }
-    .map_err(|(_pipelines, e)| format!("Failed to create compute pipeline: {e}"))?;
+    let pipelines =
+        unsafe { device.create_compute_pipelines(pipeline_cache, &[create_info], None) }
+            .map_err(|(_pipelines, e)| format!("Failed to create compute pipeline: {e}"))?;
 
     Ok(ComputePipeline {
         pipeline: pipelines[0],
@@ -125,7 +123,10 @@ pub(crate) fn create_compute_pipeline(
 // Helpers
 // ---------------------------------------------------------------------------
 
-fn create_shader_module(device: &ash::Device, spv_bytes: &[u8]) -> Result<vk::ShaderModule, vk::Result> {
+fn create_shader_module(
+    device: &ash::Device,
+    spv_bytes: &[u8],
+) -> Result<vk::ShaderModule, vk::Result> {
     let spv_u32: Vec<u32> = spv_bytes
         .chunks_exact(4)
         .map(|c| u32::from_le_bytes([c[0], c[1], c[2], c[3]]))

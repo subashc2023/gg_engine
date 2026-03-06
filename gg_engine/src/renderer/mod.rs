@@ -3,10 +3,10 @@ mod compute;
 mod draw_context;
 mod editor_camera;
 mod font;
+mod framebuffer;
 pub(crate) mod gpu_allocation;
 mod gpu_particle_system;
 mod msdf;
-mod framebuffer;
 mod orthographic_camera;
 mod pipeline;
 mod render_command;
@@ -31,12 +31,13 @@ pub use buffer::{
 };
 pub(crate) use draw_context::DrawContext;
 pub use editor_camera::EditorCamera;
-pub use font::{Font, FontCpuData, GlyphInfo};
 pub(crate) use font::generate_font_cpu_data;
+pub use font::{Font, FontCpuData, GlyphInfo};
+pub(crate) use framebuffer::ClearValues;
 pub use framebuffer::{
     Framebuffer, FramebufferSpec, FramebufferTextureFormat, FramebufferTextureSpec,
 };
-pub(crate) use framebuffer::ClearValues;
+pub(crate) use gpu_allocation::GpuAllocator;
 pub use orthographic_camera::OrthographicCamera;
 pub use pipeline::Pipeline;
 pub use renderer::Renderer;
@@ -49,7 +50,6 @@ pub use swapchain::{Swapchain, SwapchainError};
 pub use texture::{ImageFormat, Texture2D, TextureCpuData, TextureSpecification};
 pub use vertex_array::VertexArray;
 pub use vulkan_context::{VulkanContext, VulkanInitError};
-pub(crate) use gpu_allocation::GpuAllocator;
 
 // ---------------------------------------------------------------------------
 // RendererResources — lightweight view of Renderer-owned Vulkan state

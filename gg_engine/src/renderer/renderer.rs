@@ -7,12 +7,11 @@ use glam::{Mat4, Quat, Vec2, Vec3, Vec4};
 use super::buffer::{IndexBuffer, VertexBuffer};
 use super::draw_context::DrawContext;
 use super::font::{Font, FontCpuData};
-use super::texture::TextureCpuData;
 use super::framebuffer::{Framebuffer, FramebufferSpec};
 use super::gpu_allocation::GpuAllocator;
+use super::gpu_particle_system::GpuParticleSystem;
 use super::pipeline::{self, Pipeline};
 use super::render_command::RenderCommand;
-use super::gpu_particle_system::GpuParticleSystem;
 use super::renderer_2d::{
     BatchCircleVertex, BatchLineVertex, BatchQuadVertex, Renderer2DData, Renderer2DStats,
     SpriteInstanceData,
@@ -20,6 +19,7 @@ use super::renderer_2d::{
 use super::renderer_api::{RendererAPI, VulkanRendererAPI};
 use super::shader::Shader;
 use super::sub_texture::SubTexture2D;
+use super::texture::TextureCpuData;
 use super::texture::{Texture2D, TransferBatch};
 use super::uniform_buffer::{CameraData, UniformBuffer};
 use super::vertex_array::VertexArray;
@@ -189,11 +189,7 @@ impl Renderer {
         let pipeline_cache = unsafe { device.create_pipeline_cache(&cache_create_info, None) }
             .map_err(|e| format!("Failed to create pipeline cache: {e}"))?;
 
-        let transfer_batch = TransferBatch::new(
-            device,
-            command_pool,
-            vk_ctx.graphics_queue(),
-        );
+        let transfer_batch = TransferBatch::new(device, command_pool, vk_ctx.graphics_queue());
 
         Ok(Self {
             api,
@@ -255,8 +251,18 @@ impl Renderer {
     // -- Public resource creation API -----------------------------------------
 
     /// Create a shader from pre-compiled SPIR-V bytecode.
-    pub fn create_shader(&self, name: &str, vert_spv: &[u8], frag_spv: &[u8]) -> Result<Arc<Shader>, String> {
-        Ok(Arc::new(Shader::new(&self.device, name, vert_spv, frag_spv)?))
+    pub fn create_shader(
+        &self,
+        name: &str,
+        vert_spv: &[u8],
+        frag_spv: &[u8],
+    ) -> Result<Arc<Shader>, String> {
+        Ok(Arc::new(Shader::new(
+            &self.device,
+            name,
+            vert_spv,
+            frag_spv,
+        )?))
     }
 
     /// Create a GPU vertex buffer from raw byte data.
@@ -305,7 +311,11 @@ impl Renderer {
     /// Create a graphics pipeline for textured rendering.
     ///
     /// Includes the texture descriptor set layout and enables alpha blending.
-    pub fn create_texture_pipeline(&self, shader: &Shader, va: &VertexArray) -> Result<Arc<Pipeline>, String> {
+    pub fn create_texture_pipeline(
+        &self,
+        shader: &Shader,
+        va: &VertexArray,
+    ) -> Result<Arc<Pipeline>, String> {
         Ok(Arc::new(pipeline::create_pipeline(
             &self.device,
             shader,
@@ -332,8 +342,14 @@ impl Renderer {
     }
 
     /// Create a texture from raw RGBA8 pixel data.
-    pub fn create_texture_from_rgba8(&self, width: u32, height: u32, pixels: &[u8]) -> Result<Texture2D, String> {
-        let mut texture = Texture2D::from_rgba8(&self.resources(), &self.allocator, width, height, pixels)?;
+    pub fn create_texture_from_rgba8(
+        &self,
+        width: u32,
+        height: u32,
+        pixels: &[u8],
+    ) -> Result<Texture2D, String> {
+        let mut texture =
+            Texture2D::from_rgba8(&self.resources(), &self.allocator, width, height, pixels)?;
         if let Some(data) = &self.renderer_2d {
             let index = data.register_texture(&texture);
             texture.set_bindless_index(index);
@@ -368,7 +384,10 @@ impl Renderer {
             depth_format: self.depth_format,
         };
         let mut texture = Texture2D::from_cpu_data_batched(
-            &res, &self.allocator, data, &mut self.transfer_batch,
+            &res,
+            &self.allocator,
+            data,
+            &mut self.transfer_batch,
         )?;
         if let Some(r2d) = &self.renderer_2d {
             let index = r2d.register_texture(&texture);
@@ -389,9 +408,8 @@ impl Renderer {
             color_format: self.color_format,
             depth_format: self.depth_format,
         };
-        let mut font = Font::from_cpu_data_batched(
-            &res, &self.allocator, data, &mut self.transfer_batch,
-        )?;
+        let mut font =
+            Font::from_cpu_data_batched(&res, &self.allocator, data, &mut self.transfer_batch)?;
         if let Some(r2d) = &self.renderer_2d {
             let index = r2d.register_texture(&font.atlas_texture);
             font.atlas_texture.set_bindless_index(index);
@@ -487,7 +505,9 @@ impl Renderer {
     pub fn reload_shaders(&mut self, shader_dir: &std::path::Path) -> Result<u32, String> {
         if let Some(data) = &mut self.renderer_2d {
             unsafe {
-                self.device.device_wait_idle().map_err(|e| format!("device_wait_idle failed: {e}"))?;
+                self.device
+                    .device_wait_idle()
+                    .map_err(|e| format!("device_wait_idle failed: {e}"))?;
             }
             data.reload_shaders(shader_dir)
         } else {
@@ -785,12 +805,7 @@ impl Renderer {
     /// sprite's color (acting as a tint). The `tiling_factor` controls
     /// texture coordinate scaling. If no texture is set, the white default
     /// texture is used (flat-colored quad).
-    pub fn draw_sprite(
-        &self,
-        transform: &Mat4,
-        sprite: &SpriteRendererComponent,
-        entity_id: i32,
-    ) {
+    pub fn draw_sprite(&self, transform: &Mat4, sprite: &SpriteRendererComponent, entity_id: i32) {
         let tex_index = sprite
             .texture
             .as_ref()
@@ -809,7 +824,6 @@ impl Renderer {
 
     /// Draw a flat-colored quad at a 3D position with the given size and color.
     pub fn draw_quad(&self, position: &Vec3, size: &Vec2, color: Vec4) {
-
         let transform = Mat4::from_scale_rotation_translation(
             Vec3::new(size.x, size.y, 1.0),
             Quat::IDENTITY,
@@ -837,7 +851,6 @@ impl Renderer {
         tiling_factor: f32,
         tint_color: Vec4,
     ) {
-
         let transform = Mat4::from_scale_rotation_translation(
             Vec3::new(size.x, size.y, 1.0),
             Quat::IDENTITY,
@@ -874,7 +887,6 @@ impl Renderer {
 
     /// Draw a rotated flat-colored quad. `rotation` is in radians (Z-axis).
     pub fn draw_rotated_quad(&self, position: &Vec3, size: &Vec2, rotation: f32, color: Vec4) {
-
         let transform = Mat4::from_scale_rotation_translation(
             Vec3::new(size.x, size.y, 1.0),
             Quat::from_rotation_z(rotation),
@@ -904,7 +916,6 @@ impl Renderer {
         tiling_factor: f32,
         tint_color: Vec4,
     ) {
-
         let transform = Mat4::from_scale_rotation_translation(
             Vec3::new(size.x, size.y, 1.0),
             Quat::from_rotation_z(rotation),
@@ -955,7 +966,6 @@ impl Renderer {
         sub_texture: &SubTexture2D,
         tint_color: Vec4,
     ) {
-
         let transform = Mat4::from_scale_rotation_translation(
             Vec3::new(size.x, size.y, 1.0),
             Quat::IDENTITY,
@@ -1038,7 +1048,6 @@ impl Renderer {
         sub_texture: &SubTexture2D,
         tint_color: Vec4,
     ) {
-
         let transform = Mat4::from_scale_rotation_translation(
             Vec3::new(size.x, size.y, 1.0),
             Quat::from_rotation_z(rotation),
@@ -1104,11 +1113,7 @@ impl Renderer {
             let world_pos = *transform * QUAD_POSITIONS[i];
             v.world_position = [world_pos.x, world_pos.y, world_pos.z];
             // Local position: quad corners * 2 → range [-1, 1].
-            v.local_position = [
-                QUAD_POSITIONS[i].x * 2.0,
-                QUAD_POSITIONS[i].y * 2.0,
-                0.0,
-            ];
+            v.local_position = [QUAD_POSITIONS[i].x * 2.0, QUAD_POSITIONS[i].y * 2.0, 0.0];
         }
 
         if !data.push_circle(vertices) {
@@ -1139,7 +1144,6 @@ impl Renderer {
         circle: &CircleRendererComponent,
         entity_id: i32,
     ) {
-
         self.push_circle_to_batch(
             transform,
             circle.color,
@@ -1325,7 +1329,6 @@ impl Renderer {
         kerning: f32,
         entity_id: i32,
     ) {
-
         let tex_index = font.bindless_index() as f32;
         let scale = font_size;
 
@@ -1390,13 +1393,7 @@ impl Renderer {
     }
 
     /// Draw a [`TextComponent`] using a pre-built transform matrix.
-    pub fn draw_text_component(
-        &self,
-        transform: &Mat4,
-        text: &TextComponent,
-        entity_id: i32,
-    ) {
-
+    pub fn draw_text_component(&self, transform: &Mat4, text: &TextComponent, entity_id: i32) {
         if let Some(font) = &text.font {
             self.draw_text_string(
                 &text.text,

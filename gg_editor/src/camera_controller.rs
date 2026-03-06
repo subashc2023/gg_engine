@@ -32,7 +32,9 @@ impl NativeScript for NativeCameraFollow {
             self.target = Some(target_entity);
             info!(
                 "NativeCameraFollow: found '{}' (uuid={}) for camera entity {}",
-                self.target_name, uuid, entity.id()
+                self.target_name,
+                uuid,
+                entity.id()
             );
         } else {
             warn!(

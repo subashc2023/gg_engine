@@ -2,6 +2,7 @@ use gg_engine::egui;
 use gg_engine::prelude::*;
 
 use crate::panels::content_browser::ContentBrowserPayload;
+use crate::panels::relative_asset_path;
 
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn draw_sprite_renderer_component(
@@ -24,7 +25,15 @@ pub(crate) fn draw_sprite_renderer_component(
         .id_salt(("sprite_renderer", entity.id()))
         .default_open(true)
         .show(ui, |ui| {
-            let (mut color_arr, texture_handle_raw, mut tiling_factor, mut sorting_layer, mut order_in_layer, mut atlas_min, mut atlas_max) = {
+            let (
+                mut color_arr,
+                texture_handle_raw,
+                mut tiling_factor,
+                mut sorting_layer,
+                mut order_in_layer,
+                mut atlas_min,
+                mut atlas_max,
+            ) = {
                 let sprite = scene
                     .get_component::<SpriteRendererComponent>(entity)
                     .unwrap();
@@ -97,23 +106,19 @@ pub(crate) fn draw_sprite_renderer_component(
             let btn_width = ((texture_label.len() as f32) * 7.0 + 20.0).max(100.0);
 
             ui.horizontal(|ui| {
-                let btn_resp = ui.add_sized(
-                    [btn_width, 0.0],
-                    egui::Button::new(&texture_label),
-                );
+                let btn_resp = ui.add_sized([btn_width, 0.0], egui::Button::new(&texture_label));
 
                 if btn_resp.clicked() {
                     if let Some(am) = asset_manager.as_mut() {
                         let textures_dir = assets_root.join("textures");
                         let textures_dir_str = textures_dir.to_string_lossy();
-                        if let Some(path_str) =
-                            FileDialogs::open_file_in("Image files", &["png", "jpg", "jpeg"], &textures_dir_str)
-                        {
+                        if let Some(path_str) = FileDialogs::open_file_in(
+                            "Image files",
+                            &["png", "jpg", "jpeg"],
+                            &textures_dir_str,
+                        ) {
                             let abs_path = std::path::PathBuf::from(&path_str);
-                            let rel_path = abs_path
-                                .strip_prefix(am.asset_directory())
-                                .map(|p| p.to_string_lossy().to_string())
-                                .unwrap_or(path_str);
+                            let rel_path = relative_asset_path(&abs_path, am.asset_directory());
                             let handle = am.import_asset(&rel_path);
                             if let Some(mut sprite) =
                                 scene.get_component_mut::<SpriteRendererComponent>(entity)
@@ -126,9 +131,7 @@ pub(crate) fn draw_sprite_renderer_component(
                     }
                 }
 
-                if let Some(payload) =
-                    btn_resp.dnd_release_payload::<ContentBrowserPayload>()
-                {
+                if let Some(payload) = btn_resp.dnd_release_payload::<ContentBrowserPayload>() {
                     if !payload.is_directory {
                         let ext = payload
                             .path
@@ -138,10 +141,7 @@ pub(crate) fn draw_sprite_renderer_component(
                             .to_lowercase();
                         if matches!(ext.as_str(), "png" | "jpg" | "jpeg") {
                             if let Some(am) = asset_manager.as_mut() {
-                                let rel_path = payload.path
-                                    .strip_prefix(am.asset_directory())
-                                    .map(|p| p.to_string_lossy().to_string())
-                                    .unwrap_or_else(|_| payload.path.to_string_lossy().to_string());
+                                let rel_path = relative_asset_path(&payload.path, am.asset_directory());
                                 let handle = am.import_asset(&rel_path);
                                 if let Some(mut sprite) =
                                     scene.get_component_mut::<SpriteRendererComponent>(entity)
@@ -155,7 +155,10 @@ pub(crate) fn draw_sprite_renderer_component(
                     }
                 }
 
-                if btn_resp.dnd_hover_payload::<ContentBrowserPayload>().is_some() {
+                if btn_resp
+                    .dnd_hover_payload::<ContentBrowserPayload>()
+                    .is_some()
+                {
                     ui.painter().rect_stroke(
                         btn_resp.rect,
                         egui::CornerRadius::same(2),
@@ -164,9 +167,7 @@ pub(crate) fn draw_sprite_renderer_component(
                     );
                 }
 
-                if texture_handle_raw != 0
-                    && ui.small_button("X").clicked()
-                {
+                if texture_handle_raw != 0 && ui.small_button("X").clicked() {
                     if let Some(mut sprite) =
                         scene.get_component_mut::<SpriteRendererComponent>(entity)
                     {
@@ -211,8 +212,7 @@ pub(crate) fn draw_sprite_renderer_component(
                     .changed();
             });
             if sort_changed {
-                if let Some(mut sprite) =
-                    scene.get_component_mut::<SpriteRendererComponent>(entity)
+                if let Some(mut sprite) = scene.get_component_mut::<SpriteRendererComponent>(entity)
                 {
                     sprite.sorting_layer = sorting_layer;
                     sprite.order_in_layer = order_in_layer;
@@ -226,19 +226,39 @@ pub(crate) fn draw_sprite_renderer_component(
                 ui.horizontal(|ui| {
                     ui.label("Atlas Min UV");
                     atlas_changed |= ui
-                        .add(egui::DragValue::new(&mut atlas_min.x).speed(0.01).range(0.0..=1.0).prefix("U: "))
+                        .add(
+                            egui::DragValue::new(&mut atlas_min.x)
+                                .speed(0.01)
+                                .range(0.0..=1.0)
+                                .prefix("U: "),
+                        )
                         .changed();
                     atlas_changed |= ui
-                        .add(egui::DragValue::new(&mut atlas_min.y).speed(0.01).range(0.0..=1.0).prefix("V: "))
+                        .add(
+                            egui::DragValue::new(&mut atlas_min.y)
+                                .speed(0.01)
+                                .range(0.0..=1.0)
+                                .prefix("V: "),
+                        )
                         .changed();
                 });
                 ui.horizontal(|ui| {
                     ui.label("Atlas Max UV");
                     atlas_changed |= ui
-                        .add(egui::DragValue::new(&mut atlas_max.x).speed(0.01).range(0.0..=1.0).prefix("U: "))
+                        .add(
+                            egui::DragValue::new(&mut atlas_max.x)
+                                .speed(0.01)
+                                .range(0.0..=1.0)
+                                .prefix("U: "),
+                        )
                         .changed();
                     atlas_changed |= ui
-                        .add(egui::DragValue::new(&mut atlas_max.y).speed(0.01).range(0.0..=1.0).prefix("V: "))
+                        .add(
+                            egui::DragValue::new(&mut atlas_max.y)
+                                .speed(0.01)
+                                .range(0.0..=1.0)
+                                .prefix("V: "),
+                        )
                         .changed();
                 });
                 if atlas_changed {
@@ -314,8 +334,7 @@ pub(crate) fn draw_sprite_animator_component(
                         }
                     }
                 } else if ui.button("Preview").clicked() {
-                    if let Some(mut sa) =
-                        scene.get_component_mut::<SpriteAnimatorComponent>(entity)
+                    if let Some(mut sa) = scene.get_component_mut::<SpriteAnimatorComponent>(entity)
                     {
                         sa.set_previewing(true);
                         // If no clip is selected, play the first clip or default.
@@ -339,8 +358,7 @@ pub(crate) fn draw_sprite_animator_component(
                 }
 
                 if ui.button("Stop").clicked() {
-                    if let Some(mut sa) =
-                        scene.get_component_mut::<SpriteAnimatorComponent>(entity)
+                    if let Some(mut sa) = scene.get_component_mut::<SpriteAnimatorComponent>(entity)
                     {
                         sa.reset();
                     }
@@ -428,18 +446,14 @@ pub(crate) fn draw_sprite_animator_component(
                             default_changed = true;
                         }
                         for name in &clip_names {
-                            if ui
-                                .selectable_label(*name == default_clip, name)
-                                .clicked()
-                            {
+                            if ui.selectable_label(*name == default_clip, name).clicked() {
                                 default_clip = name.clone();
                                 default_changed = true;
                             }
                         }
                     });
                 if default_changed {
-                    if let Some(mut sa) =
-                        scene.get_component_mut::<SpriteAnimatorComponent>(entity)
+                    if let Some(mut sa) = scene.get_component_mut::<SpriteAnimatorComponent>(entity)
                     {
                         sa.default_clip = default_clip.clone();
                         *scene_dirty = true;
@@ -448,9 +462,7 @@ pub(crate) fn draw_sprite_animator_component(
             });
 
             if changed {
-                if let Some(mut sa) =
-                    scene.get_component_mut::<SpriteAnimatorComponent>(entity)
-                {
+                if let Some(mut sa) = scene.get_component_mut::<SpriteAnimatorComponent>(entity) {
                     sa.cell_size = Vec2::new(cell_w, cell_h);
                     sa.columns = columns;
                     *scene_dirty = true;
@@ -507,26 +519,18 @@ pub(crate) fn draw_sprite_animator_component(
                             )
                             .changed();
                         clip_changed |= ui
-                            .add(
-                                egui::DragValue::new(&mut end)
-                                    .prefix("End: ")
-                                    .speed(0.1),
-                            )
+                            .add(egui::DragValue::new(&mut end).prefix("End: ").speed(0.1))
                             .changed();
                     });
                     ui.horizontal(|ui| {
                         ui.label("FPS");
                         clip_changed |= ui
-                            .add(
-                                egui::DragValue::new(&mut fps)
-                                    .range(0.1..=120.0)
-                                    .speed(0.1),
-                            )
+                            .add(egui::DragValue::new(&mut fps).range(0.1..=120.0).speed(0.1))
                             .changed();
                         clip_changed |= ui.checkbox(&mut looping, "Loop").changed();
                     });
 
-                    // Per-clip texture picker.
+                    // Per-clip texture picker (click or drag-and-drop).
                     ui.horizontal(|ui| {
                         let tex_label = if clip_tex_handle != 0 {
                             if let Some(am) = asset_manager.as_ref() {
@@ -544,24 +548,28 @@ pub(crate) fn draw_sprite_animator_component(
                                 format!("{}", clip_tex_handle)
                             }
                         } else {
-                            "Sprite Texture".to_string()
+                            "None (uses sprite)".to_string()
                         };
 
                         ui.label("Texture");
-                        let btn_resp = ui.button(&tex_label);
+                        let btn_w = ((tex_label.len() as f32) * 7.0 + 20.0).max(100.0);
+                        let btn_resp = ui.add_sized([btn_w, 0.0], egui::Button::new(&tex_label));
 
                         if btn_resp.clicked() {
                             if let Some(am) = asset_manager.as_mut() {
-                                let textures_dir = assets_root.join("textures");
-                                let textures_dir_str = textures_dir.to_string_lossy();
-                                if let Some(path_str) =
-                                    FileDialogs::open_file_in("Image files", &["png", "jpg", "jpeg"], &textures_dir_str)
-                                {
+                                let start_dir = if assets_root.join("textures").exists() {
+                                    assets_root.join("textures")
+                                } else {
+                                    assets_root.to_path_buf()
+                                };
+                                let start_dir_str = start_dir.to_string_lossy();
+                                if let Some(path_str) = FileDialogs::open_file_in(
+                                    "Image files",
+                                    &["png", "jpg", "jpeg"],
+                                    &start_dir_str,
+                                ) {
                                     let abs_path = std::path::PathBuf::from(&path_str);
-                                    let rel_path = abs_path
-                                        .strip_prefix(am.asset_directory())
-                                        .map(|p| p.to_string_lossy().to_string())
-                                        .unwrap_or(path_str);
+                                    let rel_path = relative_asset_path(&abs_path, am.asset_directory());
                                     let handle = am.import_asset(&rel_path);
                                     if let Some(mut sa) =
                                         scene.get_component_mut::<SpriteAnimatorComponent>(entity)
@@ -576,16 +584,54 @@ pub(crate) fn draw_sprite_animator_component(
                             }
                         }
 
-                        if clip_tex_handle != 0 {
-                            if ui.small_button("Clear").clicked() {
-                                if let Some(mut sa) =
-                                    scene.get_component_mut::<SpriteAnimatorComponent>(entity)
-                                {
-                                    if let Some(c) = sa.clips.get_mut(i) {
-                                        c.texture_handle = Uuid::from_raw(0);
-                                        c.texture = None;
-                                        *scene_dirty = true;
+                        // Drag-and-drop from content browser.
+                        if let Some(payload) = btn_resp.dnd_release_payload::<ContentBrowserPayload>() {
+                            if !payload.is_directory {
+                                let ext = payload
+                                    .path
+                                    .extension()
+                                    .and_then(|e| e.to_str())
+                                    .unwrap_or("")
+                                    .to_lowercase();
+                                if matches!(ext.as_str(), "png" | "jpg" | "jpeg") {
+                                    if let Some(am) = asset_manager.as_mut() {
+                                        let rel_path = relative_asset_path(&payload.path, am.asset_directory());
+                                        let handle = am.import_asset(&rel_path);
+                                        if let Some(mut sa) =
+                                            scene.get_component_mut::<SpriteAnimatorComponent>(entity)
+                                        {
+                                            if let Some(c) = sa.clips.get_mut(i) {
+                                                c.texture_handle = handle;
+                                                c.texture = None;
+                                                *scene_dirty = true;
+                                            }
+                                        }
                                     }
+                                }
+                            }
+                        }
+
+                        // Visual drop target highlight.
+                        if btn_resp
+                            .dnd_hover_payload::<ContentBrowserPayload>()
+                            .is_some()
+                        {
+                            ui.painter().rect_stroke(
+                                btn_resp.rect,
+                                egui::CornerRadius::same(2),
+                                egui::Stroke::new(2.0, egui::Color32::from_rgb(0x56, 0x9C, 0xD6)),
+                                egui::StrokeKind::Inside,
+                            );
+                        }
+
+                        if clip_tex_handle != 0 && ui.small_button("X").clicked() {
+                            if let Some(mut sa) =
+                                scene.get_component_mut::<SpriteAnimatorComponent>(entity)
+                            {
+                                if let Some(c) = sa.clips.get_mut(i) {
+                                    c.texture_handle = Uuid::from_raw(0);
+                                    c.texture = None;
+                                    *scene_dirty = true;
                                 }
                             }
                         }
@@ -609,9 +655,7 @@ pub(crate) fn draw_sprite_animator_component(
             }
 
             if let Some(idx) = clip_to_remove {
-                if let Some(mut sa) =
-                    scene.get_component_mut::<SpriteAnimatorComponent>(entity)
-                {
+                if let Some(mut sa) = scene.get_component_mut::<SpriteAnimatorComponent>(entity) {
                     sa.clips.remove(idx);
                     *scene_dirty = true;
                 }
@@ -619,9 +663,7 @@ pub(crate) fn draw_sprite_animator_component(
 
             ui.separator();
             if ui.button("Add Clip").clicked() {
-                if let Some(mut sa) =
-                    scene.get_component_mut::<SpriteAnimatorComponent>(entity)
-                {
+                if let Some(mut sa) = scene.get_component_mut::<SpriteAnimatorComponent>(entity) {
                     let idx = sa.clips.len();
                     sa.clips.push(AnimationClip {
                         name: format!("clip_{}", idx),
@@ -761,8 +803,7 @@ pub(crate) fn draw_circle_renderer_component(
                     .changed();
             });
             if sort_changed {
-                if let Some(mut circle) =
-                    scene.get_component_mut::<CircleRendererComponent>(entity)
+                if let Some(mut circle) = scene.get_component_mut::<CircleRendererComponent>(entity)
                 {
                     circle.sorting_layer = sorting_layer;
                     circle.order_in_layer = order_in_layer;

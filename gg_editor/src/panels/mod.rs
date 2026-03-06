@@ -1,19 +1,43 @@
+pub(crate) mod animation_timeline;
 mod console;
 pub(crate) mod content_browser;
 pub(crate) mod project;
 pub(crate) mod properties;
-mod scene_hierarchy;
+pub(crate) mod scene_hierarchy;
 mod settings;
 pub(crate) mod viewport;
+
+use std::path::Path;
 
 use gg_engine::egui;
 use gg_engine::prelude::*;
 use gg_engine::ui_theme::EditorTheme;
+
+/// Strip the `\\?\` UNC prefix that Windows canonicalization adds,
+/// so that `strip_prefix` works when comparing paths from different sources
+/// (e.g. file dialogs return `C:\...` but canonicalized paths have `\\?\C:\...`).
+fn strip_unc_prefix(p: &Path) -> &Path {
+    p.to_str()
+        .and_then(|s| s.strip_prefix(r"\\?\"))
+        .map(Path::new)
+        .unwrap_or(p)
+}
+
+/// Compute a relative asset path from an absolute file path and the asset directory.
+/// Handles UNC prefix mismatches on Windows.
+pub(crate) fn relative_asset_path(abs_path: &Path, asset_dir: &Path) -> String {
+    let clean_abs = strip_unc_prefix(abs_path);
+    let clean_dir = strip_unc_prefix(asset_dir);
+    clean_abs
+        .strip_prefix(clean_dir)
+        .map(|p| p.to_string_lossy().to_string())
+        .unwrap_or_else(|_| abs_path.to_string_lossy().to_string())
+}
 use transform_gizmo_egui::Gizmo;
 
-use crate::TilemapPaintState;
 use crate::gizmo::GizmoOperation;
 use crate::undo::UndoSystem;
+use crate::TilemapPaintState;
 
 /// Reset all thread-local panel state (caches, rename/delete dialogs, etc.).
 /// Call this when switching projects or performing a full editor reset.
@@ -21,6 +45,7 @@ pub(crate) fn reset_all_panel_state() {
     content_browser::invalidate_dir_cache();
     content_browser::reset_dialog_state();
     project::invalidate_scene_cache();
+    animation_timeline::reset_animation_timeline_state();
     #[cfg(feature = "lua-scripting")]
     properties::clear_field_cache();
 }
@@ -41,9 +66,13 @@ pub(crate) struct TilesetPreviewInfo {
 
 /// Compute the UV min corner for a tile in the tileset image.
 pub(crate) fn tile_uv_min(
-    ts_col: usize, ts_row: usize,
-    cell_size: Vec2, spacing: Vec2, margin: Vec2,
-    tex_w: f32, tex_h: f32,
+    ts_col: usize,
+    ts_row: usize,
+    cell_size: Vec2,
+    spacing: Vec2,
+    margin: Vec2,
+    tex_w: f32,
+    tex_h: f32,
 ) -> (f32, f32) {
     let px_x = margin.x + ts_col as f32 * (cell_size.x + spacing.x);
     let px_y = margin.y + ts_row as f32 * (cell_size.y + spacing.y);
@@ -52,9 +81,13 @@ pub(crate) fn tile_uv_min(
 
 /// Compute the UV max corner for a tile in the tileset image.
 pub(crate) fn tile_uv_max(
-    ts_col: usize, ts_row: usize,
-    cell_size: Vec2, spacing: Vec2, margin: Vec2,
-    tex_w: f32, tex_h: f32,
+    ts_col: usize,
+    ts_row: usize,
+    cell_size: Vec2,
+    spacing: Vec2,
+    margin: Vec2,
+    tex_w: f32,
+    tex_h: f32,
 ) -> (f32, f32) {
     let px_x = margin.x + ts_col as f32 * (cell_size.x + spacing.x) + cell_size.x;
     let px_y = margin.y + ts_row as f32 * (cell_size.y + spacing.y) + cell_size.y;
@@ -74,6 +107,7 @@ pub(crate) enum Tab {
     Settings,
     Project,
     Console,
+    AnimationTimeline,
 }
 
 // ---------------------------------------------------------------------------
@@ -134,6 +168,7 @@ pub(crate) struct EditorTabViewer<'a> {
     pub(crate) reload_shaders_requested: &'a mut bool,
     pub(crate) viewport: ViewportState<'a>,
     pub(crate) project: ProjectContext<'a>,
+    pub(crate) hierarchy_action: &'a mut Option<scene_hierarchy::HierarchyExternalAction>,
 }
 
 impl EditorTabViewer<'_> {
@@ -157,6 +192,7 @@ impl egui_dock::TabViewer for EditorTabViewer<'_> {
             Tab::Settings => "Settings".into(),
             Tab::Project => "Project".into(),
             Tab::Console => "Console".into(),
+            Tab::AnimationTimeline => "Animation".into(),
         }
     }
 
@@ -164,7 +200,16 @@ impl egui_dock::TabViewer for EditorTabViewer<'_> {
         match tab {
             Tab::SceneHierarchy => {
                 self.unfocus_viewport_on_click(ui);
-                scene_hierarchy::scene_hierarchy_ui(ui, self.scene, self.selection_context, self.scene_dirty, self.undo_system, self.hierarchy_filter);
+                if let Some(action) = scene_hierarchy::scene_hierarchy_ui(
+                    ui,
+                    self.scene,
+                    self.selection_context,
+                    self.scene_dirty,
+                    self.undo_system,
+                    self.hierarchy_filter,
+                ) {
+                    *self.hierarchy_action = Some(action);
+                }
             }
 
             Tab::Viewport => {
@@ -213,7 +258,13 @@ impl egui_dock::TabViewer for EditorTabViewer<'_> {
 
             Tab::ContentBrowser => {
                 self.unfocus_viewport_on_click(ui);
-                content_browser::content_browser_ui(ui, self.project.current_directory, self.project.assets_root, self.project.asset_manager, self.scene);
+                content_browser::content_browser_ui(
+                    ui,
+                    self.project.current_directory,
+                    self.project.assets_root,
+                    self.project.asset_manager,
+                    self.scene,
+                );
             }
 
             Tab::Settings => {
@@ -250,6 +301,19 @@ impl egui_dock::TabViewer for EditorTabViewer<'_> {
                 self.unfocus_viewport_on_click(ui);
                 console::console_ui(ui);
             }
+
+            Tab::AnimationTimeline => {
+                self.unfocus_viewport_on_click(ui);
+                animation_timeline::animation_timeline_ui(
+                    ui,
+                    self.scene,
+                    self.selection_context,
+                    self.project.asset_manager,
+                    self.project.egui_texture_map,
+                    self.scene_dirty,
+                    self.undo_system,
+                );
+            }
         }
     }
 
@@ -268,7 +332,7 @@ impl egui_dock::TabViewer for EditorTabViewer<'_> {
     fn scroll_bars(&self, tab: &Tab) -> [bool; 2] {
         match tab {
             Tab::SceneHierarchy | Tab::Properties | Tab::Settings | Tab::Project => [false, true],
-            Tab::Console => [false, false], // Console has its own scroll area.
+            Tab::Console | Tab::AnimationTimeline => [false, false],
             _ => [false, false],
         }
     }

@@ -13,8 +13,7 @@ pub(crate) fn draw_rigidbody2d_component(
 
     if scene.has_component::<RigidBody2DComponent>(entity) {
         let cr = egui::CollapsingHeader::new(
-            egui::RichText::new("Rigidbody 2D")
-                .font(egui::FontId::new(14.0, bold_family.clone())),
+            egui::RichText::new("Rigidbody 2D").font(egui::FontId::new(14.0, bold_family.clone())),
         )
         .id_salt(("rigidbody_2d", entity.id()))
         .default_open(true)
@@ -96,7 +95,15 @@ pub(crate) fn draw_box_collider2d_component(
         .id_salt(("box_collider_2d", entity.id()))
         .default_open(true)
         .show(ui, |ui| {
-            let (mut offset, mut size, mut density, mut friction, mut restitution, mut collision_layer, mut collision_mask) = {
+            let (
+                mut offset,
+                mut size,
+                mut density,
+                mut friction,
+                mut restitution,
+                mut collision_layer,
+                mut collision_mask,
+            ) = {
                 let bc = scene
                     .get_component::<BoxCollider2DComponent>(entity)
                     .unwrap();
@@ -116,13 +123,21 @@ pub(crate) fn draw_box_collider2d_component(
             ui.horizontal(|ui| {
                 ui.label("Offset");
                 if ui
-                    .add(egui::DragValue::new(&mut offset.x).speed(0.01).prefix("X: "))
+                    .add(
+                        egui::DragValue::new(&mut offset.x)
+                            .speed(0.01)
+                            .prefix("X: "),
+                    )
                     .changed()
                 {
                     changed = true;
                 }
                 if ui
-                    .add(egui::DragValue::new(&mut offset.y).speed(0.01).prefix("Y: "))
+                    .add(
+                        egui::DragValue::new(&mut offset.y)
+                            .speed(0.01)
+                            .prefix("Y: "),
+                    )
                     .changed()
                 {
                     changed = true;
@@ -203,9 +218,7 @@ pub(crate) fn draw_box_collider2d_component(
             });
 
             if changed {
-                if let Some(mut bc) =
-                    scene.get_component_mut::<BoxCollider2DComponent>(entity)
-                {
+                if let Some(mut bc) = scene.get_component_mut::<BoxCollider2DComponent>(entity) {
                     bc.offset = offset;
                     bc.size = size;
                     bc.density = density;
@@ -247,7 +260,15 @@ pub(crate) fn draw_circle_collider2d_component(
         .id_salt(("circle_collider_2d", entity.id()))
         .default_open(true)
         .show(ui, |ui| {
-            let (mut offset, mut radius, mut density, mut friction, mut restitution, mut collision_layer, mut collision_mask) = {
+            let (
+                mut offset,
+                mut radius,
+                mut density,
+                mut friction,
+                mut restitution,
+                mut collision_layer,
+                mut collision_mask,
+            ) = {
                 let cc = scene
                     .get_component::<CircleCollider2DComponent>(entity)
                     .unwrap();
@@ -267,13 +288,21 @@ pub(crate) fn draw_circle_collider2d_component(
             ui.horizontal(|ui| {
                 ui.label("Offset");
                 if ui
-                    .add(egui::DragValue::new(&mut offset.x).speed(0.01).prefix("X: "))
+                    .add(
+                        egui::DragValue::new(&mut offset.x)
+                            .speed(0.01)
+                            .prefix("X: "),
+                    )
                     .changed()
                 {
                     changed = true;
                 }
                 if ui
-                    .add(egui::DragValue::new(&mut offset.y).speed(0.01).prefix("Y: "))
+                    .add(
+                        egui::DragValue::new(&mut offset.y)
+                            .speed(0.01)
+                            .prefix("Y: "),
+                    )
                     .changed()
                 {
                     changed = true;
@@ -339,9 +368,7 @@ pub(crate) fn draw_circle_collider2d_component(
             });
 
             if changed {
-                if let Some(mut cc) =
-                    scene.get_component_mut::<CircleCollider2DComponent>(entity)
-                {
+                if let Some(mut cc) = scene.get_component_mut::<CircleCollider2DComponent>(entity) {
                     cc.offset = offset;
                     cc.radius = radius;
                     cc.density = density;

@@ -216,9 +216,7 @@ impl EdgeSegment {
         match self {
             Self::Linear { p0, p1, .. } => signed_distance_linear(*p0, *p1, p),
             Self::Quadratic { p0, p1, p2, .. } => signed_distance_quadratic(*p0, *p1, *p2, p),
-            Self::Cubic {
-                p0, p1, p2, p3, ..
-            } => signed_distance_cubic(*p0, *p1, *p2, *p3, p),
+            Self::Cubic { p0, p1, p2, p3, .. } => signed_distance_cubic(*p0, *p1, *p2, *p3, p),
         }
     }
 }
@@ -312,7 +310,9 @@ impl ttf_parser::OutlineBuilder for OutlineBuilder {
 
     fn close(&mut self) {
         // Add closing segment if needed.
-        if self.current_pos.sub(self.contour_start).length() > 1e-12 && !self.current_edges.is_empty() {
+        if self.current_pos.sub(self.contour_start).length() > 1e-12
+            && !self.current_edges.is_empty()
+        {
             self.current_edges.push(EdgeSegment::Linear {
                 p0: self.current_pos,
                 p1: self.contour_start,
@@ -493,7 +493,9 @@ fn signed_distance_cubic(p0: Vec2, p1: Vec2, p2: Vec2, p3: Vec2, p: Vec2) -> Sig
 
 fn eval_quadratic(p0: Vec2, p1: Vec2, p2: Vec2, t: f64) -> Vec2 {
     let s = 1.0 - t;
-    p0.scale(s * s).add(p1.scale(2.0 * s * t)).add(p2.scale(t * t))
+    p0.scale(s * s)
+        .add(p1.scale(2.0 * s * t))
+        .add(p2.scale(t * t))
 }
 
 fn eval_quadratic_deriv(p0: Vec2, p1: Vec2, p2: Vec2, t: f64) -> Vec2 {
@@ -523,7 +525,9 @@ fn eval_cubic_deriv(p0: Vec2, p1: Vec2, p2: Vec2, p3: Vec2, t: f64) -> Vec2 {
 
 fn eval_cubic_second_deriv(p0: Vec2, p1: Vec2, p2: Vec2, p3: Vec2, t: f64) -> Vec2 {
     let s = 1.0 - t;
-    p2.sub(p1.scale(2.0)).add(p0).scale(6.0 * s)
+    p2.sub(p1.scale(2.0))
+        .add(p0)
+        .scale(6.0 * s)
         .add(p3.sub(p2.scale(2.0)).add(p1).scale(6.0 * t))
 }
 
@@ -632,9 +636,7 @@ fn edge_winding(edge: &EdgeSegment, p: Vec2) -> i32 {
             }
             w
         }
-        EdgeSegment::Cubic {
-            p0, p1, p2, p3, ..
-        } => {
+        EdgeSegment::Cubic { p0, p1, p2, p3, .. } => {
             let steps = 12;
             let mut w = 0;
             let mut prev = *p0;
@@ -691,8 +693,16 @@ pub(super) fn generate_msdf(
     edge_coloring_simple(shape, CORNER_ANGLE_THRESHOLD);
 
     let range_in_shape = Vec2::new(
-        if scale.x.abs() > 1e-12 { px_range / scale.x } else { 0.0 },
-        if scale.y.abs() > 1e-12 { px_range / scale.y } else { 0.0 },
+        if scale.x.abs() > 1e-12 {
+            px_range / scale.x
+        } else {
+            0.0
+        },
+        if scale.y.abs() > 1e-12 {
+            px_range / scale.y
+        } else {
+            0.0
+        },
     );
     // Use the average for normalization.
     let range_norm = (range_in_shape.x + range_in_shape.y) * 0.5;
@@ -803,9 +813,7 @@ fn edge_sample_points(edge: &EdgeSegment) -> Vec<Vec2> {
             }
             pts
         }
-        EdgeSegment::Cubic {
-            p0, p1, p2, p3, ..
-        } => {
+        EdgeSegment::Cubic { p0, p1, p2, p3, .. } => {
             let mut pts = Vec::with_capacity(13);
             for i in 0..=12 {
                 let t = i as f64 / 12.0;

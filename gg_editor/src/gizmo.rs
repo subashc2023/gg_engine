@@ -4,12 +4,12 @@ use transform_gizmo_egui::{EnumSet, GizmoMode};
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
 pub(crate) enum GizmoOperation {
-    None,      // Q — select mode, no gizmo
+    None, // Q — select mode, no gizmo
     #[serde(alias = "translate")]
     #[default]
     Translate, // W
-    Rotate,    // E
-    Scale,     // R
+    Rotate, // E
+    Scale, // R
 }
 
 pub(crate) fn gizmo_modes_for(op: GizmoOperation) -> EnumSet<GizmoMode> {

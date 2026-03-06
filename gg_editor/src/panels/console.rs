@@ -74,11 +74,7 @@ pub(crate) fn console_ui(ui: &mut egui::Ui) {
                     "[{} {} {}] {}",
                     entry.timestamp, entry.level, entry.tag, entry.message
                 );
-                ui.label(
-                    egui::RichText::new(text)
-                        .monospace()
-                        .color(color),
-                );
+                ui.label(egui::RichText::new(text).monospace().color(color));
             }
         });
     });

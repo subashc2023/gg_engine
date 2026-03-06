@@ -178,7 +178,10 @@ impl BufferLayout {
     }
 
     /// Generate a Vulkan vertex input binding description with per-instance rate.
-    pub fn vk_binding_description_instanced(&self, binding: u32) -> vk::VertexInputBindingDescription {
+    pub fn vk_binding_description_instanced(
+        &self,
+        binding: u32,
+    ) -> vk::VertexInputBindingDescription {
         vk::VertexInputBindingDescription {
             binding,
             stride: self.stride,
@@ -245,8 +248,13 @@ impl VertexBuffer {
         let _timer = ProfileTimer::new("VertexBuffer::new");
         let size = data.len() as vk::DeviceSize;
 
-        let (buffer, allocation) =
-            create_buffer_with_allocation(allocator, device, size, vk::BufferUsageFlags::VERTEX_BUFFER, "VertexBuffer")?;
+        let (buffer, allocation) = create_buffer_with_allocation(
+            allocator,
+            device,
+            size,
+            vk::BufferUsageFlags::VERTEX_BUFFER,
+            "VertexBuffer",
+        )?;
 
         // Copy data via mapped pointer.
         let ptr = allocation
@@ -307,8 +315,13 @@ impl IndexBuffer {
         let _timer = ProfileTimer::new("IndexBuffer::new");
         let size = std::mem::size_of_val(indices) as vk::DeviceSize;
 
-        let (buffer, allocation) =
-            create_buffer_with_allocation(allocator, device, size, vk::BufferUsageFlags::INDEX_BUFFER, "IndexBuffer")?;
+        let (buffer, allocation) = create_buffer_with_allocation(
+            allocator,
+            device,
+            size,
+            vk::BufferUsageFlags::INDEX_BUFFER,
+            "IndexBuffer",
+        )?;
 
         // Copy data via mapped pointer.
         let ptr = allocation
@@ -449,12 +462,16 @@ pub(super) fn create_buffer_with_allocation(
         .usage(usage)
         .sharing_mode(vk::SharingMode::EXCLUSIVE);
 
-    let buffer =
-        unsafe { device.create_buffer(&buffer_info, None) }
-            .map_err(|e| format!("Failed to create {name} buffer: {e}"))?;
+    let buffer = unsafe { device.create_buffer(&buffer_info, None) }
+        .map_err(|e| format!("Failed to create {name} buffer: {e}"))?;
 
-    let allocation =
-        GpuAllocator::allocate_for_buffer(allocator, device, buffer, name, MemoryLocation::CpuToGpu)?;
+    let allocation = GpuAllocator::allocate_for_buffer(
+        allocator,
+        device,
+        buffer,
+        name,
+        MemoryLocation::CpuToGpu,
+    )?;
 
     Ok((buffer, allocation))
 }
@@ -473,12 +490,10 @@ pub(super) fn create_buffer_with_location(
         .usage(usage)
         .sharing_mode(vk::SharingMode::EXCLUSIVE);
 
-    let buffer =
-        unsafe { device.create_buffer(&buffer_info, None) }
-            .map_err(|e| format!("Failed to create {name} buffer: {e}"))?;
+    let buffer = unsafe { device.create_buffer(&buffer_info, None) }
+        .map_err(|e| format!("Failed to create {name} buffer: {e}"))?;
 
-    let allocation =
-        GpuAllocator::allocate_for_buffer(allocator, device, buffer, name, location)?;
+    let allocation = GpuAllocator::allocate_for_buffer(allocator, device, buffer, name, location)?;
 
     Ok((buffer, allocation))
 }

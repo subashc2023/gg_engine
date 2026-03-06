@@ -29,8 +29,7 @@ pub(crate) fn compile_glsl(path: &Path) -> Result<CompiledShader, String> {
     let (vert_src, frag_src) = split_glsl_source(&source, path)?;
 
     let temp_dir = std::env::temp_dir().join("gg_shader_hotreload");
-    std::fs::create_dir_all(&temp_dir)
-        .map_err(|e| format!("Cannot create temp dir: {e}"))?;
+    std::fs::create_dir_all(&temp_dir).map_err(|e| format!("Cannot create temp dir: {e}"))?;
 
     let stem = path
         .file_stem()
@@ -39,10 +38,8 @@ pub(crate) fn compile_glsl(path: &Path) -> Result<CompiledShader, String> {
 
     let vert_tmp = temp_dir.join(format!("{stem}.vert"));
     let frag_tmp = temp_dir.join(format!("{stem}.frag"));
-    std::fs::write(&vert_tmp, &vert_src)
-        .map_err(|e| format!("Cannot write temp vert: {e}"))?;
-    std::fs::write(&frag_tmp, &frag_src)
-        .map_err(|e| format!("Cannot write temp frag: {e}"))?;
+    std::fs::write(&vert_tmp, &vert_src).map_err(|e| format!("Cannot write temp vert: {e}"))?;
+    std::fs::write(&frag_tmp, &frag_src).map_err(|e| format!("Cannot write temp frag: {e}"))?;
 
     let vert_spv_path = temp_dir.join(format!("{stem}_vert.spv"));
     let frag_spv_path = temp_dir.join(format!("{stem}_frag.spv"));
@@ -69,8 +66,7 @@ pub(crate) fn compile_compute_glsl(path: &Path) -> Result<CompiledComputeShader,
     let comp_src = extract_compute_source(&source, path)?;
 
     let temp_dir = std::env::temp_dir().join("gg_shader_hotreload");
-    std::fs::create_dir_all(&temp_dir)
-        .map_err(|e| format!("Cannot create temp dir: {e}"))?;
+    std::fs::create_dir_all(&temp_dir).map_err(|e| format!("Cannot create temp dir: {e}"))?;
 
     let stem = path
         .file_stem()
@@ -78,8 +74,7 @@ pub(crate) fn compile_compute_glsl(path: &Path) -> Result<CompiledComputeShader,
         .ok_or_else(|| format!("Invalid shader path: {}", path.display()))?;
 
     let comp_tmp = temp_dir.join(format!("{stem}.comp"));
-    std::fs::write(&comp_tmp, &comp_src)
-        .map_err(|e| format!("Cannot write temp comp: {e}"))?;
+    std::fs::write(&comp_tmp, &comp_src).map_err(|e| format!("Cannot write temp comp: {e}"))?;
 
     let comp_spv_path = temp_dir.join(format!("{stem}_comp.spv"));
     run_glslc(&comp_tmp, &comp_spv_path)?;

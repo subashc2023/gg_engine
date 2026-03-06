@@ -10,7 +10,6 @@ const BUTTON_ICON_COLOR: egui::Color32 = egui::Color32::from_rgb(0xCC, 0xCC, 0xC
 const BUTTON_HOVER_BG: egui::Color32 = egui::Color32::from_rgb(0x40, 0x40, 0x40);
 const CLOSE_HOVER_BG: egui::Color32 = egui::Color32::from_rgb(0xE8, 0x11, 0x23);
 
-
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum PlayState {
     Edit,
@@ -159,10 +158,16 @@ pub fn title_bar_ui(
 
             let btn_size = egui::vec2(28.0, 22.0);
             let spacing = 4.0;
-            let button_count = [has_play_button, has_simulate_button, has_stop_button, has_pause_button, has_step_button]
-                .iter()
-                .filter(|&&b| b)
-                .count() as f32;
+            let button_count = [
+                has_play_button,
+                has_simulate_button,
+                has_stop_button,
+                has_pause_button,
+                has_step_button,
+            ]
+            .iter()
+            .filter(|&&b| b)
+            .count() as f32;
             let buttons_width = btn_size.x * button_count + spacing * (button_count - 1.0).max(0.0);
 
             // Measure title text width so we can center the whole group.
@@ -278,10 +283,14 @@ pub fn title_bar_ui(
 
             // Handle clicks.
             if let Some((_, ref resp)) = play_rect_resp {
-                if resp.clicked() { play_toggled = true; }
+                if resp.clicked() {
+                    play_toggled = true;
+                }
             }
             if let Some((_, ref resp)) = sim_rect_resp {
-                if resp.clicked() { simulate_toggled = true; }
+                if resp.clicked() {
+                    simulate_toggled = true;
+                }
             }
             if let Some((_, ref resp)) = stop_rect_resp {
                 if resp.clicked() {
@@ -294,10 +303,14 @@ pub fn title_bar_ui(
                 }
             }
             if let Some((_, ref resp)) = pause_rect_resp {
-                if resp.clicked() { pause_toggled = true; }
+                if resp.clicked() {
+                    pause_toggled = true;
+                }
             }
             if let Some((_, ref resp)) = step_rect_resp {
-                if resp.clicked() { step_pressed = true; }
+                if resp.clicked() {
+                    step_pressed = true;
+                }
             }
 
             // Button icons
@@ -488,7 +501,10 @@ fn paint_restore_icon(painter: &egui::Painter, resp: &egui::Response, rect: egui
     let offset = 2.0;
 
     // Back (upper-right) rectangle
-    let back_min = egui::pos2(center.x - size / 2.0 + offset, center.y - size / 2.0 - offset);
+    let back_min = egui::pos2(
+        center.x - size / 2.0 + offset,
+        center.y - size / 2.0 - offset,
+    );
     let back_max = egui::pos2(back_min.x + size, back_min.y + size);
     let back_rect = egui::Rect::from_min_max(back_min, back_max);
     painter.rect_stroke(
@@ -499,7 +515,10 @@ fn paint_restore_icon(painter: &egui::Painter, resp: &egui::Response, rect: egui
     );
 
     // Front (lower-left) rectangle — filled with bar bg to occlude back rect
-    let front_min = egui::pos2(center.x - size / 2.0 - offset, center.y - size / 2.0 + offset);
+    let front_min = egui::pos2(
+        center.x - size / 2.0 - offset,
+        center.y - size / 2.0 + offset,
+    );
     let front_max = egui::pos2(front_min.x + size, front_min.y + size);
     let front_rect = egui::Rect::from_min_max(front_min, front_max);
     painter.rect_filled(front_rect, 0.0, BAR_BG);
@@ -627,10 +646,7 @@ fn paint_step_icon(painter: &egui::Painter, center: egui::Pos2) {
     // Vertical bar (right half).
     let bar_x = center.x + half * 0.7;
     painter.rect_filled(
-        egui::Rect::from_center_size(
-            egui::pos2(bar_x, center.y),
-            egui::vec2(2.5, half * 2.0),
-        ),
+        egui::Rect::from_center_size(egui::pos2(bar_x, center.y), egui::vec2(2.5, half * 2.0)),
         0.0,
         color,
     );

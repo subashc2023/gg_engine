@@ -82,8 +82,7 @@ pub(crate) fn project_ui(
 
     if scenes.is_empty() {
         ui.label(
-            egui::RichText::new("No scenes found")
-                .color(egui::Color32::from_rgb(0x88, 0x88, 0x88)),
+            egui::RichText::new("No scenes found").color(egui::Color32::from_rgb(0x88, 0x88, 0x88)),
         );
         return;
     }
@@ -103,7 +102,9 @@ pub(crate) fn project_ui(
 
     for relative in &scenes {
         let abs_path = assets_root.join(relative);
-        let is_current = current_relative.as_ref().is_some_and(|current| current == relative);
+        let is_current = current_relative
+            .as_ref()
+            .is_some_and(|current| current == relative);
 
         let display_name = relative.to_string_lossy();
         let response = ui.selectable_label(is_current, display_name.as_ref());

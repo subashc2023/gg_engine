@@ -277,8 +277,7 @@ impl GpuParticleSystem {
                 .descriptor_count(1)
                 .stage_flags(vk::ShaderStageFlags::COMPUTE),
         ];
-        let ds_layout_info =
-            vk::DescriptorSetLayoutCreateInfo::default().bindings(&bindings);
+        let ds_layout_info = vk::DescriptorSetLayoutCreateInfo::default().bindings(&bindings);
         let compute_ds_layout =
             unsafe { device.create_descriptor_set_layout(&ds_layout_info, None) }
                 .map_err(|e| format!("Failed to create compute DS layout: {e}"))?;
@@ -291,9 +290,8 @@ impl GpuParticleSystem {
         let pool_info = vk::DescriptorPoolCreateInfo::default()
             .pool_sizes(std::slice::from_ref(&pool_size))
             .max_sets(FRAMES as u32);
-        let compute_ds_pool =
-            unsafe { device.create_descriptor_pool(&pool_info, None) }
-                .map_err(|e| format!("Failed to create compute descriptor pool: {e}"))?;
+        let compute_ds_pool = unsafe { device.create_descriptor_pool(&pool_info, None) }
+            .map_err(|e| format!("Failed to create compute descriptor pool: {e}"))?;
 
         // -- Allocate descriptor sets --
         let layouts = [compute_ds_layout; FRAMES];
@@ -344,11 +342,8 @@ impl GpuParticleSystem {
         }
 
         // -- Compute shader and pipeline --
-        let compute_shader = ComputeShader::new(
-            device,
-            "particle_sim",
-            shaders::PARTICLE_SIM_COMP_SPV,
-        )?;
+        let compute_shader =
+            ComputeShader::new(device, "particle_sim", shaders::PARTICLE_SIM_COMP_SPV)?;
         let compute_pipeline = compute::create_compute_pipeline(
             device,
             &compute_shader,
@@ -427,12 +422,7 @@ impl GpuParticleSystem {
 
     /// Record compute commands into the command buffer. Must be called
     /// OUTSIDE a render pass, before any draw calls that render particles.
-    pub(super) fn dispatch(
-        &mut self,
-        cmd_buf: vk::CommandBuffer,
-        current_frame: usize,
-        dt: f32,
-    ) {
+    pub(super) fn dispatch(&mut self, cmd_buf: vk::CommandBuffer, current_frame: usize, dt: f32) {
         let _timer = ProfileTimer::new("GpuParticleSystem::dispatch");
 
         // 1. Reset indirect buffer (CPU write, safe after fence wait).
@@ -636,8 +626,7 @@ impl GpuParticleSystem {
             self.device.cmd_pipeline_barrier(
                 cmd_buf,
                 vk::PipelineStageFlags::COMPUTE_SHADER,
-                vk::PipelineStageFlags::VERTEX_INPUT
-                    | vk::PipelineStageFlags::DRAW_INDIRECT,
+                vk::PipelineStageFlags::VERTEX_INPUT | vk::PipelineStageFlags::DRAW_INDIRECT,
                 vk::DependencyFlags::empty(),
                 &[],
                 &[instance_barrier, indirect_read_barrier],
@@ -664,11 +653,8 @@ impl GpuParticleSystem {
         let layout = pipeline.layout();
 
         unsafe {
-            self.device.cmd_bind_pipeline(
-                cmd_buf,
-                vk::PipelineBindPoint::GRAPHICS,
-                pl,
-            );
+            self.device
+                .cmd_bind_pipeline(cmd_buf, vk::PipelineBindPoint::GRAPHICS, pl);
 
             self.device.cmd_bind_descriptor_sets(
                 cmd_buf,
@@ -682,12 +668,8 @@ impl GpuParticleSystem {
             // Bind vertex buffers: binding 0 = unit quad, binding 1 = particle instances.
             let uq_handle = r2d.unit_quad_vb_handle();
             let inst_handle = self.instance_buffers[current_frame];
-            self.device.cmd_bind_vertex_buffers(
-                cmd_buf,
-                0,
-                &[uq_handle, inst_handle],
-                &[0, 0],
-            );
+            self.device
+                .cmd_bind_vertex_buffers(cmd_buf, 0, &[uq_handle, inst_handle], &[0, 0]);
 
             // Bind index buffer (unit quad: 6 indices).
             self.device.cmd_bind_index_buffer(

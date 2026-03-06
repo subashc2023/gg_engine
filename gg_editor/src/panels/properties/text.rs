@@ -19,7 +19,16 @@ pub(crate) fn draw_text_component(
         .id_salt(("text", entity.id()))
         .default_open(true)
         .show(ui, |ui| {
-            let (mut text_str, mut font_path, mut font_size, mut color_arr, mut line_spacing, mut kerning, mut sorting_layer, mut order_in_layer) = {
+            let (
+                mut text_str,
+                mut font_path,
+                mut font_size,
+                mut color_arr,
+                mut line_spacing,
+                mut kerning,
+                mut sorting_layer,
+                mut order_in_layer,
+            ) = {
                 let tc = scene.get_component::<TextComponent>(entity).unwrap();
                 (
                     tc.text.clone(),

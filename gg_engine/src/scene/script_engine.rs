@@ -218,7 +218,10 @@ impl ScriptEngine {
             .named_registry_value::<LuaTable>(ENTITY_ENVS_REGISTRY_KEY)
         {
             if let Err(e) = envs_table.set(uuid, env.clone()) {
-                log::error!("ScriptEngine: failed to mirror env to registry table: {}", e);
+                log::error!(
+                    "ScriptEngine: failed to mirror env to registry table: {}",
+                    e
+                );
             }
         }
 
@@ -266,12 +269,22 @@ impl ScriptEngine {
 
     /// Call a collision callback (e.g. `on_collision_enter` / `on_collision_exit`)
     /// in an entity's environment, passing the other entity's UUID.
-    pub fn call_entity_collision(&mut self, uuid: u64, callback_name: &str, other_uuid: u64) -> bool {
+    pub fn call_entity_collision(
+        &mut self,
+        uuid: u64,
+        callback_name: &str,
+        other_uuid: u64,
+    ) -> bool {
         self.call_entity_function(uuid, callback_name, other_uuid)
     }
 
     /// Call a named callback with a string argument (e.g. `on_animation_finished(clip_name)`).
-    pub fn call_entity_callback_str(&mut self, uuid: u64, callback_name: &str, arg: String) -> bool {
+    pub fn call_entity_callback_str(
+        &mut self,
+        uuid: u64,
+        callback_name: &str,
+        arg: String,
+    ) -> bool {
         self.call_entity_function(uuid, callback_name, arg)
     }
 
@@ -341,12 +354,19 @@ impl ScriptEngine {
                 log::error!(
                     "ScriptEngine: entity {} '{}' disabled after {} consecutive errors. \
                      Last error: {}",
-                    uuid, name, MAX_SCRIPT_ERRORS, e
+                    uuid,
+                    name,
+                    MAX_SCRIPT_ERRORS,
+                    e
                 );
             } else {
                 log::error!(
                     "ScriptEngine: error calling '{}' for entity {} ({}/{}): {}",
-                    name, uuid, count, MAX_SCRIPT_ERRORS, e
+                    name,
+                    uuid,
+                    count,
+                    MAX_SCRIPT_ERRORS,
+                    e
                 );
             }
             return false;
@@ -492,11 +512,7 @@ impl ScriptEngine {
             .unwrap_or_else(|| "unknown".into());
 
         if let Err(e) = self.lua.load(&source).set_name(&chunk_name).exec() {
-            log::error!(
-                "ScriptEngine: error executing '{}': {}",
-                path.display(),
-                e
-            );
+            log::error!("ScriptEngine: error executing '{}': {}", path.display(), e);
             return false;
         }
 
@@ -509,7 +525,10 @@ impl ScriptEngine {
         let globals = self.lua.globals();
 
         let mut functions = Vec::new();
-        if let Ok(pairs) = globals.pairs::<String, LuaValue>().collect::<Result<Vec<_>, _>>() {
+        if let Ok(pairs) = globals
+            .pairs::<String, LuaValue>()
+            .collect::<Result<Vec<_>, _>>()
+        {
             for (key, value) in pairs {
                 if value.is_function() {
                     functions.push(key);
@@ -659,13 +678,13 @@ impl ScriptEngine {
             if fire {
                 // Temporarily take the timer to call its callback.
                 let mut timer = self.timers[i].take().unwrap();
-                let callback: Result<LuaFunction, _> =
-                    self.lua.registry_value(&timer.callback_key);
+                let callback: Result<LuaFunction, _> = self.lua.registry_value(&timer.callback_key);
                 if let Ok(func) = callback {
                     if let Err(e) = func.call::<()>(()) {
                         log::error!(
                             "ScriptEngine: timer callback error for entity {}: {}",
-                            entity_uuid, e
+                            entity_uuid,
+                            e
                         );
                     }
                 }
@@ -796,11 +815,7 @@ end
     #[test]
     fn has_function() {
         let engine = ScriptEngine::new();
-        engine
-            .lua()
-            .load("function foo() end")
-            .exec()
-            .unwrap();
+        engine.lua().load("function foo() end").exec().unwrap();
         assert!(engine.has_function("foo"));
         assert!(!engine.has_function("bar"));
     }
@@ -808,11 +823,7 @@ end
     #[test]
     fn dump_globals_runs_without_error() {
         let engine = ScriptEngine::new();
-        engine
-            .lua()
-            .load("function test_fn() end")
-            .exec()
-            .unwrap();
+        engine.lua().load("function test_fn() end").exec().unwrap();
         // Just verify it doesn't panic.
         engine.dump_globals();
     }
@@ -821,12 +832,11 @@ end
     fn engine_table_available_after_new() {
         // ScriptEngine::new() should register the Engine table via script_glue.
         let engine = ScriptEngine::new();
-        let has_engine: bool = engine
-            .lua()
-            .globals()
-            .get::<LuaTable>("Engine")
-            .is_ok();
-        assert!(has_engine, "Engine table should exist after ScriptEngine::new()");
+        let has_engine: bool = engine.lua().globals().get::<LuaTable>("Engine").is_ok();
+        assert!(
+            has_engine,
+            "Engine table should exist after ScriptEngine::new()"
+        );
     }
 
     #[test]
@@ -864,7 +874,10 @@ end
         assert!((cz - 1.0).abs() < 0.001, "cross(x, y) should be z");
 
         let ny: f32 = engine.lua().globals().get("ny").unwrap();
-        assert!((ny - 1.0).abs() < 0.001, "normalize(0,3,0) should be (0,1,0)");
+        assert!(
+            (ny - 1.0).abs() < 0.001,
+            "normalize(0,3,0) should be (0,1,0)"
+        );
 
         std::fs::remove_file(&path).ok();
     }

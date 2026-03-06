@@ -1,5 +1,9 @@
+use std::path::PathBuf;
+
 use gg_engine::egui;
 use gg_engine::prelude::*;
+
+use crate::panels::content_browser::ContentBrowserPayload;
 
 // ---------------------------------------------------------------------------
 // Drag-and-drop payload for hierarchy reparenting
@@ -16,9 +20,28 @@ struct HierarchyDragPayload {
 enum DeferredHierarchyAction {
     DeleteEntity(Entity),
     CreateChild(Entity),
-    Reparent { child: Entity, new_parent: Entity },
+    Reparent {
+        child: Entity,
+        new_parent: Entity,
+    },
     DetachToRoot(Entity),
-    ReorderSibling { child_uuid: u64, new_index: usize },
+    ReorderSibling {
+        child_uuid: u64,
+        new_index: usize,
+    },
+    InstantiatePrefab {
+        path: PathBuf,
+        parent: Option<Entity>,
+    },
+}
+
+/// Actions that the editor main loop must handle (require broader context).
+pub(crate) enum HierarchyExternalAction {
+    SaveAsPrefab(Entity),
+    InstantiatePrefab {
+        path: PathBuf,
+        parent: Option<Entity>,
+    },
 }
 
 /// Fraction of item height at top/bottom that triggers reorder vs reparent.
@@ -35,7 +58,7 @@ pub(crate) fn scene_hierarchy_ui(
     scene_dirty: &mut bool,
     undo_system: &mut crate::undo::UndoSystem,
     filter: &mut String,
-) {
+) -> Option<HierarchyExternalAction> {
     // Search box.
     ui.horizontal(|ui| {
         ui.label("Search");
@@ -50,6 +73,7 @@ pub(crate) fn scene_hierarchy_ui(
 
     let root_entities = scene.root_entities();
     let mut deferred_action: Option<DeferredHierarchyAction> = None;
+    let mut external_action: Option<HierarchyExternalAction> = None;
 
     for (entity, tag) in &root_entities {
         if !filter_lower.is_empty() && !entity_matches_filter(scene, *entity, tag, &filter_lower) {
@@ -63,6 +87,7 @@ pub(crate) fn scene_hierarchy_ui(
             selection_context,
             scene_dirty,
             &mut deferred_action,
+            &mut external_action,
         );
     }
 
@@ -92,7 +117,22 @@ pub(crate) fn scene_hierarchy_ui(
         if let Some(payload) = response.dnd_release_payload::<HierarchyDragPayload>() {
             deferred_action = Some(DeferredHierarchyAction::DetachToRoot(payload.entity));
         }
-        if response.dnd_hover_payload::<HierarchyDragPayload>().is_some() {
+        // Drop target: instantiate prefab from content browser.
+        if let Some(payload) = response.dnd_release_payload::<ContentBrowserPayload>() {
+            if is_prefab_file(&payload.path) {
+                deferred_action = Some(DeferredHierarchyAction::InstantiatePrefab {
+                    path: payload.path.clone(),
+                    parent: None,
+                });
+            }
+        }
+        let has_hierarchy_hover = response
+            .dnd_hover_payload::<HierarchyDragPayload>()
+            .is_some();
+        let has_prefab_hover = response
+            .dnd_hover_payload::<ContentBrowserPayload>()
+            .is_some_and(|p| is_prefab_file(&p.path));
+        if has_hierarchy_hover || has_prefab_hover {
             ui.painter().rect_stroke(
                 clamped,
                 egui::CornerRadius::ZERO,
@@ -103,6 +143,7 @@ pub(crate) fn scene_hierarchy_ui(
     }
 
     // Process deferred action.
+    let mut external_action = None;
     if let Some(action) = deferred_action {
         match action {
             DeferredHierarchyAction::DeleteEntity(entity) => {
@@ -140,14 +181,19 @@ pub(crate) fn scene_hierarchy_ui(
                 scene.reorder_child(child_uuid, new_index);
                 *scene_dirty = true;
             }
+            DeferredHierarchyAction::InstantiatePrefab { path, parent } => {
+                external_action = Some(HierarchyExternalAction::InstantiatePrefab { path, parent });
+            }
         }
     }
+    external_action
 }
 
 // ---------------------------------------------------------------------------
 // Recursive entity node drawing
 // ---------------------------------------------------------------------------
 
+#[allow(clippy::too_many_arguments)]
 fn draw_entity_node(
     ui: &mut egui::Ui,
     scene: &mut Scene,
@@ -156,6 +202,7 @@ fn draw_entity_node(
     selection_context: &mut Option<Entity>,
     scene_dirty: &mut bool,
     deferred_action: &mut Option<DeferredHierarchyAction>,
+    external_action: &mut Option<HierarchyExternalAction>,
 ) {
     let children = scene.get_children(entity);
     let has_parent = scene.get_parent(entity).is_some();
@@ -167,24 +214,35 @@ fn draw_entity_node(
         if response.clicked() {
             *selection_context = Some(entity);
         }
-        entity_context_menu(&response, entity, deferred_action, scene_dirty, has_parent);
+        entity_context_menu(
+            &response,
+            entity,
+            deferred_action,
+            external_action,
+            scene_dirty,
+            has_parent,
+        );
         handle_drag_source(ui, &response, entity);
         handle_drop_target(&response, ui, entity, deferred_action, scene);
     } else {
         // Parent node — collapsing header with children.
         let id = ui.make_persistent_id(entity.id());
-        let header = egui::collapsing_header::CollapsingState::load_with_default_open(
-            ui.ctx(),
-            id,
-            true,
-        );
+        let header =
+            egui::collapsing_header::CollapsingState::load_with_default_open(ui.ctx(), id, true);
         let (_collapse_resp, header_ir, _body_ir) = header
             .show_header(ui, |ui| {
                 let r = ui.selectable_label(selected, tag);
                 if r.clicked() {
                     *selection_context = Some(entity);
                 }
-                entity_context_menu(&r, entity, deferred_action, scene_dirty, has_parent);
+                entity_context_menu(
+                    &r,
+                    entity,
+                    deferred_action,
+                    external_action,
+                    scene_dirty,
+                    has_parent,
+                );
                 handle_drag_source(ui, &r, entity);
                 r
             })
@@ -204,6 +262,7 @@ fn draw_entity_node(
                             selection_context,
                             scene_dirty,
                             deferred_action,
+                            external_action,
                         );
                     }
                 }
@@ -277,32 +336,47 @@ fn handle_drop_target(
             }
         }
     }
-    if let Some(payload) = response.dnd_hover_payload::<HierarchyDragPayload>() {
-        if payload.entity != entity {
-            let accent = egui::Color32::from_rgb(0x00, 0x7A, 0xCC);
-            if let Some(cy) = cursor_y {
-                let (is_reorder, insert_before) = drop_zone(response, cy);
-                if is_reorder && are_siblings(scene, entity, payload.entity) {
-                    // Insertion line indicator.
-                    let line_y = if insert_before {
-                        response.rect.min.y
-                    } else {
-                        response.rect.max.y
-                    };
-                    ui.painter().hline(
-                        response.rect.min.x..=response.rect.max.x,
-                        line_y,
-                        egui::Stroke::new(2.0, accent),
-                    );
+    // Content browser drop: instantiate prefab as child of this entity.
+    if let Some(payload) = response.dnd_release_payload::<ContentBrowserPayload>() {
+        if is_prefab_file(&payload.path) {
+            *deferred_action = Some(DeferredHierarchyAction::InstantiatePrefab {
+                path: payload.path.clone(),
+                parent: Some(entity),
+            });
+        }
+    }
+
+    let has_hierarchy_hover = response
+        .dnd_hover_payload::<HierarchyDragPayload>()
+        .is_some_and(|p| p.entity != entity);
+    let has_prefab_hover = response
+        .dnd_hover_payload::<ContentBrowserPayload>()
+        .is_some_and(|p| is_prefab_file(&p.path));
+
+    if has_hierarchy_hover {
+        let accent = egui::Color32::from_rgb(0x00, 0x7A, 0xCC);
+        if let Some(cy) = cursor_y {
+            let (is_reorder, insert_before) = drop_zone(response, cy);
+            if is_reorder
+                && are_siblings(
+                    scene,
+                    entity,
+                    response
+                        .dnd_hover_payload::<HierarchyDragPayload>()
+                        .unwrap()
+                        .entity,
+                )
+            {
+                let line_y = if insert_before {
+                    response.rect.min.y
                 } else {
-                    // Reparent highlight.
-                    ui.painter().rect_stroke(
-                        response.rect,
-                        egui::CornerRadius::ZERO,
-                        egui::Stroke::new(2.0, accent),
-                        egui::StrokeKind::Inside,
-                    );
-                }
+                    response.rect.max.y
+                };
+                ui.painter().hline(
+                    response.rect.min.x..=response.rect.max.x,
+                    line_y,
+                    egui::Stroke::new(2.0, accent),
+                );
             } else {
                 ui.painter().rect_stroke(
                     response.rect,
@@ -311,7 +385,22 @@ fn handle_drop_target(
                     egui::StrokeKind::Inside,
                 );
             }
+        } else {
+            ui.painter().rect_stroke(
+                response.rect,
+                egui::CornerRadius::ZERO,
+                egui::Stroke::new(2.0, accent),
+                egui::StrokeKind::Inside,
+            );
         }
+    } else if has_prefab_hover {
+        let accent = egui::Color32::from_rgb(0x00, 0x7A, 0xCC);
+        ui.painter().rect_stroke(
+            response.rect,
+            egui::CornerRadius::ZERO,
+            egui::Stroke::new(2.0, accent),
+            egui::StrokeKind::Inside,
+        );
     }
 }
 
@@ -369,6 +458,7 @@ fn entity_context_menu(
     response: &egui::Response,
     entity: Entity,
     deferred_action: &mut Option<DeferredHierarchyAction>,
+    external_action: &mut Option<HierarchyExternalAction>,
     scene_dirty: &mut bool,
     has_parent: bool,
 ) {
@@ -379,11 +469,16 @@ fn entity_context_menu(
             ui.close();
         }
 
-        if has_parent
-            && ui.button("Detach from Parent").clicked()
-        {
+        if has_parent && ui.button("Detach from Parent").clicked() {
             *deferred_action = Some(DeferredHierarchyAction::DetachToRoot(entity));
             *scene_dirty = true;
+            ui.close();
+        }
+
+        ui.separator();
+
+        if ui.button("Save as Prefab...").clicked() {
+            *external_action = Some(HierarchyExternalAction::SaveAsPrefab(entity));
             ui.close();
         }
 
@@ -400,6 +495,10 @@ fn entity_context_menu(
 // ---------------------------------------------------------------------------
 // Filter helper — returns true if entity name or any descendant matches
 // ---------------------------------------------------------------------------
+
+fn is_prefab_file(path: &std::path::Path) -> bool {
+    path.extension().is_some_and(|ext| ext == "ggprefab")
+}
 
 fn entity_matches_filter(scene: &Scene, entity: Entity, tag: &str, filter: &str) -> bool {
     if tag.to_lowercase().contains(filter) {
