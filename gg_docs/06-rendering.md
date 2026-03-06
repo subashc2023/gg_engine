@@ -228,6 +228,30 @@ Factory method `TextureSpecification::font_atlas()` creates LINEAR + UNORM spec 
 - Each texture gets a `bindless_index: u32` on creation
 - Destroyed on drop (sampler, image view, image, memory)
 
+### Async Texture Loading
+
+**Files:** `renderer/texture.rs`, `asset/asset_loader.rs`
+
+The engine supports non-blocking background texture loading via a two-phase CPU/GPU split.
+
+**`TextureCpuData`** is a thread-safe intermediate struct containing decoded pixel data with no Vulkan types:
+
+```rust
+pub struct TextureCpuData {
+    pub width: u32,
+    pub height: u32,
+    pub pixels: Vec<u8>,
+    pub spec: TextureSpecification,
+}
+```
+
+**Loading pipeline:**
+
+1. **`Texture2D::load_cpu_data(path, spec) -> Result<TextureCpuData>`** — decodes an image file (PNG, JPEG, etc.) into raw RGBA8 pixels. Contains no GPU calls, safe to call on any background thread.
+2. **`Texture2D::from_cpu_data(resources, allocator, data)`** — performs GPU upload from pre-loaded `TextureCpuData` (staging buffer, layout transitions, sampler/descriptor set creation). Must be called on the main/render thread.
+
+**`AssetLoader`** (`asset/asset_loader.rs`) drives this pipeline with a pool of 2 worker threads (`WORKER_COUNT = 2`). Workers are spawned lazily on first request. The main thread sends `LoadRequest::Texture` messages, workers call `load_cpu_data` on a background thread, and completed `TextureCpuData` results are polled non-blocking via `AssetLoader::poll_results()`. The main thread then finalizes GPU upload with `from_cpu_data`. The same pattern is used for font atlas generation.
+
 ### SubTexture2D (Sprite Sheets)
 
 **File:** `renderer/sub_texture.rs`
@@ -255,6 +279,7 @@ The renderer uses a bindless texture descriptor array (`MAX_BINDLESS_TEXTURES = 
 - `UPDATE_AFTER_BIND | PARTIALLY_BOUND` flags
 - Two descriptor sets maintained (one per frame-in-flight)
 - Textures auto-registered on creation via `register_texture()`
+- **Slot recycling:** `Renderer::unregister_texture(texture)` returns the texture's bindless slot to a free-list (`bindless_free_list: Vec<u32>`). The next `register_texture` call reuses freed slots before allocating new indices. Slot 0 (white texture) is never freed. This prevents exhausting the 4096 slot limit when textures are created and destroyed over time.
 - Batch shader: `texture(u_textures[nonuniformEXT(tex_index)], uv)` using `GL_EXT_nonuniform_qualifier`
 
 ## Cameras
@@ -345,6 +370,7 @@ All methods are on `Renderer` — no pipeline/vertex array management needed.
 | `draw_rotated_textured_quad(...)` | Rotated + textured |
 | `draw_sub_textured_quad(pos, size, sub_texture, tint)` | Sprite sheet region |
 | `draw_rotated_sub_textured_quad(...)` | Rotated sprite sheet region |
+| `draw_sub_textured_quad_transformed(transform, sub_texture, tint, entity_id)` | Sub-texture quad from raw Mat4 transform |
 | `draw_particle(pos, size, rotation, color)` | Optimized for particles |
 
 Position sets the **center**, size scales the unit quad (-0.5..0.5). Z-ordering is respected via depth testing.
@@ -357,6 +383,61 @@ Position sets the **center**, size scales the unit quad (-0.5..0.5). Z-ordering 
 | `draw_sprite(transform: &Mat4, sprite: &SpriteRendererComponent, entity_id)` | Sprite component |
 | `draw_circle(transform, color, thickness, fade, entity_id)` | SDF circle |
 | `draw_circle_component(transform, circle: &CircleRendererComponent, entity_id)` | Circle component |
+
+## Scene Rendering
+
+**File:** `scene/mod.rs` — `Scene::render_scene()`
+
+`render_scene()` is the central method that draws all renderable entities in the scene. It is called by `on_update_runtime`, `on_update_editor`, and `on_update_simulation` after setting the view-projection matrix.
+
+The method pre-computes world transforms for all entities once (`build_world_transform_cache()`), then iterates each renderable component type in order:
+
+1. **Sprites** (with optional animation) — see [Animation Rendering](#animation-rendering) below
+2. **Circles** — `CircleRendererComponent` entities
+3. **Text** — `TextComponent` entities
+4. **Tilemaps** — `TilemapComponent` entities — see [Tilemap Rendering](#tilemap-rendering) below
+
+### Animation Rendering
+
+During `render_scene()`, each `SpriteRendererComponent` entity is checked for an accompanying `SpriteAnimatorComponent`. If the animator has an active clip playing:
+
+1. `current_grid_coords()` returns the current frame's `(column, row)` in the sprite sheet grid
+2. A `SubTexture2D` is created from those grid coordinates using the animator's `cell_size`
+3. `draw_sub_textured_quad_transformed()` renders the current frame's sub-region instead of the full texture
+
+If no animator is present or no clip is playing, the sprite renders normally via `draw_sprite()`.
+
+Animation timing is advanced separately by `Scene::on_update_animations(dt)`, which iterates all `SpriteAnimatorComponent` entities and calls `update(dt)` to advance their frame timers. The `SpriteAnimatorComponent` stores per-entity state: current clip index, frame timer, current frame number, and playing flag.
+
+**`AnimationClip`** defines a contiguous range of frames in the sprite sheet (start_frame, end_frame inclusive), playback FPS, and a looping flag. Frame indices are 0-based, row-major: frame 0 is top-left, and frames wrap across rows based on the animator's `columns` count.
+
+### Tilemap Rendering
+
+`render_scene()` iterates all `TilemapComponent` entities and renders their tile grids. Each `TilemapComponent` describes a row-major grid of tile IDs referencing sub-regions of a tileset texture.
+
+**Per-tile rendering steps:**
+
+1. Skip empty tiles (tile ID = -1)
+2. Extract flip flags from high bits: bit 30 = horizontal flip (`TILE_FLIP_H`), bit 29 = vertical flip (`TILE_FLIP_V`). The lower 29 bits (`TILE_ID_MASK`) hold the actual tile ID
+3. Compute tileset grid coordinates: `col = tile_id % tileset_columns`, `row = tile_id / tileset_columns`
+4. Calculate UV rectangle accounting for `cell_size`, `spacing`, and `margin` (all in pixels). Flip UVs are applied by swapping min/max on the appropriate axis
+5. Create a `SubTexture2D` from the computed UVs
+6. Build a per-tile transform by combining the entity's world transform with a translation offset (`col * tile_size.x`, `row * tile_size.y`) and scale (`tile_size`)
+7. Draw via `draw_sub_textured_quad_transformed()`
+
+**`TilemapComponent` fields:**
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `width`, `height` | `u32` | Grid dimensions |
+| `tile_size` | `Vec2` | World-space size per tile |
+| `texture_handle` | `Uuid` | Asset handle for tileset texture |
+| `texture` | `Option<Ref<Texture2D>>` | Runtime-loaded texture (not serialized) |
+| `tileset_columns` | `u32` | Columns in the tileset image |
+| `cell_size` | `Vec2` | Pixel size per cell in tileset |
+| `spacing` | `Vec2` | Pixel spacing between tileset cells |
+| `margin` | `Vec2` | Pixel margin from tileset edge |
+| `tiles` | `Vec<i32>` | Row-major tile IDs (-1 = empty, high bits = flip flags) |
 
 ## Circle Rendering
 

@@ -6,20 +6,26 @@ The Entity Component System lives in `gg_engine/src/scene/` and is built on top 
 
 **File:** `scene/mod.rs`
 
-`Scene` wraps `hecs::World` and owns all entity/component data.
+`Scene` wraps `hecs::World` and owns all entity/component data. It also owns the physics world (`PhysicsWorld2D`), the Lua script engine (`ScriptEngine`), the audio engine (`AudioEngine`), and internal caches for UUID and name lookups.
 
 ### Entity Management
 
 ```rust
-let entity = scene.create_entity();                              // Default: IdComponent + Tag("Entity") + Transform(IDENTITY)
+let entity = scene.create_entity();                              // Default: IdComponent + Tag("Entity") + Transform(IDENTITY) + RelationshipComponent
 let entity = scene.create_entity_with_tag("Player");             // Custom name
 let entity = scene.create_entity_with_uuid(uuid, "Player");      // Known UUID (deserialization)
-scene.destroy_entity(entity);
+scene.destroy_entity(entity);                                    // Recursive — destroys all children, detaches from parent
+scene.queue_entity_destroy(uuid);                                // Deferred destruction (by UUID) — for use during script callbacks
+scene.flush_pending_destroys();                                  // Flush the deferred destruction queue
 scene.is_alive(entity);
 scene.entity_count();
 scene.find_entity_by_id(u32) -> Option<Entity>;                  // From hecs entity ID
-scene.duplicate_entity(entity);                                   // New UUID, copies all components
+scene.find_entity_by_uuid(u64) -> Option<Entity>;                // O(1) UUID lookup via internal cache
+scene.find_entity_by_name(&str) -> Option<(Entity, u64)>;        // Lazy name cache, returns entity + UUID
+scene.duplicate_entity(entity);                                   // New UUID, copies all components, resets relationship to root
 ```
+
+**Note:** `create_entity` (all variants) now auto-adds four components: `IdComponent`, `TagComponent`, `TransformComponent`, and `RelationshipComponent`.
 
 ### Component Operations
 
@@ -45,6 +51,25 @@ for (entity, (transform, sprite)) in world.query::<(hecs::Entity, &TransformComp
 
 **hecs 0.11 query API:** `query::<Q>().iter()` yields `Q::Item` directly (NOT `(Entity, Q::Item)`). To get entity IDs, include `hecs::Entity` as a query component.
 
+### Hierarchy Operations
+
+Parent-child relationships are tracked via `RelationshipComponent` using entity UUIDs. These methods manage the hierarchy:
+
+| Method | Signature | Description |
+|--------|-----------|-------------|
+| `set_parent` | `(child, parent, preserve_world_transform) -> bool` | Parent `child` under `parent`. Returns `false` if it would create a cycle or self-parenting. When `preserve_world_transform` is `true`, the child's local transform is adjusted so its world position stays the same. |
+| `detach_from_parent` | `(entity, preserve_world_transform)` | Remove entity from its parent, making it a root entity. Optionally preserves world-space position. |
+| `get_parent` | `(entity) -> Option<u64>` | Returns the parent UUID, or `None` if root. |
+| `get_children` | `(entity) -> Vec<u64>` | Returns ordered list of child UUIDs. |
+| `reorder_child` | `(child_uuid, new_index)` | Move a child to a specific index within its parent's children list. |
+| `is_ancestor_of` | `(ancestor_uuid, entity_uuid) -> bool` | Walk parent chain to check ancestry. Used for cycle detection. |
+| `root_entities` | `() -> Vec<(Entity, String)>` | All entities without a parent, sorted by entity ID. |
+| `get_world_transform` | `(entity) -> Mat4` | Compute world-space transform by walking the parent chain. No caching — O(depth) per call. |
+
+**World-transform preservation:** When `preserve_world_transform` is `true` in `set_parent` or `detach_from_parent`, the entity's local transform is decomposed and rewritten so that `parent_world * local == original_world`. This ensures the entity doesn't jump visually when reparented.
+
+**Cycle prevention:** `set_parent` checks `is_ancestor_of(child, parent)` before establishing the relationship. Self-parenting is also rejected.
+
 ### Utility Methods
 
 | Method | Description |
@@ -52,12 +77,13 @@ for (entity, (transform, sprite)) in world.query::<(hecs::Entity, &TransformComp
 | `each_entity_with_tag()` | Returns `Vec<(Entity, String)>` sorted by ID |
 | `set_primary_camera(entity)` | Clears primary on all others |
 | `get_primary_camera_entity()` | Returns `Option<Entity>` |
-| `copy(source)` | Deep-copies an entire scene (preserves UUIDs, resets physics) |
+| `copy(source)` | Deep-copies an entire scene (preserves UUIDs, resets physics/script handles) |
 | `on_viewport_resize(w, h)` | Updates all non-fixed-aspect-ratio camera projections |
+| `find_asset_references(asset_handle)` | Returns `Vec<(String, &str)>` of `(entity_name, component_kind)` pairs referencing the asset. Scans `SpriteRendererComponent::texture_handle`, `TilemapComponent::texture_handle`, and `AudioSourceComponent::audio_handle`. |
 
 ### Rendering
 
-Two render paths:
+Three render paths:
 
 ```rust
 // Editor mode — external VP from EditorCamera
@@ -65,22 +91,69 @@ scene.on_update_editor(&editor_camera.view_projection(), &mut renderer);
 
 // Runtime mode — finds primary CameraComponent, computes VP
 scene.on_update_runtime(&mut renderer);
+
+// Simulation mode — external camera, physics-only (no scripts)
+scene.on_update_simulation(&editor_camera.view_projection(), &mut renderer);
 ```
 
-Both iterate `SpriteRendererComponent`, `CircleRendererComponent`, and `TextComponent` entities and submit draw calls.
+All paths call the shared `render_scene()` which iterates `SpriteRendererComponent` (with optional `SpriteAnimatorComponent` for animated sprites), `CircleRendererComponent`, `TextComponent`, and `TilemapComponent` entities and submits draw calls. World transforms are pre-computed via `build_world_transform_cache()` for hierarchy-aware rendering.
+
+### Animation Lifecycle
+
+```rust
+scene.on_update_animations(dt);  // Advances all SpriteAnimatorComponent timers
+```
+
+Call each frame before rendering. This only updates animator state (current frame, timer). The renderer reads the current frame to compute UV coordinates from the sprite sheet.
+
+### Texture & Font Loading
+
+```rust
+scene.resolve_texture_handles(&mut asset_manager, &renderer);       // Sync: load SpriteRenderer + Tilemap textures
+scene.resolve_texture_handles_async(&mut asset_manager);             // Async: request background loads
+scene.resolve_audio_handles(&mut asset_manager);                     // Resolve AudioSourceComponent handles to file paths
+scene.load_fonts(&renderer);                                         // Load MSDF fonts for TextComponent entities
+```
+
+### Audio Lifecycle
+
+Audio playback is managed internally. The audio engine starts/stops with runtime mode. API for scripts:
+
+```rust
+scene.play_entity_sound(entity);         // Play audio for an entity's AudioSourceComponent
+scene.stop_entity_sound(entity);         // Stop audio for an entity
+scene.set_entity_volume(entity, vol);    // Adjust volume at runtime
+```
 
 ### Physics Lifecycle
 
 ```rust
-scene.on_runtime_start();       // Creates rapier2d world, spawns bodies/colliders
-scene.on_update_physics(dt);    // Steps simulation, writes back transforms
-scene.on_runtime_stop();        // Drops physics world, resets runtime handles
+scene.on_runtime_start();       // Creates rapier2d world, spawns bodies/colliders, starts scripts + audio
+scene.on_update_physics(dt);    // Steps simulation (with optional Lua on_fixed_update), writes back interpolated transforms
+scene.on_runtime_stop();        // Drops physics world, scripts, audio — resets all runtime handles
+
+scene.on_simulation_start();    // Physics only (no scripts)
+scene.on_simulation_stop();
 ```
+
+Physics scripting API (used by both native + Lua scripts):
+
+| Method | Description |
+|--------|-------------|
+| `apply_impulse(entity, Vec2)` | Instant velocity change |
+| `apply_impulse_at_point(entity, impulse, point)` | Impulse at world-space point (can cause torque) |
+| `apply_force(entity, Vec2)` | Continuous force (accumulated per physics step) |
+| `get_linear_velocity(entity) -> Option<Vec2>` | Current linear velocity |
+| `set_linear_velocity(entity, Vec2)` | Override linear velocity |
+| `get_angular_velocity(entity) -> Option<f32>` | Current angular velocity (rad/s) |
+| `set_angular_velocity(entity, f32)` | Override angular velocity |
 
 ### Script Lifecycle
 
 ```rust
-scene.on_update_scripts(dt, &input);  // Runs all NativeScriptComponent scripts
+scene.on_update_scripts(dt, &input);       // Runs all NativeScriptComponent scripts
+scene.on_update_lua_scripts(dt, &input);   // Runs all LuaScriptComponent scripts (play mode)
+scene.reload_lua_scripts();                // Hot-reload all Lua scripts from disk mid-play
 ```
 
 ## Entity
@@ -90,20 +163,25 @@ scene.on_update_scripts(dt, &input);  // Runs all NativeScriptComponent scripts
 Lightweight `Copy` newtype over `hecs::Entity`. No back-reference to Scene — all component operations go through Scene methods.
 
 ```rust
-entity.id() -> u32  // hecs runtime ID (NOT the UUID)
+entity.id() -> u32      // hecs runtime ID (NOT the UUID)
+entity.handle() -> hecs::Entity  // underlying hecs handle
 ```
 
 ## Built-in Components
 
-**File:** `scene/components.rs`
+**File:** `scene/components.rs`, `scene/animation.rs`
+
+Every entity created via `Scene::create_entity` automatically receives: `IdComponent`, `TagComponent`, `TransformComponent`, and `RelationshipComponent`.
 
 ### IdComponent
 
 ```rust
-struct IdComponent(pub Uuid);
+struct IdComponent {
+    pub id: Uuid,
+}
 ```
 
-64-bit UUID, spawned on every entity automatically. Used for persistent identification across serialization/deserialization.
+64-bit UUID, spawned on every entity automatically. Used for persistent identification across serialization/deserialization and parent-child relationships.
 
 ### TagComponent
 
@@ -113,7 +191,7 @@ struct TagComponent {
 }
 ```
 
-Human-readable entity name.
+Human-readable entity name. Default: `"Entity"`.
 
 ### TransformComponent
 
@@ -127,7 +205,27 @@ struct TransformComponent {
 
 - `new(Vec3)` sets translation, scale defaults to `Vec3::ONE`
 - `get_transform() -> Mat4` builds combined TRS matrix via `Mat4::from_scale_rotation_translation`
+- Default: translation `ZERO`, rotation `ZERO`, scale `ONE`
 - Implements `Clone`
+
+### RelationshipComponent
+
+```rust
+struct RelationshipComponent {
+    /// Parent entity UUID. `None` = root entity.
+    pub parent: Option<u64>,
+    /// Ordered list of child entity UUIDs.
+    pub children: Vec<u64>,
+}
+```
+
+Tracks parent-child hierarchy between entities. Auto-added on every entity creation with default values (no parent, no children). Parent and children are stored as UUIDs (from `IdComponent`) so relationships survive scene copy and serialization.
+
+- `has_relationships() -> bool` — returns `true` if this entity has a parent or children
+- Default: `parent: None`, `children: []`
+- Implements `Clone`
+
+Hierarchy operations (parenting, detaching, reordering) are performed via `Scene` methods — see [Hierarchy Operations](#hierarchy-operations).
 
 ### SpriteRendererComponent
 
@@ -135,12 +233,12 @@ struct TransformComponent {
 struct SpriteRendererComponent {
     pub color: Vec4,
     pub texture_handle: Uuid,              // Asset handle (0 = none)
-    pub texture: Option<Ref<Texture2D>>,   // Runtime GPU texture
+    pub texture: Option<Ref<Texture2D>>,   // Runtime GPU texture (not serialized)
     pub tiling_factor: f32,
 }
 ```
 
-- `new(color)`, `from_rgb(r, g, b)`, `Default` (white)
+- `new(color)`, `from_rgb(r, g, b)`, `Default` (white, tiling_factor 1.0)
 - Clone via `Arc` sharing for textures
 - `texture_handle` links to the asset registry; resolved to `texture` at runtime via `Scene::resolve_texture_handles()`
 
@@ -149,12 +247,12 @@ struct SpriteRendererComponent {
 ```rust
 struct CircleRendererComponent {
     pub color: Vec4,
-    pub thickness: f32,  // 1.0 = filled
-    pub fade: f32,       // default 0.005
+    pub thickness: f32,  // 1.0 = filled, lower = ring/outline
+    pub fade: f32,       // default 0.005, higher = softer edges
 }
 ```
 
-SDF-based circle rendered on a quad. Fragments with alpha <= 0 are discarded for correct entity picking.
+SDF-based circle rendered on a quad. Size controlled by entity's `TransformComponent` scale. Fragments with alpha <= 0 are discarded for correct entity picking.
 
 ### CameraComponent
 
@@ -166,7 +264,145 @@ struct CameraComponent {
 }
 ```
 
-Only the primary camera renders. `SceneCamera` is projection-only (see [Rendering — SceneCamera](rendering.md#scenecamera-ecs)).
+Only the primary camera renders. `SceneCamera` is projection-only (see [Rendering — SceneCamera](rendering.md#scenecamera-ecs)). When `fixed_aspect_ratio` is `false` (default), the projection is recalculated on viewport resize.
+
+### TextComponent
+
+```rust
+struct TextComponent {
+    pub text: String,
+    pub font_path: String,
+    pub font: Option<Ref<Font>>,   // Runtime-only, not serialized
+    pub font_size: f32,
+    pub color: Vec4,
+    pub line_spacing: f32,
+    pub kerning: f32,
+}
+```
+
+MSDF text rendered via the batch text pipeline. The `font_path` points to a `.ttf` file. Fonts loaded via `Scene::load_fonts(renderer)` and cached. Default: `font_size` 1.0, `color` white, `line_spacing` 1.0, `kerning` 0.0.
+
+### AudioSourceComponent
+
+```rust
+struct AudioSourceComponent {
+    /// Asset handle referencing an audio file (wav/ogg/mp3/flac). 0 = none.
+    pub audio_handle: Uuid,
+    /// Playback volume (0.0–1.0). Default: 1.0.
+    pub volume: f32,
+    /// Playback rate/pitch (1.0 = normal speed). Default: 1.0.
+    pub pitch: f32,
+    /// Whether the sound loops. Default: false.
+    pub looping: bool,
+    /// If true, sound plays automatically when entering play mode. Default: false.
+    pub play_on_start: bool,
+    // (runtime-only) resolved_path: Option<String> — not serialized
+}
+```
+
+Asset-handle based audio source. The `audio_handle` references an audio asset in the registry. At runtime, `Scene::resolve_audio_handles()` resolves the handle to a file path. Sounds with `play_on_start` play automatically when entering play mode. Runtime playback controlled via `Scene::play_entity_sound()`, `stop_entity_sound()`, `set_entity_volume()`.
+
+> **See also:** [Audio](10-audio.md) for AudioEngine architecture, kira integration, lifecycle, and Lua API.
+
+### TilemapComponent
+
+```rust
+struct TilemapComponent {
+    pub width: u32,                    // Number of columns in the grid
+    pub height: u32,                   // Number of rows in the grid
+    pub tile_size: Vec2,               // World-space size per tile
+    pub texture_handle: Uuid,          // Asset handle for tileset texture (0 = none)
+    pub texture: Option<Ref<Texture2D>>,  // Runtime-only, not serialized
+    pub tileset_columns: u32,          // Number of columns in the tileset image
+    pub cell_size: Vec2,               // Pixel size per cell in the tileset image
+    pub spacing: Vec2,                 // Spacing between tiles in tileset (pixels)
+    pub margin: Vec2,                  // Margin from tileset edge (pixels)
+    pub tiles: Vec<i32>,              // Tile IDs, row-major. -1 = empty.
+}
+```
+
+Grid-based tile map renderer for 2D levels. Each tile ID maps to a sub-region of the tileset texture. Tile values may include flip flags in the high bits:
+
+| Constant | Value | Description |
+|----------|-------|-------------|
+| `TILE_FLIP_H` | `0x4000_0000` (bit 30) | Horizontal flip |
+| `TILE_FLIP_V` | `0x2000_0000` (bit 29) | Vertical flip |
+| `TILE_ID_MASK` | `0x1FFF_FFFF` (lower 29 bits) | Actual tile ID |
+
+Methods:
+
+| Method | Signature | Description |
+|--------|-----------|-------------|
+| `get_tile` | `(x: u32, y: u32) -> i32` | Get tile ID at grid position. Returns -1 if out of bounds. |
+| `set_tile` | `(x: u32, y: u32, id: i32)` | Set tile ID at grid position. No-op if out of bounds. |
+| `resize` | `(new_width: u32, new_height: u32)` | Resize the grid, preserving existing data. New cells filled with -1. |
+
+Default: 10x10 grid, `tile_size` (1.0, 1.0), `cell_size` (32.0, 32.0), all tiles empty (-1).
+
+The tilemap's world position comes from the entity's `TransformComponent`. At render time, each non-empty tile computes UV coordinates from the tileset image using `cell_size`, `spacing`, and `margin`, and submits a sub-textured quad draw call.
+
+> **See also:** [Rendering — Tilemap Rendering](06-rendering.md#tilemap-rendering) for the rendering pipeline, [Editor — Tilemap Painting](03-editor.md#tilemap-painting) for the editor paint tools, [Scripting — Tilemap](07-scripting.md#tilemap) for the Lua API.
+
+### SpriteAnimatorComponent
+
+**File:** `scene/animation.rs`
+
+```rust
+struct SpriteAnimatorComponent {
+    /// Pixel size of each cell in the sprite sheet.
+    pub cell_size: Vec2,
+    /// Number of columns in the sprite sheet grid.
+    pub columns: u32,
+    /// Animation clips defined for this sprite sheet.
+    pub clips: Vec<AnimationClip>,
+
+    // Runtime state (managed internally):
+    // current_clip_index: Option<usize>
+    // frame_timer: f32
+    // current_frame: u32
+    // playing: bool
+}
+```
+
+Sprite sheet animation component. Requires a `SpriteRendererComponent` on the same entity with a loaded texture (the sprite sheet). The animator divides the texture into a grid of `columns` x N rows, each cell being `cell_size` pixels. Frame indices are 0-based and row-major.
+
+At runtime, `Scene::on_update_animations(dt)` advances the frame timer. During rendering, the current frame's UV region is used instead of the full texture.
+
+Public methods:
+
+| Method | Signature | Description |
+|--------|-----------|-------------|
+| `play` | `(name: &str) -> bool` | Play a clip by name. Returns `false` if not found. Only resets frame if switching clips. |
+| `stop` | `()` | Stop playback. |
+| `is_playing` | `() -> bool` | Whether the animator is currently playing. |
+| `current_grid_coords` | `() -> Option<(u32, u32)>` | Current frame's (column, row) in the sprite sheet grid. |
+
+Default: `cell_size` (32.0, 32.0), `columns` 1, no clips.
+
+### AnimationClip
+
+**File:** `scene/animation.rs`
+
+```rust
+struct AnimationClip {
+    /// Human-readable name (e.g. "idle", "walk", "run").
+    pub name: String,
+    /// First frame index (0-based, row-major in grid).
+    pub start_frame: u32,
+    /// Last frame index (inclusive).
+    pub end_frame: u32,
+    /// Playback speed in frames per second.
+    pub fps: f32,
+    /// Whether the clip loops when it reaches the end.
+    pub looping: bool,
+}
+```
+
+Named animation range within a sprite sheet. Frame indices map to grid cells: frame N is at column `N % columns`, row `N / columns`. Looping clips wrap from `end_frame` back to `start_frame`. Non-looping clips stop at `end_frame`.
+
+Default: `fps` 12.0, `looping` true.
+
+> **See also:** [Rendering — Animation Rendering](06-rendering.md#animation-rendering) for how animated sprites are rendered, [Scripting — Animation](07-scripting.md#animation) for the Lua API.
 
 ### RigidBody2DComponent
 
@@ -174,9 +410,13 @@ Only the primary camera renders. `SceneCamera` is projection-only (see [Renderin
 struct RigidBody2DComponent {
     pub body_type: RigidBody2DType,  // Static, Dynamic, Kinematic
     pub fixed_rotation: bool,
-    pub runtime_body: Option<RigidBodyHandle>,
+    // (runtime-only) runtime_body: Option<RigidBodyHandle> — not serialized
 }
 ```
+
+2D rigid body for physics simulation. Requires a `TransformComponent`. At runtime start, the scene creates a rapier rigid body from this component's settings.
+
+`RigidBody2DType` enum: `Static` (fixed in place), `Dynamic` (fully simulated), `Kinematic` (position-based movement).
 
 Manual `Clone` resets `runtime_body` to `None`.
 
@@ -185,14 +425,15 @@ Manual `Clone` resets `runtime_body` to `None`.
 ```rust
 struct BoxCollider2DComponent {
     pub offset: Vec2,
-    pub size: Vec2,
-    pub density: f32,
-    pub friction: f32,
-    pub restitution: f32,
-    pub restitution_threshold: f32,
-    pub runtime_fixture: Option<ColliderHandle>,
+    pub size: Vec2,           // Half-extents (default 0.5 x 0.5)
+    pub density: f32,         // Default: 1.0
+    pub friction: f32,        // Default: 0.5
+    pub restitution: f32,     // Default: 0.0
+    // (runtime-only) runtime_fixture: Option<ColliderHandle> — not serialized
 }
 ```
+
+2D box collider. Requires a `RigidBody2DComponent` on the same entity. Half-extents are scaled by the entity's transform scale.
 
 Manual `Clone` resets `runtime_fixture` to `None`.
 
@@ -201,31 +442,42 @@ Manual `Clone` resets `runtime_fixture` to `None`.
 ```rust
 struct CircleCollider2DComponent {
     pub offset: Vec2,
-    pub radius: f32,
-    pub density: f32,
-    pub friction: f32,
-    pub restitution: f32,
-    pub restitution_threshold: f32,
-    pub runtime_fixture: Option<ColliderHandle>,
+    pub radius: f32,          // Default: 0.5
+    pub density: f32,         // Default: 1.0
+    pub friction: f32,        // Default: 0.5
+    pub restitution: f32,     // Default: 0.0
+    // (runtime-only) runtime_fixture: Option<ColliderHandle> — not serialized
 }
 ```
+
+2D circle collider. Requires a `RigidBody2DComponent` on the same entity. Radius scaled by `max(scale.x, scale.y)`.
 
 Manual `Clone` resets `runtime_fixture` to `None`.
 
-### TextComponent
+### NativeScriptComponent
 
 ```rust
-struct TextComponent {
-    pub text: String,
-    pub font_path: String,
-    pub font_size: f32,
-    pub color: Vec4,
-    pub line_spacing: f32,
-    pub kerning: f32,
+struct NativeScriptComponent {
+    // (internal) instance: Option<Box<dyn NativeScript>>
+    // (internal) instantiate_fn: fn() -> Box<dyn NativeScript>
+    // (internal) created: bool
 }
 ```
 
-MSDF text rendered via the batch text pipeline. Fonts loaded via `Scene::load_fonts(renderer)` and cached on the Scene. Serialized to `.ggscene`.
+Attaches a `NativeScript` to an entity. Created via `NativeScriptComponent::bind::<T>()` where `T: NativeScript + Default`. Lazy instantiation on first `on_update_scripts` call. **Not serialized** (runtime-only, code-defined). Not `Clone` — manually copied in `Scene::copy()` and `duplicate_entity()`.
+
+### LuaScriptComponent
+
+```rust
+#[cfg(feature = "lua-scripting")]
+struct LuaScriptComponent {
+    pub script_path: String,
+    pub field_overrides: HashMap<String, ScriptFieldValue>,
+    // (runtime-only) loaded: bool — reset on clone, not serialized
+}
+```
+
+Lua script attached to an entity. Feature-gated behind `lua-scripting`. The `script_path` points to a `.lua` file relative to the project root. `field_overrides` stores editor-set values applied before `on_create()`. The `loaded` flag is reset on clone (same pattern as physics handles).
 
 ## Native Scripting
 
@@ -234,14 +486,14 @@ MSDF text rendered via the batch text pipeline. Fonts loaded via `Scene::load_fo
 ### NativeScript Trait
 
 ```rust
-trait NativeScript {
+trait NativeScript: Send + Sync + 'static {
     fn on_create(&mut self, entity: Entity, scene: &mut Scene) {}
     fn on_update(&mut self, entity: Entity, scene: &mut Scene, dt: Timestep, input: &Input) {}
     fn on_destroy(&mut self, entity: Entity, scene: &mut Scene) {}
 }
 ```
 
-All methods have default empty implementations.
+All methods have default empty implementations. The trait requires `Send + Sync + 'static`.
 
 ### NativeScriptComponent
 
@@ -274,11 +526,28 @@ impl NativeScript for CameraController {
 scene.on_update_scripts(dt, &input);
 ```
 
+## Scene Copy & Duplication
+
+`Scene::copy(source)` creates a deep clone of the entire scene:
+
+- All entities recreated with their original UUIDs (preserves hierarchy, script references, etc.)
+- All cloneable components copied via `for_each_cloneable_component!` macro
+- `NativeScriptComponent` manually copied (not `Clone` — only `instantiate_fn` is carried over)
+- `LuaScriptComponent` cloned (resets `loaded` flag)
+- Runtime-only handles (physics bodies, colliders, Lua loaded flags) reset to `None`/`false`
+- Used by the editor for play/stop snapshot-restore cycle
+
+`Scene::duplicate_entity(entity)` creates a copy within the same scene:
+
+- Fresh UUID assigned
+- All components cloned
+- Relationship reset to root (no parent, no children)
+
 ## Scene Serialization
 
 YAML-based scene persistence (`.ggscene` files) via external serializer pattern. Scene types have no serde derives — `SceneSerializer` handles conversion through intermediate data structs.
 
-**Not serialized:** `NativeScriptComponent` (runtime-only, code-defined), `Texture2D` GPU resources, physics runtime handles, Lua `loaded` flags.
+**Not serialized:** `NativeScriptComponent` (runtime-only, code-defined), `Texture2D` / `Font` GPU resources, physics runtime handles, Lua `loaded` flags, `AudioSourceComponent::resolved_path`, `TilemapComponent::texture`.
 
 See [Scene Serialization](08-serialization.md) for full details: YAML format, intermediate structs, deserialization flow, `Scene::copy()`, UUID system, and editor file operations.
 

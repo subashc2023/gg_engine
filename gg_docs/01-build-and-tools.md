@@ -19,31 +19,73 @@ cargo build --release                                          # release
 cargo build --profile dist --no-default-features --features lua-scripting  # dist
 
 # Run
-cargo run -p gg_sandbox                                        # dev
-cargo run -p gg_sandbox --release                              # release
-cargo run -p gg_sandbox --profile dist --no-default-features --features lua-scripting  # dist
+cargo run -p gg_editor                                         # editor (primary dev target)
+cargo run -p gg_sandbox                                        # sandbox
+cargo run -p gg_player -- Sandbox.ggproject                    # standalone player
+
+# Dist build for shipping (player)
+cargo build --profile dist -p gg_player --no-default-features --features lua-scripting
 
 # Build specific crates
 cargo build -p gg_engine
 cargo build -p gg_editor
+cargo build -p gg_player
 cargo build -p gg_sandbox
 ```
 
 ### Feature Flag Chain
 
-The `profiling` feature controls instrumentation:
-2
+Two default features control instrumentation and scripting:
+
 ```
-gg_sandbox / gg_editor
-    │  profiling = ["gg_engine/profiling"]  (default on)
+gg_editor / gg_sandbox / gg_player
+    │  profiling = ["gg_engine/profiling"]           (default on)
+    │  lua-scripting = ["gg_engine/lua-scripting"]    (default on)
     │  depends on gg_engine with default-features = false
     ▼
 gg_engine
-    profiling feature (default on)
+    default = ["profiling", "lua-scripting"]
+    profiling   — Chrome Tracing instrumentation
+    lua-scripting = ["mlua"]  — LuaJIT scripting via mlua
 ```
+
+`gg_editor` additionally pulls in `notify 7` as an optional dependency tied
+to the `lua-scripting` feature (`lua-scripting = ["gg_engine/lua-scripting", "dep:notify"]`),
+enabling file-system watching for Lua script hot-reload during play sessions.
 
 Dist builds pass `--no-default-features --features lua-scripting` to strip
 profiling while keeping Lua scripting enabled.
+
+### Workspace Dependencies
+
+All versions are pinned in `[workspace.dependencies]` in the root `Cargo.toml`:
+
+| Category | Crate | Version | Notes |
+|----------|-------|---------|-------|
+| Logging | `log` | 0.4 | `release_max_level_info` |
+| Windowing | `winit` | 0.30 | |
+| | `raw-window-handle` | 0.6 | |
+| Vulkan | `ash` | 0.38 | |
+| | `ash-window` | 0.13 | |
+| | `gpu-allocator` | 0.28 | Vulkan backend, no defaults |
+| UI | `egui` | 0.33 | |
+| | `egui-winit` | 0.33 | |
+| | `egui-ash-renderer` | 0.11 | |
+| | `egui_dock` | 0.18 | Editor only, serde feature |
+| | `transform-gizmo-egui` | 0.8 | Editor only |
+| Math & ECS | `glam` | 0.29 | |
+| | `hecs` | 0.11 | |
+| Serialization | `serde` | 1 | derive feature |
+| | `serde_yaml_ng` | 0.10 | |
+| | `serde_json` | 1 | |
+| Assets | `image` | 0.25 | png + jpeg |
+| | `ttf-parser` | 0.25 | MSDF text |
+| Physics | `rapier2d` | 0.22 | simd-stable |
+| Scripting | `mlua` | 0.10 | LuaJIT, vendored, optional |
+| Audio | `kira` | 0.12 | |
+| Misc | `rfd` | 0.15 | File dialogs |
+| | `rand` | 0.9 | |
+| | `notify` | 7 | File watching (editor, optional) |
 
 ## Profiling / Instrumentation
 
@@ -115,14 +157,19 @@ cargo run -p gg_tools
 
 # Analyze a specific profile
 cargo run -p gg_tools -- path/to/profile.json
+
+# Generate a flame graph SVG alongside analysis
+cargo run -p gg_tools -- --flamegraph path/to/profile.json
 ```
 
 ### Output
 
-- **Frame summary:** average/min/max time, FPS
-- **Top functions by total time**
+- **Frame summary:** average/min/max frame time, FPS (detected via "Run loop" events)
+- **Top functions by total time** (with avg, max, call count)
+- **Percentile analysis** (P50, P95, P99, max per function)
 - **Top functions by average time**
 - **Top functions by call count**
+- **Flame graph SVG** (optional, via `--flamegraph` / `--svg` flag)
 
 Handles truncated JSON gracefully (e.g. from force-killed sessions).
 
@@ -134,11 +181,24 @@ Shader compilation is automatic via `gg_engine/build.rs` (requires `glslc` from 
 
 1. `build.rs` reads `.glsl` files from `gg_engine/src/renderer/shaders/`
 2. Splits on `#type vertex` / `#type fragment` markers
-3. Compiles each stage to SPIR-V via `glslc`
-4. SPIR-V bytes exposed as `pub const` in `gg_engine::shaders`
+3. Compiles each stage to SPIR-V via `glslc` (target: `vulkan1.2`, `-O` in release/dist)
+4. Optionally validates with `spirv-val` (skipped silently if not installed)
+5. SPIR-V bytes exposed as `pub const` in `gg_engine::shaders`
+
+### Shader Files
+
+| File | Generated Constants | Purpose |
+|------|-------------------|---------|
+| `batch.glsl` | `BATCH_VERT_SPV`, `BATCH_FRAG_SPV` | Textured quad batching (offscreen) |
+| `batch_swapchain.glsl` | `BATCH_SWAPCHAIN_VERT_SPV`, `BATCH_SWAPCHAIN_FRAG_SPV` | Textured quad batching (swapchain) |
+| `circle.glsl` | `CIRCLE_VERT_SPV`, `CIRCLE_FRAG_SPV` | SDF circle rendering (offscreen) |
+| `circle_swapchain.glsl` | `CIRCLE_SWAPCHAIN_VERT_SPV`, `CIRCLE_SWAPCHAIN_FRAG_SPV` | SDF circle rendering (swapchain) |
+| `line.glsl` | `LINE_VERT_SPV`, `LINE_FRAG_SPV` | Line rendering (offscreen) |
+| `line_swapchain.glsl` | `LINE_SWAPCHAIN_VERT_SPV`, `LINE_SWAPCHAIN_FRAG_SPV` | Line rendering (swapchain) |
+| `text.glsl` | `TEXT_VERT_SPV`, `TEXT_FRAG_SPV` | MSDF text rendering (offscreen) |
+| `text_swapchain.glsl` | `TEXT_SWAPCHAIN_VERT_SPV`, `TEXT_SWAPCHAIN_FRAG_SPV` | MSDF text rendering (swapchain) |
 
 ```rust
-// Example: FLAT_COLOR_VERT_SPV, FLAT_COLOR_FRAG_SPV
 use gg_engine::shaders::*;
 ```
 
