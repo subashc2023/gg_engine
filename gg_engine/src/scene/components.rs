@@ -316,6 +316,10 @@ pub struct TextComponent {
     pub color: Vec4,
     pub line_spacing: f32,
     pub kerning: f32,
+    /// Sorting layer for draw order. Lower layers render first (behind).
+    pub sorting_layer: i32,
+    /// Order within the same sorting layer. Lower values render first.
+    pub order_in_layer: i32,
 }
 
 impl Clone for TextComponent {
@@ -328,6 +332,8 @@ impl Clone for TextComponent {
             color: self.color,
             line_spacing: self.line_spacing,
             kerning: self.kerning,
+            sorting_layer: self.sorting_layer,
+            order_in_layer: self.order_in_layer,
         }
     }
 }
@@ -342,6 +348,8 @@ impl Default for TextComponent {
             color: Vec4::ONE,
             line_spacing: 1.0,
             kerning: 0.0,
+            sorting_layer: 0,
+            order_in_layer: 0,
         }
     }
 }
@@ -567,6 +575,88 @@ impl Default for AudioSourceComponent {
 }
 
 // ---------------------------------------------------------------------------
+// Particle Emitter Component
+// ---------------------------------------------------------------------------
+
+/// GPU particle emitter attached to an entity.
+///
+/// Particles are emitted from the entity's [`TransformComponent`] position
+/// each frame while `playing` is true. The GPU particle system must be
+/// initialized on the renderer first (done automatically by the scene when
+/// a `ParticleEmitterComponent` is encountered).
+///
+/// All particles share a single GPU particle pool on the renderer.
+#[derive(Clone)]
+pub struct ParticleEmitterComponent {
+    /// Number of particles emitted per frame.
+    pub emit_rate: u32,
+    /// Maximum particles this emitter contributes to the shared pool.
+    /// Used when auto-creating the GPU particle system (first emitter wins).
+    pub max_particles: u32,
+    /// Whether the emitter is actively emitting.
+    pub playing: bool,
+    /// Base velocity for emitted particles.
+    pub velocity: Vec2,
+    /// Random spread added to velocity.
+    pub velocity_variation: Vec2,
+    /// Start color (interpolated to `color_end` over lifetime).
+    pub color_begin: Vec4,
+    /// End color.
+    pub color_end: Vec4,
+    /// Start size.
+    pub size_begin: f32,
+    /// End size.
+    pub size_end: f32,
+    /// Random variation added to size_begin.
+    pub size_variation: f32,
+    /// Particle lifetime in seconds.
+    pub lifetime: f32,
+}
+
+impl Default for ParticleEmitterComponent {
+    fn default() -> Self {
+        Self {
+            emit_rate: 5,
+            max_particles: 100_000,
+            playing: true,
+            velocity: Vec2::ZERO,
+            velocity_variation: Vec2::new(3.0, 3.0),
+            color_begin: Vec4::new(0.98, 0.33, 0.16, 1.0),
+            color_end: Vec4::new(0.98, 0.84, 0.16, 0.0),
+            size_begin: 0.1,
+            size_end: 0.0,
+            size_variation: 0.05,
+            lifetime: 5.0,
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Audio Listener Component
+// ---------------------------------------------------------------------------
+
+/// Marks an entity as the spatial audio listener.
+///
+/// By default, spatial audio uses the primary camera's position as the
+/// listener. Adding an `AudioListenerComponent` to an entity overrides this
+/// — the entity's [`TransformComponent`] position will be used instead.
+/// Useful when the listener should follow a player character rather than
+/// the camera.
+///
+/// If multiple entities have this component, the last one found is used.
+#[derive(Clone, Default)]
+pub struct AudioListenerComponent {
+    /// Whether this listener is active. Allows disabling without removing.
+    pub active: bool,
+}
+
+impl AudioListenerComponent {
+    pub fn new() -> Self {
+        Self { active: true }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Tilemap Component
 // ---------------------------------------------------------------------------
 
@@ -613,6 +703,10 @@ pub struct TilemapComponent {
     /// Tile IDs, row-major (width * height). -1 = empty.
     /// High bits encode flip flags (see [`TILE_FLIP_H`], [`TILE_FLIP_V`]).
     pub tiles: Vec<i32>,
+    /// Sorting layer for draw order. Lower layers render first (behind).
+    pub sorting_layer: i32,
+    /// Order within the same sorting layer. Lower values render first.
+    pub order_in_layer: i32,
 }
 
 impl TilemapComponent {
@@ -665,6 +759,8 @@ impl Default for TilemapComponent {
             spacing: Vec2::ZERO,
             margin: Vec2::ZERO,
             tiles: vec![-1; 100],
+            sorting_layer: 0,
+            order_in_layer: 0,
         }
     }
 }

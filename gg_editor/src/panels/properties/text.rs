@@ -19,7 +19,7 @@ pub(crate) fn draw_text_component(
         .id_salt(("text", entity.id()))
         .default_open(true)
         .show(ui, |ui| {
-            let (mut text_str, mut font_path, mut font_size, mut color_arr, mut line_spacing, mut kerning) = {
+            let (mut text_str, mut font_path, mut font_size, mut color_arr, mut line_spacing, mut kerning, mut sorting_layer, mut order_in_layer) = {
                 let tc = scene.get_component::<TextComponent>(entity).unwrap();
                 (
                     tc.text.clone(),
@@ -28,6 +28,8 @@ pub(crate) fn draw_text_component(
                     [tc.color.x, tc.color.y, tc.color.z, tc.color.w],
                     tc.line_spacing,
                     tc.kerning,
+                    tc.sorting_layer,
+                    tc.order_in_layer,
                 )
             };
 
@@ -154,6 +156,28 @@ pub(crate) fn draw_text_component(
                     }
                 }
             });
+
+            // Sorting layer & order.
+            let mut sort_changed = false;
+            ui.horizontal(|ui| {
+                ui.label("Sorting Layer");
+                sort_changed |= ui
+                    .add(egui::DragValue::new(&mut sorting_layer).speed(0.1))
+                    .changed();
+            });
+            ui.horizontal(|ui| {
+                ui.label("Order in Layer");
+                sort_changed |= ui
+                    .add(egui::DragValue::new(&mut order_in_layer).speed(0.1))
+                    .changed();
+            });
+            if sort_changed {
+                if let Some(mut tc) = scene.get_component_mut::<TextComponent>(entity) {
+                    tc.sorting_layer = sorting_layer;
+                    tc.order_in_layer = order_in_layer;
+                }
+                *scene_dirty = true;
+            }
         });
 
         cr.header_response.context_menu(|ui| {

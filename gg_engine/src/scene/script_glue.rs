@@ -499,6 +499,10 @@ fn has_component(lua: &Lua, (entity_id, name): (u64, String)) -> LuaResult<bool>
         "NativeScript" => scene.has_component::<super::NativeScriptComponent>(entity),
         "Tilemap" => scene.has_component::<super::TilemapComponent>(entity),
         "AudioSource" | "Audio" => scene.has_component::<super::AudioSourceComponent>(entity),
+        "AudioListener" => scene.has_component::<super::AudioListenerComponent>(entity),
+        "ParticleEmitter" => scene.has_component::<super::ParticleEmitterComponent>(entity),
+        "Text" => scene.has_component::<super::TextComponent>(entity),
+        "SpriteAnimator" => scene.has_component::<super::SpriteAnimatorComponent>(entity),
         "LuaScript" => {
             #[cfg(feature = "lua-scripting")]
             { scene.has_component::<super::LuaScriptComponent>(entity) }

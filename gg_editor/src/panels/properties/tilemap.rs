@@ -28,9 +28,9 @@ pub(crate) fn draw_tilemap_component(
         .id_salt(("tilemap", entity.id()))
         .default_open(true)
         .show(ui, |ui| {
-            let (mut width, mut height, tile_size, mut tileset_cols, cell_size, spacing, margin, tex_handle) = {
+            let (mut width, mut height, tile_size, mut tileset_cols, cell_size, spacing, margin, tex_handle, mut sorting_layer, mut order_in_layer) = {
                 let tm = scene.get_component::<TilemapComponent>(entity).unwrap();
-                (tm.width, tm.height, tm.tile_size, tm.tileset_columns, tm.cell_size, tm.spacing, tm.margin, tm.texture_handle)
+                (tm.width, tm.height, tm.tile_size, tm.tileset_columns, tm.cell_size, tm.spacing, tm.margin, tm.texture_handle, tm.sorting_layer, tm.order_in_layer)
             };
 
             // Grid size.
@@ -120,6 +120,28 @@ pub(crate) fn draw_tilemap_component(
                     }
                 }
             });
+
+            // Sorting layer & order.
+            let mut sort_changed = false;
+            ui.horizontal(|ui| {
+                ui.label("Sorting Layer");
+                sort_changed |= ui
+                    .add(egui::DragValue::new(&mut sorting_layer).speed(0.1))
+                    .changed();
+            });
+            ui.horizontal(|ui| {
+                ui.label("Order in Layer");
+                sort_changed |= ui
+                    .add(egui::DragValue::new(&mut order_in_layer).speed(0.1))
+                    .changed();
+            });
+            if sort_changed {
+                if let Some(mut tm) = scene.get_component_mut::<TilemapComponent>(entity) {
+                    tm.sorting_layer = sorting_layer;
+                    tm.order_in_layer = order_in_layer;
+                }
+                *scene_dirty = true;
+            }
 
             // Texture handle (drag-drop from content browser).
             ui.horizontal(|ui| {

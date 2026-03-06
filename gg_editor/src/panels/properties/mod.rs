@@ -1,5 +1,6 @@
 mod audio;
 mod camera;
+mod particles;
 mod physics;
 mod scripting;
 mod sprite;
@@ -293,6 +294,20 @@ fn draw_components(
                     scene.add_component(entity, AudioSourceComponent::default());
                     *scene_dirty = true;
                 }
+                if !scene.has_component::<AudioListenerComponent>(entity)
+                    && ui.button("Audio Listener").clicked()
+                {
+                    undo_system.record(scene);
+                    scene.add_component(entity, AudioListenerComponent::new());
+                    *scene_dirty = true;
+                }
+                if !scene.has_component::<ParticleEmitterComponent>(entity)
+                    && ui.button("Particle Emitter").clicked()
+                {
+                    undo_system.record(scene);
+                    scene.add_component(entity, ParticleEmitterComponent::default());
+                    *scene_dirty = true;
+                }
 
                 #[cfg(feature = "lua-scripting")]
                 {
@@ -408,6 +423,18 @@ fn draw_components(
     if audio::draw_audio_source_component(ui, scene, entity, &bold_family, asset_manager, assets_root, scene_dirty, undo_system) {
         undo_system.record(scene);
         scene.remove_component::<AudioSourceComponent>(entity);
+        *scene_dirty = true;
+    }
+
+    if audio::draw_audio_listener_component(ui, scene, entity, &bold_family, scene_dirty, undo_system) {
+        undo_system.record(scene);
+        scene.remove_component::<AudioListenerComponent>(entity);
+        *scene_dirty = true;
+    }
+
+    if particles::draw_particle_emitter_component(ui, scene, entity, &bold_family, scene_dirty, undo_system) {
+        undo_system.record(scene);
+        scene.remove_component::<ParticleEmitterComponent>(entity);
         *scene_dirty = true;
     }
 

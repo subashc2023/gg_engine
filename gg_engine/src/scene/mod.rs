@@ -13,10 +13,10 @@ pub(crate) mod script_engine;
 use crate::renderer::Font;
 
 pub use components::{
-    AudioSourceComponent, BoxCollider2DComponent, CameraComponent, CircleCollider2DComponent,
-    CircleRendererComponent, IdComponent, NativeScriptComponent, RelationshipComponent,
-    RigidBody2DComponent, RigidBody2DType, SpriteRendererComponent, TagComponent, TextComponent,
-    TilemapComponent, TransformComponent,
+    AudioListenerComponent, AudioSourceComponent, BoxCollider2DComponent, CameraComponent,
+    CircleCollider2DComponent, CircleRendererComponent, IdComponent, NativeScriptComponent,
+    ParticleEmitterComponent, RelationshipComponent, RigidBody2DComponent, RigidBody2DType,
+    SpriteRendererComponent, TagComponent, TextComponent, TilemapComponent, TransformComponent,
     TILE_FLIP_H, TILE_FLIP_V, TILE_ID_MASK,
 };
 #[cfg(feature = "lua-scripting")]
@@ -93,6 +93,8 @@ macro_rules! for_each_cloneable_component {
             SpriteAnimatorComponent,
             TilemapComponent,
             AudioSourceComponent,
+            AudioListenerComponent,
+            ParticleEmitterComponent,
         );
     };
 }
@@ -1525,20 +1527,31 @@ impl Scene {
     }
 
     /// Update spatial audio: compute panning and distance attenuation for
-    /// all spatial audio sources based on the primary camera position.
+    /// all spatial audio sources based on the listener position.
+    ///
+    /// If an entity has an active [`AudioListenerComponent`], its position is
+    /// used as the listener. Otherwise, the primary camera position is used.
     pub fn update_spatial_audio(&mut self) {
         if self.audio_engine.is_none() {
             return;
         }
 
-        // Find primary camera position.
+        // Prefer explicit AudioListenerComponent, fall back to primary camera.
         let listener_pos = self
             .world
-            .query::<(&CameraComponent, &TransformComponent)>()
+            .query::<(&AudioListenerComponent, &TransformComponent)>()
             .iter()
-            .filter(|(cam, _)| cam.primary)
+            .filter(|(al, _)| al.active)
             .map(|(_, tf)| tf.translation.truncate())
             .last()
+            .or_else(|| {
+                self.world
+                    .query::<(&CameraComponent, &TransformComponent)>()
+                    .iter()
+                    .filter(|(cam, _)| cam.primary)
+                    .map(|(_, tf)| tf.translation.truncate())
+                    .last()
+            })
             .unwrap_or(glam::Vec2::ZERO);
 
         // Collect spatial updates (uuid, panning, effective_volume).
@@ -2133,7 +2146,7 @@ impl Scene {
             renderables.push((circle.sorting_layer, circle.order_in_layer, z, 1, handle));
         }
 
-        for (handle, _text) in self
+        for (handle, text) in self
             .world
             .query::<(hecs::Entity, &TextComponent)>()
             .iter()
@@ -2142,11 +2155,10 @@ impl Scene {
                 .get(&handle)
                 .map(|m| m.w_axis.z)
                 .unwrap_or(0.0);
-            // Text has no sorting fields — default to (0, 0).
-            renderables.push((0, 0, z, 2, handle));
+            renderables.push((text.sorting_layer, text.order_in_layer, z, 2, handle));
         }
 
-        for (handle, _tilemap) in self
+        for (handle, tilemap) in self
             .world
             .query::<(hecs::Entity, &TilemapComponent)>()
             .iter()
@@ -2155,8 +2167,7 @@ impl Scene {
                 .get(&handle)
                 .map(|m| m.w_axis.z)
                 .unwrap_or(0.0);
-            // Tilemaps have no sorting fields — default to (0, 0).
-            renderables.push((0, 0, z, 3, handle));
+            renderables.push((tilemap.sorting_layer, tilemap.order_in_layer, z, 3, handle));
         }
 
         // Sort by (sorting_layer, order_in_layer, z).
@@ -2165,6 +2176,9 @@ impl Scene {
                 .then(a.1.cmp(&b.1))
                 .then(a.2.partial_cmp(&b.2).unwrap_or(std::cmp::Ordering::Equal))
         });
+
+        // Precompute inverse VP for tilemap frustum culling.
+        let vp_inv = renderer.view_projection().inverse();
 
         // Render in sorted order.
         for &(_, _, _, kind, handle) in &renderables {
@@ -2240,58 +2254,148 @@ impl Scene {
                     );
                 }
                 3 => {
-                    // Tilemap
+                    // Tilemap — frustum culled + precomputed transforms.
                     let tilemap = self.world.get::<&TilemapComponent>(handle).unwrap();
                     let texture = match tilemap.texture.as_ref() {
                         Some(tex) => tex.clone(),
                         None => continue,
                     };
-                    let cols = tilemap.tileset_columns.max(1);
+                    let tile_cols = tilemap.tileset_columns.max(1);
                     let tw = texture.width() as f32;
                     let th = texture.height() as f32;
-                    for row in 0..tilemap.height {
-                        for col in 0..tilemap.width {
+                    if tw == 0.0 || th == 0.0 { continue; }
+                    let tile_size = tilemap.tile_size;
+                    if tile_size.x <= 0.0 || tile_size.y <= 0.0 { continue; }
+                    let tex_idx = texture.bindless_index() as f32;
+                    let eid = handle.id() as i32;
+
+                    // Precompute UV constants.
+                    let inv_tw = 1.0 / tw;
+                    let inv_th = 1.0 / th;
+                    let cell_w = tilemap.cell_size.x;
+                    let cell_h = tilemap.cell_size.y;
+                    let margin_x = tilemap.margin.x;
+                    let margin_y = tilemap.margin.y;
+                    let step_x = cell_w + tilemap.spacing.x;
+                    let step_y = cell_h + tilemap.spacing.y;
+
+                    // --- Frustum culling: visible tile range ---
+                    let ndc_to_local = world_transform.inverse() * vp_inv;
+                    let mut local_min = glam::Vec2::splat(f32::INFINITY);
+                    let mut local_max = glam::Vec2::splat(f32::NEG_INFINITY);
+                    for ndc in [
+                        glam::Vec3::new(-1.0, -1.0, 0.0),
+                        glam::Vec3::new( 1.0, -1.0, 0.0),
+                        glam::Vec3::new( 1.0,  1.0, 0.0),
+                        glam::Vec3::new(-1.0,  1.0, 0.0),
+                    ] {
+                        let p = ndc_to_local.project_point3(ndc);
+                        local_min = local_min.min(p.truncate());
+                        local_max = local_max.max(p.truncate());
+                    }
+                    let w = tilemap.width as f32;
+                    let h = tilemap.height as f32;
+                    let (min_col, max_col, min_row, max_row) =
+                        if local_min.is_finite() && local_max.is_finite() {
+                            (
+                                ((local_min.x / tile_size.x).floor() - 1.0).clamp(0.0, w) as u32,
+                                ((local_max.x / tile_size.x).ceil() + 1.0).clamp(0.0, w) as u32,
+                                ((local_min.y / tile_size.y).floor() - 1.0).clamp(0.0, h) as u32,
+                                ((local_max.y / tile_size.y).ceil() + 1.0).clamp(0.0, h) as u32,
+                            )
+                        } else {
+                            // Degenerate transform — render all tiles.
+                            (0, tilemap.width, 0, tilemap.height)
+                        };
+
+                    // --- Precomputed transform columns ---
+                    // tile_transform columns 0-2 are constant; only col3 varies.
+                    let scaled_x = world_transform.x_axis * tile_size.x;
+                    let scaled_y = world_transform.y_axis * tile_size.y;
+                    let const_col2 = world_transform.z_axis;
+                    let base_w = world_transform.w_axis;
+
+                    for row in min_row..max_row {
+                        let row_w = base_w + row as f32 * scaled_y;
+                        for col in min_col..max_col {
                             let raw = tilemap.tiles[(row * tilemap.width + col) as usize];
-                            if raw < 0 {
-                                continue;
-                            }
+                            if raw < 0 { continue; }
                             let flip_h = raw & TILE_FLIP_H != 0;
                             let flip_v = raw & TILE_FLIP_V != 0;
                             let tile_id = raw & TILE_ID_MASK;
 
-                            let tex_col = (tile_id as u32) % cols;
-                            let tex_row = (tile_id as u32) / cols;
+                            let tex_col = (tile_id as u32) % tile_cols;
+                            let tex_row = (tile_id as u32) / tile_cols;
+                            let px = margin_x + tex_col as f32 * step_x;
+                            let py = margin_y + tex_row as f32 * step_y;
+                            let mut min_u = px * inv_tw;
+                            let mut min_v = py * inv_th;
+                            let mut max_u = (px + cell_w) * inv_tw;
+                            let mut max_v = (py + cell_h) * inv_th;
 
-                            let px = tilemap.margin.x + tex_col as f32 * (tilemap.cell_size.x + tilemap.spacing.x);
-                            let py = tilemap.margin.y + tex_row as f32 * (tilemap.cell_size.y + tilemap.spacing.y);
-                            let mut min_uv = glam::Vec2::new(px / tw, py / th);
-                            let mut max_uv = glam::Vec2::new((px + tilemap.cell_size.x) / tw, (py + tilemap.cell_size.y) / th);
+                            if flip_h { std::mem::swap(&mut min_u, &mut max_u); }
+                            if flip_v { std::mem::swap(&mut min_v, &mut max_v); }
 
-                            if flip_h { std::mem::swap(&mut min_uv.x, &mut max_uv.x); }
-                            if flip_v { std::mem::swap(&mut min_uv.y, &mut max_uv.y); }
-
-                            let sub_tex = SubTexture2D::new(&texture, min_uv, max_uv);
-                            let tile_transform = world_transform
-                                * glam::Mat4::from_scale_rotation_translation(
-                                    glam::Vec3::new(tilemap.tile_size.x, tilemap.tile_size.y, 1.0),
-                                    glam::Quat::IDENTITY,
-                                    glam::Vec3::new(
-                                        col as f32 * tilemap.tile_size.x,
-                                        row as f32 * tilemap.tile_size.y,
-                                        0.0,
-                                    ),
-                                );
-                            renderer.draw_sub_textured_quad_transformed(
-                                &tile_transform,
-                                &sub_tex,
-                                glam::Vec4::ONE,
-                                handle.id() as i32,
+                            let col3 = row_w + col as f32 * scaled_x;
+                            let tile_transform = glam::Mat4::from_cols(
+                                scaled_x, scaled_y, const_col2, col3,
+                            );
+                            renderer.draw_textured_quad_transformed_uv(
+                                &tile_transform, tex_idx,
+                                [min_u, min_v], [max_u, max_v],
+                                glam::Vec4::ONE, eid,
                             );
                         }
                     }
                 }
                 _ => {}
             }
+        }
+
+        // Emit and render GPU particles from all active ParticleEmitterComponents.
+        self.emit_and_render_particles(renderer);
+    }
+
+    /// Emit particles from all active [`ParticleEmitterComponent`]s and
+    /// render the GPU particle system. The GPU particle system is lazily
+    /// created on the first emitter encountered.
+    fn emit_and_render_particles(&self, renderer: &mut Renderer) {
+        let mut any_emitter = false;
+        for (pe, tf) in self
+            .world
+            .query::<(&ParticleEmitterComponent, &TransformComponent)>()
+            .iter()
+        {
+            if !pe.playing || pe.emit_rate == 0 {
+                continue;
+            }
+            // Lazily initialize the GPU particle system on first use.
+            if !any_emitter {
+                if !renderer.has_gpu_particle_system() {
+                    if let Err(e) = renderer.create_gpu_particle_system(pe.max_particles) {
+                        log::error!("Failed to create GPU particle system: {e}");
+                        return;
+                    }
+                }
+                any_emitter = true;
+            }
+            let props = crate::particle_system::ParticleProps {
+                position: tf.translation.truncate(),
+                velocity: pe.velocity,
+                velocity_variation: pe.velocity_variation,
+                color_begin: pe.color_begin,
+                color_end: pe.color_end,
+                size_begin: pe.size_begin,
+                size_end: pe.size_end,
+                size_variation: pe.size_variation,
+                lifetime: pe.lifetime,
+            };
+            for _ in 0..pe.emit_rate {
+                renderer.emit_particles(&props);
+            }
+        }
+        if any_emitter {
+            renderer.render_gpu_particles();
         }
     }
 
@@ -2989,7 +3093,7 @@ mod tests {
         }
         for_each_cloneable_component!(count_types);
         // Update this constant when adding or removing cloneable components.
-        const EXPECTED_COUNT: usize = 12;
+        const EXPECTED_COUNT: usize = 14;
         assert_eq!(
             MACRO_COUNT, EXPECTED_COUNT,
             "for_each_cloneable_component! has {} types but expected {}. \

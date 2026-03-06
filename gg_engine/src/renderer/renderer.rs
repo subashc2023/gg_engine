@@ -1011,6 +1011,24 @@ impl Renderer {
         );
     }
 
+    /// Draw a textured quad with explicit UV coordinates and a pre-built
+    /// transform matrix.  Skips [`SubTexture2D`] construction — useful for
+    /// tight inner loops such as tilemap rendering.
+    #[allow(clippy::too_many_arguments)]
+    pub fn draw_textured_quad_transformed_uv(
+        &self,
+        transform: &Mat4,
+        tex_index: f32,
+        uv_min: [f32; 2],
+        uv_max: [f32; 2],
+        tint_color: Vec4,
+        entity_id: i32,
+    ) {
+        self.push_sprite_instance_uv(
+            transform, tint_color, tex_index, 1.0, uv_min, uv_max, entity_id,
+        );
+    }
+
     /// Draw a rotated sub-textured quad. `rotation` is in radians (Z-axis).
     pub fn draw_rotated_sub_textured_quad(
         &self,
@@ -1445,6 +1463,11 @@ impl Renderer {
         }
     }
 
+    /// Returns the current view-projection matrix.
+    pub fn view_projection(&self) -> Mat4 {
+        self.view_projection
+    }
+
     /// Override the view-projection matrix for the current scene.
     ///
     /// Call this between `begin_scene` / `end_scene` to change the camera
@@ -1589,6 +1612,11 @@ impl Renderer {
     }
 
     // -- GPU Particle System ------------------------------------------------
+
+    /// Returns `true` if a GPU particle system has been created.
+    pub fn has_gpu_particle_system(&self) -> bool {
+        self.gpu_particles.is_some()
+    }
 
     /// Create a GPU-driven particle system with the given maximum particle count.
     /// Uses a compute shader for simulation and instanced rendering for drawing.

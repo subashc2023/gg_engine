@@ -6,10 +6,11 @@ use serde::{Deserialize, Serialize};
 
 use crate::renderer::{ProjectionType, SceneCamera};
 use crate::scene::{
-    AnimationClip, AudioSourceComponent, BoxCollider2DComponent, CameraComponent,
-    CircleCollider2DComponent, CircleRendererComponent, IdComponent, RelationshipComponent,
-    RigidBody2DComponent, RigidBody2DType, Scene, SpriteAnimatorComponent,
-    SpriteRendererComponent, TagComponent, TextComponent, TilemapComponent, TransformComponent,
+    AnimationClip, AudioListenerComponent, AudioSourceComponent, BoxCollider2DComponent,
+    CameraComponent, CircleCollider2DComponent, CircleRendererComponent, IdComponent,
+    ParticleEmitterComponent, RelationshipComponent, RigidBody2DComponent, RigidBody2DType, Scene,
+    SpriteAnimatorComponent, SpriteRendererComponent, TagComponent, TextComponent,
+    TilemapComponent, TransformComponent,
 };
 #[cfg(feature = "lua-scripting")]
 use crate::scene::LuaScriptComponent;
@@ -115,6 +116,18 @@ struct EntityData {
         default
     )]
     audio_source: Option<AudioSourceData>,
+    #[serde(
+        rename = "AudioListenerComponent",
+        skip_serializing_if = "Option::is_none",
+        default
+    )]
+    audio_listener: Option<AudioListenerData>,
+    #[serde(
+        rename = "ParticleEmitterComponent",
+        skip_serializing_if = "Option::is_none",
+        default
+    )]
+    particle_emitter: Option<ParticleEmitterData>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -231,6 +244,10 @@ struct TextData {
     line_spacing: f32,
     #[serde(rename = "Kerning", default)]
     kerning: f32,
+    #[serde(rename = "SortingLayer", default)]
+    sorting_layer: i32,
+    #[serde(rename = "OrderInLayer", default)]
+    order_in_layer: i32,
 }
 
 fn default_font_size() -> f32 {
@@ -379,6 +396,10 @@ struct TilemapData {
     margin: [f32; 2],
     #[serde(rename = "Tiles")]
     tiles: Vec<i32>,
+    #[serde(rename = "SortingLayer", default)]
+    sorting_layer: i32,
+    #[serde(rename = "OrderInLayer", default)]
+    order_in_layer: i32,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -426,6 +447,45 @@ fn default_volume() -> f32 {
 fn default_pitch() -> f32 {
     1.0
 }
+
+#[derive(Serialize, Deserialize)]
+struct AudioListenerData {
+    #[serde(rename = "Active", default = "default_true")]
+    active: bool,
+}
+
+#[derive(Serialize, Deserialize)]
+struct ParticleEmitterData {
+    #[serde(rename = "EmitRate", default = "default_emit_rate")]
+    emit_rate: u32,
+    #[serde(rename = "MaxParticles", default = "default_max_particles")]
+    max_particles: u32,
+    #[serde(rename = "Playing", default = "default_true")]
+    playing: bool,
+    #[serde(rename = "Velocity", default = "default_zero_vec2")]
+    velocity: [f32; 2],
+    #[serde(rename = "VelocityVariation", default = "default_velocity_variation")]
+    velocity_variation: [f32; 2],
+    #[serde(rename = "ColorBegin")]
+    color_begin: [f32; 4],
+    #[serde(rename = "ColorEnd")]
+    color_end: [f32; 4],
+    #[serde(rename = "SizeBegin", default = "default_size_begin")]
+    size_begin: f32,
+    #[serde(rename = "SizeEnd", default)]
+    size_end: f32,
+    #[serde(rename = "SizeVariation", default = "default_size_variation")]
+    size_variation: f32,
+    #[serde(rename = "Lifetime", default = "default_lifetime")]
+    lifetime: f32,
+}
+
+fn default_emit_rate() -> u32 { 5 }
+fn default_max_particles() -> u32 { 100_000 }
+fn default_velocity_variation() -> [f32; 2] { [3.0, 3.0] }
+fn default_size_begin() -> f32 { 0.1 }
+fn default_size_variation() -> f32 { 0.05 }
+fn default_lifetime() -> f32 { 5.0 }
 
 fn default_tileset_columns() -> u32 {
     1
@@ -638,6 +698,8 @@ impl SceneSerializer {
                         color: tc.color.into(),
                         line_spacing: tc.line_spacing,
                         kerning: tc.kerning,
+                        sorting_layer: tc.sorting_layer,
+                        order_in_layer: tc.order_in_layer,
                     });
 
             let rigidbody_2d_data =
@@ -742,6 +804,12 @@ impl SceneSerializer {
                     max_distance: asc.max_distance,
                 });
 
+            let audio_listener_data = scene
+                .get_component::<AudioListenerComponent>(entity)
+                .map(|al| AudioListenerData {
+                    active: al.active,
+                });
+
             let tilemap_data = scene
                 .get_component::<TilemapComponent>(entity)
                 .map(|tm| TilemapData {
@@ -754,6 +822,8 @@ impl SceneSerializer {
                     spacing: tm.spacing.into(),
                     margin: tm.margin.into(),
                     tiles: tm.tiles.clone(),
+                    sorting_layer: tm.sorting_layer,
+                    order_in_layer: tm.order_in_layer,
                 });
 
             let uuid = scene
@@ -777,6 +847,22 @@ impl SceneSerializer {
                 relationship: relationship_data,
                 tilemap: tilemap_data,
                 audio_source: audio_source_data,
+                audio_listener: audio_listener_data,
+                particle_emitter: scene
+                    .get_component::<ParticleEmitterComponent>(entity)
+                    .map(|pe| ParticleEmitterData {
+                        emit_rate: pe.emit_rate,
+                        max_particles: pe.max_particles,
+                        playing: pe.playing,
+                        velocity: pe.velocity.into(),
+                        velocity_variation: pe.velocity_variation.into(),
+                        color_begin: pe.color_begin.into(),
+                        color_end: pe.color_end.into(),
+                        size_begin: pe.size_begin,
+                        size_end: pe.size_end,
+                        size_variation: pe.size_variation,
+                        lifetime: pe.lifetime,
+                    }),
             });
         }
 
@@ -879,6 +965,8 @@ impl SceneSerializer {
                         color: Vec4::from(td.color),
                         line_spacing: td.line_spacing,
                         kerning: td.kerning,
+                        sorting_layer: td.sorting_layer,
+                        order_in_layer: td.order_in_layer,
                     },
                 );
             }
@@ -1011,6 +1099,38 @@ impl SceneSerializer {
                         spacing: Vec2::from(td.spacing),
                         margin: Vec2::from(td.margin),
                         tiles: td.tiles.clone(),
+                        sorting_layer: td.sorting_layer,
+                        order_in_layer: td.order_in_layer,
+                    },
+                );
+            }
+
+            // AudioListenerComponent — added only if present in the file.
+            if let Some(ref ald) = entity_data.audio_listener {
+                scene.add_component(
+                    entity,
+                    AudioListenerComponent {
+                        active: ald.active,
+                    },
+                );
+            }
+
+            // ParticleEmitterComponent — added only if present in the file.
+            if let Some(ref ped) = entity_data.particle_emitter {
+                scene.add_component(
+                    entity,
+                    ParticleEmitterComponent {
+                        emit_rate: ped.emit_rate,
+                        max_particles: ped.max_particles,
+                        playing: ped.playing,
+                        velocity: Vec2::from(ped.velocity),
+                        velocity_variation: Vec2::from(ped.velocity_variation),
+                        color_begin: Vec4::from(ped.color_begin),
+                        color_end: Vec4::from(ped.color_end),
+                        size_begin: ped.size_begin,
+                        size_end: ped.size_end,
+                        size_variation: ped.size_variation,
+                        lifetime: ped.lifetime,
                     },
                 );
             }

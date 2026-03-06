@@ -233,3 +233,50 @@ pub(crate) fn draw_audio_source_component(
 
     remove
 }
+
+pub(crate) fn draw_audio_listener_component(
+    ui: &mut egui::Ui,
+    scene: &mut Scene,
+    entity: Entity,
+    bold_family: &egui::FontFamily,
+    scene_dirty: &mut bool,
+    _undo_system: &mut crate::undo::UndoSystem,
+) -> bool {
+    let mut remove = false;
+
+    if scene.has_component::<AudioListenerComponent>(entity) {
+        let cr = egui::CollapsingHeader::new(
+            egui::RichText::new("Audio Listener")
+                .font(egui::FontId::new(14.0, bold_family.clone())),
+        )
+        .id_salt(("audio_listener", entity.id()))
+        .default_open(true)
+        .show(ui, |ui| {
+            let mut active = scene
+                .get_component::<AudioListenerComponent>(entity)
+                .map(|al| al.active)
+                .unwrap_or(true);
+
+            ui.horizontal(|ui| {
+                if ui.checkbox(&mut active, "Active").on_hover_text(
+                    "When active, this entity's position is used as the\n\
+                     spatial audio listener instead of the primary camera.",
+                ).changed() {
+                    if let Some(mut al) = scene.get_component_mut::<AudioListenerComponent>(entity) {
+                        al.active = active;
+                    }
+                    *scene_dirty = true;
+                }
+            });
+        });
+
+        cr.header_response.context_menu(|ui| {
+            if ui.button("Remove Component").clicked() {
+                remove = true;
+                ui.close();
+            }
+        });
+    }
+
+    remove
+}

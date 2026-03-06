@@ -45,11 +45,11 @@ pub use renderer::{
     VertexBuffer,
 };
 pub use scene::{
-    AnimationClip, AudioSourceComponent, BoxCollider2DComponent, CameraComponent,
-    CircleCollider2DComponent, CircleRendererComponent, Entity, IdComponent, NativeScript,
-    NativeScriptComponent, RelationshipComponent, RigidBody2DComponent, RigidBody2DType, Scene,
-    SceneSerializer, SpriteAnimatorComponent, SpriteRendererComponent, TagComponent, TextComponent,
-    TilemapComponent, TransformComponent,
+    AnimationClip, AudioListenerComponent, AudioSourceComponent, BoxCollider2DComponent,
+    CameraComponent, CircleCollider2DComponent, CircleRendererComponent, Entity, IdComponent,
+    NativeScript, NativeScriptComponent, ParticleEmitterComponent, RelationshipComponent,
+    RigidBody2DComponent, RigidBody2DType, Scene, SceneSerializer, SpriteAnimatorComponent,
+    SpriteRendererComponent, TagComponent, TextComponent, TilemapComponent, TransformComponent,
     TILE_FLIP_H, TILE_FLIP_V, TILE_ID_MASK,
 };
 #[cfg(feature = "lua-scripting")]
@@ -84,11 +84,11 @@ pub mod prelude {
         VertexBuffer,
     };
     pub use crate::scene::{
-        AnimationClip, AudioSourceComponent, BoxCollider2DComponent, CameraComponent,
-        CircleCollider2DComponent, CircleRendererComponent, Entity, IdComponent, NativeScript,
-        NativeScriptComponent, RelationshipComponent, RigidBody2DComponent, RigidBody2DType, Scene,
-        SceneSerializer, SpriteAnimatorComponent, SpriteRendererComponent, TagComponent,
-        TextComponent, TilemapComponent, TransformComponent,
+        AnimationClip, AudioListenerComponent, AudioSourceComponent, BoxCollider2DComponent,
+        CameraComponent, CircleCollider2DComponent, CircleRendererComponent, Entity, IdComponent,
+        NativeScript, NativeScriptComponent, ParticleEmitterComponent, RelationshipComponent,
+        RigidBody2DComponent, RigidBody2DType, Scene, SceneSerializer, SpriteAnimatorComponent,
+        SpriteRendererComponent, TagComponent, TextComponent, TilemapComponent, TransformComponent,
         TILE_FLIP_H, TILE_FLIP_V, TILE_ID_MASK,
     };
     #[cfg(feature = "lua-scripting")]

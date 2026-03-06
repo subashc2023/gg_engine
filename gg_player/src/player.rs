@@ -265,11 +265,13 @@ impl Application for GGPlayer {
         }
 
         self.scene.on_update_physics(dt, Some(input));
+        self.scene.on_update_scripts(dt, input);
 
         #[cfg(feature = "lua-scripting")]
         self.scene.on_update_lua_scripts(dt, input);
 
         self.scene.on_update_animations(dt.seconds());
+        self.scene.update_spatial_audio();
     }
 
     fn on_render(&mut self, renderer: &mut Renderer) {
