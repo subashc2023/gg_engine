@@ -535,6 +535,16 @@ pub struct AudioSourceComponent {
     pub looping: bool,
     /// If true, the sound plays automatically when entering play mode.
     pub play_on_start: bool,
+    /// If true, use streaming playback (decode from disk gradually).
+    /// Better for long music tracks. Worse for short SFX (higher CPU, startup delay).
+    pub streaming: bool,
+    /// If true, panning and volume are computed from entity position
+    /// relative to the listener (primary camera).
+    pub spatial: bool,
+    /// Distance below which spatial volume is at full strength (default 1.0).
+    pub min_distance: f32,
+    /// Distance above which spatial volume is zero (default 50.0).
+    pub max_distance: f32,
     /// Runtime-only: resolved file path from asset manager. Not serialized.
     pub(crate) resolved_path: Option<String>,
 }
@@ -547,6 +557,10 @@ impl Default for AudioSourceComponent {
             pitch: 1.0,
             looping: false,
             play_on_start: false,
+            streaming: false,
+            spatial: false,
+            min_distance: 1.0,
+            max_distance: 50.0,
             resolved_path: None,
         }
     }

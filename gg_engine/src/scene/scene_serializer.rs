@@ -385,6 +385,30 @@ struct AudioSourceData {
     looping: bool,
     #[serde(rename = "PlayOnStart", default)]
     play_on_start: bool,
+    #[serde(rename = "Streaming", default)]
+    streaming: bool,
+    #[serde(rename = "Spatial", default)]
+    spatial: bool,
+    #[serde(rename = "MinDistance", default = "default_min_distance", skip_serializing_if = "is_default_min_distance")]
+    min_distance: f32,
+    #[serde(rename = "MaxDistance", default = "default_max_distance", skip_serializing_if = "is_default_max_distance")]
+    max_distance: f32,
+}
+
+fn default_min_distance() -> f32 {
+    1.0
+}
+
+fn default_max_distance() -> f32 {
+    50.0
+}
+
+fn is_default_min_distance(v: &f32) -> bool {
+    (*v - 1.0).abs() < f32::EPSILON
+}
+
+fn is_default_max_distance(v: &f32) -> bool {
+    (*v - 50.0).abs() < f32::EPSILON
 }
 
 fn default_volume() -> f32 {
@@ -702,6 +726,10 @@ impl SceneSerializer {
                     pitch: asc.pitch,
                     looping: asc.looping,
                     play_on_start: asc.play_on_start,
+                    streaming: asc.streaming,
+                    spatial: asc.spatial,
+                    min_distance: asc.min_distance,
+                    max_distance: asc.max_distance,
                 });
 
             let tilemap_data = scene
@@ -946,6 +974,10 @@ impl SceneSerializer {
                         pitch: asd.pitch,
                         looping: asd.looping,
                         play_on_start: asd.play_on_start,
+                        streaming: asd.streaming,
+                        spatial: asd.spatial,
+                        min_distance: asd.min_distance,
+                        max_distance: asd.max_distance,
                         resolved_path: None,
                     },
                 );
@@ -1090,6 +1122,10 @@ mod tests {
             pitch: 1.2,
             looping: true,
             play_on_start: true,
+            streaming: true,
+            spatial: true,
+            min_distance: 2.0,
+            max_distance: 30.0,
             resolved_path: None,
         };
         scene.add_component(e, audio);
@@ -1109,6 +1145,10 @@ mod tests {
         assert!((ac.pitch - 1.2).abs() < 0.001);
         assert!(ac.looping);
         assert!(ac.play_on_start);
+        assert!(ac.streaming);
+        assert!(ac.spatial);
+        assert!((ac.min_distance - 2.0).abs() < 0.001);
+        assert!((ac.max_distance - 30.0).abs() < 0.001);
         assert!(ac.resolved_path.is_none());
     }
 

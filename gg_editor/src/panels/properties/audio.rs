@@ -24,9 +24,11 @@ pub(crate) fn draw_audio_source_component(
         .id_salt(("audio_source", entity.id()))
         .default_open(true)
         .show(ui, |ui| {
-            let (audio_handle_raw, mut volume, mut pitch, mut looping, mut play_on_start) = {
+            let (audio_handle_raw, mut volume, mut pitch, mut looping, mut play_on_start,
+                 mut streaming, mut spatial, mut min_distance, mut max_distance) = {
                 let ac = scene.get_component::<AudioSourceComponent>(entity).unwrap();
-                (ac.audio_handle.raw(), ac.volume, ac.pitch, ac.looping, ac.play_on_start)
+                (ac.audio_handle.raw(), ac.volume, ac.pitch, ac.looping, ac.play_on_start,
+                 ac.streaming, ac.spatial, ac.min_distance, ac.max_distance)
             };
 
             // Audio file label.
@@ -169,6 +171,56 @@ pub(crate) fn draw_audio_source_component(
                     *scene_dirty = true;
                 }
             });
+
+            // Streaming checkbox.
+            ui.horizontal(|ui| {
+                if ui.checkbox(&mut streaming, "Streaming").on_hover_text(
+                    "Stream from disk instead of loading into memory.\nBetter for long music tracks.",
+                ).changed() {
+                    if let Some(mut ac) = scene.get_component_mut::<AudioSourceComponent>(entity) {
+                        ac.streaming = streaming;
+                    }
+                    *scene_dirty = true;
+                }
+            });
+
+            ui.separator();
+
+            // Spatial audio checkbox.
+            ui.horizontal(|ui| {
+                if ui.checkbox(&mut spatial, "Spatial Audio").on_hover_text(
+                    "Compute panning and distance attenuation\nbased on entity position relative to camera.",
+                ).changed() {
+                    if let Some(mut ac) = scene.get_component_mut::<AudioSourceComponent>(entity) {
+                        ac.spatial = spatial;
+                    }
+                    *scene_dirty = true;
+                }
+            });
+
+            if spatial {
+                // Min distance.
+                ui.horizontal(|ui| {
+                    ui.label("Min Distance");
+                    if ui.add(egui::DragValue::new(&mut min_distance).range(0.0..=max_distance).speed(0.1)).changed() {
+                        if let Some(mut ac) = scene.get_component_mut::<AudioSourceComponent>(entity) {
+                            ac.min_distance = min_distance;
+                        }
+                        *scene_dirty = true;
+                    }
+                });
+
+                // Max distance.
+                ui.horizontal(|ui| {
+                    ui.label("Max Distance");
+                    if ui.add(egui::DragValue::new(&mut max_distance).range(min_distance..=1000.0).speed(0.5)).changed() {
+                        if let Some(mut ac) = scene.get_component_mut::<AudioSourceComponent>(entity) {
+                            ac.max_distance = max_distance;
+                        }
+                        *scene_dirty = true;
+                    }
+                });
+            }
         });
 
         cr.header_response.context_menu(|ui| {

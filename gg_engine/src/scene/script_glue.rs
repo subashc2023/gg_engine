@@ -114,6 +114,7 @@ pub fn register_all(lua: &Lua) -> LuaResult<()> {
     engine.set("play_sound", lua.create_function(lua_play_sound)?)?;
     engine.set("stop_sound", lua.create_function(lua_stop_sound)?)?;
     engine.set("set_volume", lua.create_function(lua_set_volume)?)?;
+    engine.set("set_panning", lua.create_function(lua_set_panning)?)?;
 
     // Tilemap
     engine.set("set_tile", lua.create_function(lua_set_tile)?)?;
@@ -824,6 +825,22 @@ fn lua_set_volume(lua: &Lua, (entity_id, volume): (u64, f32)) -> LuaResult<()> {
     Ok(())
 }
 
+/// `Engine.set_panning(entity_id, panning)` — adjust stereo panning at runtime.
+/// Panning: -1.0 = hard left, 0.0 = center, 1.0 = hard right.
+fn lua_set_panning(lua: &Lua, (entity_id, panning): (u64, f32)) -> LuaResult<()> {
+    let mut ctx = match lua.app_data_mut::<SceneScriptContext>() {
+        Some(ctx) => ctx,
+        None => return Ok(()),
+    };
+
+    let scene = unsafe { ctx.scene_mut() };
+    if let Some(entity) = scene.find_entity_by_uuid(entity_id) {
+        scene.set_entity_panning(entity, panning);
+    }
+
+    Ok(())
+}
+
 // ---------------------------------------------------------------------------
 // Tilemap bindings
 // ---------------------------------------------------------------------------
@@ -1284,6 +1301,7 @@ mod tests {
         assert!(engine.get::<LuaFunction>("play_sound").is_ok());
         assert!(engine.get::<LuaFunction>("stop_sound").is_ok());
         assert!(engine.get::<LuaFunction>("set_volume").is_ok());
+        assert!(engine.get::<LuaFunction>("set_panning").is_ok());
         // Physics
         assert!(engine.get::<LuaFunction>("apply_impulse").is_ok());
         assert!(engine.get::<LuaFunction>("apply_impulse_at_point").is_ok());
@@ -1608,6 +1626,14 @@ mod tests {
         lua.load("Engine.set_volume(12345, 0.5)")
             .exec()
             .expect("set_volume should not error without context");
+    }
+
+    #[test]
+    fn set_panning_no_context_no_error() {
+        let lua = setup();
+        lua.load("Engine.set_panning(12345, -0.5)")
+            .exec()
+            .expect("set_panning should not error without context");
     }
 
     #[test]

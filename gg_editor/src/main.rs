@@ -650,6 +650,7 @@ impl Application for GGEditor {
                     };
                     self.scene.on_update_physics(physics_dt, None);
                     self.scene.on_update_animations(physics_dt.seconds());
+                    self.scene.update_spatial_audio();
                     if self.playback.step_frames > 0 {
                         self.playback.step_frames -= 1;
                     }
@@ -674,6 +675,8 @@ impl Application for GGEditor {
                     self.scene.on_update_lua_scripts(step_dt, input);
                     // Advance sprite animations.
                     self.scene.on_update_animations(step_dt.seconds());
+                    // Update spatial audio panning/attenuation.
+                    self.scene.update_spatial_audio();
                     if self.playback.step_frames > 0 {
                         self.playback.step_frames -= 1;
                     }

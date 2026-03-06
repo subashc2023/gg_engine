@@ -1250,7 +1250,7 @@ impl Scene {
         self.audio_engine = Some(engine);
 
         // Collect entities that should auto-play.
-        let auto_play: Vec<(u64, String, f32, f32, bool)> = self
+        let auto_play: Vec<(u64, String, f32, f32, bool, bool)> = self
             .world
             .query::<(hecs::Entity, &IdComponent, &AudioSourceComponent)>()
             .iter()
@@ -1262,13 +1262,14 @@ impl Scene {
                     asc.volume,
                     asc.pitch,
                     asc.looping,
+                    asc.streaming,
                 )
             })
             .collect();
 
         if let Some(ref mut engine) = self.audio_engine {
-            for (uuid, path, volume, pitch, looping) in auto_play {
-                engine.play_sound(uuid, &path, volume, pitch, looping);
+            for (uuid, path, volume, pitch, looping, streaming) in auto_play {
+                engine.play_sound(uuid, &path, volume, pitch, looping, streaming);
             }
         }
     }
@@ -1345,7 +1346,7 @@ impl Scene {
 
     /// Play audio for an entity (used by Lua scripts).
     pub fn play_entity_sound(&mut self, entity: Entity) {
-        let (uuid, path, volume, pitch, looping) = {
+        let (uuid, path, volume, pitch, looping, streaming) = {
             let id = match self.get_component::<IdComponent>(entity) {
                 Some(id) => id.id.raw(),
                 None => return,
@@ -1358,10 +1359,10 @@ impl Scene {
                 Some(p) => p.clone(),
                 None => return,
             };
-            (id, path, asc.volume, asc.pitch, asc.looping)
+            (id, path, asc.volume, asc.pitch, asc.looping, asc.streaming)
         };
         if let Some(ref mut engine) = self.audio_engine {
-            engine.play_sound(uuid, &path, volume, pitch, looping);
+            engine.play_sound(uuid, &path, volume, pitch, looping, streaming);
         }
     }
 
@@ -1384,6 +1385,71 @@ impl Scene {
         };
         if let Some(ref mut engine) = self.audio_engine {
             engine.set_volume(uuid, volume);
+        }
+    }
+
+    /// Set panning for an entity (used by Lua scripts).
+    /// -1.0 = hard left, 0.0 = center, 1.0 = hard right.
+    pub fn set_entity_panning(&mut self, entity: Entity, panning: f32) {
+        let uuid = match self.get_component::<IdComponent>(entity) {
+            Some(id) => id.id.raw(),
+            None => return,
+        };
+        if let Some(ref mut engine) = self.audio_engine {
+            engine.set_panning(uuid, panning);
+        }
+    }
+
+    /// Update spatial audio: compute panning and distance attenuation for
+    /// all spatial audio sources based on the primary camera position.
+    pub fn update_spatial_audio(&mut self) {
+        if self.audio_engine.is_none() {
+            return;
+        }
+
+        // Find primary camera position.
+        let listener_pos = self
+            .world
+            .query::<(&CameraComponent, &TransformComponent)>()
+            .iter()
+            .filter(|(cam, _)| cam.primary)
+            .map(|(_, tf)| tf.translation.truncate())
+            .last()
+            .unwrap_or(glam::Vec2::ZERO);
+
+        // Collect spatial updates (uuid, panning, effective_volume).
+        let updates: Vec<(u64, f32, f32)> = self
+            .world
+            .query::<(&IdComponent, &AudioSourceComponent, &TransformComponent)>()
+            .iter()
+            .filter(|(_, asc, _)| asc.spatial)
+            .map(|(id, asc, tf)| {
+                let entity_pos = tf.translation.truncate();
+                let delta = entity_pos - listener_pos;
+                let dist = delta.length();
+                // Panning: proportional to horizontal offset relative to max_distance.
+                let panning = (delta.x / asc.max_distance.max(0.01)).clamp(-1.0, 1.0);
+                // Attenuation: linear falloff between min and max distance.
+                // Expressed in decibels: 0 dB at min_distance, -60 dB (silence) at max_distance.
+                let atten_db = if dist <= asc.min_distance {
+                    0.0
+                } else if dist >= asc.max_distance {
+                    -60.0
+                } else {
+                    let t = (dist - asc.min_distance) / (asc.max_distance - asc.min_distance);
+                    -60.0 * t
+                };
+                // Combine: component volume (dB-ish) + distance attenuation.
+                let effective_volume = asc.volume + atten_db;
+                (id.id.raw(), panning, effective_volume)
+            })
+            .collect();
+
+        if let Some(ref mut engine) = self.audio_engine {
+            for (uuid, panning, volume) in updates {
+                engine.set_panning(uuid, panning);
+                engine.set_volume(uuid, volume);
+            }
         }
     }
 
