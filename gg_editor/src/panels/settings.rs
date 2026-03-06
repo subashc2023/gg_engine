@@ -18,6 +18,7 @@ pub(crate) fn settings_ui(
     grid_size: &mut f32,
     scene_warnings: &[String],
     theme: &mut EditorTheme,
+    reload_shaders_requested: &mut bool,
 ) {
     ui.heading("Renderer");
     ui.separator();
@@ -42,6 +43,13 @@ pub(crate) fn settings_ui(
 
     ui.add_space(8.0);
     ui.checkbox(vsync, "VSync");
+
+    ui.add_space(4.0);
+    if ui.button("Reload Shaders").on_hover_text(
+        "Recompile .glsl sources and rebuild all pipelines.\nRequires glslc on PATH.",
+    ).clicked() {
+        *reload_shaders_requested = true;
+    }
 
     ui.add_space(4.0);
     egui::ComboBox::from_label("Theme")

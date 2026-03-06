@@ -218,6 +218,7 @@ These functions access entity environments directly from the Lua-side registry t
 | `play_sound` | `(entity_id)` | — | Plays the entity's `AudioSourceComponent` |
 | `stop_sound` | `(entity_id)` | — | Stops audio playback |
 | `set_volume` | `(entity_id, volume)` | — | `volume` is `f32` (0.0 = silent, 1.0 = full) |
+| `set_panning` | `(entity_id, panning)` | — | `panning` is `f32` (-1.0 = left, 0.0 = center, 1.0 = right) |
 
 ### Tilemap
 

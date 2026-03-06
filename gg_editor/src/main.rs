@@ -160,6 +160,7 @@ struct UiState {
     /// Deferred scene open (set by content browser / project panel, consumed in on_egui).
     pending_open_path: Option<PathBuf>,
     hierarchy_filter: String,
+    reload_shaders_requested: bool,
     /// UUID of the entity last copied via Ctrl+C. Used by Ctrl+V to duplicate.
     clipboard_entity_uuid: Option<u64>,
 }
@@ -341,6 +342,7 @@ impl Application for GGEditor {
                 show_shortcuts_dialog: false,
                 pending_open_path: None,
                 hierarchy_filter: String::new(),
+                reload_shaders_requested: false,
                 clipboard_entity_uuid: None,
             },
             viewport: ViewportInfo {
@@ -408,7 +410,7 @@ impl Application for GGEditor {
     }
 
     fn on_attach(&mut self, renderer: &Renderer) {
-        let fb = renderer.create_framebuffer(FramebufferSpec {
+        match renderer.create_framebuffer(FramebufferSpec {
             width: 800,
             height: 600,
             attachments: vec![
@@ -416,8 +418,10 @@ impl Application for GGEditor {
                 FramebufferTextureFormat::RedInteger.into(),
                 FramebufferTextureFormat::Depth.into(),
             ],
-        });
-        self.viewport.scene_fb = Some(fb);
+        }) {
+            Ok(fb) => self.viewport.scene_fb = Some(fb),
+            Err(e) => warn!("Failed to create scene framebuffer: {e}"),
+        }
     }
 
     fn scene_framebuffer(&self) -> Option<&Framebuffer> {
@@ -634,6 +638,8 @@ impl Application for GGEditor {
             SceneState::Edit => {
                 // Update editor camera (orbit/pan/zoom via Alt+mouse).
                 self.editor_camera.on_update(dt, input);
+                // Tick animation previews (editor inspector play button).
+                self.scene.on_update_animation_previews(dt.seconds());
             }
             SceneState::Simulate => {
                 // Update editor camera — simulation renders from the editor
@@ -705,6 +711,27 @@ impl Application for GGEditor {
         // Poll completed transfer fences and free staging buffers from previous frames.
         renderer.poll_transfers();
 
+        // Handle shader hot-reload request from settings panel.
+        if self.ui.reload_shaders_requested {
+            self.ui.reload_shaders_requested = false;
+            let shader_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .parent()
+                .unwrap()
+                .join("gg_engine")
+                .join("src")
+                .join("renderer")
+                .join("shaders");
+            match renderer.reload_shaders(&shader_dir) {
+                Ok(count) => {
+                    info!("Shader hot-reload: {} shaders recompiled successfully", count);
+                }
+                Err(e) => {
+                    error!("Shader hot-reload failed: {}", e);
+                    gg_engine::platform_utils::error_dialog("Shader Reload Error", &e);
+                }
+            }
+        }
+
         if self.editor_mode == EditorMode::Hub {
             return;
         }
@@ -716,8 +743,14 @@ impl Application for GGEditor {
                 if let gg_engine::asset::LoadResult::Font { font_key, data } = result {
                     match data {
                         Ok(cpu_data) => {
-                            let font = Ref::new(renderer.upload_font(cpu_data));
-                            self.fonts.cache.insert(font_key, font);
+                            match renderer.upload_font(cpu_data) {
+                                Ok(font) => {
+                                    self.fonts.cache.insert(font_key, Ref::new(font));
+                                }
+                                Err(e) => {
+                                    warn!("Font GPU upload failed: {e}");
+                                }
+                            }
                         }
                         Err(e) => {
                             warn!("Async font load failed: {e}");
@@ -1046,6 +1079,7 @@ impl Application for GGEditor {
                 snap_to_grid: &mut self.editor_settings.snap_to_grid,
                 grid_size: &mut self.editor_settings.grid_size,
                 theme: &mut self.editor_settings.theme,
+                reload_shaders_requested: &mut self.ui.reload_shaders_requested,
                 viewport: ViewportState {
                     size: &mut self.viewport.size,
                     focused: &mut self.viewport.focused,

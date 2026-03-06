@@ -14,6 +14,7 @@ mod renderer_2d;
 mod renderer_api;
 mod scene_camera;
 mod shader;
+mod shader_compiler;
 mod shader_library;
 pub mod shaders;
 mod sub_texture;

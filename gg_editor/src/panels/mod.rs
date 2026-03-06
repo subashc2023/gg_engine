@@ -131,6 +131,7 @@ pub(crate) struct EditorTabViewer<'a> {
     pub(crate) snap_to_grid: &'a mut bool,
     pub(crate) grid_size: &'a mut f32,
     pub(crate) theme: &'a mut EditorTheme,
+    pub(crate) reload_shaders_requested: &'a mut bool,
     pub(crate) viewport: ViewportState<'a>,
     pub(crate) project: ProjectContext<'a>,
 }
@@ -230,6 +231,7 @@ impl egui_dock::TabViewer for EditorTabViewer<'_> {
                     self.grid_size,
                     self.scene_warnings,
                     self.theme,
+                    self.reload_shaders_requested,
                 );
             }
 

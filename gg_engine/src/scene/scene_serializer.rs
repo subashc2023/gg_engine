@@ -323,6 +323,8 @@ struct AnimationClipData {
     fps: f32,
     #[serde(rename = "Looping", default = "default_true")]
     looping: bool,
+    #[serde(rename = "TextureHandle", default, skip_serializing_if = "is_zero_uuid")]
+    texture_handle: u64,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -333,6 +335,8 @@ struct SpriteAnimatorData {
     columns: u32,
     #[serde(rename = "Clips", default)]
     clips: Vec<AnimationClipData>,
+    #[serde(rename = "DefaultClip", default, skip_serializing_if = "String::is_empty")]
+    default_clip: String,
 }
 
 fn default_animation_fps() -> f32 {
@@ -349,6 +353,10 @@ fn default_zero_vec2() -> [f32; 2] {
 
 fn is_zero_vec2(v: &[f32; 2]) -> bool {
     v[0] == 0.0 && v[1] == 0.0
+}
+
+fn is_zero_uuid(v: &u64) -> bool {
+    *v == 0
 }
 
 #[derive(Serialize, Deserialize)]
@@ -706,8 +714,10 @@ impl SceneSerializer {
                             end_frame: c.end_frame,
                             fps: c.fps,
                             looping: c.looping,
+                            texture_handle: c.texture_handle.raw(),
                         })
                         .collect(),
+                    default_clip: sa.default_clip.clone(),
                 });
 
             let relationship_data = scene
@@ -940,6 +950,8 @@ impl SceneSerializer {
                         end_frame: c.end_frame,
                         fps: c.fps,
                         looping: c.looping,
+                        texture_handle: Uuid::from_raw(c.texture_handle),
+                        texture: None,
                     })
                     .collect();
                 scene.add_component(
@@ -948,6 +960,7 @@ impl SceneSerializer {
                         cell_size: Vec2::from(sad.cell_size),
                         columns: sad.columns,
                         clips,
+                        default_clip: sad.default_clip.clone(),
                         ..Default::default()
                     },
                 );

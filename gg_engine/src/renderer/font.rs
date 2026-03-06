@@ -332,7 +332,7 @@ impl Font {
         res: &RendererResources<'_>,
         allocator: &Arc<Mutex<GpuAllocator>>,
         data: FontCpuData,
-    ) -> Self {
+    ) -> Result<Self, String> {
         let atlas_texture = Texture2D::from_rgba8_with_spec(
             res,
             allocator,
@@ -340,9 +340,9 @@ impl Font {
             data.atlas_height,
             &data.atlas_pixels,
             &TextureSpecification::font_atlas(),
-        );
+        )?;
 
-        Self {
+        Ok(Self {
             atlas_texture,
             glyphs: data.glyphs,
             kerning_pairs: data.kerning_pairs,
@@ -351,7 +351,7 @@ impl Font {
             descender: data.descender,
             atlas_width: data.atlas_width,
             atlas_height: data.atlas_height,
-        }
+        })
     }
 
     /// Create a Font from pre-generated CPU data, recording the atlas upload
@@ -361,7 +361,7 @@ impl Font {
         allocator: &Arc<Mutex<GpuAllocator>>,
         data: FontCpuData,
         batch: &mut TransferBatch,
-    ) -> Self {
+    ) -> Result<Self, String> {
         let atlas_texture = Texture2D::from_rgba8_with_spec_batched(
             res,
             allocator,
@@ -370,9 +370,9 @@ impl Font {
             &data.atlas_pixels,
             &TextureSpecification::font_atlas(),
             batch,
-        );
+        )?;
 
-        Self {
+        Ok(Self {
             atlas_texture,
             glyphs: data.glyphs,
             kerning_pairs: data.kerning_pairs,
@@ -381,7 +381,7 @@ impl Font {
             descender: data.descender,
             atlas_width: data.atlas_width,
             atlas_height: data.atlas_height,
-        }
+        })
     }
 
     /// Load a font from a TTF file and generate an MSDF atlas (synchronous).
@@ -394,7 +394,13 @@ impl Font {
                 return None;
             }
         };
-        Some(Self::from_cpu_data(res, allocator, cpu_data))
+        match Self::from_cpu_data(res, allocator, cpu_data) {
+            Ok(font) => Some(font),
+            Err(e) => {
+                log::error!("Failed to create font GPU resources for '{}': {e}", path.display());
+                None
+            }
+        }
     }
 
     /// Look up glyph information for a character.

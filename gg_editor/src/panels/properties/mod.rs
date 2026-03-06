@@ -363,7 +363,7 @@ fn draw_components(
         *scene_dirty = true;
     }
 
-    if sprite::draw_sprite_animator_component(ui, scene, entity, &bold_family, scene_dirty, undo_system) {
+    if sprite::draw_sprite_animator_component(ui, scene, entity, &bold_family, asset_manager, assets_root, scene_dirty, undo_system) {
         undo_system.record(scene);
         scene.remove_component::<SpriteAnimatorComponent>(entity);
         *scene_dirty = true;

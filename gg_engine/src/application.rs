@@ -269,11 +269,20 @@ impl<T: Application> ApplicationHandler for EngineRunner<T> {
                 match VulkanContext::new(&window) {
                     Ok(ctx) => {
                         // Create GPU memory sub-allocator.
-                        let allocator = Arc::new(Mutex::new(GpuAllocator::new(
+                        let gpu_alloc = match GpuAllocator::new(
                             ctx.instance(),
                             ctx.device(),
                             ctx.physical_device(),
-                        )));
+                        ) {
+                            Ok(a) => a,
+                            Err(e) => {
+                                log::error!(target: "gg_engine", "GPU allocator init failed: {e}");
+                                self.vulkan_context = Some(ctx);
+                                self.window = Some(window);
+                                return;
+                            }
+                        };
+                        let allocator = Arc::new(Mutex::new(gpu_alloc));
 
                         // Create swapchain.
                         match Swapchain::new(
@@ -314,14 +323,26 @@ impl<T: Application> ApplicationHandler for EngineRunner<T> {
                                     },
                                 ) {
                                     Ok(egui_rend) => {
-                                        self.renderer = Some(Renderer::new(
+                                        match Renderer::new(
                                             &ctx,
                                             &allocator,
                                             sc.render_pass(),
                                             sc.command_pool(),
                                             sc.format().format,
                                             sc.depth_format(),
-                                        ));
+                                        ) {
+                                            Ok(renderer) => {
+                                                self.renderer = Some(renderer);
+                                            }
+                                            Err(e) => {
+                                                log::error!(target: "gg_engine", "Renderer init failed: {e}");
+                                                self.swapchain = Some(sc);
+                                                self.allocator = Some(allocator);
+                                                self.vulkan_context = Some(ctx);
+                                                self.window = Some(window);
+                                                return;
+                                            }
+                                        }
                                         self.egui_winit_state = Some(egui_winit_state);
                                         self.egui_renderer = Some(egui_rend);
                                         self.swapchain = Some(sc);
@@ -331,7 +352,9 @@ impl<T: Application> ApplicationHandler for EngineRunner<T> {
 
                                         // Initialize built-in 2D renderer resources.
                                         if let Some(renderer) = &mut self.renderer {
-                                            renderer.init_2d();
+                                            if let Err(e) = renderer.init_2d() {
+                                                log::error!(target: "gg_engine", "2D renderer init failed: {e}");
+                                            }
                                         }
 
                                         // Notify the application that the renderer is ready.
@@ -344,10 +367,12 @@ impl<T: Application> ApplicationHandler for EngineRunner<T> {
                                         if let Some(fb) = self.app.scene_framebuffer() {
                                             if fb.color_attachment_count() > 1 {
                                                 if let Some(renderer) = &mut self.renderer {
-                                                    renderer.create_offscreen_batch_pipeline(
+                                                    if let Err(e) = renderer.create_offscreen_batch_pipeline(
                                                         fb.render_pass(),
                                                         fb.color_attachment_count() as u32,
-                                                    );
+                                                    ) {
+                                                        log::error!(target: "gg_engine", "Offscreen pipeline init failed: {e}");
+                                                    }
                                                 }
                                             }
                                         }
@@ -490,7 +515,10 @@ impl<T: Application> ApplicationHandler for EngineRunner<T> {
             if now.duration_since(stamp) >= RESIZE_DEBOUNCE {
                 self.pending_resize = None;
                 if let (Some(vk_ctx), Some(sc)) = (&self.vulkan_context, &mut self.swapchain) {
-                    sc.recreate(vk_ctx, w, h, None);
+                    if let Err(e) = sc.recreate(vk_ctx, w, h, None) {
+                        log::error!(target: "gg_engine", "Swapchain recreate failed: {e}");
+                        return;
+                    }
                     if let Some(renderer) = &mut self.renderer {
                         renderer.update_render_pass(sc.render_pass());
                     }
@@ -641,7 +669,9 @@ impl<T: Application> ApplicationHandler for EngineRunner<T> {
                         unsafe {
                             let _ = vk_ctx.device().device_wait_idle();
                         }
-                        fb.resize(w, h);
+                        if let Err(e) = fb.resize(w, h) {
+                            log::error!(target: "gg_engine", "Framebuffer resize failed: {e}");
+                        }
                     }
                 }
             }
@@ -729,7 +759,10 @@ impl<T: Application> ApplicationHandler for EngineRunner<T> {
                 let size = window.inner_size();
                 if size.width > 0 && size.height > 0 {
                     let mode_arg = if mode_changed { Some(desired) } else { None };
-                    swapchain.recreate(vk_ctx, size.width, size.height, mode_arg);
+                    if let Err(e) = swapchain.recreate(vk_ctx, size.width, size.height, mode_arg) {
+                        log::error!(target: "gg_engine", "Swapchain recreate failed: {e}");
+                        return;
+                    }
                     renderer.update_render_pass(swapchain.render_pass());
                     if let Err(e) = egui_renderer.set_render_pass(swapchain.render_pass()) {
                         log::error!(target: "gg_engine", "Failed to update egui render pass: {e:?}");

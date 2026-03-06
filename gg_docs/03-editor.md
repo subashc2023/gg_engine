@@ -137,7 +137,7 @@ The Properties panel has been split into sub-modules for better organization:
 | **RigidBody2D** | Body type, fixed rotation |
 | **BoxCollider2D** | Offset, size, density, friction, restitution, threshold |
 | **CircleCollider2D** | Radius, offset, density, friction, restitution, threshold |
-| **Audio Source** | Audio file (file picker + drag-drop from content browser), volume slider (0-1), pitch drag (0.1-4.0), looping checkbox, play on start checkbox |
+| **Audio Source** | Audio file (file picker + drag-drop from content browser), volume slider (0-1), pitch drag (0.1-4.0), looping checkbox, play on start checkbox, streaming checkbox, spatial audio checkbox with min/max distance controls |
 | **Tilemap** | Grid width/height, tile size (X/Y), tileset columns, cell size, spacing, margin, tileset texture (drag-drop), tile palette with visual preview grid, eraser, flip H/V toggles |
 | **Lua Script** | Script path (file picker + drag-and-drop), field overrides with live editing in play mode |
 | **Native Script** | Display-only (runtime-only component) |
@@ -216,6 +216,7 @@ Search field below the mode toggle filters entries by name (case-insensitive sub
   - FPS counter
   - Draw calls, quads, vertices, indices counts
   - VSync toggle
+  - Reload Shaders button (recompiles `.glsl` sources and rebuilds all pipelines at runtime; requires `glslc` on PATH)
   - Theme selector (combo box with `EditorTheme` variants)
 - **Debug** section:
   - Show Physics Colliders toggle

@@ -58,9 +58,9 @@ impl TransferBatch {
     }
 
     /// Ensure a command buffer is being recorded. Allocates one lazily.
-    fn ensure_active(&mut self) {
+    fn ensure_active(&mut self) -> Result<(), String> {
         if self.active_cmd_buf.is_some() {
-            return;
+            return Ok(());
         }
         let alloc_info = vk::CommandBufferAllocateInfo::default()
             .level(vk::CommandBufferLevel::PRIMARY)
@@ -68,7 +68,7 @@ impl TransferBatch {
             .command_buffer_count(1);
 
         let cmd_buf = unsafe { self.device.allocate_command_buffers(&alloc_info) }
-            .expect("Failed to allocate transfer command buffer")[0];
+            .map_err(|e| format!("Failed to allocate transfer command buffer: {e}"))?[0];
 
         let begin_info = vk::CommandBufferBeginInfo::default()
             .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT);
@@ -76,10 +76,11 @@ impl TransferBatch {
         unsafe {
             self.device
                 .begin_command_buffer(cmd_buf, &begin_info)
-                .expect("Failed to begin transfer command buffer");
+                .map_err(|e| format!("Failed to begin transfer command buffer: {e}"))?;
         }
 
         self.active_cmd_buf = Some(cmd_buf);
+        Ok(())
     }
 
     /// Record a staging-buffer-to-image copy with layout transitions.
@@ -91,8 +92,8 @@ impl TransferBatch {
         staging_alloc: GpuAllocation,
         width: u32,
         height: u32,
-    ) {
-        self.ensure_active();
+    ) -> Result<(), String> {
+        self.ensure_active()?;
         let cmd_buf = self.active_cmd_buf.unwrap();
 
         transition_image_layout(
@@ -140,29 +141,30 @@ impl TransferBatch {
         );
 
         self.active_staging.push((staging_buffer, staging_alloc));
+        Ok(())
     }
 
     /// Submit the active command buffer with a fence. No-op if nothing recorded.
-    pub fn submit(&mut self) {
+    pub fn submit(&mut self) -> Result<(), String> {
         let cmd_buf = match self.active_cmd_buf.take() {
             Some(cb) => cb,
-            None => return,
+            None => return Ok(()),
         };
 
         let fence_info = vk::FenceCreateInfo::default();
         let fence = unsafe { self.device.create_fence(&fence_info, None) }
-            .expect("Failed to create transfer fence");
+            .map_err(|e| format!("Failed to create transfer fence: {e}"))?;
 
         unsafe {
             self.device
                 .end_command_buffer(cmd_buf)
-                .expect("Failed to end transfer command buffer");
+                .map_err(|e| format!("Failed to end transfer command buffer: {e}"))?;
 
             let cmd_bufs = [cmd_buf];
             let submit_info = vk::SubmitInfo::default().command_buffers(&cmd_bufs);
             self.device
                 .queue_submit(self.graphics_queue, &[submit_info], fence)
-                .expect("Failed to submit transfer batch");
+                .map_err(|e| format!("Failed to submit transfer batch: {e}"))?;
         }
 
         let staging = std::mem::take(&mut self.active_staging);
@@ -171,6 +173,7 @@ impl TransferBatch {
             command_buffer: cmd_buf,
             staging_resources: staging,
         });
+        Ok(())
     }
 
     /// Poll all pending fences. Free staging resources for completed batches.
@@ -199,7 +202,9 @@ impl TransferBatch {
     /// Wait for all pending transfers to complete (used at shutdown).
     pub fn wait_all(&mut self) {
         // Submit any active batch first.
-        self.submit();
+        if let Err(e) = self.submit() {
+            log::error!(target: "gg_engine", "Failed to submit final transfer batch: {e}");
+        }
 
         if self.pending.is_empty() {
             return;
@@ -363,7 +368,13 @@ impl Texture2D {
         let (width, height) = rgba.dimensions();
         let pixels = rgba.into_raw();
 
-        Some(Self::from_rgba8(res, allocator, width, height, &pixels))
+        match Self::from_rgba8(res, allocator, width, height, &pixels) {
+            Ok(tex) => Some(tex),
+            Err(e) => {
+                log::error!("Failed to create texture GPU resources: {e}");
+                None
+            }
+        }
     }
 
     /// Create a texture from raw RGBA8 pixel data with default spec (sRGB, nearest, repeat).
@@ -373,7 +384,7 @@ impl Texture2D {
         width: u32,
         height: u32,
         pixels: &[u8],
-    ) -> Self {
+    ) -> Result<Self, String> {
         Self::from_rgba8_with_spec(res, allocator, width, height, pixels, &TextureSpecification::default())
     }
 
@@ -385,7 +396,7 @@ impl Texture2D {
         height: u32,
         pixels: &[u8],
         spec: &TextureSpecification,
-    ) -> Self {
+    ) -> Result<Self, String> {
         let _timer = ProfileTimer::new("Texture2D::from_rgba8_with_spec");
         let image_size = (width * height * 4) as vk::DeviceSize;
         assert_eq!(pixels.len() as vk::DeviceSize, image_size);
@@ -400,7 +411,7 @@ impl Texture2D {
 
         // 1. Create staging buffer with pixel data.
         let (staging_buffer, _staging_alloc) =
-            create_staging_buffer(allocator, device, pixels);
+            create_staging_buffer(allocator, device, pixels)?;
 
         // 2. Create Vulkan image.
         let image_info = vk::ImageCreateInfo::default()
@@ -420,12 +431,12 @@ impl Texture2D {
             .samples(vk::SampleCountFlags::TYPE_1);
 
         let image =
-            unsafe { device.create_image(&image_info, None) }.expect("Failed to create image");
+            unsafe { device.create_image(&image_info, None) }
+                .map_err(|e| format!("Failed to create texture image: {e}"))?;
 
         // 3. Allocate and bind DEVICE_LOCAL memory via sub-allocator.
         let allocation =
-            GpuAllocator::allocate_for_image(allocator, device, image, "Texture2D", MemoryLocation::GpuOnly)
-                .expect("GPU image allocation failed for Texture2D");
+            GpuAllocator::allocate_for_image(allocator, device, image, "Texture2D", MemoryLocation::GpuOnly)?;
 
         // 4. One-shot command buffer: transition + copy + transition.
         execute_one_shot(device, command_pool, graphics_queue, |cmd_buf| {
@@ -472,7 +483,7 @@ impl Texture2D {
                 vk::ImageLayout::TRANSFER_DST_OPTIMAL,
                 vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
             );
-        });
+        })?;
 
         // 5. Staging buffer + allocation auto-freed when _staging_alloc drops.
         unsafe {
@@ -494,7 +505,7 @@ impl Texture2D {
             });
 
         let image_view = unsafe { device.create_image_view(&view_info, None) }
-            .expect("Failed to create image view");
+            .map_err(|e| format!("Failed to create texture image view: {e}"))?;
 
         // 7. Create sampler.
         let mipmap_mode = match spec.filter {
@@ -519,7 +530,7 @@ impl Texture2D {
             .max_lod(0.0);
 
         let sampler = unsafe { device.create_sampler(&sampler_info, None) }
-            .expect("Failed to create sampler");
+            .map_err(|e| format!("Failed to create texture sampler: {e}"))?;
 
         // 8. Allocate descriptor set and write combined image sampler.
         let layouts = [descriptor_set_layout];
@@ -528,7 +539,7 @@ impl Texture2D {
             .set_layouts(&layouts);
 
         let ds_vec = unsafe { device.allocate_descriptor_sets(&ds_alloc_info) }
-            .expect("Failed to allocate descriptor set");
+            .map_err(|e| format!("Failed to allocate texture descriptor set: {e}"))?;
         let descriptor_set = ds_vec[0];
 
         let image_info_ds = vk::DescriptorImageInfo::default()
@@ -547,7 +558,7 @@ impl Texture2D {
             device.update_descriptor_sets(&[write], &[]);
         }
 
-        Self {
+        Ok(Self {
             image,
             _allocation: allocation,
             image_view,
@@ -558,7 +569,7 @@ impl Texture2D {
             _width: width,
             _height: height,
             device: device.clone(),
-        }
+        })
     }
 
     /// The descriptor set for binding this texture in a draw call.
@@ -610,7 +621,7 @@ impl Texture2D {
         allocator: &Arc<Mutex<GpuAllocator>>,
         data: &TextureCpuData,
         batch: &mut TransferBatch,
-    ) -> Self {
+    ) -> Result<Self, String> {
         Self::from_rgba8_with_spec_batched(
             res, allocator, data.width, data.height, &data.pixels, &data.spec, batch,
         )
@@ -630,7 +641,7 @@ impl Texture2D {
         pixels: &[u8],
         spec: &TextureSpecification,
         batch: &mut TransferBatch,
-    ) -> Self {
+    ) -> Result<Self, String> {
         let _timer = ProfileTimer::new("Texture2D::from_rgba8_with_spec_batched");
         let image_size = (width * height * 4) as vk::DeviceSize;
         assert_eq!(pixels.len() as vk::DeviceSize, image_size);
@@ -643,7 +654,7 @@ impl Texture2D {
 
         // 1. Create staging buffer with pixel data.
         let (staging_buffer, staging_alloc) =
-            create_staging_buffer(allocator, device, pixels);
+            create_staging_buffer(allocator, device, pixels)?;
 
         // 2. Create Vulkan image.
         let image_info = vk::ImageCreateInfo::default()
@@ -663,15 +674,15 @@ impl Texture2D {
             .samples(vk::SampleCountFlags::TYPE_1);
 
         let image =
-            unsafe { device.create_image(&image_info, None) }.expect("Failed to create image");
+            unsafe { device.create_image(&image_info, None) }
+                .map_err(|e| format!("Failed to create texture image: {e}"))?;
 
         // 3. Allocate and bind DEVICE_LOCAL memory via sub-allocator.
         let allocation =
-            GpuAllocator::allocate_for_image(allocator, device, image, "Texture2D", MemoryLocation::GpuOnly)
-                .expect("GPU image allocation failed for Texture2D");
+            GpuAllocator::allocate_for_image(allocator, device, image, "Texture2D", MemoryLocation::GpuOnly)?;
 
         // 4. Record the staging copy + layout transitions into the batch.
-        batch.record_image_upload(image, staging_buffer, staging_alloc, width, height);
+        batch.record_image_upload(image, staging_buffer, staging_alloc, width, height)?;
 
         // 5. Create image view.
         let view_info = vk::ImageViewCreateInfo::default()
@@ -687,7 +698,7 @@ impl Texture2D {
             });
 
         let image_view = unsafe { device.create_image_view(&view_info, None) }
-            .expect("Failed to create image view");
+            .map_err(|e| format!("Failed to create texture image view: {e}"))?;
 
         // 6. Create sampler.
         let mipmap_mode = match spec.filter {
@@ -712,7 +723,7 @@ impl Texture2D {
             .max_lod(0.0);
 
         let sampler = unsafe { device.create_sampler(&sampler_info, None) }
-            .expect("Failed to create sampler");
+            .map_err(|e| format!("Failed to create texture sampler: {e}"))?;
 
         // 7. Allocate descriptor set and write combined image sampler.
         let layouts = [descriptor_set_layout];
@@ -721,7 +732,7 @@ impl Texture2D {
             .set_layouts(&layouts);
 
         let ds_vec = unsafe { device.allocate_descriptor_sets(&ds_alloc_info) }
-            .expect("Failed to allocate descriptor set");
+            .map_err(|e| format!("Failed to allocate texture descriptor set: {e}"))?;
         let descriptor_set = ds_vec[0];
 
         let image_info_ds = vk::DescriptorImageInfo::default()
@@ -740,7 +751,7 @@ impl Texture2D {
             device.update_descriptor_sets(&[write], &[]);
         }
 
-        Self {
+        Ok(Self {
             image,
             _allocation: allocation,
             image_view,
@@ -751,7 +762,7 @@ impl Texture2D {
             _width: width,
             _height: height,
             device: device.clone(),
-        }
+        })
     }
 }
 
@@ -780,14 +791,14 @@ fn execute_one_shot(
     command_pool: vk::CommandPool,
     queue: vk::Queue,
     record: impl FnOnce(vk::CommandBuffer),
-) {
+) -> Result<(), String> {
     let alloc_info = vk::CommandBufferAllocateInfo::default()
         .level(vk::CommandBufferLevel::PRIMARY)
         .command_pool(command_pool)
         .command_buffer_count(1);
 
     let cmd_buf = unsafe { device.allocate_command_buffers(&alloc_info) }
-        .expect("Failed to allocate one-shot command buffer")[0];
+        .map_err(|e| format!("Failed to allocate one-shot command buffer: {e}"))?[0];
 
     let begin_info =
         vk::CommandBufferBeginInfo::default().flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT);
@@ -795,7 +806,7 @@ fn execute_one_shot(
     unsafe {
         device
             .begin_command_buffer(cmd_buf, &begin_info)
-            .expect("Failed to begin one-shot command buffer");
+            .map_err(|e| format!("Failed to begin one-shot command buffer: {e}"))?;
     }
 
     record(cmd_buf);
@@ -803,19 +814,20 @@ fn execute_one_shot(
     unsafe {
         device
             .end_command_buffer(cmd_buf)
-            .expect("Failed to end one-shot command buffer");
+            .map_err(|e| format!("Failed to end one-shot command buffer: {e}"))?;
 
         let cmd_bufs = [cmd_buf];
         let submit_info = vk::SubmitInfo::default().command_buffers(&cmd_bufs);
         device
             .queue_submit(queue, &[submit_info], vk::Fence::null())
-            .expect("Failed to submit one-shot command buffer");
+            .map_err(|e| format!("Failed to submit one-shot command buffer: {e}"))?;
         device
             .queue_wait_idle(queue)
-            .expect("Failed to wait for queue idle");
+            .map_err(|e| format!("Failed to wait for queue idle: {e}"))?;
 
         device.free_command_buffers(command_pool, &[cmd_buf]);
     }
+    Ok(())
 }
 
 /// Insert a pipeline barrier to transition an image between layouts.

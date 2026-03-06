@@ -37,7 +37,7 @@ impl UniformBuffer {
         allocator: &Arc<Mutex<GpuAllocator>>,
         device: &ash::Device,
         size: usize,
-    ) -> Self {
+    ) -> Result<Self, String> {
         let mut buffers = [vk::Buffer::null(); FRAMES_IN_FLIGHT];
         let mut allocations: [Option<GpuAllocation>; FRAMES_IN_FLIGHT] = [None, None];
 
@@ -48,17 +48,17 @@ impl UniformBuffer {
                 size as vk::DeviceSize,
                 vk::BufferUsageFlags::UNIFORM_BUFFER,
                 "UniformBuffer",
-            );
+            )?;
 
             buffers[i] = buffer;
             allocations[i] = Some(allocation);
         }
 
-        Self {
+        Ok(Self {
             buffers,
             allocations,
             device: device.clone(),
-        }
+        })
     }
 
     /// Write data to the UBO for the given frame-in-flight index.

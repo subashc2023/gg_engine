@@ -264,11 +264,14 @@ pub(crate) fn draw_sprite_renderer_component(
     remove
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn draw_sprite_animator_component(
     ui: &mut egui::Ui,
     scene: &mut Scene,
     entity: Entity,
     bold_family: &egui::FontFamily,
+    asset_manager: &mut Option<EditorAssetManager>,
+    assets_root: &std::path::Path,
     scene_dirty: &mut bool,
     _undo_system: &mut crate::undo::UndoSystem,
 ) -> bool {
@@ -282,12 +285,101 @@ pub(crate) fn draw_sprite_animator_component(
         .id_salt(("sprite_animator", entity.id()))
         .default_open(true)
         .show(ui, |ui| {
-            let (mut cell_w, mut cell_h, mut columns) = {
+            let (mut cell_w, mut cell_h, mut columns, mut default_clip, clip_names) = {
                 let sa = scene
                     .get_component::<SpriteAnimatorComponent>(entity)
                     .unwrap();
-                (sa.cell_size.x, sa.cell_size.y, sa.columns)
+                (
+                    sa.cell_size.x,
+                    sa.cell_size.y,
+                    sa.columns,
+                    sa.default_clip.clone(),
+                    sa.clips.iter().map(|c| c.name.clone()).collect::<Vec<_>>(),
+                )
             };
+
+            // --- Preview controls ---
+            ui.horizontal(|ui| {
+                let is_previewing = scene
+                    .get_component::<SpriteAnimatorComponent>(entity)
+                    .map(|sa| sa.is_previewing() && sa.is_playing())
+                    .unwrap_or(false);
+
+                if is_previewing {
+                    if ui.button("Pause").clicked() {
+                        if let Some(mut sa) =
+                            scene.get_component_mut::<SpriteAnimatorComponent>(entity)
+                        {
+                            sa.stop();
+                        }
+                    }
+                } else if ui.button("Preview").clicked() {
+                    if let Some(mut sa) =
+                        scene.get_component_mut::<SpriteAnimatorComponent>(entity)
+                    {
+                        sa.set_previewing(true);
+                        // If no clip is selected, play the first clip or default.
+                        if sa.current_clip_index().is_none() {
+                            if !sa.default_clip.is_empty() {
+                                let name = sa.default_clip.clone();
+                                sa.play(&name);
+                            } else if !sa.clips.is_empty() {
+                                let name = sa.clips[0].name.clone();
+                                sa.play(&name);
+                            }
+                        } else {
+                            // Resume from where we paused.
+                            let idx = sa.current_clip_index().unwrap();
+                            if let Some(clip) = sa.clips.get(idx) {
+                                let name = clip.name.clone();
+                                sa.play(&name);
+                            }
+                        }
+                    }
+                }
+
+                if ui.button("Stop").clicked() {
+                    if let Some(mut sa) =
+                        scene.get_component_mut::<SpriteAnimatorComponent>(entity)
+                    {
+                        sa.reset();
+                    }
+                }
+
+                // Show clip selector for preview.
+                let mut preview_clip_idx: usize = scene
+                    .get_component::<SpriteAnimatorComponent>(entity)
+                    .and_then(|sa| sa.current_clip_index())
+                    .unwrap_or(0);
+                if !clip_names.is_empty() {
+                    let prev_idx = preview_clip_idx;
+                    egui::ComboBox::from_id_salt(("preview_clip", entity.id()))
+                        .selected_text(
+                            clip_names
+                                .get(preview_clip_idx)
+                                .cloned()
+                                .unwrap_or_default(),
+                        )
+                        .show_ui(ui, |ui| {
+                            for (i, name) in clip_names.iter().enumerate() {
+                                ui.selectable_value(&mut preview_clip_idx, i, name);
+                            }
+                        });
+                    if preview_clip_idx != prev_idx {
+                        if let Some(mut sa) =
+                            scene.get_component_mut::<SpriteAnimatorComponent>(entity)
+                        {
+                            if let Some(clip) = sa.clips.get(preview_clip_idx) {
+                                let name = clip.name.clone();
+                                sa.play(&name);
+                                sa.set_previewing(true);
+                            }
+                        }
+                    }
+                }
+            });
+
+            ui.separator();
 
             let mut changed = false;
             ui.horizontal(|ui| {
@@ -304,6 +396,55 @@ pub(crate) fn draw_sprite_animator_component(
                 changed |= ui
                     .add(egui::DragValue::new(&mut columns).range(1..=256).speed(0.1))
                     .changed();
+
+                // Auto-detect columns from sprite texture size.
+                if ui.button("Auto").clicked() && cell_w > 0.0 {
+                    let tex_width = scene
+                        .get_component::<SpriteRendererComponent>(entity)
+                        .and_then(|sprite| sprite.texture.as_ref().map(|t| t.width()));
+                    if let Some(w) = tex_width {
+                        columns = (w as f32 / cell_w).floor().max(1.0) as u32;
+                        changed = true;
+                    }
+                }
+            });
+
+            // Default clip selector.
+            ui.horizontal(|ui| {
+                ui.label("Default Clip");
+                let mut default_changed = false;
+                egui::ComboBox::from_id_salt(("default_clip", entity.id()))
+                    .selected_text(if default_clip.is_empty() {
+                        "(none)"
+                    } else {
+                        &default_clip
+                    })
+                    .show_ui(ui, |ui| {
+                        if ui
+                            .selectable_label(default_clip.is_empty(), "(none)")
+                            .clicked()
+                        {
+                            default_clip.clear();
+                            default_changed = true;
+                        }
+                        for name in &clip_names {
+                            if ui
+                                .selectable_label(*name == default_clip, name)
+                                .clicked()
+                            {
+                                default_clip = name.clone();
+                                default_changed = true;
+                            }
+                        }
+                    });
+                if default_changed {
+                    if let Some(mut sa) =
+                        scene.get_component_mut::<SpriteAnimatorComponent>(entity)
+                    {
+                        sa.default_clip = default_clip.clone();
+                        *scene_dirty = true;
+                    }
+                }
             });
 
             if changed {
@@ -324,7 +465,7 @@ pub(crate) fn draw_sprite_animator_component(
 
             let mut clip_to_remove = None;
             for i in 0..clip_count {
-                let (mut name, mut start, mut end, mut fps, mut looping) = {
+                let (mut name, mut start, mut end, mut fps, mut looping, clip_tex_handle) = {
                     let sa = scene
                         .get_component::<SpriteAnimatorComponent>(entity)
                         .unwrap();
@@ -335,6 +476,7 @@ pub(crate) fn draw_sprite_animator_component(
                         c.end_frame,
                         c.fps,
                         c.looping,
+                        c.texture_handle.raw(),
                     )
                 };
 
@@ -382,6 +524,71 @@ pub(crate) fn draw_sprite_animator_component(
                             )
                             .changed();
                         clip_changed |= ui.checkbox(&mut looping, "Loop").changed();
+                    });
+
+                    // Per-clip texture picker.
+                    ui.horizontal(|ui| {
+                        let tex_label = if clip_tex_handle != 0 {
+                            if let Some(am) = asset_manager.as_ref() {
+                                let handle = Uuid::from_raw(clip_tex_handle);
+                                am.get_metadata(&handle)
+                                    .map(|m| {
+                                        std::path::Path::new(&m.file_path)
+                                            .file_name()
+                                            .unwrap_or_default()
+                                            .to_string_lossy()
+                                            .to_string()
+                                    })
+                                    .unwrap_or_else(|| format!("{}", clip_tex_handle))
+                            } else {
+                                format!("{}", clip_tex_handle)
+                            }
+                        } else {
+                            "Sprite Texture".to_string()
+                        };
+
+                        ui.label("Texture");
+                        let btn_resp = ui.button(&tex_label);
+
+                        if btn_resp.clicked() {
+                            if let Some(am) = asset_manager.as_mut() {
+                                let textures_dir = assets_root.join("textures");
+                                let textures_dir_str = textures_dir.to_string_lossy();
+                                if let Some(path_str) =
+                                    FileDialogs::open_file_in("Image files", &["png", "jpg", "jpeg"], &textures_dir_str)
+                                {
+                                    let abs_path = std::path::PathBuf::from(&path_str);
+                                    let rel_path = abs_path
+                                        .strip_prefix(am.asset_directory())
+                                        .map(|p| p.to_string_lossy().to_string())
+                                        .unwrap_or(path_str);
+                                    let handle = am.import_asset(&rel_path);
+                                    if let Some(mut sa) =
+                                        scene.get_component_mut::<SpriteAnimatorComponent>(entity)
+                                    {
+                                        if let Some(c) = sa.clips.get_mut(i) {
+                                            c.texture_handle = handle;
+                                            c.texture = None;
+                                            *scene_dirty = true;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        if clip_tex_handle != 0 {
+                            if ui.small_button("Clear").clicked() {
+                                if let Some(mut sa) =
+                                    scene.get_component_mut::<SpriteAnimatorComponent>(entity)
+                                {
+                                    if let Some(c) = sa.clips.get_mut(i) {
+                                        c.texture_handle = Uuid::from_raw(0);
+                                        c.texture = None;
+                                        *scene_dirty = true;
+                                    }
+                                }
+                            }
+                        }
                     });
 
                     if clip_changed {

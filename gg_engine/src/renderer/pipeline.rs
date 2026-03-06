@@ -65,7 +65,7 @@ pub(crate) fn create_pipeline(
     descriptor_set_layouts: &[vk::DescriptorSetLayout],
     blend_enable: bool,
     pipeline_cache: vk::PipelineCache,
-) -> Pipeline {
+) -> Result<Pipeline, String> {
     let _timer = ProfileTimer::new("Pipeline::create");
     let entry_point = c"main";
 
@@ -170,7 +170,7 @@ pub(crate) fn create_pipeline(
         .push_constant_ranges(push_constant_ranges)
         .set_layouts(&all_layouts);
     let pipeline_layout = unsafe { device.create_pipeline_layout(&layout_info, None) }
-        .expect("Failed to create pipeline layout");
+        .map_err(|e| format!("Failed to create pipeline layout: {e}"))?;
 
     let pipeline_info = vk::GraphicsPipelineCreateInfo::default()
         .stages(&shader_stages)
@@ -189,13 +189,16 @@ pub(crate) fn create_pipeline(
     let pipeline = unsafe {
         device.create_graphics_pipelines(pipeline_cache, &[pipeline_info], None)
     }
-    .expect("Failed to create graphics pipeline")[0];
+    .map_err(|(_, e)| {
+        unsafe { device.destroy_pipeline_layout(pipeline_layout, None); }
+        format!("Failed to create graphics pipeline: {e}")
+    })?[0];
 
-    Pipeline {
+    Ok(Pipeline {
         pipeline,
         layout: pipeline_layout,
         device: device.clone(),
-    }
+    })
 }
 
 /// Create a Vulkan graphics pipeline for batch rendering.
@@ -213,7 +216,7 @@ pub(crate) fn create_batch_pipeline(
     descriptor_set_layouts: &[vk::DescriptorSetLayout],
     color_attachment_count: u32,
     pipeline_cache: vk::PipelineCache,
-) -> Pipeline {
+) -> Result<Pipeline, String> {
     let _timer = ProfileTimer::new("Pipeline::create_batch");
     let entry_point = c"main";
 
@@ -299,7 +302,7 @@ pub(crate) fn create_batch_pipeline(
 
     let layout_info = vk::PipelineLayoutCreateInfo::default().set_layouts(&all_layouts);
     let pipeline_layout = unsafe { device.create_pipeline_layout(&layout_info, None) }
-        .expect("Failed to create batch pipeline layout");
+        .map_err(|e| format!("Failed to create batch pipeline layout: {e}"))?;
 
     let pipeline_info = vk::GraphicsPipelineCreateInfo::default()
         .stages(&shader_stages)
@@ -318,13 +321,16 @@ pub(crate) fn create_batch_pipeline(
     let pipeline = unsafe {
         device.create_graphics_pipelines(pipeline_cache, &[pipeline_info], None)
     }
-    .expect("Failed to create batch graphics pipeline")[0];
+    .map_err(|(_, e)| {
+        unsafe { device.destroy_pipeline_layout(pipeline_layout, None); }
+        format!("Failed to create batch graphics pipeline: {e}")
+    })?[0];
 
-    Pipeline {
+    Ok(Pipeline {
         pipeline,
         layout: pipeline_layout,
         device: device.clone(),
-    }
+    })
 }
 
 /// Create a Vulkan graphics pipeline for batch **line** rendering.
@@ -341,7 +347,7 @@ pub(crate) fn create_line_batch_pipeline(
     camera_ubo_ds_layout: vk::DescriptorSetLayout,
     color_attachment_count: u32,
     pipeline_cache: vk::PipelineCache,
-) -> Pipeline {
+) -> Result<Pipeline, String> {
     let _timer = ProfileTimer::new("Pipeline::create_line_batch");
     let entry_point = c"main";
 
@@ -428,7 +434,7 @@ pub(crate) fn create_line_batch_pipeline(
 
     let layout_info = vk::PipelineLayoutCreateInfo::default().set_layouts(&all_layouts);
     let pipeline_layout = unsafe { device.create_pipeline_layout(&layout_info, None) }
-        .expect("Failed to create line batch pipeline layout");
+        .map_err(|e| format!("Failed to create line batch pipeline layout: {e}"))?;
 
     let pipeline_info = vk::GraphicsPipelineCreateInfo::default()
         .stages(&shader_stages)
@@ -447,11 +453,14 @@ pub(crate) fn create_line_batch_pipeline(
     let pipeline = unsafe {
         device.create_graphics_pipelines(pipeline_cache, &[pipeline_info], None)
     }
-    .expect("Failed to create line batch graphics pipeline")[0];
+    .map_err(|(_, e)| {
+        unsafe { device.destroy_pipeline_layout(pipeline_layout, None); }
+        format!("Failed to create line batch graphics pipeline: {e}")
+    })?[0];
 
-    Pipeline {
+    Ok(Pipeline {
         pipeline,
         layout: pipeline_layout,
         device: device.clone(),
-    }
+    })
 }

@@ -99,7 +99,7 @@ impl Renderer {
         command_pool: vk::CommandPool,
         color_format: vk::Format,
         depth_format: vk::Format,
-    ) -> Self {
+    ) -> Result<Self, String> {
         let device = vk_ctx.device();
         let api = RendererAPI::Vulkan(VulkanRendererAPI::new(device));
 
@@ -119,7 +119,7 @@ impl Renderer {
             .max_sets(102)
             .flags(vk::DescriptorPoolCreateFlags::FREE_DESCRIPTOR_SET);
         let descriptor_pool = unsafe { device.create_descriptor_pool(&pool_info, None) }
-            .expect("Failed to create descriptor pool");
+            .map_err(|e| format!("Failed to create descriptor pool: {e}"))?;
 
         // Create descriptor set layout: binding 0 = combined image sampler, fragment stage.
         let binding = vk::DescriptorSetLayoutBinding::default()
@@ -131,7 +131,7 @@ impl Renderer {
             vk::DescriptorSetLayoutCreateInfo::default().bindings(std::slice::from_ref(&binding));
         let texture_descriptor_set_layout =
             unsafe { device.create_descriptor_set_layout(&layout_info, None) }
-                .expect("Failed to create descriptor set layout");
+                .map_err(|e| format!("Failed to create descriptor set layout: {e}"))?;
 
         // -- Camera UBO descriptor set layout: binding 0, UNIFORM_BUFFER, vertex stage --
         let ubo_binding = vk::DescriptorSetLayoutBinding::default()
@@ -143,10 +143,10 @@ impl Renderer {
             .bindings(std::slice::from_ref(&ubo_binding));
         let camera_ubo_ds_layout =
             unsafe { device.create_descriptor_set_layout(&ubo_layout_info, None) }
-                .expect("Failed to create camera UBO descriptor set layout");
+                .map_err(|e| format!("Failed to create camera UBO descriptor set layout: {e}"))?;
 
         // -- Camera UBO buffer (64 bytes, double-buffered) --
-        let camera_ubo = UniformBuffer::new(allocator, device, CameraData::SIZE);
+        let camera_ubo = UniformBuffer::new(allocator, device, CameraData::SIZE)?;
 
         // -- Allocate 2 descriptor sets for the camera UBO --
         let ubo_layouts = [camera_ubo_ds_layout; 2];
@@ -154,7 +154,7 @@ impl Renderer {
             .descriptor_pool(descriptor_pool)
             .set_layouts(&ubo_layouts);
         let ubo_ds_vec = unsafe { device.allocate_descriptor_sets(&ubo_ds_alloc_info) }
-            .expect("Failed to allocate camera UBO descriptor sets");
+            .map_err(|e| format!("Failed to allocate camera UBO descriptor sets: {e}"))?;
         let camera_ubo_ds = [ubo_ds_vec[0], ubo_ds_vec[1]];
 
         // -- Write each descriptor set pointing to the UBO buffer --
@@ -182,7 +182,7 @@ impl Renderer {
             vk::PipelineCacheCreateInfo::default().initial_data(&cache_data)
         };
         let pipeline_cache = unsafe { device.create_pipeline_cache(&cache_create_info, None) }
-            .expect("Failed to create pipeline cache");
+            .map_err(|e| format!("Failed to create pipeline cache: {e}"))?;
 
         let transfer_batch = TransferBatch::new(
             device,
@@ -190,7 +190,7 @@ impl Renderer {
             vk_ctx.graphics_queue(),
         );
 
-        Self {
+        Ok(Self {
             api,
             draw_context: None,
             view_projection: Mat4::IDENTITY,
@@ -211,7 +211,7 @@ impl Renderer {
             line_width: 4.0,
             last_stats_2d: Renderer2DStats::default(),
             transfer_batch,
-        }
+        })
     }
 
     // -- Pipeline cache persistence -------------------------------------------
@@ -249,19 +249,19 @@ impl Renderer {
     // -- Public resource creation API -----------------------------------------
 
     /// Create a shader from pre-compiled SPIR-V bytecode.
-    pub fn create_shader(&self, name: &str, vert_spv: &[u8], frag_spv: &[u8]) -> Arc<Shader> {
-        Arc::new(Shader::new(&self.device, name, vert_spv, frag_spv))
+    pub fn create_shader(&self, name: &str, vert_spv: &[u8], frag_spv: &[u8]) -> Result<Arc<Shader>, String> {
+        Ok(Arc::new(Shader::new(&self.device, name, vert_spv, frag_spv)?))
     }
 
     /// Create a GPU vertex buffer from raw byte data.
     ///
     /// Use [`as_bytes`](super::as_bytes) to convert typed vertex slices.
-    pub fn create_vertex_buffer(&self, data: &[u8]) -> VertexBuffer {
+    pub fn create_vertex_buffer(&self, data: &[u8]) -> Result<VertexBuffer, String> {
         VertexBuffer::new(&self.allocator, &self.device, data)
     }
 
     /// Create a GPU index buffer from u32 indices.
-    pub fn create_index_buffer(&self, indices: &[u32]) -> IndexBuffer {
+    pub fn create_index_buffer(&self, indices: &[u32]) -> Result<IndexBuffer, String> {
         IndexBuffer::new(&self.allocator, &self.device, indices)
     }
 
@@ -282,8 +282,8 @@ impl Renderer {
         va: &VertexArray,
         has_material_color: bool,
         blend_enable: bool,
-    ) -> Arc<Pipeline> {
-        Arc::new(pipeline::create_pipeline(
+    ) -> Result<Arc<Pipeline>, String> {
+        Ok(Arc::new(pipeline::create_pipeline(
             &self.device,
             shader,
             va,
@@ -293,14 +293,14 @@ impl Renderer {
             &[],
             blend_enable,
             self.pipeline_cache,
-        ))
+        )?))
     }
 
     /// Create a graphics pipeline for textured rendering.
     ///
     /// Includes the texture descriptor set layout and enables alpha blending.
-    pub fn create_texture_pipeline(&self, shader: &Shader, va: &VertexArray) -> Arc<Pipeline> {
-        Arc::new(pipeline::create_pipeline(
+    pub fn create_texture_pipeline(&self, shader: &Shader, va: &VertexArray) -> Result<Arc<Pipeline>, String> {
+        Ok(Arc::new(pipeline::create_pipeline(
             &self.device,
             shader,
             va,
@@ -310,7 +310,7 @@ impl Renderer {
             &[self.texture_descriptor_set_layout],
             true,
             self.pipeline_cache,
-        ))
+        )?))
     }
 
     /// Load a texture from an image file.
@@ -326,13 +326,13 @@ impl Renderer {
     }
 
     /// Create a texture from raw RGBA8 pixel data.
-    pub fn create_texture_from_rgba8(&self, width: u32, height: u32, pixels: &[u8]) -> Texture2D {
-        let mut texture = Texture2D::from_rgba8(&self.resources(), &self.allocator, width, height, pixels);
+    pub fn create_texture_from_rgba8(&self, width: u32, height: u32, pixels: &[u8]) -> Result<Texture2D, String> {
+        let mut texture = Texture2D::from_rgba8(&self.resources(), &self.allocator, width, height, pixels)?;
         if let Some(data) = &self.renderer_2d {
             let index = data.register_texture(&texture);
             texture.set_bindless_index(index);
         }
-        texture
+        Ok(texture)
     }
 
     /// Load a font from a TTF file and generate an MSDF atlas.
@@ -351,7 +351,7 @@ impl Renderer {
     /// Upload a texture from pre-loaded CPU data (async path).
     /// Records the staging copy into the internal [`TransferBatch`] — call
     /// [`flush_transfers`] before rendering to submit the batch.
-    pub fn upload_texture(&mut self, data: &TextureCpuData) -> Texture2D {
+    pub fn upload_texture(&mut self, data: &TextureCpuData) -> Result<Texture2D, String> {
         let res = super::RendererResources {
             device: &self.device,
             graphics_queue: self.graphics_queue,
@@ -363,17 +363,17 @@ impl Renderer {
         };
         let mut texture = Texture2D::from_cpu_data_batched(
             &res, &self.allocator, data, &mut self.transfer_batch,
-        );
+        )?;
         if let Some(r2d) = &self.renderer_2d {
             let index = r2d.register_texture(&texture);
             texture.set_bindless_index(index);
         }
-        texture
+        Ok(texture)
     }
 
     /// Upload a font from pre-generated CPU data (async path).
     /// Records the atlas upload into the internal [`TransferBatch`].
-    pub fn upload_font(&mut self, data: FontCpuData) -> Font {
+    pub fn upload_font(&mut self, data: FontCpuData) -> Result<Font, String> {
         let res = super::RendererResources {
             device: &self.device,
             graphics_queue: self.graphics_queue,
@@ -385,19 +385,21 @@ impl Renderer {
         };
         let mut font = Font::from_cpu_data_batched(
             &res, &self.allocator, data, &mut self.transfer_batch,
-        );
+        )?;
         if let Some(r2d) = &self.renderer_2d {
             let index = r2d.register_texture(&font.atlas_texture);
             font.atlas_texture.set_bindless_index(index);
         }
-        font
+        Ok(font)
     }
 
     /// Submit any pending texture/font uploads as a single command buffer with
     /// a fence. Call this before rendering to ensure uploaded textures are
     /// available. No-op if nothing is pending.
     pub fn flush_transfers(&mut self) {
-        self.transfer_batch.submit();
+        if let Err(e) = self.transfer_batch.submit() {
+            log::error!("Failed to submit transfer batch: {e}");
+        }
     }
 
     /// Poll completed transfer fences and free their staging buffers.
@@ -422,7 +424,7 @@ impl Renderer {
     }
 
     /// Create an offscreen framebuffer for rendering to a texture.
-    pub fn create_framebuffer(&self, spec: FramebufferSpec) -> Framebuffer {
+    pub fn create_framebuffer(&self, spec: FramebufferSpec) -> Result<Framebuffer, String> {
         Framebuffer::new(&self.resources(), &self.allocator, spec)
     }
 
@@ -451,7 +453,7 @@ impl Renderer {
         &mut self,
         render_pass: vk::RenderPass,
         color_attachment_count: u32,
-    ) {
+    ) -> Result<(), String> {
         if let Some(data) = &mut self.renderer_2d {
             data.create_offscreen_pipeline(
                 &self.device,
@@ -459,8 +461,9 @@ impl Renderer {
                 self.camera_ubo_ds_layout,
                 color_attachment_count,
                 self.pipeline_cache,
-            );
+            )?;
         }
+        Ok(())
     }
 
     /// Tell the batch renderer to use the offscreen pipeline (or switch back).
@@ -470,14 +473,30 @@ impl Renderer {
         }
     }
 
+    /// Hot-reload all shaders from the given source directory.
+    ///
+    /// Compiles `.glsl` files with `glslc` at runtime, creates new shader
+    /// modules, and rebuilds all pipelines. Waits for GPU idle before
+    /// swapping. On failure, returns an error string and keeps old pipelines.
+    pub fn reload_shaders(&mut self, shader_dir: &std::path::Path) -> Result<u32, String> {
+        if let Some(data) = &mut self.renderer_2d {
+            unsafe {
+                self.device.device_wait_idle().map_err(|e| format!("device_wait_idle failed: {e}"))?;
+            }
+            data.reload_shaders(shader_dir)
+        } else {
+            Err("2D renderer not initialized".to_string())
+        }
+    }
+
     // -- Built-in 2D renderer -------------------------------------------------
 
     /// Initialize built-in 2D rendering resources (batch pipeline,
     /// dynamic VBs, static IB, bindless descriptor sets, 1×1 white
     /// default texture). Called once by the engine after Vulkan is ready.
-    pub(crate) fn init_2d(&mut self) {
+    pub(crate) fn init_2d(&mut self) -> Result<(), String> {
         let _timer = ProfileTimer::new("Renderer::init_2d");
-        let white_texture = self.create_texture_from_rgba8(1, 1, &[255, 255, 255, 255]);
+        let white_texture = self.create_texture_from_rgba8(1, 1, &[255, 255, 255, 255])?;
         let data = Renderer2DData::new(
             &self.allocator,
             &self.device,
@@ -485,10 +504,11 @@ impl Renderer {
             self.camera_ubo_ds_layout,
             white_texture,
             self.pipeline_cache,
-        );
+        )?;
         // White texture gets bindless index 0.
         data.register_texture(&data.white_texture);
         self.renderer_2d = Some(data);
+        Ok(())
     }
 
     /// Get the 2D renderer batch statistics from the last completed frame.

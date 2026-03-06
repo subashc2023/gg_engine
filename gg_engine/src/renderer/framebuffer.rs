@@ -174,7 +174,7 @@ impl Framebuffer {
         res: &RendererResources<'_>,
         allocator: &Arc<Mutex<GpuAllocator>>,
         spec: FramebufferSpec,
-    ) -> Self {
+    ) -> Result<Self, String> {
         let device = res.device;
         let descriptor_pool = res.descriptor_pool;
         let descriptor_set_layout = res.texture_ds_layout;
@@ -212,9 +212,9 @@ impl Framebuffer {
             depth_spec.as_ref(),
             color_format,
             depth_format,
-        );
+        )?;
 
-        let sampler = create_sampler(device);
+        let sampler = create_sampler(device)?;
 
         let color_attachments: Vec<ColorAttachment> = color_specs
             .iter()
@@ -222,26 +222,28 @@ impl Framebuffer {
                 let vk_fmt = resolve_vk_format(cs.format, color_format, depth_format);
                 create_color_attachment(allocator, device, &spec, vk_fmt, cs.format)
             })
-            .collect();
+            .collect::<Result<Vec<_>, _>>()?;
 
-        let depth_attachment = depth_spec.map(|ds| {
-            let vk_fmt = resolve_vk_format(ds.format, color_format, depth_format);
-            create_depth_attachment(allocator, device, &spec, vk_fmt)
-        });
+        let depth_attachment = depth_spec
+            .map(|ds| {
+                let vk_fmt = resolve_vk_format(ds.format, color_format, depth_format);
+                create_depth_attachment(allocator, device, &spec, vk_fmt)
+            })
+            .transpose()?;
 
         let color_views: Vec<vk::ImageView> = color_attachments.iter().map(|a| a.view).collect();
         let depth_view = depth_attachment.as_ref().map(|a| a.view);
         let framebuffer =
-            create_vk_framebuffer(device, render_pass, &color_views, depth_view, &spec);
+            create_vk_framebuffer(device, render_pass, &color_views, depth_view, &spec)?;
 
         let descriptor_set =
-            allocate_descriptor_set(device, descriptor_pool, descriptor_set_layout);
+            allocate_descriptor_set(device, descriptor_pool, descriptor_set_layout)?;
         write_descriptor_set(device, descriptor_set, color_attachments[0].view, sampler);
 
         let (readback_buffer, readback_allocation) =
-            create_readback_staging_buffer(allocator, device);
+            create_readback_staging_buffer(allocator, device)?;
 
-        Self {
+        Ok(Self {
             color_attachments,
             color_attachment_specs: color_specs,
             depth_attachment,
@@ -260,15 +262,15 @@ impl Framebuffer {
             last_readback: -1,
             allocator: allocator.clone(),
             device: device.clone(),
-        }
+        })
     }
 
     /// Resize the framebuffer. Skips if the size hasn't changed.
     /// The descriptor set handle is reused (updated in-place), so the
     /// egui TextureId remains valid.
-    pub fn resize(&mut self, width: u32, height: u32) {
+    pub fn resize(&mut self, width: u32, height: u32) -> Result<(), String> {
         if self.spec.width == width && self.spec.height == height {
-            return;
+            return Ok(());
         }
 
         if width == 0
@@ -280,7 +282,7 @@ impl Framebuffer {
                 "Attempted to resize framebuffer to {}x{} (max {}) — ignoring",
                 width, height, MAX_FRAMEBUFFER_SIZE,
             );
-            return;
+            return Ok(());
         }
 
         self.spec = FramebufferSpec {
@@ -330,13 +332,15 @@ impl Framebuffer {
                 let vk_fmt = resolve_vk_format(cs.format, self.color_format, self.depth_format);
                 create_color_attachment(&self.allocator, &self.device, &self.spec, vk_fmt, cs.format)
             })
-            .collect();
+            .collect::<Result<Vec<_>, _>>()?;
 
         // Recreate depth attachment at new size if present.
-        self.depth_attachment = self.depth_attachment_spec.map(|ds| {
-            let vk_fmt = resolve_vk_format(ds.format, self.color_format, self.depth_format);
-            create_depth_attachment(&self.allocator, &self.device, &self.spec, vk_fmt)
-        });
+        self.depth_attachment = self.depth_attachment_spec
+            .map(|ds| {
+                let vk_fmt = resolve_vk_format(ds.format, self.color_format, self.depth_format);
+                create_depth_attachment(&self.allocator, &self.device, &self.spec, vk_fmt)
+            })
+            .transpose()?;
 
         let color_views: Vec<vk::ImageView> =
             self.color_attachments.iter().map(|a| a.view).collect();
@@ -347,11 +351,11 @@ impl Framebuffer {
             &color_views,
             depth_view,
             &self.spec,
-        );
+        )?;
 
         // Recreate readback staging buffer.
         let (rb_buf, rb_alloc) =
-            create_readback_staging_buffer(&self.allocator, &self.device);
+            create_readback_staging_buffer(&self.allocator, &self.device)?;
         // Drop old readback allocation (the buffer was already destroyed above).
         let old_readback_alloc = std::mem::replace(&mut self.readback_allocation, rb_alloc);
         drop(old_readback_alloc);
@@ -366,6 +370,8 @@ impl Framebuffer {
             self.color_attachments[0].view,
             self.sampler,
         );
+
+        Ok(())
     }
 
     // -- Accessors ------------------------------------------------------------
@@ -528,7 +534,7 @@ fn create_offscreen_render_pass(
     depth_spec: Option<&FramebufferTextureSpec>,
     color_format: vk::Format,
     depth_format: vk::Format,
-) -> vk::RenderPass {
+) -> Result<vk::RenderPass, String> {
     let mut attachment_descriptions = Vec::new();
     let mut color_attachment_refs = Vec::new();
 
@@ -603,7 +609,7 @@ fn create_offscreen_render_pass(
         .dependencies(std::slice::from_ref(&dependency));
 
     unsafe { device.create_render_pass(&render_pass_info, None) }
-        .expect("Failed to create offscreen render pass")
+        .map_err(|e| format!("Failed to create offscreen render pass: {e}"))
 }
 
 fn create_color_attachment(
@@ -612,7 +618,7 @@ fn create_color_attachment(
     spec: &FramebufferSpec,
     vk_format: vk::Format,
     fb_format: FramebufferTextureFormat,
-) -> ColorAttachment {
+) -> Result<ColorAttachment, String> {
     let image_info = vk::ImageCreateInfo::default()
         .image_type(vk::ImageType::TYPE_2D)
         .extent(vk::Extent3D {
@@ -634,11 +640,11 @@ fn create_color_attachment(
         .samples(vk::SampleCountFlags::TYPE_1);
 
     let image =
-        unsafe { device.create_image(&image_info, None) }.expect("Failed to create color image");
+        unsafe { device.create_image(&image_info, None) }
+            .map_err(|e| format!("Failed to create FB color image: {e}"))?;
 
     let allocation =
-        GpuAllocator::allocate_for_image(allocator, device, image, "FB_Color", MemoryLocation::GpuOnly)
-            .expect("GPU image allocation failed for FB color attachment");
+        GpuAllocator::allocate_for_image(allocator, device, image, "FB_Color", MemoryLocation::GpuOnly)?;
 
     let view_info = vk::ImageViewCreateInfo::default()
         .image(image)
@@ -653,14 +659,14 @@ fn create_color_attachment(
         });
 
     let view = unsafe { device.create_image_view(&view_info, None) }
-        .expect("Failed to create color image view");
+        .map_err(|e| format!("Failed to create FB color image view: {e}"))?;
 
-    ColorAttachment {
+    Ok(ColorAttachment {
         image,
         _allocation: allocation,
         view,
         format: fb_format,
-    }
+    })
 }
 
 fn create_depth_attachment(
@@ -668,7 +674,7 @@ fn create_depth_attachment(
     device: &ash::Device,
     spec: &FramebufferSpec,
     vk_format: vk::Format,
-) -> DepthAttachment {
+) -> Result<DepthAttachment, String> {
     let image_info = vk::ImageCreateInfo::default()
         .image_type(vk::ImageType::TYPE_2D)
         .extent(vk::Extent3D {
@@ -686,11 +692,11 @@ fn create_depth_attachment(
         .samples(vk::SampleCountFlags::TYPE_1);
 
     let image =
-        unsafe { device.create_image(&image_info, None) }.expect("Failed to create depth image");
+        unsafe { device.create_image(&image_info, None) }
+            .map_err(|e| format!("Failed to create FB depth image: {e}"))?;
 
     let allocation =
-        GpuAllocator::allocate_for_image(allocator, device, image, "FB_Depth", MemoryLocation::GpuOnly)
-            .expect("GPU image allocation failed for FB depth attachment");
+        GpuAllocator::allocate_for_image(allocator, device, image, "FB_Depth", MemoryLocation::GpuOnly)?;
 
     let view_info = vk::ImageViewCreateInfo::default()
         .image(image)
@@ -705,16 +711,16 @@ fn create_depth_attachment(
         });
 
     let view = unsafe { device.create_image_view(&view_info, None) }
-        .expect("Failed to create depth image view");
+        .map_err(|e| format!("Failed to create FB depth image view: {e}"))?;
 
-    DepthAttachment {
+    Ok(DepthAttachment {
         image,
         _allocation: allocation,
         view,
-    }
+    })
 }
 
-fn create_sampler(device: &ash::Device) -> vk::Sampler {
+fn create_sampler(device: &ash::Device) -> Result<vk::Sampler, String> {
     let sampler_info = vk::SamplerCreateInfo::default()
         .mag_filter(vk::Filter::LINEAR)
         .min_filter(vk::Filter::LINEAR)
@@ -730,7 +736,8 @@ fn create_sampler(device: &ash::Device) -> vk::Sampler {
         .min_lod(0.0)
         .max_lod(0.0);
 
-    unsafe { device.create_sampler(&sampler_info, None) }.expect("Failed to create FB sampler")
+    unsafe { device.create_sampler(&sampler_info, None) }
+        .map_err(|e| format!("Failed to create FB sampler: {e}"))
 }
 
 fn create_vk_framebuffer(
@@ -739,7 +746,7 @@ fn create_vk_framebuffer(
     color_views: &[vk::ImageView],
     depth_view: Option<vk::ImageView>,
     spec: &FramebufferSpec,
-) -> vk::Framebuffer {
+) -> Result<vk::Framebuffer, String> {
     let mut attachments: Vec<vk::ImageView> = color_views.to_vec();
     if let Some(dv) = depth_view {
         attachments.push(dv);
@@ -753,22 +760,22 @@ fn create_vk_framebuffer(
         .layers(1);
 
     unsafe { device.create_framebuffer(&fb_info, None) }
-        .expect("Failed to create offscreen framebuffer")
+        .map_err(|e| format!("Failed to create offscreen framebuffer: {e}"))
 }
 
 fn allocate_descriptor_set(
     device: &ash::Device,
     pool: vk::DescriptorPool,
     layout: vk::DescriptorSetLayout,
-) -> vk::DescriptorSet {
+) -> Result<vk::DescriptorSet, String> {
     let layouts = [layout];
     let alloc_info = vk::DescriptorSetAllocateInfo::default()
         .descriptor_pool(pool)
         .set_layouts(&layouts);
 
     let ds_vec = unsafe { device.allocate_descriptor_sets(&alloc_info) }
-        .expect("Failed to allocate FB descriptor set");
-    ds_vec[0]
+        .map_err(|e| format!("Failed to allocate FB descriptor set: {e}"))?;
+    Ok(ds_vec[0])
 }
 
 /// Create a small HOST_VISIBLE staging buffer for pixel readback (2 × i32,
@@ -776,7 +783,7 @@ fn allocate_descriptor_set(
 fn create_readback_staging_buffer(
     allocator: &Arc<Mutex<GpuAllocator>>,
     device: &ash::Device,
-) -> (vk::Buffer, GpuAllocation) {
+) -> Result<(vk::Buffer, GpuAllocation), String> {
     let size = (2 * std::mem::size_of::<i32>()) as u64;
 
     let buf_info = vk::BufferCreateInfo::default()
@@ -785,11 +792,11 @@ fn create_readback_staging_buffer(
         .sharing_mode(vk::SharingMode::EXCLUSIVE);
 
     let buffer =
-        unsafe { device.create_buffer(&buf_info, None) }.expect("Failed to create readback buffer");
+        unsafe { device.create_buffer(&buf_info, None) }
+            .map_err(|e| format!("Failed to create readback buffer: {e}"))?;
 
     let allocation =
-        GpuAllocator::allocate_for_buffer(allocator, device, buffer, "ReadbackBuffer", MemoryLocation::GpuToCpu)
-            .expect("GPU buffer allocation failed for readback buffer");
+        GpuAllocator::allocate_for_buffer(allocator, device, buffer, "ReadbackBuffer", MemoryLocation::GpuToCpu)?;
 
     // Initialize both slots to -1 (no entity).
     // SAFETY: GpuToCpu allocation guarantees HOST_VISIBLE mapped memory.
@@ -802,7 +809,7 @@ fn create_readback_staging_buffer(
         std::ptr::write(mapping.add(1), -1);
     }
 
-    (buffer, allocation)
+    Ok((buffer, allocation))
 }
 
 fn write_descriptor_set(

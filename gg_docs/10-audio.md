@@ -1,24 +1,29 @@
 # Audio System
 
-The engine integrates [kira](https://docs.rs/kira/0.12) 0.12 for audio playback. Sounds are keyed by entity UUID — each entity can have at most one active sound at a time. Audio assets are referenced by UUID handle (`AudioSourceComponent`) and resolved to file paths at runtime via the asset manager.
+The engine integrates [kira](https://docs.rs/kira/0.12) 0.12 for audio playback. Sounds are keyed by entity UUID — each entity can have multiple concurrent sounds (e.g. footsteps + breathing). Supports both static (in-memory) and streaming (from-disk) playback, plus spatial audio with camera-relative panning and distance attenuation. Audio assets are referenced by UUID handle (`AudioSourceComponent`) and resolved to file paths at runtime via the asset manager.
 
 **Files:**
 - `gg_engine/src/scene/audio.rs` — `AudioEngine` struct, kira wrapper
 - `gg_engine/src/scene/components.rs` — `AudioSourceComponent` definition
-- `gg_engine/src/scene/mod.rs` — Scene audio lifecycle (`on_audio_start`, `on_audio_stop`, `resolve_audio_handles`, `play_entity_sound`, `stop_entity_sound`, `set_entity_volume`)
-- `gg_engine/src/scene/script_glue.rs` — Lua bindings (`play_sound`, `stop_sound`, `set_volume`)
+- `gg_engine/src/scene/mod.rs` — Scene audio lifecycle (`on_audio_start`, `on_audio_stop`, `resolve_audio_handles`, `play_entity_sound`, `stop_entity_sound`, `set_entity_volume`, `set_entity_panning`, `update_spatial_audio`)
+- `gg_engine/src/scene/script_glue.rs` — Lua bindings (`play_sound`, `stop_sound`, `set_volume`, `set_panning`)
 - `gg_editor/src/panels/properties/audio.rs` — Editor UI for audio source properties
 
 ## AudioEngine
 
 **File:** `gg_engine/src/scene/audio.rs`
 
-Wraps `kira::AudioManager<DefaultBackend>` with entity-keyed playback tracking and file caching.
+Wraps `kira::AudioManager<DefaultBackend>` with entity-keyed playback tracking and file caching. Supports both static (in-memory) and streaming (from-disk) playback via a unified `SoundHandle` enum.
 
 ```rust
+enum SoundHandle {
+    Static(StaticSoundHandle),
+    Streaming(StreamingSoundHandle<FromFileError>),
+}
+
 pub(crate) struct AudioEngine {
     manager: AudioManager,
-    active_sounds: HashMap<u64, StaticSoundHandle>,
+    active_sounds: HashMap<u64, Vec<SoundHandle>>,
     sound_cache: HashMap<String, StaticSoundData>,
 }
 ```
@@ -26,25 +31,36 @@ pub(crate) struct AudioEngine {
 | Field | Type | Description |
 |-------|------|-------------|
 | `manager` | `kira::AudioManager` | Kira audio manager (default backend) |
-| `active_sounds` | `HashMap<u64, StaticSoundHandle>` | Active sound handles keyed by entity UUID |
-| `sound_cache` | `HashMap<String, StaticSoundData>` | Cached loaded audio files keyed by absolute file path |
+| `active_sounds` | `HashMap<u64, Vec<SoundHandle>>` | Active sound handles keyed by entity UUID. Each entity can have multiple concurrent sounds |
+| `sound_cache` | `HashMap<String, StaticSoundData>` | Cached loaded audio files keyed by absolute file path (static sounds only) |
+
+### SoundHandle
+
+The `SoundHandle` enum unifies `StaticSoundHandle` and `StreamingSoundHandle<FromFileError>`, delegating `state()`, `stop()`, `set_volume()`, and `set_panning()` to the appropriate kira type.
 
 ### Methods
 
 | Method | Signature | Description |
 |--------|-----------|-------------|
 | `new()` | `-> Option<Self>` | Creates the kira `AudioManager`. Returns `None` on failure (logged as error) |
-| `play_sound` | `(entity_uuid, path, volume, pitch, looping)` | Stops any existing sound for the entity, loads (or retrieves cached) audio data, configures volume/pitch/looping, plays via kira. Inserts handle into `active_sounds` |
-| `stop_sound` | `(entity_uuid)` | Removes and stops the sound for the given entity (uses `Tween::default()` for fade) |
-| `set_volume` | `(entity_uuid, volume)` | Adjusts volume on an active sound handle (uses `Tween::default()`) |
+| `play_sound` | `(entity_uuid, path, volume, pitch, looping, streaming)` | Prunes finished sounds for the entity, then plays a new sound (static or streaming). Multiple sounds can overlap per entity |
+| `stop_sound` | `(entity_uuid)` | Removes and stops all sounds for the given entity (uses `Tween::default()` for fade) |
+| `set_volume` | `(entity_uuid, volume)` | Adjusts volume on all active sounds for the entity (uses `kira::Decibels`) |
+| `set_panning` | `(entity_uuid, panning)` | Sets panning for all active sounds. -1.0 = hard left, 0.0 = center, 1.0 = hard right (clamped, uses `kira::Panning`) |
 | `stop_all` | `()` | Drains and stops all active sounds |
 
-**Sound caching:** The first call to `play_sound` for a given file path loads `StaticSoundData::from_file()` and caches it. Subsequent plays of the same file clone the cached data (avoiding disk I/O).
+**Sound caching:** The first call to `play_sound` for a static (non-streaming) sound loads `StaticSoundData::from_file()` and caches it. Subsequent plays clone the cached data (avoiding disk I/O). Streaming sounds always read from disk (no caching — that's the point of streaming).
+
+**Static vs Streaming:**
+- **Static** (`streaming: false`): Loads the entire file into memory via `StaticSoundData`. Best for short sound effects (footsteps, UI clicks, gunshots). Cached for reuse.
+- **Streaming** (`streaming: true`): Decodes gradually from disk via `StreamingSoundData`. Best for long music tracks and ambient audio. Lower memory usage but slightly higher CPU overhead.
 
 **Playback configuration:**
-- Volume: passed directly to `StaticSoundSettings::volume()`
-- Pitch: converted to `f64`, passed to `StaticSoundSettings::playback_rate()`
-- Looping: when enabled, sets `StaticSoundSettings::loop_region(..)` (loops the entire sound)
+- Volume: passed directly to `StaticSoundSettings::volume()` or `StreamingSoundData::volume()`
+- Pitch: converted to `f64`, passed as `playback_rate()`
+- Looping: when enabled, sets `loop_region(..)` (loops the entire sound)
+
+**Finished sound pruning:** Each call to `play_sound` automatically removes handles for sounds that have finished playing (`PlaybackState::Stopped`), preventing unbounded handle accumulation.
 
 ## AudioSourceComponent
 
@@ -57,6 +73,10 @@ pub struct AudioSourceComponent {
     pub pitch: f32,                   // playback rate, 1.0 = normal, default 1.0
     pub looping: bool,                // default false
     pub play_on_start: bool,          // auto-play on entering play mode, default false
+    pub streaming: bool,              // stream from disk instead of loading into memory, default false
+    pub spatial: bool,                // enable spatial audio (panning + distance attenuation), default false
+    pub min_distance: f32,            // distance at which attenuation begins, default 1.0
+    pub max_distance: f32,            // distance at which sound is fully attenuated, default 50.0
     pub(crate) resolved_path: Option<String>,  // runtime-only, not serialized
 }
 ```
@@ -68,6 +88,10 @@ pub struct AudioSourceComponent {
 | `pitch` | `1.0` | Playback rate (< 1.0 = slower/lower, > 1.0 = faster/higher) |
 | `looping` | `false` | Whether the sound loops continuously |
 | `play_on_start` | `false` | Automatically play when entering play mode |
+| `streaming` | `false` | Stream from disk instead of loading into memory. Better for long music tracks |
+| `spatial` | `false` | Enable spatial audio (panning and distance attenuation based on entity position relative to camera) |
+| `min_distance` | `1.0` | Distance from the listener at which attenuation begins (no attenuation within this radius) |
+| `max_distance` | `50.0` | Distance at which the sound is fully attenuated (-60 dB) |
 | `resolved_path` | `None` | Absolute file path resolved at runtime from asset manager. Not serialized |
 
 **Supported formats:** WAV, OGG, MP3, FLAC (via kira's built-in decoders).
@@ -132,6 +156,25 @@ This must be called before `on_runtime_start()` for `play_on_start` sounds to wo
 
 The `AudioEngine` is **not** copied during `Scene::copy()`. A fresh engine is created on the next `on_runtime_start()`. The `AudioSourceComponent` itself is cloned normally (including `resolved_path`).
 
+## Spatial Audio
+
+**File:** `gg_engine/src/scene/mod.rs` — `update_spatial_audio()`
+
+When `AudioSourceComponent::spatial` is `true`, the engine automatically computes panning and distance attenuation each frame based on the entity's position relative to the primary camera.
+
+### How it works
+
+`Scene::update_spatial_audio()` is called each frame during Play and Simulate modes (after `on_update_animations`):
+
+1. **Find the listener**: queries for the primary `CameraComponent` + `TransformComponent`, uses the camera's 2D position as the listener
+2. **Collect spatial updates**: for each entity with `spatial: true`, computes:
+   - **Panning**: `delta.x / max_distance`, clamped to [-1.0, 1.0]. Gives natural stereo spread proportional to horizontal offset
+   - **Distance attenuation**: linear dB falloff from 0 dB at `min_distance` to -60 dB at `max_distance`. Sounds within `min_distance` are at full volume; sounds beyond `max_distance` are effectively silent
+   - **Effective volume**: `component_volume + attenuation_db` (additive in dB space)
+3. **Apply**: sets panning and volume on all active sound handles for each entity
+
+Uses a collect-then-apply pattern (collects updates into a `Vec`, then applies via `audio_engine`) to avoid borrow checker issues with simultaneous ECS queries and audio engine mutation.
+
 ## Runtime API
 
 **File:** `gg_engine/src/scene/mod.rs`
@@ -140,11 +183,13 @@ These methods are used by Lua scripts (via script glue) to control audio at runt
 
 | Method | Description |
 |--------|-------------|
-| `play_entity_sound(entity)` | Reads the entity's `AudioSourceComponent` (volume, pitch, looping, resolved_path), plays via `AudioEngine::play_sound()` |
+| `play_entity_sound(entity)` | Reads the entity's `AudioSourceComponent` (volume, pitch, looping, streaming, resolved_path), plays via `AudioEngine::play_sound()` |
 | `stop_entity_sound(entity)` | Looks up the entity's UUID, calls `AudioEngine::stop_sound()` |
 | `set_entity_volume(entity, volume)` | Looks up the entity's UUID, calls `AudioEngine::set_volume()` |
+| `set_entity_panning(entity, panning)` | Looks up the entity's UUID, calls `AudioEngine::set_panning()` |
+| `update_spatial_audio()` | Updates panning and volume for all spatial audio sources based on camera-relative position |
 
-All three methods are no-ops if the entity lacks the required components, has no resolved path, or the audio engine is `None`.
+All methods are no-ops if the entity lacks the required components, has no resolved path, or the audio engine is `None`.
 
 ## Lua Scripting API
 
@@ -157,6 +202,7 @@ Registered on the `Engine` global table:
 | `Engine.play_sound(entity_id)` | `lua_play_sound` | `(u64) -> ()` | Play the entity's audio source |
 | `Engine.stop_sound(entity_id)` | `lua_stop_sound` | `(u64) -> ()` | Stop the entity's audio playback |
 | `Engine.set_volume(entity_id, volume)` | `lua_set_volume` | `(u64, f32) -> ()` | Adjust volume at runtime |
+| `Engine.set_panning(entity_id, panning)` | `lua_set_panning` | `(u64, f32) -> ()` | Set stereo panning (-1.0 = left, 0.0 = center, 1.0 = right) |
 
 All bindings access the scene through `SceneScriptContext` (the standard take-modify-replace pattern). Entity is looked up by UUID via `scene.find_entity_by_uuid()`. No-op if context is unavailable or entity not found.
 
@@ -175,8 +221,9 @@ function on_update(dt)
         Engine.stop_sound(self_id)
     end
 
-    -- Fade volume based on distance or other logic
+    -- Adjust volume and panning at runtime
     Engine.set_volume(self_id, 0.5)
+    Engine.set_panning(self_id, -0.5)  -- slightly to the left
 end
 ```
 
@@ -197,6 +244,10 @@ The audio source properties panel (`draw_audio_source_component`) renders inside
 | Pitch | DragValue | Range 0.1 to 4.0, step 0.01 |
 | Looping | Checkbox | Toggle looping playback |
 | Play On Start | Checkbox | Toggle auto-play on entering play mode |
+| Streaming | Checkbox | Stream from disk instead of loading into memory (tooltip: "Better for long music tracks") |
+| Spatial Audio | Checkbox | Enable camera-relative panning and distance attenuation (tooltip explains behavior) |
+| Min Distance | DragValue | Only shown when spatial is enabled. Distance at which attenuation begins (range 0.0 to max_distance) |
+| Max Distance | DragValue | Only shown when spatial is enabled. Distance at which sound is fully attenuated (range min_distance to 1000.0) |
 
 The audio file button displays the asset filename (resolved from the asset registry) or "None" if no asset is assigned. A blue highlight stroke appears when hovering with a valid drag-and-drop payload. The component can be removed via right-click context menu on the header.
 
@@ -213,6 +264,10 @@ struct AudioSourceData {
     pitch: f32,           // "Pitch", default 1.0
     looping: bool,        // "Looping", default false
     play_on_start: bool,  // "PlayOnStart", default false
+    streaming: bool,      // "Streaming", default false
+    spatial: bool,        // "Spatial", default false
+    min_distance: f32,    // "MinDistance", default 1.0, skipped if default
+    max_distance: f32,    // "MaxDistance", default 50.0, skipped if default
 }
 ```
 
@@ -223,6 +278,12 @@ struct AudioSourceData {
 | `Pitch` | `f32` | `1.0` | |
 | `Looping` | `bool` | `false` | |
 | `PlayOnStart` | `bool` | `false` | |
+| `Streaming` | `bool` | `false` | |
+| `Spatial` | `bool` | `false` | |
+| `MinDistance` | `f32` | `1.0` | Skipped in output if default |
+| `MaxDistance` | `f32` | `50.0` | Skipped in output if default |
+
+All new fields use `#[serde(default)]` for backward compatibility with existing `.ggscene` files.
 
 `resolved_path` is **never** serialized — it is runtime-only, populated by `resolve_audio_handles()` after deserialization.
 
@@ -242,4 +303,8 @@ struct AudioSourceData {
     Pitch: 1.2
     Looping: true
     PlayOnStart: true
+    Streaming: true
+    Spatial: true
+    MinDistance: 2.0
+    MaxDistance: 30.0
 ```

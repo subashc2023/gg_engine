@@ -1,11 +1,19 @@
 use glam::Vec2;
 
+use crate::renderer::Texture2D;
+use crate::uuid::Uuid;
+use crate::Ref;
+
 /// A named animation clip within a sprite sheet.
 ///
 /// Clips reference a contiguous range of frames in a grid-based sprite sheet.
 /// Frame indices are 0-based and row-major: frame 0 is top-left, frame
 /// `columns - 1` is top-right, frame `columns` is the first cell of the
 /// second row, and so on.
+///
+/// Each clip can optionally reference its own texture via `texture_handle`.
+/// When set (non-zero), the clip's texture is used instead of the entity's
+/// `SpriteRendererComponent` texture during rendering.
 #[derive(Clone)]
 pub struct AnimationClip {
     /// Human-readable name (e.g. "idle", "walk", "run").
@@ -18,6 +26,10 @@ pub struct AnimationClip {
     pub fps: f32,
     /// Whether the clip loops when it reaches the end.
     pub looping: bool,
+    /// Optional per-clip texture asset handle. 0 = use sprite's texture.
+    pub texture_handle: Uuid,
+    /// Runtime-only loaded texture for this clip. Not serialized.
+    pub texture: Option<Ref<Texture2D>>,
 }
 
 impl Default for AnimationClip {
@@ -28,6 +40,8 @@ impl Default for AnimationClip {
             end_frame: 0,
             fps: 12.0,
             looping: true,
+            texture_handle: Uuid::from_raw(0),
+            texture: None,
         }
     }
 }
@@ -50,6 +64,9 @@ pub struct SpriteAnimatorComponent {
     pub columns: u32,
     /// Animation clips defined for this sprite sheet.
     pub clips: Vec<AnimationClip>,
+    /// Name of the default/idle clip. Played automatically on create and
+    /// when a non-looping clip finishes (if set).
+    pub default_clip: String,
 
     // -- Runtime state (reset on clone) --
     /// Currently playing clip index, or `None` if stopped.
@@ -60,6 +77,11 @@ pub struct SpriteAnimatorComponent {
     pub(crate) current_frame: u32,
     /// Whether the animator is actively playing.
     pub(crate) playing: bool,
+    /// Set by `update()` when a non-looping clip reaches its last frame.
+    /// Cleared after the scene dispatches the `on_animation_finished` callback.
+    pub(crate) finished_clip_name: Option<String>,
+    /// Editor-only: when true, the animation ticks in edit mode for preview.
+    pub(crate) previewing: bool,
 }
 
 impl SpriteAnimatorComponent {
@@ -123,6 +145,7 @@ impl SpriteAnimatorComponent {
                 } else {
                     self.current_frame = clip.end_frame;
                     self.playing = false;
+                    self.finished_clip_name = Some(clip.name.clone());
                     break;
                 }
             }
@@ -142,6 +165,38 @@ impl SpriteAnimatorComponent {
             (col, row)
         })
     }
+
+    /// Returns the current clip's per-clip texture, if any.
+    pub fn current_clip_texture(&self) -> Option<&Ref<Texture2D>> {
+        let idx = self.current_clip_index?;
+        let clip = self.clips.get(idx)?;
+        clip.texture.as_ref()
+    }
+
+    /// Returns the current clip index, or `None` if no clip is selected.
+    pub fn current_clip_index(&self) -> Option<usize> {
+        self.current_clip_index
+    }
+
+    /// Whether the editor preview is active.
+    pub fn is_previewing(&self) -> bool {
+        self.previewing
+    }
+
+    /// Enable or disable editor preview mode.
+    pub fn set_previewing(&mut self, v: bool) {
+        self.previewing = v;
+    }
+
+    /// Reset all runtime state (stop playback, clear clip selection).
+    pub fn reset(&mut self) {
+        self.playing = false;
+        self.previewing = false;
+        self.current_clip_index = None;
+        self.current_frame = 0;
+        self.frame_timer = 0.0;
+        self.finished_clip_name = None;
+    }
 }
 
 impl Default for SpriteAnimatorComponent {
@@ -150,10 +205,13 @@ impl Default for SpriteAnimatorComponent {
             cell_size: Vec2::new(32.0, 32.0),
             columns: 1,
             clips: Vec::new(),
+            default_clip: String::new(),
             current_clip_index: None,
             frame_timer: 0.0,
             current_frame: 0,
             playing: false,
+            finished_clip_name: None,
+            previewing: false,
         }
     }
 }
@@ -173,6 +231,7 @@ mod tests {
                     end_frame: 3,
                     fps: 10.0,
                     looping: true,
+                    ..Default::default()
                 },
                 AnimationClip {
                     name: "walk".into(),
@@ -180,6 +239,7 @@ mod tests {
                     end_frame: 7,
                     fps: 10.0,
                     looping: false,
+                    ..Default::default()
                 },
             ],
             ..Default::default()
@@ -229,6 +289,7 @@ mod tests {
         anim.update(0.45); // 4.5 frames → reaches end
         assert_eq!(anim.current_frame, 7);
         assert!(!anim.is_playing());
+        assert_eq!(anim.finished_clip_name.as_deref(), Some("walk"));
     }
 
     #[test]

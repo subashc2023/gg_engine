@@ -257,7 +257,13 @@ impl EditorAssetManager {
             }
         }
 
-        let texture = renderer.create_texture_from_rgba8(4, 4, &pixels);
+        let texture = match renderer.create_texture_from_rgba8(4, 4, &pixels) {
+            Ok(t) => t,
+            Err(e) => {
+                log::error!("Failed to create fallback texture: {e}");
+                return self.fallback_texture.clone().unwrap();
+            }
+        };
         let tex_ref = Ref::new(texture);
         self.fallback_texture = Some(tex_ref.clone());
         log::info!("Created fallback checkerboard texture for missing assets");
@@ -318,8 +324,16 @@ impl EditorAssetManager {
                     self.access_times.insert(handle, self.access_counter);
                     match data {
                         Ok(cpu_data) => {
-                            let texture = Ref::new(renderer.upload_texture(&cpu_data));
-                            self.loaded_assets.insert(handle, AssetData::Texture(texture));
+                            match renderer.upload_texture(&cpu_data) {
+                                Ok(tex) => {
+                                    self.loaded_assets.insert(handle, AssetData::Texture(Ref::new(tex)));
+                                }
+                                Err(e) => {
+                                    log::warn!("Texture GPU upload failed: {e}, using fallback");
+                                    let fallback = self.get_fallback_texture(renderer);
+                                    self.loaded_assets.insert(handle, AssetData::Texture(fallback));
+                                }
+                            }
                         }
                         Err(e) => {
                             log::warn!("Async texture load failed: {e}, using fallback");

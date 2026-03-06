@@ -11,3 +11,9 @@ Assets:
 - Handle: 2841034490373146
   FilePath: textures/tileset_legacy.png
   Type: Texture2D
+- Handle: 3001
+  FilePath: sprites/2dguy/Walking.png
+  Type: Texture2D
+- Handle: 3002
+  FilePath: sprites/2dguy/2dguy_atlas.png
+  Type: Texture2D

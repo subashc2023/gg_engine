@@ -208,13 +208,23 @@ Handles truncated JSON gracefully (e.g. from force-killed sessions).
 
 Shader compilation is automatic via `gg_engine/build.rs` (requires `glslc` from Vulkan SDK on PATH).
 
-### Pipeline
+### Build-Time Pipeline
 
 1. `build.rs` reads `.glsl` files from `gg_engine/src/renderer/shaders/`
 2. Splits on `#type vertex` / `#type fragment` markers
 3. Compiles each stage to SPIR-V via `glslc` (target: `vulkan1.2`, `-O` in release/dist)
 4. Optionally validates with `spirv-val` (skipped silently if not installed)
 5. SPIR-V bytes exposed as `pub const` in `gg_engine::shaders`
+
+### Runtime Hot-Reload
+
+Shaders can be recompiled at runtime without restarting the application. In the editor, use Settings → **Reload Shaders**. Programmatically:
+
+```rust
+renderer.reload_shaders(shader_dir)?;
+```
+
+The hot-reload system (`renderer/shader_compiler.rs`) replicates the `build.rs` logic but returns `Result` for graceful error handling. All shaders are compiled first — if any fail, old pipelines remain intact. See `gg_docs/06-rendering.md` for implementation details.
 
 ### Shader Files
 

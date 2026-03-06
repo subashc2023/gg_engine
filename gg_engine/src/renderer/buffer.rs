@@ -221,12 +221,12 @@ impl VertexBuffer {
         allocator: &Arc<Mutex<GpuAllocator>>,
         device: &ash::Device,
         data: &[u8],
-    ) -> Self {
+    ) -> Result<Self, String> {
         let _timer = ProfileTimer::new("VertexBuffer::new");
         let size = data.len() as vk::DeviceSize;
 
         let (buffer, allocation) =
-            create_buffer_with_allocation(allocator, device, size, vk::BufferUsageFlags::VERTEX_BUFFER, "VertexBuffer");
+            create_buffer_with_allocation(allocator, device, size, vk::BufferUsageFlags::VERTEX_BUFFER, "VertexBuffer")?;
 
         // Copy data via mapped pointer.
         let ptr = allocation
@@ -236,12 +236,12 @@ impl VertexBuffer {
             std::ptr::copy_nonoverlapping(data.as_ptr(), ptr, data.len());
         }
 
-        Self {
+        Ok(Self {
             buffer,
             _allocation: allocation,
             layout: None,
             device: device.clone(),
-        }
+        })
     }
 
     pub fn set_layout(&mut self, layout: BufferLayout) {
@@ -283,12 +283,12 @@ impl IndexBuffer {
         allocator: &Arc<Mutex<GpuAllocator>>,
         device: &ash::Device,
         indices: &[u32],
-    ) -> Self {
+    ) -> Result<Self, String> {
         let _timer = ProfileTimer::new("IndexBuffer::new");
         let size = std::mem::size_of_val(indices) as vk::DeviceSize;
 
         let (buffer, allocation) =
-            create_buffer_with_allocation(allocator, device, size, vk::BufferUsageFlags::INDEX_BUFFER, "IndexBuffer");
+            create_buffer_with_allocation(allocator, device, size, vk::BufferUsageFlags::INDEX_BUFFER, "IndexBuffer")?;
 
         // Copy data via mapped pointer.
         let ptr = allocation
@@ -302,12 +302,12 @@ impl IndexBuffer {
             );
         }
 
-        Self {
+        Ok(Self {
             buffer,
             _allocation: allocation,
             count: indices.len() as u32,
             device: device.clone(),
-        }
+        })
     }
 
     pub(crate) fn bind(&self, device: &ash::Device, cmd_buf: vk::CommandBuffer) {
@@ -355,22 +355,22 @@ impl DynamicVertexBuffer {
         device: &ash::Device,
         capacity: usize,
         layout: BufferLayout,
-    ) -> Self {
+    ) -> Result<Self, String> {
         let (buffer, allocation) = create_buffer_with_allocation(
             allocator,
             device,
             capacity as vk::DeviceSize,
             vk::BufferUsageFlags::VERTEX_BUFFER,
             "DynamicVertexBuffer",
-        );
+        )?;
 
-        Self {
+        Ok(Self {
             buffer,
             allocation,
             capacity,
             layout,
             device: device.clone(),
-        }
+        })
     }
 
     /// Copy vertex data into the persistently mapped buffer at a byte offset.
@@ -423,20 +423,20 @@ pub(super) fn create_buffer_with_allocation(
     size: vk::DeviceSize,
     usage: vk::BufferUsageFlags,
     name: &str,
-) -> (vk::Buffer, GpuAllocation) {
+) -> Result<(vk::Buffer, GpuAllocation), String> {
     let buffer_info = vk::BufferCreateInfo::default()
         .size(size)
         .usage(usage)
         .sharing_mode(vk::SharingMode::EXCLUSIVE);
 
     let buffer =
-        unsafe { device.create_buffer(&buffer_info, None) }.expect("Failed to create buffer");
+        unsafe { device.create_buffer(&buffer_info, None) }
+            .map_err(|e| format!("Failed to create {name} buffer: {e}"))?;
 
     let allocation =
-        GpuAllocator::allocate_for_buffer(allocator, device, buffer, name, MemoryLocation::CpuToGpu)
-            .expect("GPU buffer allocation failed");
+        GpuAllocator::allocate_for_buffer(allocator, device, buffer, name, MemoryLocation::CpuToGpu)?;
 
-    (buffer, allocation)
+    Ok((buffer, allocation))
 }
 
 /// Create a staging buffer (TRANSFER_SRC, host-visible) and copy data into it.
@@ -444,7 +444,7 @@ pub(super) fn create_staging_buffer(
     allocator: &Arc<Mutex<GpuAllocator>>,
     device: &ash::Device,
     data: &[u8],
-) -> (vk::Buffer, GpuAllocation) {
+) -> Result<(vk::Buffer, GpuAllocation), String> {
     let size = data.len() as vk::DeviceSize;
 
     let (buffer, allocation) = create_buffer_with_allocation(
@@ -453,7 +453,7 @@ pub(super) fn create_staging_buffer(
         size,
         vk::BufferUsageFlags::TRANSFER_SRC,
         "StagingBuffer",
-    );
+    )?;
 
     let ptr = allocation
         .mapped_ptr()
@@ -462,5 +462,5 @@ pub(super) fn create_staging_buffer(
         std::ptr::copy_nonoverlapping(data.as_ptr(), ptr, data.len());
     }
 
-    (buffer, allocation)
+    Ok((buffer, allocation))
 }

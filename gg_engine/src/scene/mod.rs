@@ -891,9 +891,85 @@ impl Scene {
     /// Call this each frame before rendering (in both play mode and editor
     /// preview). This only updates the animator state — rendering uses the
     /// current frame to compute UV coordinates.
+    ///
+    /// After updating, dispatches `on_animation_finished(clip_name)` Lua
+    /// callbacks for any non-looping clips that just ended, then transitions
+    /// to the default clip if one is configured.
     pub fn on_update_animations(&mut self, dt: f32) {
-        for animator in self.world.query_mut::<&mut SpriteAnimatorComponent>() {
+        // Phase 1: tick all animators, collect finished events.
+        let mut finished_events: Vec<(u64, String, String)> = Vec::new();
+        for (id_comp, animator) in self
+            .world
+            .query_mut::<(&IdComponent, &mut SpriteAnimatorComponent)>()
+        {
             animator.update(dt);
+            if let Some(clip_name) = animator.finished_clip_name.take() {
+                finished_events.push((
+                    id_comp.id.raw(),
+                    clip_name,
+                    animator.default_clip.clone(),
+                ));
+            }
+        }
+
+        if finished_events.is_empty() {
+            return;
+        }
+
+        // Phase 2: dispatch Lua callbacks.
+        #[cfg(feature = "lua-scripting")]
+        self.dispatch_animation_finished_events(&finished_events);
+
+        // Phase 3: transition to default clip for entities that have one.
+        for (uuid, _, default_clip) in &finished_events {
+            if default_clip.is_empty() {
+                continue;
+            }
+            if let Some(entity) = self.find_entity_by_uuid(*uuid) {
+                if let Some(mut animator) =
+                    self.get_component_mut::<SpriteAnimatorComponent>(entity)
+                {
+                    animator.play(default_clip);
+                }
+            }
+        }
+    }
+
+    /// Advance animations only for entities with `previewing` set (editor preview).
+    pub fn on_update_animation_previews(&mut self, dt: f32) {
+        for animator in self.world.query_mut::<&mut SpriteAnimatorComponent>() {
+            if animator.previewing {
+                animator.update(dt);
+            }
+        }
+    }
+
+    /// Dispatch `on_animation_finished(clip_name)` Lua callbacks.
+    #[cfg(feature = "lua-scripting")]
+    fn dispatch_animation_finished_events(&mut self, events: &[(u64, String, String)]) {
+        use script_glue::SceneScriptContext;
+
+        let mut engine = match self.script_engine.take() {
+            Some(e) => e,
+            None => return,
+        };
+
+        let scene_ptr: *mut Scene = self;
+
+        let ctx = SceneScriptContext {
+            scene: scene_ptr,
+            input: std::ptr::null(),
+        };
+        engine.lua().set_app_data(ctx);
+
+        for (uuid, clip_name, _) in events {
+            engine.call_entity_callback_str(*uuid, "on_animation_finished", clip_name.clone());
+        }
+
+        engine.lua().remove_app_data::<SceneScriptContext>();
+
+        unsafe {
+            (*scene_ptr).script_engine = Some(engine);
         }
     }
 
@@ -961,6 +1037,9 @@ impl Scene {
                 }
             }
         }
+
+        // Phase 4: resolve per-clip animator textures.
+        self.resolve_animator_clip_textures(asset_manager, Some(renderer));
     }
 
     /// Async variant of [`resolve_texture_handles`](Self::resolve_texture_handles).
@@ -1021,6 +1100,51 @@ impl Scene {
                     tilemap.texture = Some(texture);
                 }
             } else {
+                asset_manager.request_load(&asset_handle);
+            }
+        }
+
+        // Phase 3: resolve per-clip animator textures.
+        self.resolve_animator_clip_textures(asset_manager, None);
+    }
+
+    /// Resolve per-clip texture handles in all [`SpriteAnimatorComponent`]s.
+    ///
+    /// If `renderer` is `Some`, uses synchronous `load_asset`; otherwise
+    /// uses `request_load` for async loading.
+    fn resolve_animator_clip_textures(
+        &mut self,
+        asset_manager: &mut crate::asset::EditorAssetManager,
+        renderer: Option<&Renderer>,
+    ) {
+        // Collect (entity, clip_index, handle) for clips needing resolution.
+        let needs: Vec<(hecs::Entity, usize, crate::uuid::Uuid)> = self
+            .world
+            .query::<(hecs::Entity, &SpriteAnimatorComponent)>()
+            .iter()
+            .flat_map(|(entity, animator)| {
+                animator
+                    .clips
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, clip)| clip.texture_handle.raw() != 0 && clip.texture.is_none())
+                    .map(move |(i, clip)| (entity, i, clip.texture_handle))
+            })
+            .collect();
+
+        for (entity, clip_idx, asset_handle) in needs {
+            if let Some(r) = renderer {
+                asset_manager.load_asset(&asset_handle, r);
+            }
+            if let Some(texture) = asset_manager.get_texture(&asset_handle) {
+                if let Ok(mut animator) =
+                    self.world.get::<&mut SpriteAnimatorComponent>(entity)
+                {
+                    if let Some(clip) = animator.clips.get_mut(clip_idx) {
+                        clip.texture = Some(texture);
+                    }
+                }
+            } else if renderer.is_none() {
                 asset_manager.request_load(&asset_handle);
             }
         }
@@ -2055,7 +2179,10 @@ impl Scene {
                         .ok()
                         .and_then(|anim| {
                             let (col, row) = anim.current_grid_coords()?;
-                            let texture = sprite.texture.as_ref()?;
+                            // Per-clip texture takes priority over the sprite's texture.
+                            let texture = anim
+                                .current_clip_texture()
+                                .or(sprite.texture.as_ref())?;
                             Some(SubTexture2D::from_coords(
                                 texture,
                                 glam::Vec2::new(col as f32, row as f32),

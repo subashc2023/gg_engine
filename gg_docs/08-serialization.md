@@ -107,6 +107,10 @@ Entities:
     Pitch: 1.0                         # default: 1.0
     Looping: false
     PlayOnStart: false
+    Streaming: false                   # default: false
+    Spatial: false                     # default: false
+    MinDistance: 1.0                   # default: 1.0, skipped if default
+    MaxDistance: 50.0                  # default: 50.0, skipped if default
   TilemapComponent:
     Width: 10
     Height: 10
@@ -141,7 +145,7 @@ Optional components are omitted from YAML when not present (`skip_serializing_if
 | `RelationshipData` | `RelationshipComponent` | `parent: Option<u64>`, `children: Vec<u64>` |
 | `SpriteAnimatorData` | `SpriteAnimatorComponent` | `cell_size: [f32;2]`, `columns: u32`, `clips: Vec<AnimationClipData>` |
 | `AnimationClipData` | (nested in Clips) | `name: String`, `start_frame: u32`, `end_frame: u32`, `fps: f32` (default 12.0), `looping: bool` (default true) |
-| `AudioSourceData` | `AudioSourceComponent` | `audio_handle: u64`, `volume: f32` (default 1.0), `pitch: f32` (default 1.0), `looping: bool`, `play_on_start: bool` |
+| `AudioSourceData` | `AudioSourceComponent` | `audio_handle: u64`, `volume: f32` (default 1.0), `pitch: f32` (default 1.0), `looping: bool`, `play_on_start: bool`, `streaming: bool`, `spatial: bool`, `min_distance: f32` (default 1.0), `max_distance: f32` (default 50.0) |
 | `TilemapData` | `TilemapComponent` | `width: u32`, `height: u32`, `tile_size: [f32;2]`, `texture_handle: u64`, `tileset_columns: u32` (default 1), `cell_size: [f32;2]`, `spacing: [f32;2]` (default [0,0]), `margin: [f32;2]` (default [0,0]), `tiles: Vec<i32>` |
 
 All field names use PascalCase in YAML via `#[serde(rename)]`.
@@ -162,6 +166,8 @@ Several fields use custom default functions for backwards-compatible deserializa
 | `default_true()` | `true` (bool) | `AnimationClipData::looping` |
 | `default_volume()` | `1.0` (f32) | `AudioSourceData::volume` |
 | `default_pitch()` | `1.0` (f32) | `AudioSourceData::pitch` |
+| `default_min_distance()` | `1.0` (f32) | `AudioSourceData::min_distance` |
+| `default_max_distance()` | `50.0` (f32) | `AudioSourceData::max_distance` |
 | `default_tileset_columns()` | `1` (u32) | `TilemapData::tileset_columns` |
 | `default_zero_vec2()` | `[0.0, 0.0]` | `TilemapData::spacing`, `TilemapData::margin` |
 
@@ -197,7 +203,7 @@ This produces YAML like `speed: 5.0` rather than `speed: !Float 5.0`. When `lua-
 | `LuaScriptComponent` | script_path, field_overrides | `loaded: bool` |
 | `RelationshipComponent` | parent, children | -- |
 | `SpriteAnimatorComponent` | cell_size, columns, clips | `current_clip_index`, `frame_timer`, `current_frame`, `playing` |
-| `AudioSourceComponent` | audio_handle, volume, pitch, looping, play_on_start | `resolved_path: Option<String>` |
+| `AudioSourceComponent` | audio_handle, volume, pitch, looping, play_on_start, streaming, spatial, min_distance, max_distance | `resolved_path: Option<String>` |
 | `TilemapComponent` | width, height, tile_size, texture_handle, tileset_columns, cell_size, spacing, margin, tiles | `texture: Option<Arc<Texture2D>>` |
 | `NativeScriptComponent` | **NOT serialized** (code-defined) | `instance`, `instantiate_fn`, `created` |
 

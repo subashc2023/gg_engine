@@ -3,12 +3,15 @@ use std::sync::{Arc, Mutex};
 
 use ash::vk;
 
+use std::path::Path;
+
 use super::buffer::{
     BufferElement, BufferLayout, DynamicVertexBuffer, IndexBuffer, ShaderDataType,
 };
 use super::gpu_allocation::GpuAllocator;
 use super::pipeline::{self, Pipeline};
 use super::shader::Shader;
+use super::shader_compiler;
 use super::texture::Texture2D;
 use crate::profiling::ProfileTimer;
 use crate::shaders;
@@ -223,7 +226,8 @@ impl TextBatchState {
 
 pub(super) struct Renderer2DData {
     // -- Quad batch resources --
-    _batch_shader: Arc<Shader>,
+    batch_swapchain_shader: Arc<Shader>,
+    batch_offscreen_shader: Arc<Shader>,
     batch_pipeline: Arc<Pipeline>,
     offscreen_pipeline: Option<Arc<Pipeline>>,
     use_offscreen: bool,
@@ -232,7 +236,8 @@ pub(super) struct Renderer2DData {
     quad_batch: RefCell<QuadBatchState>,
 
     // -- Circle batch resources --
-    _circle_shader: Arc<Shader>,
+    circle_swapchain_shader: Arc<Shader>,
+    circle_offscreen_shader: Arc<Shader>,
     circle_pipeline: Arc<Pipeline>,
     circle_offscreen_pipeline: Option<Arc<Pipeline>>,
     circle_vertex_buffers: [DynamicVertexBuffer; FRAMES_IN_FLIGHT],
@@ -240,7 +245,8 @@ pub(super) struct Renderer2DData {
     circle_batch: RefCell<CircleBatchState>,
 
     // -- Line batch resources --
-    _line_shader: Arc<Shader>,
+    line_swapchain_shader: Arc<Shader>,
+    line_offscreen_shader: Arc<Shader>,
     line_pipeline: Arc<Pipeline>,
     line_offscreen_pipeline: Option<Arc<Pipeline>>,
     line_vertex_buffers: [DynamicVertexBuffer; FRAMES_IN_FLIGHT],
@@ -248,7 +254,8 @@ pub(super) struct Renderer2DData {
     line_batch: RefCell<LineBatchState>,
 
     // -- Text batch resources (same vertex format as quads, MSDF shader) --
-    _text_shader: Arc<Shader>,
+    text_swapchain_shader: Arc<Shader>,
+    text_offscreen_shader: Arc<Shader>,
     text_pipeline: Arc<Pipeline>,
     text_offscreen_pipeline: Option<Arc<Pipeline>>,
     text_vertex_buffers: [DynamicVertexBuffer; FRAMES_IN_FLIGHT],
@@ -265,6 +272,13 @@ pub(super) struct Renderer2DData {
     next_bindless_index: RefCell<u32>,
     pub(super) white_texture: Texture2D,
     device: ash::Device,
+
+    // -- Stored creation params for shader hot-reload --
+    swapchain_render_pass: vk::RenderPass,
+    camera_ubo_ds_layout: vk::DescriptorSetLayout,
+    pipeline_cache: vk::PipelineCache,
+    offscreen_render_pass: Option<vk::RenderPass>,
+    offscreen_color_attachment_count: u32,
 }
 
 impl Renderer2DData {
@@ -275,7 +289,7 @@ impl Renderer2DData {
         camera_ubo_ds_layout: vk::DescriptorSetLayout,
         white_texture: Texture2D,
         pipeline_cache: vk::PipelineCache,
-    ) -> Self {
+    ) -> Result<Self, String> {
         let _timer = ProfileTimer::new("Renderer2D::init");
 
         // -- Quad Shaders --
@@ -285,14 +299,14 @@ impl Renderer2DData {
             "batch_swapchain",
             shaders::BATCH_SWAPCHAIN_VERT_SPV,
             shaders::BATCH_SWAPCHAIN_FRAG_SPV,
-        ));
+        )?);
         // Offscreen shader: 2 outputs (color + entity ID for picking).
         let batch_shader = Arc::new(Shader::new(
             device,
             "batch",
             shaders::BATCH_VERT_SPV,
             shaders::BATCH_FRAG_SPV,
-        ));
+        )?);
 
         // -- Circle Shaders --
         let circle_swapchain_shader = Arc::new(Shader::new(
@@ -300,13 +314,13 @@ impl Renderer2DData {
             "circle_swapchain",
             shaders::CIRCLE_SWAPCHAIN_VERT_SPV,
             shaders::CIRCLE_SWAPCHAIN_FRAG_SPV,
-        ));
+        )?);
         let circle_shader = Arc::new(Shader::new(
             device,
             "circle",
             shaders::CIRCLE_VERT_SPV,
             shaders::CIRCLE_FRAG_SPV,
-        ));
+        )?);
 
         // -- Line Shaders --
         let line_swapchain_shader = Arc::new(Shader::new(
@@ -314,13 +328,13 @@ impl Renderer2DData {
             "line_swapchain",
             shaders::LINE_SWAPCHAIN_VERT_SPV,
             shaders::LINE_SWAPCHAIN_FRAG_SPV,
-        ));
+        )?);
         let line_shader = Arc::new(Shader::new(
             device,
             "line",
             shaders::LINE_VERT_SPV,
             shaders::LINE_FRAG_SPV,
-        ));
+        )?);
 
         // -- Text Shaders --
         let text_swapchain_shader = Arc::new(Shader::new(
@@ -328,13 +342,13 @@ impl Renderer2DData {
             "text_swapchain",
             shaders::TEXT_SWAPCHAIN_VERT_SPV,
             shaders::TEXT_SWAPCHAIN_FRAG_SPV,
-        ));
+        )?);
         let text_shader = Arc::new(Shader::new(
             device,
             "text",
             shaders::TEXT_VERT_SPV,
             shaders::TEXT_FRAG_SPV,
-        ));
+        )?);
 
         // -- Quad Vertex layout --
         let quad_layout = batch_quad_vertex_layout();
@@ -344,14 +358,14 @@ impl Renderer2DData {
 
         // -- Per-frame-in-flight quad vertex buffers (persistently mapped) --
         let vertex_buffers = [
-            DynamicVertexBuffer::new(allocator, device, QUAD_VB_CAPACITY, quad_layout.clone()),
-            DynamicVertexBuffer::new(allocator, device, QUAD_VB_CAPACITY, quad_layout.clone()),
+            DynamicVertexBuffer::new(allocator, device, QUAD_VB_CAPACITY, quad_layout.clone())?,
+            DynamicVertexBuffer::new(allocator, device, QUAD_VB_CAPACITY, quad_layout.clone())?,
         ];
 
         // -- Per-frame-in-flight circle vertex buffers (persistently mapped) --
         let circle_vertex_buffers = [
-            DynamicVertexBuffer::new(allocator, device, CIRCLE_VB_CAPACITY, circle_layout.clone()),
-            DynamicVertexBuffer::new(allocator, device, CIRCLE_VB_CAPACITY, circle_layout.clone()),
+            DynamicVertexBuffer::new(allocator, device, CIRCLE_VB_CAPACITY, circle_layout.clone())?,
+            DynamicVertexBuffer::new(allocator, device, CIRCLE_VB_CAPACITY, circle_layout.clone())?,
         ];
 
         // -- Line Vertex layout --
@@ -359,14 +373,14 @@ impl Renderer2DData {
 
         // -- Per-frame-in-flight line vertex buffers (persistently mapped) --
         let line_vertex_buffers = [
-            DynamicVertexBuffer::new(allocator, device, LINE_VB_CAPACITY, line_layout.clone()),
-            DynamicVertexBuffer::new(allocator, device, LINE_VB_CAPACITY, line_layout.clone()),
+            DynamicVertexBuffer::new(allocator, device, LINE_VB_CAPACITY, line_layout.clone())?,
+            DynamicVertexBuffer::new(allocator, device, LINE_VB_CAPACITY, line_layout.clone())?,
         ];
 
         // -- Per-frame-in-flight text vertex buffers (same layout as quads) --
         let text_vertex_buffers = [
-            DynamicVertexBuffer::new(allocator, device, QUAD_VB_CAPACITY, quad_layout.clone()),
-            DynamicVertexBuffer::new(allocator, device, QUAD_VB_CAPACITY, quad_layout.clone()),
+            DynamicVertexBuffer::new(allocator, device, QUAD_VB_CAPACITY, quad_layout.clone())?,
+            DynamicVertexBuffer::new(allocator, device, QUAD_VB_CAPACITY, quad_layout.clone())?,
         ];
 
         // -- Static index buffer (pre-generated quad pattern) --
@@ -380,7 +394,7 @@ impl Renderer2DData {
             indices.push(base + 3);
             indices.push(base);
         }
-        let index_buffer = IndexBuffer::new(allocator, device, &indices);
+        let index_buffer = IndexBuffer::new(allocator, device, &indices)?;
 
         // -- Bindless descriptor set layout (UPDATE_AFTER_BIND + PARTIALLY_BOUND) --
         let binding = vk::DescriptorSetLayoutBinding::default()
@@ -400,7 +414,7 @@ impl Renderer2DData {
             .push_next(&mut binding_flags_info);
 
         let bindless_ds_layout = unsafe { device.create_descriptor_set_layout(&layout_info, None) }
-            .expect("Failed to create bindless descriptor set layout");
+            .map_err(|e| format!("Failed to create bindless descriptor set layout: {e}"))?;
 
         // -- Quad Pipeline (swapchain: 1 color attachment, no entity ID output) --
         let batch_pipeline = Arc::new(pipeline::create_batch_pipeline(
@@ -412,7 +426,7 @@ impl Renderer2DData {
             &[bindless_ds_layout],
             1,
             pipeline_cache,
-        ));
+        )?);
 
         // -- Circle Pipeline (swapchain: 1 color attachment, no entity ID output) --
         // Circles don't use textures, so no bindless descriptor set needed.
@@ -425,7 +439,7 @@ impl Renderer2DData {
             &[],
             1,
             pipeline_cache,
-        ));
+        )?);
 
         // -- Line Pipeline (swapchain: 1 color attachment, no entity ID output) --
         // Lines don't use textures, so no bindless descriptor set needed.
@@ -437,7 +451,7 @@ impl Renderer2DData {
             camera_ubo_ds_layout,
             1,
             pipeline_cache,
-        ));
+        )?);
 
         // -- Text Pipeline (swapchain: 1 color attachment, uses bindless textures for font atlas) --
         // Text uses the same vertex layout as quads but a different (MSDF) fragment shader.
@@ -450,7 +464,7 @@ impl Renderer2DData {
             &[bindless_ds_layout],
             1,
             pipeline_cache,
-        ));
+        )?);
 
         // -- Bindless descriptor pool (UPDATE_AFTER_BIND) --
         let pool_size = vk::DescriptorPoolSize {
@@ -462,7 +476,7 @@ impl Renderer2DData {
             .pool_sizes(std::slice::from_ref(&pool_size))
             .max_sets(FRAMES_IN_FLIGHT as u32);
         let bindless_pool = unsafe { device.create_descriptor_pool(&pool_info, None) }
-            .expect("Failed to create bindless descriptor pool");
+            .map_err(|e| format!("Failed to create bindless descriptor pool: {e}"))?;
 
         // -- Allocate one descriptor set per frame-in-flight --
         let layouts = [bindless_ds_layout; FRAMES_IN_FLIGHT];
@@ -470,7 +484,7 @@ impl Renderer2DData {
             .descriptor_pool(bindless_pool)
             .set_layouts(&layouts);
         let ds_vec = unsafe { device.allocate_descriptor_sets(&ds_alloc_info) }
-            .expect("Failed to allocate bindless descriptor sets");
+            .map_err(|e| format!("Failed to allocate bindless descriptor sets: {e}"))?;
         assert_eq!(
             ds_vec.len(),
             FRAMES_IN_FLIGHT,
@@ -480,8 +494,9 @@ impl Renderer2DData {
         );
         let bindless_ds = [ds_vec[0], ds_vec[1]];
 
-        Self {
-            _batch_shader: batch_shader,
+        Ok(Self {
+            batch_swapchain_shader,
+            batch_offscreen_shader: batch_shader,
             batch_pipeline,
             offscreen_pipeline: None,
             use_offscreen: false,
@@ -489,19 +504,22 @@ impl Renderer2DData {
             index_buffer,
             quad_batch: RefCell::new(QuadBatchState::new()),
 
-            _circle_shader: circle_shader,
+            circle_swapchain_shader,
+            circle_offscreen_shader: circle_shader,
             circle_pipeline,
             circle_offscreen_pipeline: None,
             circle_vertex_buffers,
             circle_batch: RefCell::new(CircleBatchState::new()),
 
-            _line_shader: line_shader,
+            line_swapchain_shader,
+            line_offscreen_shader: line_shader,
             line_pipeline,
             line_offscreen_pipeline: None,
             line_vertex_buffers,
             line_batch: RefCell::new(LineBatchState::new()),
 
-            _text_shader: text_shader,
+            text_swapchain_shader,
+            text_offscreen_shader: text_shader,
             text_pipeline,
             text_offscreen_pipeline: None,
             text_vertex_buffers,
@@ -514,7 +532,13 @@ impl Renderer2DData {
             next_bindless_index: RefCell::new(0),
             white_texture,
             device: device.clone(),
-        }
+
+            swapchain_render_pass: render_pass,
+            camera_ubo_ds_layout,
+            pipeline_cache,
+            offscreen_render_pass: None,
+            offscreen_color_attachment_count: 0,
+        })
     }
 
     /// Register a texture in the bindless descriptor array. Writes its
@@ -1061,58 +1085,181 @@ impl Renderer2DData {
         camera_ubo_ds_layout: vk::DescriptorSetLayout,
         color_attachment_count: u32,
         pipeline_cache: vk::PipelineCache,
-    ) {
+    ) -> Result<(), String> {
+        self.offscreen_render_pass = Some(render_pass);
+        self.offscreen_color_attachment_count = color_attachment_count;
+
+        self.rebuild_offscreen_pipelines(device, render_pass, camera_ubo_ds_layout, color_attachment_count, pipeline_cache)
+    }
+
+    fn rebuild_offscreen_pipelines(
+        &mut self,
+        device: &ash::Device,
+        render_pass: vk::RenderPass,
+        camera_ubo_ds_layout: vk::DescriptorSetLayout,
+        color_attachment_count: u32,
+        pipeline_cache: vk::PipelineCache,
+    ) -> Result<(), String> {
         // Quad offscreen pipeline (with bindless textures at set 1).
         self.offscreen_pipeline = Some(Arc::new(pipeline::create_batch_pipeline(
             device,
-            &self._batch_shader,
+            &self.batch_offscreen_shader,
             self.vertex_buffers[0].layout(),
             render_pass,
             camera_ubo_ds_layout,
             &[self.bindless_ds_layout],
             color_attachment_count,
             pipeline_cache,
-        )));
+        )?));
 
         // Circle offscreen pipeline (no textures).
         self.circle_offscreen_pipeline = Some(Arc::new(pipeline::create_batch_pipeline(
             device,
-            &self._circle_shader,
+            &self.circle_offscreen_shader,
             self.circle_vertex_buffers[0].layout(),
             render_pass,
             camera_ubo_ds_layout,
             &[],
             color_attachment_count,
             pipeline_cache,
-        )));
+        )?));
 
         // Line offscreen pipeline (no textures, LINE_LIST topology).
         self.line_offscreen_pipeline = Some(Arc::new(pipeline::create_line_batch_pipeline(
             device,
-            &self._line_shader,
+            &self.line_offscreen_shader,
             self.line_vertex_buffers[0].layout(),
             render_pass,
             camera_ubo_ds_layout,
             color_attachment_count,
             pipeline_cache,
-        )));
+        )?));
 
         // Text offscreen pipeline (with bindless textures at set 1, MSDF shader).
         self.text_offscreen_pipeline = Some(Arc::new(pipeline::create_batch_pipeline(
             device,
-            &self._text_shader,
+            &self.text_offscreen_shader,
             self.text_vertex_buffers[0].layout(),
             render_pass,
             camera_ubo_ds_layout,
             &[self.bindless_ds_layout],
             color_attachment_count,
             pipeline_cache,
-        )));
+        )?));
+
+        Ok(())
     }
 
     /// Tell the batch renderer to use the offscreen pipeline (or switch back).
     pub(super) fn set_use_offscreen(&mut self, use_it: bool) {
         self.use_offscreen = use_it;
+    }
+
+    /// Hot-reload all shaders from the given source directory.
+    ///
+    /// Compiles each `.glsl` file with `glslc`, creates new shader modules,
+    /// and rebuilds all pipelines. On failure, returns an error and keeps
+    /// the old pipelines intact.
+    pub(super) fn reload_shaders(&mut self, shader_dir: &Path) -> Result<u32, String> {
+        let entries: Vec<_> = std::fs::read_dir(shader_dir)
+            .map_err(|e| format!("Cannot read shader dir '{}': {e}", shader_dir.display()))?
+            .filter_map(|e| e.ok())
+            .map(|e| e.path())
+            .filter(|p| p.extension().and_then(|e| e.to_str()) == Some("glsl"))
+            .collect();
+
+        if entries.is_empty() {
+            return Err(format!("No .glsl files found in '{}'", shader_dir.display()));
+        }
+
+        // Phase 1: Compile all shaders. If any fail, abort before touching state.
+        let mut compiled: Vec<(String, shader_compiler::CompiledShader)> = Vec::new();
+        for path in &entries {
+            let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
+            let result = shader_compiler::compile_glsl(path)?;
+            compiled.push((stem.to_string(), result));
+        }
+
+        // Phase 2: Create new Shader objects from the compiled SPIR-V.
+        let mut new_shaders: Vec<(String, Arc<Shader>)> = Vec::new();
+        for (name, cs) in &compiled {
+            let shader = Arc::new(Shader::new(&self.device, name, &cs.vert_spv, &cs.frag_spv)?);
+            new_shaders.push((name.clone(), shader));
+        }
+
+        // Phase 3: Swap in new shaders and rebuild pipelines.
+        for (name, shader) in &new_shaders {
+            match name.as_str() {
+                "batch_swapchain" => self.batch_swapchain_shader = shader.clone(),
+                "batch" => self.batch_offscreen_shader = shader.clone(),
+                "circle_swapchain" => self.circle_swapchain_shader = shader.clone(),
+                "circle" => self.circle_offscreen_shader = shader.clone(),
+                "line_swapchain" => self.line_swapchain_shader = shader.clone(),
+                "line" => self.line_offscreen_shader = shader.clone(),
+                "text_swapchain" => self.text_swapchain_shader = shader.clone(),
+                "text" => self.text_offscreen_shader = shader.clone(),
+                _ => {} // Unknown shader (e.g. legacy/) — skip.
+            }
+        }
+
+        // Rebuild swapchain pipelines.
+        self.batch_pipeline = Arc::new(pipeline::create_batch_pipeline(
+            &self.device,
+            &self.batch_swapchain_shader,
+            self.vertex_buffers[0].layout(),
+            self.swapchain_render_pass,
+            self.camera_ubo_ds_layout,
+            &[self.bindless_ds_layout],
+            1,
+            self.pipeline_cache,
+        )?);
+
+        self.circle_pipeline = Arc::new(pipeline::create_batch_pipeline(
+            &self.device,
+            &self.circle_swapchain_shader,
+            self.circle_vertex_buffers[0].layout(),
+            self.swapchain_render_pass,
+            self.camera_ubo_ds_layout,
+            &[],
+            1,
+            self.pipeline_cache,
+        )?);
+
+        self.line_pipeline = Arc::new(pipeline::create_line_batch_pipeline(
+            &self.device,
+            &self.line_swapchain_shader,
+            self.line_vertex_buffers[0].layout(),
+            self.swapchain_render_pass,
+            self.camera_ubo_ds_layout,
+            1,
+            self.pipeline_cache,
+        )?);
+
+        self.text_pipeline = Arc::new(pipeline::create_batch_pipeline(
+            &self.device,
+            &self.text_swapchain_shader,
+            self.text_vertex_buffers[0].layout(),
+            self.swapchain_render_pass,
+            self.camera_ubo_ds_layout,
+            &[self.bindless_ds_layout],
+            1,
+            self.pipeline_cache,
+        )?);
+
+        // Rebuild offscreen pipelines if they exist.
+        if let Some(offscreen_rp) = self.offscreen_render_pass {
+            self.rebuild_offscreen_pipelines(
+                &self.device.clone(),
+                offscreen_rp,
+                self.camera_ubo_ds_layout,
+                self.offscreen_color_attachment_count,
+                self.pipeline_cache,
+            )?;
+        }
+
+        let count = new_shaders.len() as u32;
+        log::info!(target: "gg_engine", "Hot-reloaded {} shaders", count);
+        Ok(count)
     }
 }
 
@@ -1125,6 +1272,6 @@ impl Drop for Renderer2DData {
             self.device
                 .destroy_descriptor_set_layout(self.bindless_ds_layout, None);
         }
-        // vertex_buffers, index_buffer, _batch_shader, batch_pipeline — dropped by their own Drop impls.
+        // vertex_buffers, index_buffer, shaders, pipelines — dropped by their own Drop impls.
     }
 }

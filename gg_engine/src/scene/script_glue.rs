@@ -139,6 +139,7 @@ pub fn register_all(lua: &Lua) -> LuaResult<()> {
     // Component access (sprite, circle, text)
     engine.set("get_sprite_color", lua.create_function(lua_get_sprite_color)?)?;
     engine.set("set_sprite_color", lua.create_function(lua_set_sprite_color)?)?;
+    engine.set("set_sprite_texture", lua.create_function(lua_set_sprite_texture)?)?;
     engine.set("get_text", lua.create_function(lua_get_text)?)?;
     engine.set("set_text", lua.create_function(lua_set_text)?)?;
 
@@ -1208,6 +1209,28 @@ fn lua_set_sprite_color(lua: &Lua, (entity_id, r, g, b, a): (u64, f32, f32, f32,
     Ok(())
 }
 
+/// `Engine.set_sprite_texture(entity_id, texture_handle)` — swap the sprite's texture at runtime.
+///
+/// `texture_handle` is the asset UUID (u64). The texture must already be loaded
+/// (e.g. used elsewhere in the scene or pre-loaded via the asset manager).
+/// Pass 0 to clear the texture.
+fn lua_set_sprite_texture(lua: &Lua, (entity_id, handle_raw): (u64, u64)) -> LuaResult<()> {
+    let mut ctx = match lua.app_data_mut::<SceneScriptContext>() {
+        Some(ctx) => ctx,
+        None => return Ok(()),
+    };
+    let scene = unsafe { ctx.scene_mut() };
+    if let Some(entity) = scene.find_entity_by_uuid(entity_id) {
+        if let Some(mut sprite) = scene.get_component_mut::<super::SpriteRendererComponent>(entity) {
+            let uuid = crate::uuid::Uuid::from_raw(handle_raw);
+            sprite.texture_handle = uuid;
+            // Clear the loaded texture so it gets re-resolved next frame.
+            sprite.texture = None;
+        }
+    }
+    Ok(())
+}
+
 /// `Engine.get_text(entity_id)` → string or "" if not found.
 fn lua_get_text(lua: &Lua, entity_id: u64) -> LuaResult<String> {
     let ctx = match lua.app_data_mut::<SceneScriptContext>() {
@@ -1291,6 +1314,8 @@ mod tests {
         assert!(engine.get::<LuaFunction>("play_animation").is_ok());
         assert!(engine.get::<LuaFunction>("stop_animation").is_ok());
         assert!(engine.get::<LuaFunction>("is_animation_playing").is_ok());
+        // Sprite
+        assert!(engine.get::<LuaFunction>("set_sprite_texture").is_ok());
         // Tilemap
         assert!(engine.get::<LuaFunction>("set_tile").is_ok());
         assert!(engine.get::<LuaFunction>("get_tile").is_ok());

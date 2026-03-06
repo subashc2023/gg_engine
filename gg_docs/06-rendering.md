@@ -76,7 +76,7 @@ Single-file `.glsl` format with stage markers:
 
 Shader sources live in `gg_engine/src/renderer/shaders/`.
 
-### Compilation Pipeline
+### Build-Time Compilation
 
 `gg_engine/build.rs` auto-compiles `.glsl` to SPIR-V via `glslc` at build time:
 1. Reads `.glsl` files from `renderer/shaders/`
@@ -88,6 +88,33 @@ Shader sources live in `gg_engine/src/renderer/shaders/`.
 // Example: accessing compiled shaders
 use gg_engine::shaders::{FLAT_COLOR_VERT_SPV, FLAT_COLOR_FRAG_SPV};
 ```
+
+### Runtime Hot-Reload
+
+**Files:** `renderer/shader_compiler.rs`, `renderer/renderer_2d.rs`, `renderer/renderer.rs`
+
+Shaders can be recompiled and pipelines rebuilt at runtime without restarting the application. This enables rapid iteration on shader code during development.
+
+**API:**
+
+```rust
+renderer.reload_shaders(shader_dir: &Path) -> Result<u32, String>
+```
+
+**How it works:**
+
+1. `shader_compiler::compile_glsl(path)` reads each `.glsl` source, splits by `#type` markers, and invokes `glslc` to produce SPIR-V (same logic as `build.rs`, but returns `Result` instead of panicking)
+2. All shaders are compiled first — if any fail, the operation aborts and old pipelines remain intact (atomic update)
+3. `device_wait_idle()` ensures no in-flight command buffers reference the old pipelines
+4. New `Shader` objects are created from the compiled SPIR-V
+5. All pipelines (swapchain and offscreen variants) are rebuilt with the new shaders
+6. Old pipelines are dropped via `Arc` reference counting
+
+**Requirements:** `glslc` must be on PATH at runtime (standard Vulkan SDK install).
+
+**Editor integration:** The Settings panel has a "Reload Shaders" button that triggers hot-reload. Errors are shown via a native error dialog. The shader source directory is resolved from `CARGO_MANIFEST_DIR` at compile time.
+
+**Stored pipeline creation params:** `Renderer2DData` stores all parameters needed to recreate pipelines (`swapchain_render_pass`, `camera_ubo_ds_layout`, `pipeline_cache`, `offscreen_render_pass`, `offscreen_color_attachment_count`), enabling full pipeline reconstruction from a single `reload_shaders()` call.
 
 ### Available Shaders
 

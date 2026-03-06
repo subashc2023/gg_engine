@@ -17,7 +17,7 @@ impl GpuAllocator {
         instance: &ash::Instance,
         device: &ash::Device,
         physical_device: vk::PhysicalDevice,
-    ) -> Self {
+    ) -> Result<Self, String> {
         let inner = gpu_allocator::vulkan::Allocator::new(
             &gpu_allocator::vulkan::AllocatorCreateDesc {
                 instance: instance.clone(),
@@ -28,11 +28,11 @@ impl GpuAllocator {
                 allocation_sizes: gpu_allocator::AllocationSizes::default(),
             },
         )
-        .expect("Failed to create GPU allocator");
+        .map_err(|e| format!("Failed to create GPU allocator: {e}"))?;
 
         log::info!(target: "gg_engine", "GPU sub-allocator initialized");
 
-        Self { inner }
+        Ok(Self { inner })
     }
 
     /// Allocate memory for a buffer. Returns a GpuAllocation that auto-frees on Drop.

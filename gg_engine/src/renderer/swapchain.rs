@@ -303,11 +303,11 @@ impl Swapchain {
         width: u32,
         height: u32,
         new_present_mode: Option<PresentMode>,
-    ) {
+    ) -> Result<(), SwapchainError> {
         unsafe {
             self.device
                 .device_wait_idle()
-                .expect("GPU idle wait failed during swapchain recreation");
+                .map_err(SwapchainError::SurfaceCapabilities)?;
         }
 
         // Destroy old framebuffers, image views, and depth resources.
@@ -353,7 +353,7 @@ impl Swapchain {
                     vk_ctx.surface(),
                 )
         }
-        .expect("Failed to get surface capabilities during resize");
+        .map_err(SwapchainError::SurfaceCapabilities)?;
 
         let extent = vk::Extent2D {
             width: width.clamp(
@@ -390,14 +390,14 @@ impl Swapchain {
             self.swapchain_loader
                 .create_swapchain(&swapchain_info, None)
         }
-        .expect("Failed to recreate swapchain");
+        .map_err(SwapchainError::SwapchainCreation)?;
 
         unsafe {
             self.swapchain_loader.destroy_swapchain(old_swapchain, None);
         }
 
         let images = unsafe { self.swapchain_loader.get_swapchain_images(self.swapchain) }
-            .expect("Failed to get swapchain images during resize");
+            .map_err(SwapchainError::SwapchainImages)?;
 
         self.image_views = images
             .iter()
@@ -415,17 +415,16 @@ impl Swapchain {
                         layer_count: 1,
                     });
                 unsafe { self.device.create_image_view(&view_info, None) }
-                    .expect("Failed to create image view during resize")
+                    .map_err(SwapchainError::ImageViewCreation)
             })
-            .collect();
+            .collect::<Result<Vec<_>, _>>()?;
 
         let (depth_image, depth_allocation, depth_image_view) = create_depth_resources(
             &self.allocator,
             &self.device,
             extent,
             self.depth_format,
-        )
-        .expect("Failed to recreate depth resources during resize");
+        )?;
         self.depth_image = depth_image;
         self.depth_allocation = Some(depth_allocation);
         self.depth_image_view = depth_image_view;
@@ -436,8 +435,7 @@ impl Swapchain {
             &self.image_views,
             self.depth_image_view,
             extent,
-        )
-        .expect("Failed to recreate framebuffers during resize");
+        )?;
 
         // Create new render_finished semaphores matching new image count.
         let semaphore_info = vk::SemaphoreCreateInfo::default();
@@ -445,9 +443,9 @@ impl Swapchain {
             .iter()
             .map(|_| {
                 unsafe { self.device.create_semaphore(&semaphore_info, None) }
-                    .expect("Failed to create render_finished semaphore during resize")
+                    .map_err(SwapchainError::SemaphoreCreation)
             })
-            .collect();
+            .collect::<Result<Vec<_>, _>>()?;
 
         self._images = images;
         self.extent = extent;
@@ -458,6 +456,8 @@ impl Swapchain {
             "Swapchain recreated: {}x{}, present mode {:?}",
             extent.width, extent.height, self.present_mode
         );
+
+        Ok(())
     }
 
     // -----------------------------------------------------------------------
