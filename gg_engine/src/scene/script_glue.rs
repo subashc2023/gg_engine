@@ -130,6 +130,7 @@ pub fn register_all(lua: &Lua) -> LuaResult<()> {
     engine.set("set_linear_velocity", lua.create_function(lua_set_linear_velocity)?)?;
     engine.set("get_angular_velocity", lua.create_function(lua_get_angular_velocity)?)?;
     engine.set("set_angular_velocity", lua.create_function(lua_set_angular_velocity)?)?;
+    engine.set("raycast", lua.create_function(lua_raycast)?)?;
 
     lua.globals().set("Engine", engine)?;
 
@@ -961,6 +962,35 @@ fn lua_set_angular_velocity(lua: &Lua, (entity_id, omega): (u64, f32)) -> LuaRes
     }
 
     Ok(())
+}
+
+/// `Engine.raycast(origin_x, origin_y, dir_x, dir_y, max_distance, exclude_entity_id)`
+///
+/// Returns `(hit_entity_id, hit_x, hit_y, normal_x, normal_y, distance)` or `nil` on miss.
+/// `exclude_entity_id` is optional (pass `nil` to hit everything).
+fn lua_raycast(
+    lua: &Lua,
+    (ox, oy, dx, dy, max_dist, exclude_id): (f32, f32, f32, f32, f32, Option<u64>),
+) -> LuaResult<(Option<u64>, f32, f32, f32, f32, f32)> {
+    let ctx = match lua.app_data_ref::<SceneScriptContext>() {
+        Some(ctx) => ctx,
+        None => return Ok((None, 0.0, 0.0, 0.0, 0.0, 0.0)),
+    };
+
+    let scene = unsafe { ctx.scene() };
+
+    let exclude_entity = exclude_id.and_then(|uuid| scene.find_entity_by_uuid(uuid));
+
+    if let Some((uuid, hx, hy, nx, ny, toi)) = scene.raycast(
+        glam::Vec2::new(ox, oy),
+        glam::Vec2::new(dx, dy),
+        max_dist,
+        exclude_entity,
+    ) {
+        Ok((Some(uuid), hx, hy, nx, ny, toi))
+    } else {
+        Ok((None, 0.0, 0.0, 0.0, 0.0, 0.0))
+    }
 }
 
 // ---------------------------------------------------------------------------

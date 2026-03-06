@@ -73,7 +73,8 @@ pub mod prelude {
     pub use crate::platform_utils::FileDialogs;
     pub use crate::project::Project;
     pub use crate::profiling::{
-        begin_session, drain_profile_results, end_session, ProfileResult, ProfileTimer,
+        begin_session, drain_profile_results, end_session, is_session_active, ProfileResult,
+        ProfileTimer,
     };
     pub use crate::renderer::{
         as_bytes, BufferElement, BufferLayout, EditorCamera, Font, Framebuffer, FramebufferSpec,

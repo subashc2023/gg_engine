@@ -99,6 +99,28 @@ pub(crate) fn settings_ui(
     };
     ui.label(format!("Hovered Entity: {}", hovered_name));
 
+    ui.add_space(8.0);
+    ui.heading("Profiling");
+    ui.separator();
+
+    // On-demand Chrome Tracing capture for gg_tools analysis.
+    let recording = gg_engine::profiling::is_session_active();
+    let label = if recording { "Stop Capture" } else { "Capture Trace" };
+    if ui.button(label).clicked() {
+        if recording {
+            gg_engine::profiling::end_session();
+        } else {
+            gg_engine::profiling::begin_session("Runtime", "gg_profile_runtime.json");
+        }
+    }
+    if recording {
+        ui.label(
+            egui::RichText::new("Recording...")
+                .color(egui::Color32::from_rgb(0xFF, 0x44, 0x44))
+                .strong(),
+        );
+    }
+
     if !scene_warnings.is_empty() {
         ui.add_space(8.0);
         ui.heading("Warnings");

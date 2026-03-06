@@ -38,6 +38,10 @@ mod inner {
     /// Monotonic thread ID counter (avoids relying on `ThreadId`'s Debug format).
     static NEXT_THREAD_ID: AtomicU64 = AtomicU64::new(1);
 
+    /// Fast-path flag: avoids taking the mutex when no session is active.
+    static SESSION_ACTIVE: std::sync::atomic::AtomicBool =
+        std::sync::atomic::AtomicBool::new(false);
+
     thread_local! {
         static THREAD_ID: u64 = NEXT_THREAD_ID.fetch_add(1, Ordering::Relaxed);
     }
@@ -109,10 +113,12 @@ mod inner {
             start: Instant::now(),
             event_count: 0,
         });
+        SESSION_ACTIVE.store(true, Ordering::Release);
     }
 
     /// End the current profiling session and flush the JSON file.
     pub fn end_session() {
+        SESSION_ACTIVE.store(false, Ordering::Release);
         let mut guard = INSTRUMENTOR.lock().unwrap();
         if let Some(mut session) = guard.take() {
             if let Err(e) = write!(session.writer, "]}}") {
@@ -126,6 +132,11 @@ mod inner {
 
     /// Write a single Chrome Tracing "X" (complete) event to the active session.
     fn write_profile(name: &str, start: Instant, duration: Duration) {
+        // Fast path: skip mutex entirely when no session is recording.
+        if !SESSION_ACTIVE.load(Ordering::Acquire) {
+            return;
+        }
+
         let tid = THREAD_ID.with(|id| *id);
 
         let mut guard = INSTRUMENTOR.lock().unwrap();
@@ -197,6 +208,11 @@ mod inner {
             self.stop();
         }
     }
+
+    /// Returns `true` if a Chrome Tracing session is currently recording.
+    pub fn is_session_active() -> bool {
+        SESSION_ACTIVE.load(Ordering::Acquire)
+    }
 }
 
 #[cfg(feature = "profiling")]
@@ -211,6 +227,9 @@ pub fn begin_session(_name: &str, _filepath: &str) {}
 
 #[cfg(not(feature = "profiling"))]
 pub fn end_session() {}
+
+#[cfg(not(feature = "profiling"))]
+pub fn is_session_active() -> bool { false }
 
 #[cfg(not(feature = "profiling"))]
 pub struct ProfileTimer;

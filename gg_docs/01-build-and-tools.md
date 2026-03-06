@@ -95,23 +95,35 @@ All profiling is gated behind the `profiling` cargo feature (default on).
 
 ### Chrome Tracing JSON
 
-The engine automatically runs three profiling sessions:
+The profiling system writes Chrome Tracing JSON files that can be viewed in `chrome://tracing` or `edge://tracing`, or analyzed offline with `gg_tools`.
+
+**Automatic sessions** (always run):
 
 | Session | File | Covers |
 |---------|------|--------|
 | Startup | `gg_profile_startup.json` | `T::new()` through `on_attach()` (Vulkan init, resource creation) |
-| Runtime | `gg_profile_runtime.json` | Main loop (all frames from first to exit) |
 | Shutdown | `gg_profile_shutdown.json` | `EngineRunner` drop (resource teardown, `device_wait_idle`) |
+
+**Runtime session** (on-demand): The runtime session is **not** started automatically — it must be triggered explicitly to avoid per-frame overhead (mutex lock + disk I/O per scope). In the editor, use the **"Capture Trace"** button in the Settings panel. Programmatically:
+
+```rust
+// Start recording
+gg_engine::profiling::begin_session("Runtime", "gg_profile_runtime.json");
+// ... run for a while ...
+// Stop and flush
+gg_engine::profiling::end_session();
+```
+
+An atomic fast-path (`SESSION_ACTIVE`) skips the mutex entirely when no session is active, so `profile_scope!` / `ProfileTimer` have near-zero cost during normal operation.
 
 Session management is in `application.rs`:
 1. Startup session opens in `run()`
-2. Transitions to runtime after `on_attach()` inside `resumed()`
-3. Runtime ends in `EngineRunner::Drop`
-4. Shutdown wraps the `drop(runner)` call
+2. Startup session closes after `on_attach()` inside `resumed()`
+3. Runtime session is on-demand (editor: Settings → Capture Trace)
+4. `EngineRunner::Drop` calls `end_session()` (no-op if no session active)
+5. Shutdown session wraps the `drop(runner)` call
 
 Profile JSONs are written next to the executable (resolved via `std::env::current_exe()`), landing in `target/debug/`, `target/release/`, etc.
-
-**Viewing:** Open `.json` files in `chrome://tracing` or `edge://tracing`.
 
 ### profile_scope! Macro
 
@@ -128,9 +140,28 @@ When the `profiling` feature is disabled, the macro expands to nothing (zero cos
 
 `ProfileTimer` can also be used directly (the engine uses it for "Run loop", "Application::on_egui", etc.).
 
+**Instrumented scopes** (built-in):
+- **Engine loop:** `Run loop`, `LayerStack::on_update`
+- **egui:** `Application::on_egui`, `egui::tessellate`, `egui::set_textures`
+- **Render frame:** `render_frame`, `render_frame::wait_fence`, `render_frame::acquire_image`, `render_frame::record_commands`, `render_frame::queue_submit`, `render_frame::queue_present`
+- **Renderer:** `Renderer::begin_scene`, `Renderer::end_scene`, `Renderer2D::flush_quads`, `Renderer2D::flush_circles`, `Renderer2D::flush_lines`, `Renderer2D::flush_text`
+- **Scene:** `Scene::render_scene`, `Scene::build_world_transform_cache`, `Scene::render_sprites`, `Scene::render_circles`, `Scene::render_text`, `Scene::render_tilemaps`, `Scene::on_update_editor`, `Scene::on_update_runtime`, `Scene::on_update_physics`, `Scene::on_update_scripts`, `Scene::on_update_lua_scripts`, `Scene::resolve_texture_handles_async`
+- **Editor:** `GGEditor::on_update`, `GGEditor::on_render`, `GGEditor::on_overlay_render`, `GGEditor::render_grid`
+
+**Important:** Do NOT add `ProfileTimer` to per-draw-call functions (e.g. `draw_sprite`, `draw_quad`). These are called thousands of times per frame and the timer overhead (Instant::now × 2 + mutex lock when recording) dominates the function cost. Profile at batch/scene level instead.
+
 ### ProfileResult / drain_profile_results()
 
-Thread-local per-frame results always available (independent of feature flag). Apps can drain and display them in `on_egui` if desired.
+Thread-local per-frame results always available (independent of Chrome Tracing sessions). Apps can drain and display them in `on_egui` if desired. This is cheap — no mutex, no I/O.
+
+### Typical profiling workflow
+
+1. Run the editor (debug or release)
+2. Open the **Settings** panel → click **"Capture Trace"**
+3. Interact with the scene for a few seconds
+4. Click **"Stop Capture"**
+5. Analyze: `cargo run -p gg_tools -- target/debug/gg_profile_runtime.json`
+6. Optionally generate a flame graph: add `--flamegraph` flag
 
 ## Logging
 

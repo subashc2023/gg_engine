@@ -1,19 +1,19 @@
 use gg_engine::prelude::*;
 
-/// Native script for WASD impulse-based movement with velocity clamping
-/// and Space to jump. Mirrors the Lua `physics_player.lua`.
+/// Native script for WASD force-based movement with jump.
+/// Mirrors the Lua `physics_player.lua`.
 pub(crate) struct PhysicsPlayer {
     move_speed: f32,
+    move_accel: f32,
     jump_impulse: f32,
-    max_speed: f32,
 }
 
 impl Default for PhysicsPlayer {
     fn default() -> Self {
         Self {
-            move_speed: 1.0,
+            move_speed: 5.0,
+            move_accel: 50.0,
             jump_impulse: 5.0,
-            max_speed: 10.0,
         }
     }
 }
@@ -23,35 +23,36 @@ impl NativeScript for PhysicsPlayer {
         info!("PhysicsPlayer (native) created (entity {})", entity.id());
     }
 
-    fn on_update(&mut self, entity: Entity, scene: &mut Scene, _dt: Timestep, input: &Input) {
+    fn on_fixed_update(&mut self, entity: Entity, scene: &mut Scene, _dt: Timestep, input: &Input) {
         if !scene.has_component::<RigidBody2DComponent>(entity) {
             return;
         }
 
-        // Horizontal movement via impulses.
-        if input.is_key_pressed(KeyCode::A) {
-            scene.apply_impulse(entity, Vec2::new(-self.move_speed, 0.0));
-        }
-        if input.is_key_pressed(KeyCode::D) {
-            scene.apply_impulse(entity, Vec2::new(self.move_speed, 0.0));
-        }
+        let vel = scene.get_linear_velocity(entity).unwrap_or(Vec2::ZERO);
 
-        // Clamp horizontal velocity.
-        if let Some(vel) = scene.get_linear_velocity(entity) {
-            if vel.x > self.max_speed {
-                scene.set_linear_velocity(entity, Vec2::new(self.max_speed, vel.y));
-            } else if vel.x < -self.max_speed {
-                scene.set_linear_velocity(entity, Vec2::new(-self.max_speed, vel.y));
-            }
-        }
+        // Horizontal movement: force toward target velocity.
+        let target_vx = if input.is_key_pressed(KeyCode::A) {
+            -self.move_speed
+        } else if input.is_key_pressed(KeyCode::D) {
+            self.move_speed
+        } else {
+            0.0
+        };
+        let force_x = (target_vx - vel.x) * self.move_accel;
+        scene.apply_force(entity, Vec2::new(force_x, 0.0));
 
-        // Jump (only when roughly grounded).
-        if input.is_key_pressed(KeyCode::Space) {
-            if let Some(vel) = scene.get_linear_velocity(entity) {
-                if vel.y.abs() < 0.1 {
-                    scene.apply_impulse(entity, Vec2::new(0.0, self.jump_impulse));
-                }
-            }
+        // Ground check: short downward raycast from entity center.
+        let grounded = if let Some(tc) = scene.get_component::<TransformComponent>(entity) {
+            let pos = Vec2::new(tc.translation.x, tc.translation.y);
+            scene.raycast(pos, Vec2::new(0.0, -1.0), 0.55, Some(entity)).is_some()
+        } else {
+            false
+        };
+
+        // Jump when grounded. Raycast ground check prevents spam — after the
+        // impulse the player rises past the skin distance within one step.
+        if input.is_key_pressed(KeyCode::Space) && grounded {
+            scene.apply_impulse(entity, Vec2::new(0.0, self.jump_impulse));
         }
     }
 }

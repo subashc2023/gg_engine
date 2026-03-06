@@ -78,6 +78,17 @@ impl PhysicsWorld2D {
         }
     }
 
+    /// Clear all user-applied forces/torques on every body.
+    ///
+    /// Call this at the start of each fixed step, **before** scripts run,
+    /// so only forces applied during the current step are integrated.
+    /// rapier 0.22 does NOT auto-clear forces after `pipeline.step()`.
+    pub(crate) fn reset_all_forces(&mut self) {
+        for (_, body) in self.bodies.iter_mut() {
+            body.reset_forces(false);
+        }
+    }
+
     /// Execute a single rapier physics step and drain one FIXED_TIMESTEP
     /// from the accumulator.
     pub(crate) fn step_once(&mut self) {
@@ -135,6 +146,52 @@ impl PhysicsWorld2D {
     /// Get the pre-step (previous) transform for a body, if available.
     pub(crate) fn prev_transform(&self, handle: RigidBodyHandle) -> Option<(f32, f32, f32)> {
         self.prev_transforms.get(&handle).copied()
+    }
+
+    /// Cast a ray and return the first hit: `(entity_uuid, hit_x, hit_y, normal_x, normal_y, toi)`.
+    ///
+    /// `origin` is the ray start, `direction` is the (unnormalized) ray direction,
+    /// `max_toi` is the maximum "time of impact" (ray length in direction-units),
+    /// and `exclude_uuid` optionally filters out a specific entity.
+    pub(crate) fn raycast(
+        &self,
+        origin: na::Point2<f32>,
+        direction: na::Vector2<f32>,
+        max_toi: f32,
+        exclude_uuid: Option<u64>,
+    ) -> Option<(u64, f32, f32, f32, f32, f32)> {
+        let ray = rapier2d::geometry::Ray::new(origin, direction);
+        let predicate = |handle: ColliderHandle, _collider: &Collider| {
+            if let Some(exclude) = exclude_uuid {
+                if let Some(&uuid) = self.collider_to_uuid.get(&handle) {
+                    return uuid != exclude;
+                }
+            }
+            true
+        };
+        let filter = QueryFilter::default().predicate(&predicate);
+
+        if let Some((collider_handle, intersection)) = self.query_pipeline.cast_ray_and_get_normal(
+            &self.bodies,
+            &self.colliders,
+            &ray,
+            max_toi,
+            true,
+            filter,
+        ) {
+            if let Some(&uuid) = self.collider_to_uuid.get(&collider_handle) {
+                let hit_point = ray.point_at(intersection.time_of_impact);
+                return Some((
+                    uuid,
+                    hit_point.x,
+                    hit_point.y,
+                    intersection.normal.x,
+                    intersection.normal.y,
+                    intersection.time_of_impact,
+                ));
+            }
+        }
+        None
     }
 }
 

@@ -39,6 +39,9 @@ pub trait NativeScript: Send + Sync + 'static {
     /// Called every frame.
     fn on_update(&mut self, _entity: Entity, _scene: &mut Scene, _dt: Timestep, _input: &Input) {}
 
+    /// Called at the fixed physics rate (1/60 s). Use this for applying forces/impulses.
+    fn on_fixed_update(&mut self, _entity: Entity, _scene: &mut Scene, _dt: Timestep, _input: &Input) {}
+
     /// Called when the script is destroyed.
     fn on_destroy(&mut self, _entity: Entity, _scene: &mut Scene) {}
 }

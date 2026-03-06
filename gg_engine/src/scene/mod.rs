@@ -1133,7 +1133,7 @@ impl Scene {
                     let friction = validate_physics_value(bc.friction, 0.0, "friction", entity_uuid);
                     let restitution = validate_physics_value(bc.restitution, 0.0, "restitution", entity_uuid);
 
-                    let collider = rapier2d::geometry::ColliderBuilder::cuboid(half_x, half_y)
+                    let mut builder = rapier2d::geometry::ColliderBuilder::cuboid(half_x, half_y)
                         .density(density)
                         .friction(friction)
                         .restitution(restitution)
@@ -1141,8 +1141,13 @@ impl Scene {
                             bc.offset.x * scale.x.abs(),
                             bc.offset.y * scale.y.abs(),
                         ))
-                        .active_events(rapier2d::prelude::ActiveEvents::COLLISION_EVENTS)
-                        .build();
+                        .active_events(rapier2d::prelude::ActiveEvents::COLLISION_EVENTS);
+                    // When friction is 0, use Min combine rule so the zero
+                    // wins against any surface (prevents wall sticking).
+                    if friction == 0.0 {
+                        builder = builder.friction_combine_rule(rapier2d::prelude::CoefficientCombineRule::Min);
+                    }
+                    let collider = builder.build();
 
                     let collider_handle =
                         physics
@@ -1167,7 +1172,7 @@ impl Scene {
                     let friction = validate_physics_value(cc.friction, 0.0, "friction", entity_uuid);
                     let restitution = validate_physics_value(cc.restitution, 0.0, "restitution", entity_uuid);
 
-                    let collider = rapier2d::geometry::ColliderBuilder::ball(scaled_radius)
+                    let mut builder = rapier2d::geometry::ColliderBuilder::ball(scaled_radius)
                         .density(density)
                         .friction(friction)
                         .restitution(restitution)
@@ -1175,8 +1180,11 @@ impl Scene {
                             cc.offset.x * scale.x.abs(),
                             cc.offset.y * scale.y.abs(),
                         ))
-                        .active_events(rapier2d::prelude::ActiveEvents::COLLISION_EVENTS)
-                        .build();
+                        .active_events(rapier2d::prelude::ActiveEvents::COLLISION_EVENTS);
+                    if friction == 0.0 {
+                        builder = builder.friction_combine_rule(rapier2d::prelude::CoefficientCombineRule::Min);
+                    }
+                    let collider = builder.build();
 
                     let collider_handle =
                         physics
@@ -1475,6 +1483,32 @@ impl Scene {
         }
     }
 
+    /// Cast a ray and return the first hit: `(entity_uuid, hit_x, hit_y, normal_x, normal_y, toi)`.
+    ///
+    /// `exclude_entity` optionally filters out a specific entity (e.g. the caster).
+    pub fn raycast(
+        &self,
+        origin: glam::Vec2,
+        direction: glam::Vec2,
+        max_toi: f32,
+        exclude_entity: Option<Entity>,
+    ) -> Option<(u64, f32, f32, f32, f32, f32)> {
+        use rapier2d::na;
+        let exclude_uuid = exclude_entity.and_then(|e| {
+            self.get_component::<IdComponent>(e).map(|id| id.id.raw())
+        });
+        if let Some(ref physics) = self.physics_world {
+            physics.raycast(
+                na::Point2::new(origin.x, origin.y),
+                na::Vector2::new(direction.x, direction.y),
+                max_toi,
+                exclude_uuid,
+            )
+        } else {
+            None
+        }
+    }
+
     // -----------------------------------------------------------------
     // Runtime lifecycle
     // -----------------------------------------------------------------
@@ -1554,11 +1588,11 @@ impl Scene {
 
     /// Step the physics simulation and write body transforms back to entities.
     ///
-    /// When `input` is `Some`, Lua `on_fixed_update(dt)` callbacks are
-    /// interleaved with physics steps (play mode). When `None`, only physics
-    /// is stepped (simulate mode).
+    /// When `input` is `Some`, script `on_fixed_update(dt)` callbacks (both
+    /// Lua and native) are interleaved with physics steps (play mode). When
+    /// `None`, only physics is stepped (simulate mode).
     ///
-    /// Per fixed step: `on_fixed_update(FIXED_DT)` → `snapshot` → `step_once`.
+    /// Per fixed step: `reset_forces` → `on_fixed_update` → `snapshot` → `step_once`.
     /// After the loop, interpolated transforms are written back for smooth
     /// rendering.
     pub fn on_update_physics(&mut self, dt: Timestep, input: Option<&Input>) {
@@ -1571,17 +1605,22 @@ impl Scene {
         physics.accumulate(dt.seconds());
         let fixed_dt = physics.fixed_timestep();
 
-        // Fixed-step loop: scripts apply impulses → snapshot → rapier step.
+        // Fixed-step loop: clear forces → scripts apply forces → snapshot → rapier step.
         loop {
             if !self.physics_world.as_ref().unwrap().can_step() {
                 break;
             }
 
-            // Run Lua fixed-update scripts so impulses/forces are applied
+            // Clear accumulated forces before scripts add new ones.
+            // rapier 0.22 does NOT auto-clear forces after step().
+            self.physics_world.as_mut().unwrap().reset_all_forces();
+
+            // Run fixed-update scripts so impulses/forces are applied
             // at the physics rate, not the render rate.
-            #[cfg(feature = "lua-scripting")]
             if let Some(inp) = input {
+                #[cfg(feature = "lua-scripting")]
                 self.call_lua_fixed_update(fixed_dt, inp);
+                self.run_native_fixed_update(Timestep::from_seconds(fixed_dt), inp);
             }
 
             let physics = self.physics_world.as_mut().unwrap();
@@ -1799,6 +1838,51 @@ impl Scene {
         }
     }
 
+    /// Run `on_fixed_update` on all [`NativeScriptComponent`] instances.
+    ///
+    /// Called inside the physics step loop at the fixed physics rate.
+    /// Uses the same take-modify-replace pattern as [`on_update_scripts`].
+    fn run_native_fixed_update(&mut self, dt: Timestep, input: &Input) {
+        let script_entities: Vec<(hecs::Entity, bool)> = self
+            .world
+            .query::<(hecs::Entity, &NativeScriptComponent)>()
+            .iter()
+            .map(|(e, nsc)| (e, nsc.instance.is_some()))
+            .collect();
+
+        for (handle, had_instance) in script_entities {
+            let entity = Entity::new(handle);
+
+            // Lazy instantiation.
+            if !had_instance {
+                if let Ok(mut nsc) = self.world.get::<&mut NativeScriptComponent>(handle) {
+                    nsc.instance = Some((nsc.instantiate_fn)());
+                }
+            }
+
+            let (mut instance, needs_create) = {
+                let Ok(mut nsc) = self.world.get::<&mut NativeScriptComponent>(handle) else {
+                    continue;
+                };
+                let Some(inst) = nsc.instance.take() else {
+                    continue;
+                };
+                let needs_create = !nsc.created;
+                nsc.created = true;
+                (inst, needs_create)
+            };
+
+            if needs_create {
+                instance.on_create(entity, self);
+            }
+            instance.on_fixed_update(entity, self, dt, input);
+
+            if let Ok(mut nsc) = self.world.get::<&mut NativeScriptComponent>(handle) {
+                nsc.instance = Some(instance);
+            }
+        }
+    }
+
     /// Draw all sprite and circle entities.
     ///
     /// Shared rendering code used by editor, simulation, and runtime paths.
@@ -1807,9 +1891,13 @@ impl Scene {
     fn render_scene(&self, renderer: &mut Renderer) {
         let _timer = crate::profiling::ProfileTimer::new("Scene::render_scene");
         // Pre-compute world transforms for all entities once.
-        let wt_cache = self.build_world_transform_cache();
+        let wt_cache = {
+            crate::profile_scope!("Scene::build_world_transform_cache");
+            self.build_world_transform_cache()
+        };
 
         // Draw sprites (with optional animation).
+        let _sprite_timer = crate::profiling::ProfileTimer::new("Scene::render_sprites");
         for (handle, sprite) in self
             .world
             .query::<(
@@ -1852,7 +1940,10 @@ impl Scene {
             }
         }
 
+        drop(_sprite_timer);
+
         // Draw circles.
+        let _circle_timer = crate::profiling::ProfileTimer::new("Scene::render_circles");
         for (handle, circle) in self
             .world
             .query::<(
@@ -1869,7 +1960,10 @@ impl Scene {
             );
         }
 
+        drop(_circle_timer);
+
         // Draw text.
+        let _text_timer = crate::profiling::ProfileTimer::new("Scene::render_text");
         for (handle, text) in self
             .world
             .query::<(
@@ -1886,7 +1980,10 @@ impl Scene {
             );
         }
 
+        drop(_text_timer);
+
         // Draw tilemaps.
+        let _tilemap_timer = crate::profiling::ProfileTimer::new("Scene::render_tilemaps");
         for (handle, tilemap) in self
             .world
             .query::<(

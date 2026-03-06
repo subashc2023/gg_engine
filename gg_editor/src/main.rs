@@ -596,6 +596,7 @@ impl Application for GGEditor {
     }
 
     fn on_update(&mut self, dt: Timestep, input: &Input) {
+        profile_scope!("GGEditor::on_update");
         // Exponential moving average for stable frame time display.
         self.frame_time_ms = self.frame_time_ms * 0.95 + dt.millis() * 0.05;
 
@@ -689,6 +690,7 @@ impl Application for GGEditor {
     }
 
     fn on_render(&mut self, renderer: &mut Renderer) {
+        profile_scope!("GGEditor::on_render");
         // Drop old scenes that may hold GPU resources (textures). We must
         // wait for all in-flight GPU work to finish before destroying them,
         // since previous frames' command buffers may still reference them.
@@ -1138,6 +1140,7 @@ impl GGEditor {
     const AUTOSAVE_INTERVAL_SECS: f32 = 300.0;
 
     fn render_grid(&self, renderer: &mut Renderer) {
+        profile_scope!("GGEditor::render_grid");
         let grid_size = self.editor_settings.grid_size;
         if grid_size <= 0.0 {
             return;
@@ -1212,6 +1215,7 @@ impl GGEditor {
     }
 
     fn on_overlay_render(&self, renderer: &mut Renderer) {
+        profile_scope!("GGEditor::on_overlay_render");
         // Set the appropriate camera for the overlay pass.
         match self.playback.scene_state {
             SceneState::Play => {
@@ -1231,7 +1235,10 @@ impl GGEditor {
 
         // Grid rendering (behind everything else in the overlay).
         if self.editor_settings.show_grid && self.playback.scene_state != SceneState::Play {
+            let prev_line_width = renderer.line_width();
+            renderer.set_line_width(1.0);
             self.render_grid(renderer);
+            renderer.set_line_width(prev_line_width);
         }
 
         // Physics collider visualization (uses world transforms for hierarchy support).
@@ -1308,7 +1315,26 @@ impl GGEditor {
         if let Some(selected) = self.selection_context {
             if let Some(transform) = self.scene.get_component::<TransformComponent>(selected) {
                 let outline_color = Vec4::new(1.0, 0.5, 0.0, 1.0);
-                renderer.draw_rect_transform(&transform.get_transform(), outline_color, -1);
+                let outline_transform = if let Some(tm) = self.scene.get_component::<TilemapComponent>(selected) {
+                    // Expand outline to cover the full tilemap grid.
+                    transform.get_transform()
+                        * Mat4::from_scale_rotation_translation(
+                            Vec3::new(
+                                tm.width as f32 * tm.tile_size.x,
+                                tm.height as f32 * tm.tile_size.y,
+                                1.0,
+                            ),
+                            Quat::IDENTITY,
+                            Vec3::new(
+                                (tm.width as f32 - 1.0) * tm.tile_size.x * 0.5,
+                                (tm.height as f32 - 1.0) * tm.tile_size.y * 0.5,
+                                0.0,
+                            ),
+                        )
+                } else {
+                    transform.get_transform()
+                };
+                renderer.draw_rect_transform(&outline_transform, outline_color, -1);
             }
         }
 
@@ -1782,6 +1808,12 @@ impl GGEditor {
             }
         });
         ui.menu_button("View", |ui| {
+            if ui
+                .checkbox(&mut self.editor_settings.show_grid, "X-Y Grid")
+                .clicked()
+            {
+                ui.close();
+            }
             if ui
                 .checkbox(&mut self.editor_settings.show_physics_colliders, "Show Physics Colliders")
                 .clicked()

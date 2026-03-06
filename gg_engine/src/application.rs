@@ -352,13 +352,11 @@ impl<T: Application> ApplicationHandler for EngineRunner<T> {
                                             }
                                         }
 
-                                        // Startup is complete — close the startup profile
-                                        // and begin the runtime profile.
+                                        // Startup is complete — close the startup profile.
+                                        // Runtime profiling is on-demand: call
+                                        // begin_session("Runtime", "gg_profile_runtime.json")
+                                        // from the application to capture a trace for gg_tools.
                                         crate::profiling::end_session();
-                                        crate::profiling::begin_session(
-                                            "Runtime",
-                                            "gg_profile_runtime.json",
-                                        );
                                     }
                                     Err(e) => {
                                         log::error!(target: "gg_engine", "Egui renderer init failed: {e}");

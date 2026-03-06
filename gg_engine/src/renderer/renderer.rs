@@ -643,7 +643,7 @@ impl Renderer {
         sprite: &SpriteRendererComponent,
         entity_id: i32,
     ) {
-        let _timer = ProfileTimer::new("Renderer::draw_sprite");
+
         let tex_index = sprite
             .texture
             .as_ref()
@@ -662,7 +662,7 @@ impl Renderer {
 
     /// Draw a flat-colored quad at a 3D position with the given size and color.
     pub fn draw_quad(&self, position: &Vec3, size: &Vec2, color: Vec4) {
-        let _timer = ProfileTimer::new("Renderer::draw_quad");
+
         let transform = Mat4::from_scale_rotation_translation(
             Vec3::new(size.x, size.y, 1.0),
             Quat::IDENTITY,
@@ -690,7 +690,7 @@ impl Renderer {
         tiling_factor: f32,
         tint_color: Vec4,
     ) {
-        let _timer = ProfileTimer::new("Renderer::draw_textured_quad");
+
         let transform = Mat4::from_scale_rotation_translation(
             Vec3::new(size.x, size.y, 1.0),
             Quat::IDENTITY,
@@ -727,7 +727,7 @@ impl Renderer {
 
     /// Draw a rotated flat-colored quad. `rotation` is in radians (Z-axis).
     pub fn draw_rotated_quad(&self, position: &Vec3, size: &Vec2, rotation: f32, color: Vec4) {
-        let _timer = ProfileTimer::new("Renderer::draw_rotated_quad");
+
         let transform = Mat4::from_scale_rotation_translation(
             Vec3::new(size.x, size.y, 1.0),
             Quat::from_rotation_z(rotation),
@@ -757,7 +757,7 @@ impl Renderer {
         tiling_factor: f32,
         tint_color: Vec4,
     ) {
-        let _timer = ProfileTimer::new("Renderer::draw_rotated_textured_quad");
+
         let transform = Mat4::from_scale_rotation_translation(
             Vec3::new(size.x, size.y, 1.0),
             Quat::from_rotation_z(rotation),
@@ -808,7 +808,7 @@ impl Renderer {
         sub_texture: &SubTexture2D,
         tint_color: Vec4,
     ) {
-        let _timer = ProfileTimer::new("Renderer::draw_sub_textured_quad");
+
         let transform = Mat4::from_scale_rotation_translation(
             Vec3::new(size.x, size.y, 1.0),
             Quat::IDENTITY,
@@ -870,7 +870,7 @@ impl Renderer {
         sub_texture: &SubTexture2D,
         tint_color: Vec4,
     ) {
-        let _timer = ProfileTimer::new("Renderer::draw_rotated_sub_textured_quad");
+
         let transform = Mat4::from_scale_rotation_translation(
             Vec3::new(size.x, size.y, 1.0),
             Quat::from_rotation_z(rotation),
@@ -971,7 +971,7 @@ impl Renderer {
         circle: &CircleRendererComponent,
         entity_id: i32,
     ) {
-        let _timer = ProfileTimer::new("Renderer::draw_circle_component");
+
         self.push_circle_to_batch(
             transform,
             circle.color,
@@ -1076,8 +1076,14 @@ impl Renderer {
 
     /// Set the line width used for line rendering.
     /// Requires `wideLines` device feature for values other than 1.0.
+    /// Flushes any pending lines so they render at the previous width.
     pub fn set_line_width(&mut self, width: f32) {
-        self.line_width = width;
+        if (self.line_width - width).abs() > f32::EPSILON {
+            if self.draw_context.is_some() {
+                self.flush_line_batch();
+            }
+            self.line_width = width;
+        }
     }
 
     // -- Text drawing ----------------------------------------------------------
@@ -1151,7 +1157,7 @@ impl Renderer {
         kerning: f32,
         entity_id: i32,
     ) {
-        let _timer = ProfileTimer::new("Renderer::draw_text_string");
+
         let tex_index = font.bindless_index() as f32;
         let scale = font_size;
 
@@ -1222,7 +1228,7 @@ impl Renderer {
         text: &TextComponent,
         entity_id: i32,
     ) {
-        let _timer = ProfileTimer::new("Renderer::draw_text_component");
+
         if let Some(font) = &text.font {
             self.draw_text_string(
                 &text.text,
@@ -1425,6 +1431,9 @@ impl Renderer {
 impl Drop for Renderer {
     fn drop(&mut self) {
         self.save_pipeline_cache();
+        // Drop Renderer2DData (owns white_texture) before destroying the
+        // descriptor pool, so Texture2D::Drop can still free its descriptor set.
+        drop(self.renderer_2d.take());
         unsafe {
             self.device
                 .destroy_pipeline_cache(self.pipeline_cache, None);
