@@ -169,6 +169,14 @@ struct SpriteData {
     tiling_factor: f32,
     #[serde(rename = "TextureHandle", default, skip_serializing_if = "is_zero_handle")]
     texture_handle: u64,
+    #[serde(rename = "SortingLayer", default)]
+    sorting_layer: i32,
+    #[serde(rename = "OrderInLayer", default)]
+    order_in_layer: i32,
+    #[serde(rename = "AtlasMin", default, skip_serializing_if = "is_zero_vec2")]
+    atlas_min: [f32; 2],
+    #[serde(rename = "AtlasMax", default = "default_one_vec2", skip_serializing_if = "is_one_vec2")]
+    atlas_max: [f32; 2],
 }
 
 fn is_zero_handle(v: &u64) -> bool {
@@ -179,6 +187,14 @@ fn default_tiling_factor() -> f32 {
     1.0
 }
 
+fn is_one_vec2(v: &[f32; 2]) -> bool {
+    v[0] == 1.0 && v[1] == 1.0
+}
+
+fn default_one_vec2() -> [f32; 2] {
+    [1.0, 1.0]
+}
+
 #[derive(Serialize, Deserialize)]
 struct CircleData {
     #[serde(rename = "Color")]
@@ -187,6 +203,10 @@ struct CircleData {
     thickness: f32,
     #[serde(rename = "Fade", default = "default_fade")]
     fade: f32,
+    #[serde(rename = "SortingLayer", default)]
+    sorting_layer: i32,
+    #[serde(rename = "OrderInLayer", default)]
+    order_in_layer: i32,
 }
 
 fn default_thickness() -> f32 {
@@ -559,6 +579,10 @@ impl SceneSerializer {
                         color: sprite.color.into(),
                         tiling_factor: sprite.tiling_factor,
                         texture_handle: sprite.texture_handle.raw(),
+                        sorting_layer: sprite.sorting_layer,
+                        order_in_layer: sprite.order_in_layer,
+                        atlas_min: sprite.atlas_min.into(),
+                        atlas_max: sprite.atlas_max.into(),
                     });
 
             let circle_data =
@@ -568,6 +592,8 @@ impl SceneSerializer {
                         color: circle.color.into(),
                         thickness: circle.thickness,
                         fade: circle.fade,
+                        sorting_layer: circle.sorting_layer,
+                        order_in_layer: circle.order_in_layer,
                     });
 
             let text_data =
@@ -782,6 +808,10 @@ impl SceneSerializer {
                 let mut sprite = SpriteRendererComponent::new(Vec4::from(sd.color));
                 sprite.tiling_factor = sd.tiling_factor;
                 sprite.texture_handle = Uuid::from_raw(sd.texture_handle);
+                sprite.sorting_layer = sd.sorting_layer;
+                sprite.order_in_layer = sd.order_in_layer;
+                sprite.atlas_min = Vec2::from(sd.atlas_min);
+                sprite.atlas_max = Vec2::from(sd.atlas_max);
                 scene.add_component(entity, sprite);
             }
 
@@ -793,6 +823,8 @@ impl SceneSerializer {
                         color: Vec4::from(cd.color),
                         thickness: cd.thickness,
                         fade: cd.fade,
+                        sorting_layer: cd.sorting_layer,
+                        order_in_layer: cd.order_in_layer,
                     },
                 );
             }

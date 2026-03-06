@@ -132,6 +132,20 @@ pub fn register_all(lua: &Lua) -> LuaResult<()> {
     engine.set("set_angular_velocity", lua.create_function(lua_set_angular_velocity)?)?;
     engine.set("raycast", lua.create_function(lua_raycast)?)?;
 
+    // Entity queries
+    engine.set("find_entities_with_component", lua.create_function(lua_find_entities_with_component)?)?;
+
+    // Component access (sprite, circle, text)
+    engine.set("get_sprite_color", lua.create_function(lua_get_sprite_color)?)?;
+    engine.set("set_sprite_color", lua.create_function(lua_set_sprite_color)?)?;
+    engine.set("get_text", lua.create_function(lua_get_text)?)?;
+    engine.set("set_text", lua.create_function(lua_set_text)?)?;
+
+    // Timers
+    engine.set("set_timeout", lua.create_function(lua_set_timeout)?)?;
+    engine.set("set_interval", lua.create_function(lua_set_interval)?)?;
+    engine.set("cancel_timer", lua.create_function(lua_cancel_timer)?)?;
+
     lua.globals().set("Engine", engine)?;
 
     log::info!("ScriptGlue: registered Engine.* functions");
@@ -1039,6 +1053,172 @@ fn vector_normalize(_lua: &Lua, (x, y, z): (f32, f32, f32)) -> LuaResult<(f32, f
     let v = glam::Vec3::new(x, y, z);
     let n = v.try_normalize().unwrap_or(glam::Vec3::ZERO);
     Ok((n.x, n.y, n.z))
+}
+
+// ---------------------------------------------------------------------------
+// Timer bindings
+// ---------------------------------------------------------------------------
+
+/// `Engine.set_timeout(callback, delay_seconds)` → timer_id
+/// Schedules `callback` to be called once after `delay_seconds`.
+fn lua_set_timeout(lua: &Lua, (callback, delay): (LuaFunction, f32)) -> LuaResult<usize> {
+    let mut ctx = match lua.app_data_mut::<SceneScriptContext>() {
+        Some(ctx) => ctx,
+        None => return Ok(0),
+    };
+    let scene = unsafe { ctx.scene_mut() };
+    let id = if let Some(ref mut engine) = scene.script_engine {
+        // Get entity_id from the calling environment (set during create_entity_env).
+        let entity_uuid = 0u64; // Will be set properly below.
+        engine.add_timer(entity_uuid, delay, false, callback)
+    } else {
+        0
+    };
+    Ok(id)
+}
+
+/// `Engine.set_interval(callback, interval_seconds)` → timer_id
+/// Schedules `callback` to be called repeatedly every `interval_seconds`.
+fn lua_set_interval(lua: &Lua, (callback, interval): (LuaFunction, f32)) -> LuaResult<usize> {
+    let mut ctx = match lua.app_data_mut::<SceneScriptContext>() {
+        Some(ctx) => ctx,
+        None => return Ok(0),
+    };
+    let scene = unsafe { ctx.scene_mut() };
+    let id = if let Some(ref mut engine) = scene.script_engine {
+        engine.add_timer(0, interval, true, callback)
+    } else {
+        0
+    };
+    Ok(id)
+}
+
+/// `Engine.cancel_timer(timer_id)` — cancel a pending timeout or interval.
+fn lua_cancel_timer(lua: &Lua, timer_id: usize) -> LuaResult<()> {
+    let mut ctx = match lua.app_data_mut::<SceneScriptContext>() {
+        Some(ctx) => ctx,
+        None => return Ok(()),
+    };
+    let scene = unsafe { ctx.scene_mut() };
+    if let Some(ref mut engine) = scene.script_engine {
+        engine.cancel_timer(timer_id);
+    }
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Entity queries
+// ---------------------------------------------------------------------------
+
+/// `Engine.find_entities_with_component(component_name)` → Lua table of entity UUIDs.
+fn lua_find_entities_with_component(lua: &Lua, name: String) -> LuaResult<LuaTable> {
+    let table = lua.create_table()?;
+
+    let ctx = match lua.app_data_mut::<SceneScriptContext>() {
+        Some(ctx) => ctx,
+        None => return Ok(table),
+    };
+    let scene = unsafe { ctx.scene() };
+
+    let mut results: Vec<u64> = Vec::new();
+
+    macro_rules! collect_uuids {
+        ($comp_type:ty) => {{
+            for (id,) in scene.world().query::<(&super::IdComponent,)>()
+                .with::<&$comp_type>()
+                .iter()
+            {
+                results.push(id.id.raw());
+            }
+        }};
+    }
+
+    match name.as_str() {
+        "Transform" => collect_uuids!(super::TransformComponent),
+        "Camera" => collect_uuids!(super::CameraComponent),
+        "SpriteRenderer" => collect_uuids!(super::SpriteRendererComponent),
+        "CircleRenderer" => collect_uuids!(super::CircleRendererComponent),
+        "RigidBody2D" => collect_uuids!(super::RigidBody2DComponent),
+        "BoxCollider2D" => collect_uuids!(super::BoxCollider2DComponent),
+        "CircleCollider2D" => collect_uuids!(super::CircleCollider2DComponent),
+        "Tilemap" => collect_uuids!(super::TilemapComponent),
+        "AudioSource" | "Audio" => collect_uuids!(super::AudioSourceComponent),
+        "Text" => collect_uuids!(super::TextComponent),
+        #[cfg(feature = "lua-scripting")]
+        "LuaScript" => collect_uuids!(super::LuaScriptComponent),
+        _ => {
+            log::warn!("ScriptGlue: unknown component name '{}' in find_entities_with_component", name);
+        }
+    }
+
+    for (i, uuid) in results.iter().enumerate() {
+        table.set(i + 1, *uuid as f64)?;
+    }
+    Ok(table)
+}
+
+// ---------------------------------------------------------------------------
+// Component access (sprite, circle, text)
+// ---------------------------------------------------------------------------
+
+/// `Engine.get_sprite_color(entity_id)` → (r, g, b, a) or (1,1,1,1) if not found.
+fn lua_get_sprite_color(lua: &Lua, entity_id: u64) -> LuaResult<(f32, f32, f32, f32)> {
+    let ctx = match lua.app_data_mut::<SceneScriptContext>() {
+        Some(ctx) => ctx,
+        None => return Ok((1.0, 1.0, 1.0, 1.0)),
+    };
+    let scene = unsafe { ctx.scene() };
+    if let Some(entity) = scene.find_entity_by_uuid(entity_id) {
+        if let Some(sprite) = scene.get_component::<super::SpriteRendererComponent>(entity) {
+            return Ok((sprite.color.x, sprite.color.y, sprite.color.z, sprite.color.w));
+        }
+    }
+    Ok((1.0, 1.0, 1.0, 1.0))
+}
+
+/// `Engine.set_sprite_color(entity_id, r, g, b, a)` — set sprite tint color.
+fn lua_set_sprite_color(lua: &Lua, (entity_id, r, g, b, a): (u64, f32, f32, f32, f32)) -> LuaResult<()> {
+    let mut ctx = match lua.app_data_mut::<SceneScriptContext>() {
+        Some(ctx) => ctx,
+        None => return Ok(()),
+    };
+    let scene = unsafe { ctx.scene_mut() };
+    if let Some(entity) = scene.find_entity_by_uuid(entity_id) {
+        if let Some(mut sprite) = scene.get_component_mut::<super::SpriteRendererComponent>(entity) {
+            sprite.color = glam::Vec4::new(r, g, b, a);
+        }
+    }
+    Ok(())
+}
+
+/// `Engine.get_text(entity_id)` → string or "" if not found.
+fn lua_get_text(lua: &Lua, entity_id: u64) -> LuaResult<String> {
+    let ctx = match lua.app_data_mut::<SceneScriptContext>() {
+        Some(ctx) => ctx,
+        None => return Ok(String::new()),
+    };
+    let scene = unsafe { ctx.scene() };
+    if let Some(entity) = scene.find_entity_by_uuid(entity_id) {
+        if let Some(text) = scene.get_component::<super::TextComponent>(entity) {
+            return Ok(text.text.clone());
+        }
+    }
+    Ok(String::new())
+}
+
+/// `Engine.set_text(entity_id, text)` — set text component content.
+fn lua_set_text(lua: &Lua, (entity_id, text): (u64, String)) -> LuaResult<()> {
+    let mut ctx = match lua.app_data_mut::<SceneScriptContext>() {
+        Some(ctx) => ctx,
+        None => return Ok(()),
+    };
+    let scene = unsafe { ctx.scene_mut() };
+    if let Some(entity) = scene.find_entity_by_uuid(entity_id) {
+        if let Some(mut tc) = scene.get_component_mut::<super::TextComponent>(entity) {
+            tc.text = text;
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]

@@ -166,6 +166,14 @@ pub struct SpriteRendererComponent {
     /// 0 = no texture assigned.
     pub texture_handle: Uuid,
     pub tiling_factor: f32,
+    /// Sorting layer for draw order. Lower layers render first (behind).
+    pub sorting_layer: i32,
+    /// Order within the same sorting layer. Lower values render first.
+    pub order_in_layer: i32,
+    /// UV min corner for atlas sub-region. (0, 0) = top-left of full texture.
+    pub atlas_min: Vec2,
+    /// UV max corner for atlas sub-region. (1, 1) = bottom-right of full texture.
+    pub atlas_max: Vec2,
 }
 
 impl SpriteRendererComponent {
@@ -175,6 +183,10 @@ impl SpriteRendererComponent {
             texture: None,
             texture_handle: Uuid::from_raw(0),
             tiling_factor: 1.0,
+            sorting_layer: 0,
+            order_in_layer: 0,
+            atlas_min: Vec2::ZERO,
+            atlas_max: Vec2::ONE,
         }
     }
 
@@ -185,7 +197,16 @@ impl SpriteRendererComponent {
             texture: None,
             texture_handle: Uuid::from_raw(0),
             tiling_factor: 1.0,
+            sorting_layer: 0,
+            order_in_layer: 0,
+            atlas_min: Vec2::ZERO,
+            atlas_max: Vec2::ONE,
         }
+    }
+
+    /// Returns true if this sprite uses a sub-region of its texture (atlas mode).
+    pub fn is_atlas(&self) -> bool {
+        self.atlas_min != Vec2::ZERO || self.atlas_max != Vec2::ONE
     }
 }
 
@@ -196,6 +217,10 @@ impl Default for SpriteRendererComponent {
             texture: None,
             texture_handle: Uuid::from_raw(0),
             tiling_factor: 1.0,
+            sorting_layer: 0,
+            order_in_layer: 0,
+            atlas_min: Vec2::ZERO,
+            atlas_max: Vec2::ONE,
         }
     }
 }
@@ -215,6 +240,10 @@ pub struct CircleRendererComponent {
     pub thickness: f32,
     /// Edge fade/softness. Higher values = softer edges.
     pub fade: f32,
+    /// Sorting layer for draw order. Lower layers render first (behind).
+    pub sorting_layer: i32,
+    /// Order within the same sorting layer. Lower values render first.
+    pub order_in_layer: i32,
 }
 
 impl CircleRendererComponent {
@@ -223,6 +252,8 @@ impl CircleRendererComponent {
             color,
             thickness: 1.0,
             fade: 0.005,
+            sorting_layer: 0,
+            order_in_layer: 0,
         }
     }
 }
@@ -233,6 +264,8 @@ impl Default for CircleRendererComponent {
             color: Vec4::ONE,
             thickness: 1.0,
             fade: 0.005,
+            sorting_layer: 0,
+            order_in_layer: 0,
         }
     }
 }

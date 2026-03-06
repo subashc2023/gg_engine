@@ -1902,7 +1902,7 @@ impl Scene {
         }
     }
 
-    /// Draw all sprite and circle entities.
+    /// Draw all renderable entities sorted by (sorting_layer, order_in_layer, z).
     ///
     /// Shared rendering code used by editor, simulation, and runtime paths.
     /// The caller is responsible for setting the view-projection matrix on
@@ -1915,150 +1915,189 @@ impl Scene {
             self.build_world_transform_cache()
         };
 
-        // Draw sprites (with optional animation).
-        let _sprite_timer = crate::profiling::ProfileTimer::new("Scene::render_sprites");
+        // Collect all renderable entities with sort keys.
+        // 0 = Sprite, 1 = Circle, 2 = Text, 3 = Tilemap
+        let mut renderables: Vec<(i32, i32, f32, u8, hecs::Entity)> = Vec::new();
+
         for (handle, sprite) in self
             .world
-            .query::<(
-                hecs::Entity,
-                &SpriteRendererComponent,
-            )>()
+            .query::<(hecs::Entity, &SpriteRendererComponent)>()
             .iter()
         {
-            let world_transform = wt_cache.get(&handle).copied().unwrap_or(glam::Mat4::IDENTITY);
-
-            // Check if this entity has an active animator.
-            let animated = self
-                .world
-                .get::<&SpriteAnimatorComponent>(handle)
-                .ok()
-                .and_then(|anim| {
-                    let (col, row) = anim.current_grid_coords()?;
-                    let texture = sprite.texture.as_ref()?;
-                    Some(SubTexture2D::from_coords(
-                        texture,
-                        glam::Vec2::new(col as f32, row as f32),
-                        anim.cell_size,
-                        glam::Vec2::ONE,
-                    ))
-                });
-
-            if let Some(sub_tex) = animated {
-                renderer.draw_sub_textured_quad_transformed(
-                    &world_transform,
-                    &sub_tex,
-                    sprite.color,
-                    handle.id() as i32,
-                );
-            } else {
-                renderer.draw_sprite(
-                    &world_transform,
-                    sprite,
-                    handle.id() as i32,
-                );
-            }
+            let z = wt_cache
+                .get(&handle)
+                .map(|m| m.w_axis.z)
+                .unwrap_or(0.0);
+            renderables.push((sprite.sorting_layer, sprite.order_in_layer, z, 0, handle));
         }
 
-        drop(_sprite_timer);
-
-        // Draw circles.
-        let _circle_timer = crate::profiling::ProfileTimer::new("Scene::render_circles");
         for (handle, circle) in self
             .world
-            .query::<(
-                hecs::Entity,
-                &CircleRendererComponent,
-            )>()
+            .query::<(hecs::Entity, &CircleRendererComponent)>()
             .iter()
         {
-            let world_transform = wt_cache.get(&handle).copied().unwrap_or(glam::Mat4::IDENTITY);
-            renderer.draw_circle_component(
-                &world_transform,
-                circle,
-                handle.id() as i32,
-            );
+            let z = wt_cache
+                .get(&handle)
+                .map(|m| m.w_axis.z)
+                .unwrap_or(0.0);
+            renderables.push((circle.sorting_layer, circle.order_in_layer, z, 1, handle));
         }
 
-        drop(_circle_timer);
-
-        // Draw text.
-        let _text_timer = crate::profiling::ProfileTimer::new("Scene::render_text");
-        for (handle, text) in self
+        for (handle, _text) in self
             .world
-            .query::<(
-                hecs::Entity,
-                &TextComponent,
-            )>()
+            .query::<(hecs::Entity, &TextComponent)>()
             .iter()
         {
-            let world_transform = wt_cache.get(&handle).copied().unwrap_or(glam::Mat4::IDENTITY);
-            renderer.draw_text_component(
-                &world_transform,
-                text,
-                handle.id() as i32,
-            );
+            let z = wt_cache
+                .get(&handle)
+                .map(|m| m.w_axis.z)
+                .unwrap_or(0.0);
+            // Text has no sorting fields — default to (0, 0).
+            renderables.push((0, 0, z, 2, handle));
         }
 
-        drop(_text_timer);
-
-        // Draw tilemaps.
-        let _tilemap_timer = crate::profiling::ProfileTimer::new("Scene::render_tilemaps");
-        for (handle, tilemap) in self
+        for (handle, _tilemap) in self
             .world
-            .query::<(
-                hecs::Entity,
-                &TilemapComponent,
-            )>()
+            .query::<(hecs::Entity, &TilemapComponent)>()
             .iter()
         {
-            let texture = match tilemap.texture.as_ref() {
-                Some(tex) => tex,
-                None => continue,
-            };
-            let entity_world = wt_cache.get(&handle).copied().unwrap_or(glam::Mat4::IDENTITY);
-            let cols = tilemap.tileset_columns.max(1);
-            let tw = texture.width() as f32;
-            let th = texture.height() as f32;
-            for row in 0..tilemap.height {
-                for col in 0..tilemap.width {
-                    let raw = tilemap.tiles[(row * tilemap.width + col) as usize];
-                    if raw < 0 {
-                        continue;
-                    }
-                    let flip_h = raw & TILE_FLIP_H != 0;
-                    let flip_v = raw & TILE_FLIP_V != 0;
-                    let tile_id = raw & TILE_ID_MASK;
+            let z = wt_cache
+                .get(&handle)
+                .map(|m| m.w_axis.z)
+                .unwrap_or(0.0);
+            // Tilemaps have no sorting fields — default to (0, 0).
+            renderables.push((0, 0, z, 3, handle));
+        }
 
-                    let tex_col = (tile_id as u32) % cols;
-                    let tex_row = (tile_id as u32) / cols;
+        // Sort by (sorting_layer, order_in_layer, z).
+        renderables.sort_by(|a, b| {
+            a.0.cmp(&b.0)
+                .then(a.1.cmp(&b.1))
+                .then(a.2.partial_cmp(&b.2).unwrap_or(std::cmp::Ordering::Equal))
+        });
 
-                    // UV calculation with spacing and margin.
-                    let px = tilemap.margin.x + tex_col as f32 * (tilemap.cell_size.x + tilemap.spacing.x);
-                    let py = tilemap.margin.y + tex_row as f32 * (tilemap.cell_size.y + tilemap.spacing.y);
-                    let mut min_uv = glam::Vec2::new(px / tw, py / th);
-                    let mut max_uv = glam::Vec2::new((px + tilemap.cell_size.x) / tw, (py + tilemap.cell_size.y) / th);
-
-                    if flip_h { std::mem::swap(&mut min_uv.x, &mut max_uv.x); }
-                    if flip_v { std::mem::swap(&mut min_uv.y, &mut max_uv.y); }
-
-                    let sub_tex = SubTexture2D::new(texture, min_uv, max_uv);
-                    let tile_transform = entity_world
-                        * glam::Mat4::from_scale_rotation_translation(
-                            glam::Vec3::new(tilemap.tile_size.x, tilemap.tile_size.y, 1.0),
-                            glam::Quat::IDENTITY,
-                            glam::Vec3::new(
-                                col as f32 * tilemap.tile_size.x,
-                                row as f32 * tilemap.tile_size.y,
-                                0.0,
-                            ),
+        // Render in sorted order.
+        for &(_, _, _, kind, handle) in &renderables {
+            let world_transform = wt_cache.get(&handle).copied().unwrap_or(glam::Mat4::IDENTITY);
+            match kind {
+                0 => {
+                    // Sprite
+                    let sprite = self.world.get::<&SpriteRendererComponent>(handle).unwrap();
+                    let animated = self
+                        .world
+                        .get::<&SpriteAnimatorComponent>(handle)
+                        .ok()
+                        .and_then(|anim| {
+                            let (col, row) = anim.current_grid_coords()?;
+                            let texture = sprite.texture.as_ref()?;
+                            Some(SubTexture2D::from_coords(
+                                texture,
+                                glam::Vec2::new(col as f32, row as f32),
+                                anim.cell_size,
+                                glam::Vec2::ONE,
+                            ))
+                        });
+                    if let Some(sub_tex) = animated {
+                        renderer.draw_sub_textured_quad_transformed(
+                            &world_transform,
+                            &sub_tex,
+                            sprite.color,
+                            handle.id() as i32,
                         );
-                    renderer.draw_sub_textured_quad_transformed(
-                        &tile_transform,
-                        &sub_tex,
-                        glam::Vec4::ONE,
+                    } else if sprite.is_atlas() {
+                        if let Some(ref tex) = sprite.texture {
+                            let sub_tex = SubTexture2D::new(tex, sprite.atlas_min, sprite.atlas_max);
+                            renderer.draw_sub_textured_quad_transformed(
+                                &world_transform,
+                                &sub_tex,
+                                sprite.color,
+                                handle.id() as i32,
+                            );
+                        } else {
+                            renderer.draw_sprite(
+                                &world_transform,
+                                &sprite,
+                                handle.id() as i32,
+                            );
+                        }
+                    } else {
+                        renderer.draw_sprite(
+                            &world_transform,
+                            &sprite,
+                            handle.id() as i32,
+                        );
+                    }
+                }
+                1 => {
+                    // Circle
+                    let circle = self.world.get::<&CircleRendererComponent>(handle).unwrap();
+                    renderer.draw_circle_component(
+                        &world_transform,
+                        &circle,
                         handle.id() as i32,
                     );
                 }
+                2 => {
+                    // Text
+                    let text = self.world.get::<&TextComponent>(handle).unwrap();
+                    renderer.draw_text_component(
+                        &world_transform,
+                        &text,
+                        handle.id() as i32,
+                    );
+                }
+                3 => {
+                    // Tilemap
+                    let tilemap = self.world.get::<&TilemapComponent>(handle).unwrap();
+                    let texture = match tilemap.texture.as_ref() {
+                        Some(tex) => tex.clone(),
+                        None => continue,
+                    };
+                    let cols = tilemap.tileset_columns.max(1);
+                    let tw = texture.width() as f32;
+                    let th = texture.height() as f32;
+                    for row in 0..tilemap.height {
+                        for col in 0..tilemap.width {
+                            let raw = tilemap.tiles[(row * tilemap.width + col) as usize];
+                            if raw < 0 {
+                                continue;
+                            }
+                            let flip_h = raw & TILE_FLIP_H != 0;
+                            let flip_v = raw & TILE_FLIP_V != 0;
+                            let tile_id = raw & TILE_ID_MASK;
+
+                            let tex_col = (tile_id as u32) % cols;
+                            let tex_row = (tile_id as u32) / cols;
+
+                            let px = tilemap.margin.x + tex_col as f32 * (tilemap.cell_size.x + tilemap.spacing.x);
+                            let py = tilemap.margin.y + tex_row as f32 * (tilemap.cell_size.y + tilemap.spacing.y);
+                            let mut min_uv = glam::Vec2::new(px / tw, py / th);
+                            let mut max_uv = glam::Vec2::new((px + tilemap.cell_size.x) / tw, (py + tilemap.cell_size.y) / th);
+
+                            if flip_h { std::mem::swap(&mut min_uv.x, &mut max_uv.x); }
+                            if flip_v { std::mem::swap(&mut min_uv.y, &mut max_uv.y); }
+
+                            let sub_tex = SubTexture2D::new(&texture, min_uv, max_uv);
+                            let tile_transform = world_transform
+                                * glam::Mat4::from_scale_rotation_translation(
+                                    glam::Vec3::new(tilemap.tile_size.x, tilemap.tile_size.y, 1.0),
+                                    glam::Quat::IDENTITY,
+                                    glam::Vec3::new(
+                                        col as f32 * tilemap.tile_size.x,
+                                        row as f32 * tilemap.tile_size.y,
+                                        0.0,
+                                    ),
+                                );
+                            renderer.draw_sub_textured_quad_transformed(
+                                &tile_transform,
+                                &sub_tex,
+                                glam::Vec4::ONE,
+                                handle.id() as i32,
+                            );
+                        }
+                    }
+                }
+                _ => {}
             }
         }
     }
@@ -2362,6 +2401,14 @@ impl Scene {
             engine.call_entity_on_update(*uuid, dt.seconds());
         }
 
+        // Tick timers (set_timeout / set_interval).
+        // Context must be active so timer callbacks can access the scene.
+        let timer_ctx = SceneScriptContext {
+            scene: scene_ptr,
+            input: input as *const Input,
+        };
+        engine.lua().set_app_data(timer_ctx);
+        engine.tick_timers(dt.seconds());
         engine.lua().remove_app_data::<SceneScriptContext>();
 
         unsafe {

@@ -24,7 +24,7 @@ pub(crate) fn draw_sprite_renderer_component(
         .id_salt(("sprite_renderer", entity.id()))
         .default_open(true)
         .show(ui, |ui| {
-            let (mut color_arr, texture_handle_raw, mut tiling_factor) = {
+            let (mut color_arr, texture_handle_raw, mut tiling_factor, mut sorting_layer, mut order_in_layer, mut atlas_min, mut atlas_max) = {
                 let sprite = scene
                     .get_component::<SpriteRendererComponent>(entity)
                     .unwrap();
@@ -37,6 +37,10 @@ pub(crate) fn draw_sprite_renderer_component(
                     ],
                     sprite.texture_handle.raw(),
                     sprite.tiling_factor,
+                    sprite.sorting_layer,
+                    sprite.order_in_layer,
+                    sprite.atlas_min,
+                    sprite.atlas_max,
                 )
             };
 
@@ -191,6 +195,62 @@ pub(crate) fn draw_sprite_renderer_component(
                     }
                 }
             });
+
+            // Sorting layer & order.
+            let mut sort_changed = false;
+            ui.horizontal(|ui| {
+                ui.label("Sorting Layer");
+                sort_changed |= ui
+                    .add(egui::DragValue::new(&mut sorting_layer).speed(0.1))
+                    .changed();
+            });
+            ui.horizontal(|ui| {
+                ui.label("Order in Layer");
+                sort_changed |= ui
+                    .add(egui::DragValue::new(&mut order_in_layer).speed(0.1))
+                    .changed();
+            });
+            if sort_changed {
+                if let Some(mut sprite) =
+                    scene.get_component_mut::<SpriteRendererComponent>(entity)
+                {
+                    sprite.sorting_layer = sorting_layer;
+                    sprite.order_in_layer = order_in_layer;
+                }
+                *scene_dirty = true;
+            }
+
+            // Atlas sub-texture UV region.
+            if texture_handle_raw != 0 {
+                let mut atlas_changed = false;
+                ui.horizontal(|ui| {
+                    ui.label("Atlas Min UV");
+                    atlas_changed |= ui
+                        .add(egui::DragValue::new(&mut atlas_min.x).speed(0.01).range(0.0..=1.0).prefix("U: "))
+                        .changed();
+                    atlas_changed |= ui
+                        .add(egui::DragValue::new(&mut atlas_min.y).speed(0.01).range(0.0..=1.0).prefix("V: "))
+                        .changed();
+                });
+                ui.horizontal(|ui| {
+                    ui.label("Atlas Max UV");
+                    atlas_changed |= ui
+                        .add(egui::DragValue::new(&mut atlas_max.x).speed(0.01).range(0.0..=1.0).prefix("U: "))
+                        .changed();
+                    atlas_changed |= ui
+                        .add(egui::DragValue::new(&mut atlas_max.y).speed(0.01).range(0.0..=1.0).prefix("V: "))
+                        .changed();
+                });
+                if atlas_changed {
+                    if let Some(mut sprite) =
+                        scene.get_component_mut::<SpriteRendererComponent>(entity)
+                    {
+                        sprite.atlas_min = atlas_min;
+                        sprite.atlas_max = atlas_max;
+                    }
+                    *scene_dirty = true;
+                }
+            }
         });
 
         cr.header_response.context_menu(|ui| {
@@ -394,7 +454,7 @@ pub(crate) fn draw_circle_renderer_component(
         .id_salt(("circle_renderer", entity.id()))
         .default_open(true)
         .show(ui, |ui| {
-            let (mut color_arr, mut thickness, mut fade) = {
+            let (mut color_arr, mut thickness, mut fade, mut sorting_layer, mut order_in_layer) = {
                 let circle = scene
                     .get_component::<CircleRendererComponent>(entity)
                     .unwrap();
@@ -407,6 +467,8 @@ pub(crate) fn draw_circle_renderer_component(
                     ],
                     circle.thickness,
                     circle.fade,
+                    circle.sorting_layer,
+                    circle.order_in_layer,
                 )
             };
 
@@ -476,6 +538,30 @@ pub(crate) fn draw_circle_renderer_component(
                     }
                 }
             });
+
+            // Sorting layer & order.
+            let mut sort_changed = false;
+            ui.horizontal(|ui| {
+                ui.label("Sorting Layer");
+                sort_changed |= ui
+                    .add(egui::DragValue::new(&mut sorting_layer).speed(0.1))
+                    .changed();
+            });
+            ui.horizontal(|ui| {
+                ui.label("Order in Layer");
+                sort_changed |= ui
+                    .add(egui::DragValue::new(&mut order_in_layer).speed(0.1))
+                    .changed();
+            });
+            if sort_changed {
+                if let Some(mut circle) =
+                    scene.get_component_mut::<CircleRendererComponent>(entity)
+                {
+                    circle.sorting_layer = sorting_layer;
+                    circle.order_in_layer = order_in_layer;
+                }
+                *_scene_dirty = true;
+            }
         });
 
         cr.header_response.context_menu(|ui| {

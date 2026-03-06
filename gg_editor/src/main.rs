@@ -1208,7 +1208,7 @@ impl GGEditor {
         let root = egui_dock::NodeIndex::root();
         let [left, right] = surface.split_right(root, 0.77, vec![Tab::SceneHierarchy]);
         surface.split_below(right, 0.5, vec![Tab::Properties]);
-        let [top_left, _bottom_left] = surface.split_below(left, 0.7, vec![Tab::ContentBrowser]);
+        let [top_left, _bottom_left] = surface.split_below(left, 0.7, vec![Tab::ContentBrowser, Tab::Console]);
         let [left_sidebar, _viewport] = surface.split_right(top_left, 0.20, vec![Tab::Viewport]);
         surface.split_below(left_sidebar, 0.5, vec![Tab::Settings]);
         dock_state
@@ -1308,6 +1308,32 @@ impl GGEditor {
                     translation,
                 );
                 renderer.draw_rect_transform(&collider_transform, collider_color, -1);
+            }
+
+            // Velocity arrows (only during play/simulate when physics is active).
+            if self.playback.scene_state != SceneState::Edit {
+                let velocity_color = Vec4::new(1.0, 0.4, 0.1, 1.0);
+                let rb_entities: Vec<_> = self.scene.each_entity_with_tag()
+                    .iter()
+                    .filter_map(|(entity, _)| {
+                        self.scene.get_component::<RigidBody2DComponent>(*entity)?;
+                        let vel = self.scene.get_linear_velocity(*entity)?;
+                        if vel.length_squared() < 0.001 {
+                            return None;
+                        }
+                        let tc = self.scene.get_component::<TransformComponent>(*entity)?;
+                        Some((tc.translation, vel))
+                    })
+                    .collect();
+
+                let prev_line_width = renderer.line_width();
+                renderer.set_line_width(2.0);
+                for (pos, vel) in rb_entities {
+                    let end = Vec3::new(pos.x + vel.x * 0.2, pos.y + vel.y * 0.2, pos.z - 0.001);
+                    let start = Vec3::new(pos.x, pos.y, pos.z - 0.001);
+                    renderer.draw_line(start, end, velocity_color, -1);
+                }
+                renderer.set_line_width(prev_line_width);
             }
         }
 

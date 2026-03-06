@@ -55,6 +55,18 @@ const MAX_SCRIPT_ERRORS: u32 = 10;
 /// directly from this table, avoiding any raw pointer to `ScriptEngine`.
 pub(crate) const ENTITY_ENVS_REGISTRY_KEY: &str = "__gg_entity_envs";
 
+/// A scheduled timer created by `Engine.set_timeout` or `Engine.set_interval`.
+pub(crate) struct ScriptTimer {
+    /// Entity that owns this timer (cleaned up when entity is removed).
+    pub entity_uuid: u64,
+    /// Time remaining until the callback fires (seconds).
+    pub remaining: f32,
+    /// If Some, the timer repeats with this interval. None = one-shot.
+    pub interval: Option<f32>,
+    /// Lua registry key for the callback function.
+    pub callback_key: LuaRegistryKey,
+}
+
 pub struct ScriptEngine {
     lua: Lua,
     /// Per-entity Lua environments keyed by entity UUID (u64).
@@ -63,6 +75,10 @@ pub struct ScriptEngine {
     /// Keyed by (entity UUID, callback name) so errors in one callback don't
     /// reset the count for a different callback on the same entity.
     error_counts: HashMap<(u64, String), u32>,
+    /// Active timers. Indices are used as timer IDs.
+    pub(crate) timers: Vec<Option<ScriptTimer>>,
+    /// Next timer ID (monotonically increasing to avoid reuse within a session).
+    pub(crate) next_timer_id: usize,
 }
 
 impl Default for ScriptEngine {
@@ -115,6 +131,8 @@ impl ScriptEngine {
             lua,
             entity_envs: HashMap::new(),
             error_counts: HashMap::new(),
+            timers: Vec::new(),
+            next_timer_id: 0,
         }
     }
 
@@ -571,6 +589,100 @@ impl ScriptEngine {
     /// Access the underlying Lua state for advanced use.
     pub fn lua(&self) -> &Lua {
         &self.lua
+    }
+
+    // -----------------------------------------------------------------
+    // Timer system
+    // -----------------------------------------------------------------
+
+    /// Schedule a timer. Returns the timer ID.
+    pub fn add_timer(
+        &mut self,
+        entity_uuid: u64,
+        delay: f32,
+        repeating: bool,
+        callback: LuaFunction,
+    ) -> usize {
+        let id = self.next_timer_id;
+        self.next_timer_id += 1;
+
+        let key = match self.lua.create_registry_value(callback) {
+            Ok(k) => k,
+            Err(e) => {
+                log::error!("ScriptEngine: failed to register timer callback: {}", e);
+                return id;
+            }
+        };
+
+        let timer = ScriptTimer {
+            entity_uuid,
+            remaining: delay,
+            interval: if repeating { Some(delay) } else { None },
+            callback_key: key,
+        };
+
+        // Try to reuse a vacant slot.
+        if let Some(slot) = self.timers.iter_mut().find(|s| s.is_none()) {
+            *slot = Some(timer);
+        } else {
+            self.timers.push(Some(timer));
+        }
+        id
+    }
+
+    /// Cancel a timer by ID.
+    pub fn cancel_timer(&mut self, timer_id: usize) {
+        if timer_id < self.timers.len() {
+            self.timers[timer_id] = None;
+        }
+    }
+
+    /// Tick all timers, firing callbacks whose time has elapsed.
+    pub fn tick_timers(&mut self, dt: f32) {
+        for i in 0..self.timers.len() {
+            let (fire, entity_uuid) = if let Some(ref mut timer) = self.timers[i] {
+                timer.remaining -= dt;
+                if timer.remaining <= 0.0 {
+                    (true, timer.entity_uuid)
+                } else {
+                    continue;
+                }
+            } else {
+                continue;
+            };
+
+            if fire {
+                // Temporarily take the timer to call its callback.
+                let mut timer = self.timers[i].take().unwrap();
+                let callback: Result<LuaFunction, _> =
+                    self.lua.registry_value(&timer.callback_key);
+                if let Ok(func) = callback {
+                    if let Err(e) = func.call::<()>(()) {
+                        log::error!(
+                            "ScriptEngine: timer callback error for entity {}: {}",
+                            entity_uuid, e
+                        );
+                    }
+                }
+
+                // Re-arm if repeating, otherwise drop.
+                if let Some(interval) = timer.interval {
+                    timer.remaining = interval;
+                    self.timers[i] = Some(timer);
+                }
+            }
+        }
+    }
+
+    /// Remove all timers owned by a specific entity.
+    pub fn remove_entity_timers(&mut self, entity_uuid: u64) {
+        for slot in &mut self.timers {
+            if let Some(timer) = slot {
+                if timer.entity_uuid == entity_uuid {
+                    *slot = None;
+                }
+            }
+        }
     }
 }
 

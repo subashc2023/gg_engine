@@ -1,3 +1,4 @@
+mod console;
 pub(crate) mod content_browser;
 pub(crate) mod project;
 pub(crate) mod properties;
@@ -72,6 +73,7 @@ pub(crate) enum Tab {
     ContentBrowser,
     Settings,
     Project,
+    Console,
 }
 
 // ---------------------------------------------------------------------------
@@ -153,6 +155,7 @@ impl egui_dock::TabViewer for EditorTabViewer<'_> {
             Tab::ContentBrowser => "Content Browser".into(),
             Tab::Settings => "Settings".into(),
             Tab::Project => "Project".into(),
+            Tab::Console => "Console".into(),
         }
     }
 
@@ -240,6 +243,11 @@ impl egui_dock::TabViewer for EditorTabViewer<'_> {
                     self.pending_open_path,
                 );
             }
+
+            Tab::Console => {
+                self.unfocus_viewport_on_click(ui);
+                console::console_ui(ui);
+            }
         }
     }
 
@@ -258,6 +266,7 @@ impl egui_dock::TabViewer for EditorTabViewer<'_> {
     fn scroll_bars(&self, tab: &Tab) -> [bool; 2] {
         match tab {
             Tab::SceneHierarchy | Tab::Properties | Tab::Settings | Tab::Project => [false, true],
+            Tab::Console => [false, false], // Console has its own scroll area.
             _ => [false, false],
         }
     }

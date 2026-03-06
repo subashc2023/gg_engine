@@ -1,0 +1,59 @@
+Version: 1
+Scene: Test
+Entities:
+- Entity: 832959665548958
+  TagComponent:
+    Tag: Empty Entity
+  TransformComponent:
+    Translation:
+    - 0.0
+    - 0.0
+    - 0.0
+    Rotation:
+    - 0.0
+    - 0.0
+    - 0.0
+    Scale:
+    - 1.0
+    - 1.0
+    - 1.0
+  SpriteRendererComponent:
+    Color:
+    - 0.9764706
+    - 0.0
+    - 0.0
+    - 0.3137255
+    TilingFactor: 1.0
+    SortingLayer: 0
+    OrderInLayer: 0
+  SpriteAnimatorComponent:
+    CellSize:
+    - 32.0
+    - 32.0
+    Columns: 1
+    Clips: []
+- Entity: 4083212221095600
+  TagComponent:
+    Tag: Empty Entity
+  TransformComponent:
+    Translation:
+    - 0.6441925
+    - 0.0
+    - 0.0
+    Rotation:
+    - 0.0
+    - 0.0
+    - 0.0
+    Scale:
+    - 1.0
+    - 1.0
+    - 1.0
+  SpriteRendererComponent:
+    Color:
+    - 0.0
+    - 0.13333334
+    - 1.0
+    - 0.4392157
+    TilingFactor: 1.0
+    SortingLayer: 0
+    OrderInLayer: 0

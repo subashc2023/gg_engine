@@ -31,7 +31,7 @@ pub use winit;
 pub use input::Input;
 pub use layer::{Layer, LayerStack};
 pub use log;
-pub use logging::init as log_init;
+pub use logging::{init as log_init, clear_log_buffer, with_log_buffer, LogEntry};
 pub use orthographic_camera_controller::OrthographicCameraController;
 pub use particle_system::{ParticleProps, ParticleSystem};
 pub use platform_utils::{error_dialog, FileDialogs};
