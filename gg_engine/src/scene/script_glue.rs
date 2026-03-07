@@ -127,6 +127,18 @@ pub fn register_all(lua: &Lua) -> LuaResult<()> {
         "is_animation_playing",
         lua.create_function(lua_is_animation_playing)?,
     )?;
+    engine.set(
+        "get_current_animation",
+        lua.create_function(lua_get_current_animation)?,
+    )?;
+    engine.set(
+        "get_animation_frame",
+        lua.create_function(lua_get_animation_frame)?,
+    )?;
+    engine.set(
+        "set_animation_speed",
+        lua.create_function(lua_set_animation_speed)?,
+    )?;
 
     // Audio
     engine.set("play_sound", lua.create_function(lua_play_sound)?)?;
@@ -838,6 +850,63 @@ fn lua_is_animation_playing(lua: &Lua, entity_id: u64) -> LuaResult<bool> {
     Ok(false)
 }
 
+/// `Engine.get_current_animation(entity_id)` — returns the name of the currently
+/// playing clip, or `nil` if no clip is active.
+fn lua_get_current_animation(lua: &Lua, entity_id: u64) -> LuaResult<LuaValue> {
+    let ctx = match lua.app_data_mut::<SceneScriptContext>() {
+        Some(ctx) => ctx,
+        None => return Ok(LuaValue::Nil),
+    };
+
+    let scene = unsafe { ctx.scene() };
+    if let Some(entity) = scene.find_entity_by_uuid(entity_id) {
+        if let Some(animator) = scene.get_component::<super::SpriteAnimatorComponent>(entity) {
+            if let Some(name) = animator.current_clip_name() {
+                return Ok(LuaValue::String(lua.create_string(name)?));
+            }
+        }
+    }
+    Ok(LuaValue::Nil)
+}
+
+/// `Engine.get_animation_frame(entity_id)` — returns the current frame number,
+/// or `-1` if no animation is active.
+fn lua_get_animation_frame(lua: &Lua, entity_id: u64) -> LuaResult<i32> {
+    let ctx = match lua.app_data_mut::<SceneScriptContext>() {
+        Some(ctx) => ctx,
+        None => return Ok(-1),
+    };
+
+    let scene = unsafe { ctx.scene() };
+    if let Some(entity) = scene.find_entity_by_uuid(entity_id) {
+        if let Some(animator) = scene.get_component::<super::SpriteAnimatorComponent>(entity) {
+            if animator.current_clip_index().is_some() {
+                return Ok(animator.current_frame() as i32);
+            }
+        }
+    }
+    Ok(-1)
+}
+
+/// `Engine.set_animation_speed(entity_id, speed_scale)` — sets the playback
+/// speed multiplier (1.0 = normal, 0.5 = half speed, 2.0 = double speed).
+fn lua_set_animation_speed(lua: &Lua, (entity_id, speed): (u64, f32)) -> LuaResult<()> {
+    let mut ctx = match lua.app_data_mut::<SceneScriptContext>() {
+        Some(ctx) => ctx,
+        None => return Ok(()),
+    };
+
+    let scene = unsafe { ctx.scene_mut() };
+    if let Some(entity) = scene.find_entity_by_uuid(entity_id) {
+        if let Some(mut animator) =
+            scene.get_component_mut::<super::SpriteAnimatorComponent>(entity)
+        {
+            animator.speed_scale = speed;
+        }
+    }
+    Ok(())
+}
+
 // ---------------------------------------------------------------------------
 // Audio bindings
 // ---------------------------------------------------------------------------
@@ -1396,6 +1465,9 @@ mod tests {
         assert!(engine.get::<LuaFunction>("play_animation").is_ok());
         assert!(engine.get::<LuaFunction>("stop_animation").is_ok());
         assert!(engine.get::<LuaFunction>("is_animation_playing").is_ok());
+        assert!(engine.get::<LuaFunction>("get_current_animation").is_ok());
+        assert!(engine.get::<LuaFunction>("get_animation_frame").is_ok());
+        assert!(engine.get::<LuaFunction>("set_animation_speed").is_ok());
         // Sprite
         assert!(engine.get::<LuaFunction>("set_sprite_texture").is_ok());
         // Tilemap
@@ -1711,6 +1783,34 @@ mod tests {
             .unwrap();
         let result: bool = lua.globals().get("result").unwrap();
         assert!(!result);
+    }
+
+    #[test]
+    fn get_current_animation_no_context_returns_nil() {
+        let lua = setup();
+        lua.load("result = Engine.get_current_animation(12345)")
+            .exec()
+            .unwrap();
+        let result: LuaValue = lua.globals().get("result").unwrap();
+        assert!(result == LuaValue::Nil);
+    }
+
+    #[test]
+    fn get_animation_frame_no_context_returns_neg1() {
+        let lua = setup();
+        lua.load("result = Engine.get_animation_frame(12345)")
+            .exec()
+            .unwrap();
+        let result: i32 = lua.globals().get("result").unwrap();
+        assert_eq!(result, -1);
+    }
+
+    #[test]
+    fn set_animation_speed_no_context_no_error() {
+        let lua = setup();
+        lua.load("Engine.set_animation_speed(12345, 2.0)")
+            .exec()
+            .unwrap();
     }
 
     #[test]

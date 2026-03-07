@@ -382,6 +382,20 @@ struct SpriteAnimatorData {
         skip_serializing_if = "String::is_empty"
     )]
     default_clip: String,
+    #[serde(
+        rename = "SpeedScale",
+        default = "default_speed_scale",
+        skip_serializing_if = "is_default_speed_scale"
+    )]
+    speed_scale: f32,
+}
+
+fn default_speed_scale() -> f32 {
+    1.0
+}
+
+fn is_default_speed_scale(v: &f32) -> bool {
+    (*v - 1.0).abs() < f32::EPSILON
 }
 
 fn default_animation_fps() -> f32 {
@@ -1007,6 +1021,7 @@ impl SceneSerializer {
                         })
                         .collect(),
                     default_clip: sa.default_clip.clone(),
+                    speed_scale: sa.speed_scale,
                 });
 
         let relationship_data = scene
@@ -1283,6 +1298,7 @@ impl SceneSerializer {
                     columns: sad.columns,
                     clips,
                     default_clip: sad.default_clip.clone(),
+                    speed_scale: sad.speed_scale,
                     ..Default::default()
                 },
             );

@@ -1,3 +1,38 @@
+// TODO(perf): GPU-computed sprite animation
+// To eliminate ALL CPU animation cost for mass entities, add per-instance
+// animation parameters and compute UVs in this shader:
+//
+//   // Additional per-instance inputs:
+//   in float a_anim_start_time;
+//   in float a_anim_fps;
+//   in uint  a_anim_start_frame;
+//   in uint  a_anim_frame_count;
+//   in uint  a_anim_columns;
+//   in vec2  a_anim_cell_size;
+//   in vec2  a_anim_tex_size;
+//
+//   // Add u_time to the camera UBO:
+//   layout(set = 0, binding = 0) uniform CameraBuffer {
+//       mat4 u_view_projection;
+//       float u_time;
+//   };
+//
+//   // In main():
+//   if (a_anim_frame_count > 0u) {
+//       uint frame_in_clip = uint(floor((u_time - a_anim_start_time) * a_anim_fps))
+//                            % a_anim_frame_count;
+//       uint frame = a_anim_start_frame + frame_in_clip;
+//       uint col = frame % a_anim_columns;
+//       uint row = frame / a_anim_columns;
+//       vec2 uv_min = vec2(col, row) * a_anim_cell_size / a_anim_tex_size;
+//       vec2 uv_max = uv_min + a_anim_cell_size / a_anim_tex_size;
+//       v_tex_coord = uv_min + a_tex_coord * (uv_max - uv_min);
+//   }
+//
+// This makes the GPU compute frame selection — zero CPU animation work.
+// Only implement if CPU stateless math (InstancedSpriteAnimator) becomes
+// a bottleneck at 10K+ animated entities.
+
 #type vertex
 #version 450
 

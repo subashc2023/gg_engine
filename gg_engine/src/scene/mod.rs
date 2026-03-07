@@ -12,7 +12,7 @@ mod script_glue;
 
 use crate::renderer::Font;
 
-pub use animation::{AnimationClip, SpriteAnimatorComponent};
+pub use animation::{AnimationClip, InstancedSpriteAnimator, SpriteAnimatorComponent};
 #[cfg(feature = "lua-scripting")]
 pub use components::LuaScriptComponent;
 pub use components::{

@@ -305,7 +305,7 @@ pub(crate) fn draw_sprite_animator_component(
         .id_salt(("sprite_animator", entity.id()))
         .default_open(true)
         .show(ui, |ui| {
-            let (mut cell_w, mut cell_h, mut columns, mut default_clip, clip_names) = {
+            let (mut cell_w, mut cell_h, mut columns, mut default_clip, mut speed_scale, clip_names) = {
                 let sa = scene
                     .get_component::<SpriteAnimatorComponent>(entity)
                     .unwrap();
@@ -314,6 +314,7 @@ pub(crate) fn draw_sprite_animator_component(
                     sa.cell_size.y,
                     sa.columns,
                     sa.default_clip.clone(),
+                    sa.speed_scale,
                     sa.clips.iter().map(|c| c.name.clone()).collect::<Vec<_>>(),
                 )
             };
@@ -456,6 +457,25 @@ pub(crate) fn draw_sprite_animator_component(
                     if let Some(mut sa) = scene.get_component_mut::<SpriteAnimatorComponent>(entity)
                     {
                         sa.default_clip = default_clip.clone();
+                        *scene_dirty = true;
+                    }
+                }
+            });
+
+            ui.horizontal(|ui| {
+                ui.label("Speed");
+                if ui
+                    .add(
+                        egui::DragValue::new(&mut speed_scale)
+                            .range(0.0..=10.0)
+                            .speed(0.01),
+                    )
+                    .changed()
+                {
+                    if let Some(mut sa) =
+                        scene.get_component_mut::<SpriteAnimatorComponent>(entity)
+                    {
+                        sa.speed_scale = speed_scale;
                         *scene_dirty = true;
                     }
                 }

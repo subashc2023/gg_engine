@@ -139,6 +139,14 @@ fn unit_quad_vertex_layout() -> BufferLayout {
 // ---------------------------------------------------------------------------
 // SpriteInstanceData — per-instance data for instanced sprite rendering
 // ---------------------------------------------------------------------------
+//
+// TODO(perf): GPU-computed animation — extend this struct with animation
+// parameters (start_time, fps, start_frame, frame_count, columns, cell_size,
+// tex_size) and update the instance vertex shader to compute UVs from u_time.
+// This would eliminate CPU-side UV computation during batching for animated
+// sprites. Only needed if InstancedSpriteAnimator's CPU stateless math
+// becomes a bottleneck at 10K+ animated entities. See instance.glsl for
+// the shader-side TODO with the exact GLSL code.
 
 #[repr(C)]
 #[derive(Clone, Copy)]
