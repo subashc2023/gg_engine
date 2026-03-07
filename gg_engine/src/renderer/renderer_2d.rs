@@ -204,111 +204,48 @@ impl Renderer2DStats {
 }
 
 // ---------------------------------------------------------------------------
-// BatchState — interior-mutable state for the current batch
+// BatchState<V> — generic interior-mutable state for a vertex/instance batch
 // ---------------------------------------------------------------------------
 
-struct QuadBatchState {
-    vertices: Vec<BatchQuadVertex>,
-    quad_count: usize,
+const MAX_LINES: usize = 10_000;
+const MAX_LINE_VERTICES: usize = MAX_LINES * 2;
+
+struct BatchState<V> {
+    vertices: Vec<V>,
+    count: usize,
     /// Byte offset into the vertex buffer for the next flush.
     vb_write_offset: usize,
     stats: Renderer2DStats,
 }
 
-impl QuadBatchState {
-    fn new() -> Self {
+impl<V> BatchState<V> {
+    fn new(capacity: usize) -> Self {
         Self {
-            vertices: Vec::with_capacity(MAX_VERTICES),
-            quad_count: 0,
+            vertices: Vec::with_capacity(capacity),
+            count: 0,
             vb_write_offset: 0,
             stats: Renderer2DStats::default(),
         }
     }
-}
 
-struct CircleBatchState {
-    vertices: Vec<BatchCircleVertex>,
-    quad_count: usize,
-    /// Byte offset into the circle vertex buffer for the next flush.
-    vb_write_offset: usize,
-    stats: Renderer2DStats,
-}
-
-impl CircleBatchState {
-    fn new() -> Self {
-        Self {
-            vertices: Vec::with_capacity(MAX_VERTICES),
-            quad_count: 0,
-            vb_write_offset: 0,
-            stats: Renderer2DStats::default(),
-        }
+    fn reset(&mut self) {
+        self.vertices.clear();
+        self.count = 0;
+        self.vb_write_offset = 0;
+        self.stats = Renderer2DStats::default();
     }
-}
 
-const MAX_LINES: usize = 10_000;
-const MAX_LINE_VERTICES: usize = MAX_LINES * 2;
-
-struct LineBatchState {
-    vertices: Vec<BatchLineVertex>,
-    line_count: usize,
-    /// Byte offset into the line vertex buffer for the next flush.
-    vb_write_offset: usize,
-    stats: Renderer2DStats,
-}
-
-impl LineBatchState {
-    fn new() -> Self {
-        Self {
-            vertices: Vec::with_capacity(MAX_LINE_VERTICES),
-            line_count: 0,
-            vb_write_offset: 0,
-            stats: Renderer2DStats::default(),
-        }
+    fn has_pending(&self) -> bool {
+        self.count > 0
     }
-}
 
-// ---------------------------------------------------------------------------
-// InstanceBatchState — per-instance data for instanced sprite rendering
-// ---------------------------------------------------------------------------
-
-struct InstanceBatchState {
-    instances: Vec<SpriteInstanceData>,
-    instance_count: usize,
-    /// Byte offset into the instance buffer for the next flush.
-    vb_write_offset: usize,
-    stats: Renderer2DStats,
-}
-
-impl InstanceBatchState {
-    fn new() -> Self {
-        Self {
-            instances: Vec::with_capacity(MAX_INSTANCES),
-            instance_count: 0,
-            vb_write_offset: 0,
-            stats: Renderer2DStats::default(),
-        }
-    }
-}
-
-// ---------------------------------------------------------------------------
-// TextBatchState — same vertex layout as quads, different shader (MSDF)
-// ---------------------------------------------------------------------------
-
-struct TextBatchState {
-    vertices: Vec<BatchQuadVertex>,
-    quad_count: usize,
-    /// Byte offset into the text vertex buffer for the next flush.
-    vb_write_offset: usize,
-    stats: Renderer2DStats,
-}
-
-impl TextBatchState {
-    fn new() -> Self {
-        Self {
-            vertices: Vec::with_capacity(MAX_VERTICES),
-            quad_count: 0,
-            vb_write_offset: 0,
-            stats: Renderer2DStats::default(),
+    /// Reinterpret the vertex data as a byte slice for GPU upload.
+    fn as_bytes(&self) -> &[u8] {
+        unsafe {
+            std::slice::from_raw_parts(
+                self.vertices.as_ptr() as *const u8,
+                self.vertices.len() * std::mem::size_of::<V>(),
+            )
         }
     }
 }
@@ -326,7 +263,7 @@ pub(super) struct Renderer2DData {
     use_offscreen: bool,
     vertex_buffers: [DynamicVertexBuffer; FRAMES_IN_FLIGHT],
     index_buffer: IndexBuffer,
-    quad_batch: RefCell<QuadBatchState>,
+    quad_batch: RefCell<BatchState<BatchQuadVertex>>,
 
     // -- Circle batch resources --
     circle_swapchain_shader: Arc<Shader>,
@@ -335,7 +272,7 @@ pub(super) struct Renderer2DData {
     circle_offscreen_pipeline: Option<Arc<Pipeline>>,
     circle_vertex_buffers: [DynamicVertexBuffer; FRAMES_IN_FLIGHT],
     // Circle reuses the same index_buffer (identical quad topology).
-    circle_batch: RefCell<CircleBatchState>,
+    circle_batch: RefCell<BatchState<BatchCircleVertex>>,
 
     // -- Line batch resources --
     line_swapchain_shader: Arc<Shader>,
@@ -344,7 +281,7 @@ pub(super) struct Renderer2DData {
     line_offscreen_pipeline: Option<Arc<Pipeline>>,
     line_vertex_buffers: [DynamicVertexBuffer; FRAMES_IN_FLIGHT],
     // Lines don't use an index buffer (drawn with vkCmdDraw).
-    line_batch: RefCell<LineBatchState>,
+    line_batch: RefCell<BatchState<BatchLineVertex>>,
 
     // -- Text batch resources (same vertex format as quads, MSDF shader) --
     text_swapchain_shader: Arc<Shader>,
@@ -353,7 +290,7 @@ pub(super) struct Renderer2DData {
     text_offscreen_pipeline: Option<Arc<Pipeline>>,
     text_vertex_buffers: [DynamicVertexBuffer; FRAMES_IN_FLIGHT],
     // Text reuses the same index_buffer (identical quad topology).
-    text_batch: RefCell<TextBatchState>,
+    text_batch: RefCell<BatchState<BatchQuadVertex>>,
 
     // -- Instanced sprite rendering resources --
     instance_swapchain_shader: Arc<Shader>,
@@ -369,7 +306,7 @@ pub(super) struct Renderer2DData {
     /// Cached layouts for pipeline rebuilds.
     unit_quad_layout: BufferLayout,
     instance_layout: BufferLayout,
-    instance_batch: RefCell<InstanceBatchState>,
+    instance_batch: RefCell<BatchState<SpriteInstanceData>>,
 
     // -- Shared resources --
     bindless_pool: vk::DescriptorPool,
@@ -680,28 +617,28 @@ impl Renderer2DData {
             use_offscreen: false,
             vertex_buffers,
             index_buffer,
-            quad_batch: RefCell::new(QuadBatchState::new()),
+            quad_batch: RefCell::new(BatchState::new(MAX_VERTICES)),
 
             circle_swapchain_shader,
             circle_offscreen_shader: circle_shader,
             circle_pipeline,
             circle_offscreen_pipeline: None,
             circle_vertex_buffers,
-            circle_batch: RefCell::new(CircleBatchState::new()),
+            circle_batch: RefCell::new(BatchState::new(MAX_VERTICES)),
 
             line_swapchain_shader,
             line_offscreen_shader: line_shader,
             line_pipeline,
             line_offscreen_pipeline: None,
             line_vertex_buffers,
-            line_batch: RefCell::new(LineBatchState::new()),
+            line_batch: RefCell::new(BatchState::new(MAX_LINE_VERTICES)),
 
             text_swapchain_shader,
             text_offscreen_shader: text_shader,
             text_pipeline,
             text_offscreen_pipeline: None,
             text_vertex_buffers,
-            text_batch: RefCell::new(TextBatchState::new()),
+            text_batch: RefCell::new(BatchState::new(MAX_VERTICES)),
 
             instance_swapchain_shader,
             instance_offscreen_shader: instance_shader,
@@ -712,7 +649,7 @@ impl Renderer2DData {
             unit_quad_ib,
             unit_quad_layout: uq_layout,
             instance_layout: inst_layout,
-            instance_batch: RefCell::new(InstanceBatchState::new()),
+            instance_batch: RefCell::new(BatchState::new(MAX_INSTANCES)),
 
             bindless_pool,
             bindless_ds_layout,
@@ -789,46 +726,11 @@ impl Renderer2DData {
 
     /// Reset batch state for a new frame.
     pub(super) fn reset_batch(&self) {
-        // Reset quad batch.
-        {
-            let mut batch = self.quad_batch.borrow_mut();
-            batch.vertices.clear();
-            batch.quad_count = 0;
-            batch.vb_write_offset = 0;
-            batch.stats = Renderer2DStats::default();
-        }
-        // Reset circle batch.
-        {
-            let mut batch = self.circle_batch.borrow_mut();
-            batch.vertices.clear();
-            batch.quad_count = 0;
-            batch.vb_write_offset = 0;
-            batch.stats = Renderer2DStats::default();
-        }
-        // Reset line batch.
-        {
-            let mut batch = self.line_batch.borrow_mut();
-            batch.vertices.clear();
-            batch.line_count = 0;
-            batch.vb_write_offset = 0;
-            batch.stats = Renderer2DStats::default();
-        }
-        // Reset text batch.
-        {
-            let mut batch = self.text_batch.borrow_mut();
-            batch.vertices.clear();
-            batch.quad_count = 0;
-            batch.vb_write_offset = 0;
-            batch.stats = Renderer2DStats::default();
-        }
-        // Reset instance batch.
-        {
-            let mut batch = self.instance_batch.borrow_mut();
-            batch.instances.clear();
-            batch.instance_count = 0;
-            batch.vb_write_offset = 0;
-            batch.stats = Renderer2DStats::default();
-        }
+        self.quad_batch.borrow_mut().reset();
+        self.circle_batch.borrow_mut().reset();
+        self.line_batch.borrow_mut().reset();
+        self.text_batch.borrow_mut().reset();
+        self.instance_batch.borrow_mut().reset();
     }
 
     // -- Quad batch operations --
@@ -838,17 +740,17 @@ impl Renderer2DData {
     /// and a flush is needed first.
     pub(super) fn push_quad(&self, vertices: [BatchQuadVertex; 4]) -> bool {
         let mut batch = self.quad_batch.borrow_mut();
-        if batch.quad_count >= MAX_QUADS {
+        if batch.count >= MAX_QUADS {
             return false;
         }
         batch.vertices.extend_from_slice(&vertices);
-        batch.quad_count += 1;
+        batch.count += 1;
         true
     }
 
     /// Returns true if there are quads to flush.
     pub(super) fn has_pending_quads(&self) -> bool {
-        self.quad_batch.borrow().quad_count > 0
+        self.quad_batch.borrow().has_pending()
     }
 
     /// Flush the current quad batch: write vertices to GPU, bind the pre-populated
@@ -860,33 +762,29 @@ impl Renderer2DData {
         current_frame: usize,
     ) {
         let mut batch = self.quad_batch.borrow_mut();
-        if batch.quad_count == 0 {
+        if batch.count == 0 {
             return;
         }
 
         let _timer = ProfileTimer::new("Renderer2D::flush_quads");
 
         // 1. Copy vertex data to the mapped VB at the current write offset.
-        let vertex_data = unsafe {
-            std::slice::from_raw_parts(
-                batch.vertices.as_ptr() as *const u8,
-                batch.vertices.len() * std::mem::size_of::<BatchQuadVertex>(),
-            )
-        };
+        let vertex_data = batch.as_bytes();
         let vb_offset = batch.vb_write_offset;
-        if vb_offset + vertex_data.len() > QUAD_VB_CAPACITY {
+        let data_len = vertex_data.len();
+        if vb_offset + data_len > QUAD_VB_CAPACITY {
             warn!(
                 "Quad batch overflow: exceeded {} flushes per frame. {} quads dropped.",
-                MAX_BATCHES_PER_FRAME, batch.quad_count
+                MAX_BATCHES_PER_FRAME, batch.count
             );
             batch.vertices.clear();
-            batch.quad_count = 0;
+            batch.count = 0;
             return;
         }
         self.vertex_buffers[current_frame].write_at(vb_offset, vertex_data);
 
         // 2. Record Vulkan commands.
-        let index_count = (batch.quad_count * 6) as u32;
+        let index_count = (batch.count * 6) as u32;
         let active_pipeline = if self.use_offscreen {
             self.offscreen_pipeline
                 .as_ref()
@@ -932,11 +830,11 @@ impl Renderer2DData {
 
         // 3. Update stats, advance write offset, and reset vertices for next batch.
         batch.stats.draw_calls += 1;
-        batch.stats.quad_count += batch.quad_count as u32;
-        batch.vb_write_offset = vb_offset + vertex_data.len();
+        batch.stats.quad_count += batch.count as u32;
+        batch.vb_write_offset = vb_offset + data_len;
 
         batch.vertices.clear();
-        batch.quad_count = 0;
+        batch.count = 0;
     }
 
     // -- Circle batch operations --
@@ -946,17 +844,17 @@ impl Renderer2DData {
     /// Returns false if the batch was full and a flush is needed first.
     pub(super) fn push_circle(&self, vertices: [BatchCircleVertex; 4]) -> bool {
         let mut batch = self.circle_batch.borrow_mut();
-        if batch.quad_count >= MAX_QUADS {
+        if batch.count >= MAX_QUADS {
             return false;
         }
         batch.vertices.extend_from_slice(&vertices);
-        batch.quad_count += 1;
+        batch.count += 1;
         true
     }
 
     /// Returns true if there are circles to flush.
     pub(super) fn has_pending_circles(&self) -> bool {
-        self.circle_batch.borrow().quad_count > 0
+        self.circle_batch.borrow().has_pending()
     }
 
     /// Flush the current circle batch: write vertices to GPU, bind the circle
@@ -968,33 +866,29 @@ impl Renderer2DData {
         current_frame: usize,
     ) {
         let mut batch = self.circle_batch.borrow_mut();
-        if batch.quad_count == 0 {
+        if batch.count == 0 {
             return;
         }
 
         let _timer = ProfileTimer::new("Renderer2D::flush_circles");
 
         // 1. Copy vertex data to the mapped VB at the current write offset.
-        let vertex_data = unsafe {
-            std::slice::from_raw_parts(
-                batch.vertices.as_ptr() as *const u8,
-                batch.vertices.len() * std::mem::size_of::<BatchCircleVertex>(),
-            )
-        };
+        let vertex_data = batch.as_bytes();
         let vb_offset = batch.vb_write_offset;
-        if vb_offset + vertex_data.len() > CIRCLE_VB_CAPACITY {
+        let data_len = vertex_data.len();
+        if vb_offset + data_len > CIRCLE_VB_CAPACITY {
             warn!(
                 "Circle batch overflow: exceeded {} flushes per frame. {} circles dropped.",
-                MAX_BATCHES_PER_FRAME, batch.quad_count
+                MAX_BATCHES_PER_FRAME, batch.count
             );
             batch.vertices.clear();
-            batch.quad_count = 0;
+            batch.count = 0;
             return;
         }
         self.circle_vertex_buffers[current_frame].write_at(vb_offset, vertex_data);
 
         // 2. Record Vulkan commands.
-        let index_count = (batch.quad_count * 6) as u32;
+        let index_count = (batch.count * 6) as u32;
         let active_pipeline = if self.use_offscreen {
             self.circle_offscreen_pipeline
                 .as_ref()
@@ -1039,11 +933,11 @@ impl Renderer2DData {
 
         // 3. Update stats, advance write offset, and reset vertices for next batch.
         batch.stats.draw_calls += 1;
-        batch.stats.quad_count += batch.quad_count as u32;
-        batch.vb_write_offset = vb_offset + vertex_data.len();
+        batch.stats.quad_count += batch.count as u32;
+        batch.vb_write_offset = vb_offset + data_len;
 
         batch.vertices.clear();
-        batch.quad_count = 0;
+        batch.count = 0;
     }
 
     /// Get the accumulated quad statistics for this frame.
@@ -1062,17 +956,17 @@ impl Renderer2DData {
     /// Returns false if the batch was full and a flush is needed first.
     pub(super) fn push_line(&self, vertices: [BatchLineVertex; 2]) -> bool {
         let mut batch = self.line_batch.borrow_mut();
-        if batch.line_count >= MAX_LINES {
+        if batch.count >= MAX_LINES {
             return false;
         }
         batch.vertices.extend_from_slice(&vertices);
-        batch.line_count += 1;
+        batch.count += 1;
         true
     }
 
     /// Returns true if there are lines to flush.
     pub(super) fn has_pending_lines(&self) -> bool {
-        self.line_batch.borrow().line_count > 0
+        self.line_batch.borrow().has_pending()
     }
 
     /// Flush the current line batch: write vertices to GPU, bind the line
@@ -1085,33 +979,29 @@ impl Renderer2DData {
         line_width: f32,
     ) {
         let mut batch = self.line_batch.borrow_mut();
-        if batch.line_count == 0 {
+        if batch.count == 0 {
             return;
         }
 
         let _timer = ProfileTimer::new("Renderer2D::flush_lines");
 
         // 1. Copy vertex data to the mapped VB at the current write offset.
-        let vertex_data = unsafe {
-            std::slice::from_raw_parts(
-                batch.vertices.as_ptr() as *const u8,
-                batch.vertices.len() * std::mem::size_of::<BatchLineVertex>(),
-            )
-        };
+        let vertex_data = batch.as_bytes();
         let vb_offset = batch.vb_write_offset;
-        if vb_offset + vertex_data.len() > LINE_VB_CAPACITY {
+        let data_len = vertex_data.len();
+        if vb_offset + data_len > LINE_VB_CAPACITY {
             warn!(
                 "Line batch overflow: exceeded {} flushes per frame. {} lines dropped.",
-                MAX_BATCHES_PER_FRAME, batch.line_count
+                MAX_BATCHES_PER_FRAME, batch.count
             );
             batch.vertices.clear();
-            batch.line_count = 0;
+            batch.count = 0;
             return;
         }
         self.line_vertex_buffers[current_frame].write_at(vb_offset, vertex_data);
 
         // 2. Record Vulkan commands.
-        let vertex_count = (batch.line_count * 2) as u32;
+        let vertex_count = (batch.count * 2) as u32;
         let active_pipeline = if self.use_offscreen {
             self.line_offscreen_pipeline
                 .as_ref()
@@ -1150,11 +1040,11 @@ impl Renderer2DData {
 
         // 3. Update stats, advance write offset, and reset vertices for next batch.
         batch.stats.draw_calls += 1;
-        batch.stats.quad_count += batch.line_count as u32;
-        batch.vb_write_offset = vb_offset + vertex_data.len();
+        batch.stats.quad_count += batch.count as u32;
+        batch.vb_write_offset = vb_offset + data_len;
 
         batch.vertices.clear();
-        batch.line_count = 0;
+        batch.count = 0;
     }
 
     /// Get the accumulated line statistics for this frame.
@@ -1168,17 +1058,17 @@ impl Renderer2DData {
     /// Returns false if the batch was full and a flush is needed first.
     pub(super) fn push_text_quad(&self, vertices: [BatchQuadVertex; 4]) -> bool {
         let mut batch = self.text_batch.borrow_mut();
-        if batch.quad_count >= MAX_QUADS {
+        if batch.count >= MAX_QUADS {
             return false;
         }
         batch.vertices.extend_from_slice(&vertices);
-        batch.quad_count += 1;
+        batch.count += 1;
         true
     }
 
     /// Returns true if there are text quads to flush.
     pub(super) fn has_pending_text(&self) -> bool {
-        self.text_batch.borrow().quad_count > 0
+        self.text_batch.borrow().has_pending()
     }
 
     /// Flush the current text batch: write vertices to GPU, bind the MSDF text
@@ -1190,33 +1080,29 @@ impl Renderer2DData {
         current_frame: usize,
     ) {
         let mut batch = self.text_batch.borrow_mut();
-        if batch.quad_count == 0 {
+        if batch.count == 0 {
             return;
         }
 
         let _timer = ProfileTimer::new("Renderer2D::flush_text");
 
         // 1. Copy vertex data to the mapped VB at the current write offset.
-        let vertex_data = unsafe {
-            std::slice::from_raw_parts(
-                batch.vertices.as_ptr() as *const u8,
-                batch.vertices.len() * std::mem::size_of::<BatchQuadVertex>(),
-            )
-        };
+        let vertex_data = batch.as_bytes();
         let vb_offset = batch.vb_write_offset;
-        if vb_offset + vertex_data.len() > QUAD_VB_CAPACITY {
+        let data_len = vertex_data.len();
+        if vb_offset + data_len > QUAD_VB_CAPACITY {
             warn!(
                 "Text batch overflow: exceeded {} flushes per frame. {} text quads dropped.",
-                MAX_BATCHES_PER_FRAME, batch.quad_count
+                MAX_BATCHES_PER_FRAME, batch.count
             );
             batch.vertices.clear();
-            batch.quad_count = 0;
+            batch.count = 0;
             return;
         }
         self.text_vertex_buffers[current_frame].write_at(vb_offset, vertex_data);
 
         // 2. Record Vulkan commands.
-        let index_count = (batch.quad_count * 6) as u32;
+        let index_count = (batch.count * 6) as u32;
         let active_pipeline = if self.use_offscreen {
             self.text_offscreen_pipeline
                 .as_ref()
@@ -1261,11 +1147,11 @@ impl Renderer2DData {
 
         // 3. Update stats, advance write offset, and reset vertices for next batch.
         batch.stats.draw_calls += 1;
-        batch.stats.quad_count += batch.quad_count as u32;
-        batch.vb_write_offset = vb_offset + vertex_data.len();
+        batch.stats.quad_count += batch.count as u32;
+        batch.vb_write_offset = vb_offset + data_len;
 
         batch.vertices.clear();
-        batch.quad_count = 0;
+        batch.count = 0;
     }
 
     /// Get the accumulated text statistics for this frame.
@@ -1279,17 +1165,17 @@ impl Renderer2DData {
     /// Returns false if the batch was full and a flush is needed first.
     pub(super) fn push_instance(&self, instance: SpriteInstanceData) -> bool {
         let mut batch = self.instance_batch.borrow_mut();
-        if batch.instance_count >= MAX_INSTANCES {
+        if batch.count >= MAX_INSTANCES {
             return false;
         }
-        batch.instances.push(instance);
-        batch.instance_count += 1;
+        batch.vertices.push(instance);
+        batch.count += 1;
         true
     }
 
     /// Returns true if there are sprite instances to flush.
     pub(super) fn has_pending_instances(&self) -> bool {
-        self.instance_batch.borrow().instance_count > 0
+        self.instance_batch.borrow().has_pending()
     }
 
     /// Flush the current instance batch: write instance data to GPU, bind the
@@ -1301,33 +1187,29 @@ impl Renderer2DData {
         current_frame: usize,
     ) {
         let mut batch = self.instance_batch.borrow_mut();
-        if batch.instance_count == 0 {
+        if batch.count == 0 {
             return;
         }
 
         let _timer = ProfileTimer::new("Renderer2D::flush_instances");
 
         // 1. Copy instance data to the mapped instance buffer at the current write offset.
-        let instance_data = unsafe {
-            std::slice::from_raw_parts(
-                batch.instances.as_ptr() as *const u8,
-                batch.instances.len() * std::mem::size_of::<SpriteInstanceData>(),
-            )
-        };
+        let instance_data = batch.as_bytes();
         let ib_offset = batch.vb_write_offset;
-        if ib_offset + instance_data.len() > INSTANCE_VB_CAPACITY {
+        let data_len = instance_data.len();
+        if ib_offset + data_len > INSTANCE_VB_CAPACITY {
             warn!(
                 "Instance batch overflow: exceeded {} flushes per frame. {} instances dropped.",
-                MAX_BATCHES_PER_FRAME, batch.instance_count
+                MAX_BATCHES_PER_FRAME, batch.count
             );
-            batch.instances.clear();
-            batch.instance_count = 0;
+            batch.vertices.clear();
+            batch.count = 0;
             return;
         }
         self.instance_buffers[current_frame].write_at(ib_offset, instance_data);
 
         // 2. Record Vulkan commands.
-        let instance_count = batch.instance_count as u32;
+        let instance_count = batch.count as u32;
         let active_pipeline = if self.use_offscreen {
             self.instance_offscreen_pipeline
                 .as_ref()
@@ -1378,11 +1260,11 @@ impl Renderer2DData {
 
         // 3. Update stats, advance write offset, and reset instances for next batch.
         batch.stats.draw_calls += 1;
-        batch.stats.quad_count += batch.instance_count as u32;
-        batch.vb_write_offset = ib_offset + instance_data.len();
+        batch.stats.quad_count += batch.count as u32;
+        batch.vb_write_offset = ib_offset + data_len;
 
-        batch.instances.clear();
-        batch.instance_count = 0;
+        batch.vertices.clear();
+        batch.count = 0;
     }
 
     /// Get the accumulated instance statistics for this frame.
