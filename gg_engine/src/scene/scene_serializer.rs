@@ -10,11 +10,12 @@ use crate::scene::entity::Entity;
 #[cfg(feature = "lua-scripting")]
 use crate::scene::LuaScriptComponent;
 use crate::scene::{
-    AnimationClip, AudioListenerComponent, AudioSourceComponent, BoxCollider2DComponent,
-    CameraComponent, CircleCollider2DComponent, CircleRendererComponent, IdComponent,
+    AnimationClip, AnimationControllerComponent, AnimationTransition, AudioListenerComponent,
+    AudioSourceComponent, BoxCollider2DComponent, CameraComponent, CircleCollider2DComponent,
+    CircleRendererComponent, FloatOrdering, IdComponent, InstancedSpriteAnimator,
     ParticleEmitterComponent, RelationshipComponent, RigidBody2DComponent, RigidBody2DType, Scene,
     SpriteAnimatorComponent, SpriteRendererComponent, TagComponent, TextComponent,
-    TilemapComponent, TransformComponent,
+    TilemapComponent, TransformComponent, TransitionCondition,
 };
 
 /// Default value for collision layer/mask fields — all bits set (collides with everything).
@@ -110,6 +111,18 @@ struct EntityData {
         default
     )]
     sprite_animator: Option<SpriteAnimatorData>,
+    #[serde(
+        rename = "InstancedSpriteAnimator",
+        skip_serializing_if = "Option::is_none",
+        default
+    )]
+    instanced_animator: Option<InstancedSpriteAnimatorData>,
+    #[serde(
+        rename = "AnimationControllerComponent",
+        skip_serializing_if = "Option::is_none",
+        default
+    )]
+    animation_controller: Option<AnimationControllerData>,
     #[serde(
         rename = "RelationshipComponent",
         skip_serializing_if = "has_no_relationships",
@@ -376,6 +389,83 @@ struct SpriteAnimatorData {
         skip_serializing_if = "is_one_f32"
     )]
     speed_scale: f32,
+}
+
+/// Serialization struct for [`InstancedSpriteAnimator`].
+#[derive(Serialize, Deserialize)]
+struct InstancedSpriteAnimatorData {
+    #[serde(rename = "CellSize")]
+    cell_size: [f32; 2],
+    #[serde(rename = "Columns")]
+    columns: u32,
+    #[serde(rename = "Clips", default)]
+    clips: Vec<AnimationClipData>,
+    #[serde(
+        rename = "DefaultClip",
+        default,
+        skip_serializing_if = "String::is_empty"
+    )]
+    default_clip: String,
+    #[serde(
+        rename = "SpeedScale",
+        default = "default_one_f32",
+        skip_serializing_if = "is_one_f32"
+    )]
+    speed_scale: f32,
+}
+
+/// Serialization struct for a single [`AnimationTransition`].
+#[derive(Serialize, Deserialize)]
+struct AnimationTransitionData {
+    #[serde(rename = "From", default, skip_serializing_if = "String::is_empty")]
+    from: String,
+    #[serde(rename = "To")]
+    to: String,
+    #[serde(rename = "ConditionType")]
+    condition_type: String,
+    #[serde(
+        rename = "ParamName",
+        default,
+        skip_serializing_if = "String::is_empty"
+    )]
+    param_name: String,
+    #[serde(
+        rename = "BoolValue",
+        default,
+        skip_serializing_if = "is_false"
+    )]
+    bool_value: bool,
+    #[serde(
+        rename = "FloatOrdering",
+        default,
+        skip_serializing_if = "String::is_empty"
+    )]
+    float_ordering: String,
+    #[serde(
+        rename = "FloatThreshold",
+        default,
+        skip_serializing_if = "is_zero_f32"
+    )]
+    float_threshold: f32,
+}
+
+/// Serialization struct for [`AnimationControllerComponent`].
+#[derive(Serialize, Deserialize)]
+struct AnimationControllerData {
+    #[serde(rename = "Transitions", default)]
+    transitions: Vec<AnimationTransitionData>,
+    #[serde(rename = "BoolParams", default, skip_serializing_if = "HashMap::is_empty")]
+    bool_params: HashMap<String, bool>,
+    #[serde(rename = "FloatParams", default, skip_serializing_if = "HashMap::is_empty")]
+    float_params: HashMap<String, f32>,
+}
+
+fn is_false(v: &bool) -> bool {
+    !v
+}
+
+fn is_zero_f32(v: &f32) -> bool {
+    *v == 0.0
 }
 
 fn is_one_f32(v: &f32) -> bool {
@@ -968,6 +1058,67 @@ impl SceneSerializer {
                     speed_scale: sa.speed_scale,
                 });
 
+        let instanced_animator_data = scene
+            .get_component::<InstancedSpriteAnimator>(entity)
+            .map(|ia| InstancedSpriteAnimatorData {
+                cell_size: ia.cell_size.into(),
+                columns: ia.columns,
+                clips: ia
+                    .clips
+                    .iter()
+                    .map(|c| AnimationClipData {
+                        name: c.name.clone(),
+                        start_frame: c.start_frame,
+                        end_frame: c.end_frame,
+                        fps: c.fps,
+                        looping: c.looping,
+                        texture_handle: c.texture_handle.raw(),
+                    })
+                    .collect(),
+                default_clip: ia.default_clip.clone(),
+                speed_scale: ia.speed_scale,
+            });
+
+        let animation_controller_data = scene
+            .get_component::<AnimationControllerComponent>(entity)
+            .map(|ctrl| AnimationControllerData {
+                transitions: ctrl
+                    .transitions
+                    .iter()
+                    .map(|t| {
+                        let (cond_type, param_name, bool_value, float_ordering, float_threshold) =
+                            match &t.condition {
+                                TransitionCondition::OnFinished => {
+                                    ("OnFinished".into(), String::new(), false, String::new(), 0.0)
+                                }
+                                TransitionCondition::ParamBool(name, val) => {
+                                    ("ParamBool".into(), name.clone(), *val, String::new(), 0.0)
+                                }
+                                TransitionCondition::ParamFloat(name, ord, thresh) => {
+                                    let ord_str = match ord {
+                                        FloatOrdering::Greater => "Greater",
+                                        FloatOrdering::Less => "Less",
+                                        FloatOrdering::GreaterOrEqual => "GreaterOrEqual",
+                                        FloatOrdering::LessOrEqual => "LessOrEqual",
+                                    };
+                                    ("ParamFloat".into(), name.clone(), false, ord_str.into(), *thresh)
+                                }
+                            };
+                        AnimationTransitionData {
+                            from: t.from.clone(),
+                            to: t.to.clone(),
+                            condition_type: cond_type,
+                            param_name,
+                            bool_value,
+                            float_ordering,
+                            float_threshold,
+                        }
+                    })
+                    .collect(),
+                bool_params: ctrl.bool_params.clone(),
+                float_params: ctrl.float_params.clone(),
+            });
+
         let relationship_data = scene
             .get_component::<RelationshipComponent>(entity)
             .filter(|r| r.has_relationships())
@@ -1028,6 +1179,8 @@ impl SceneSerializer {
             circle_collider_2d: circle_collider_2d_data,
             lua_script: lua_script_data,
             sprite_animator: sprite_animator_data,
+            instanced_animator: instanced_animator_data,
+            animation_controller: animation_controller_data,
             relationship: relationship_data,
             tilemap: tilemap_data,
             audio_source: audio_source_data,
@@ -1244,6 +1397,87 @@ impl SceneSerializer {
                     default_clip: sad.default_clip.clone(),
                     speed_scale: sad.speed_scale,
                     ..Default::default()
+                },
+            );
+        }
+
+        // InstancedSpriteAnimator
+        if let Some(ref iad) = entity_data.instanced_animator {
+            let clips = iad
+                .clips
+                .iter()
+                .map(|c| AnimationClip {
+                    name: c.name.clone(),
+                    start_frame: c.start_frame,
+                    end_frame: c.end_frame,
+                    fps: c.fps,
+                    looping: c.looping,
+                    texture_handle: Uuid::from_raw(c.texture_handle),
+                    texture: None,
+                })
+                .collect();
+            scene.add_component(
+                entity,
+                InstancedSpriteAnimator {
+                    cell_size: Vec2::from(iad.cell_size),
+                    columns: iad.columns,
+                    clips,
+                    default_clip: iad.default_clip.clone(),
+                    speed_scale: iad.speed_scale,
+                    ..Default::default()
+                },
+            );
+        }
+
+        // AnimationControllerComponent
+        if let Some(ref acd) = entity_data.animation_controller {
+            let transitions = acd
+                .transitions
+                .iter()
+                .filter_map(|t| {
+                    let condition = match t.condition_type.as_str() {
+                        "OnFinished" => TransitionCondition::OnFinished,
+                        "ParamBool" => {
+                            TransitionCondition::ParamBool(t.param_name.clone(), t.bool_value)
+                        }
+                        "ParamFloat" => {
+                            let ordering = match t.float_ordering.as_str() {
+                                "Greater" => FloatOrdering::Greater,
+                                "Less" => FloatOrdering::Less,
+                                "GreaterOrEqual" => FloatOrdering::GreaterOrEqual,
+                                "LessOrEqual" => FloatOrdering::LessOrEqual,
+                                _ => {
+                                    log::warn!(
+                                        "Unknown float ordering '{}', defaulting to Greater",
+                                        t.float_ordering
+                                    );
+                                    FloatOrdering::Greater
+                                }
+                            };
+                            TransitionCondition::ParamFloat(
+                                t.param_name.clone(),
+                                ordering,
+                                t.float_threshold,
+                            )
+                        }
+                        other => {
+                            log::warn!("Unknown transition condition type '{}'", other);
+                            return None;
+                        }
+                    };
+                    Some(AnimationTransition {
+                        from: t.from.clone(),
+                        to: t.to.clone(),
+                        condition,
+                    })
+                })
+                .collect();
+            scene.add_component(
+                entity,
+                AnimationControllerComponent {
+                    transitions,
+                    bool_params: acd.bool_params.clone(),
+                    float_params: acd.float_params.clone(),
                 },
             );
         }

@@ -140,13 +140,10 @@ fn unit_quad_vertex_layout() -> BufferLayout {
 // SpriteInstanceData — per-instance data for instanced sprite rendering
 // ---------------------------------------------------------------------------
 //
-// TODO(perf): GPU-computed animation — extend this struct with animation
-// parameters (start_time, fps, start_frame, frame_count, columns, cell_size,
-// tex_size) and update the instance vertex shader to compute UVs from u_time.
-// This would eliminate CPU-side UV computation during batching for animated
-// sprites. Only needed if InstancedSpriteAnimator's CPU stateless math
-// becomes a bottleneck at 10K+ animated entities. See instance.glsl for
-// the shader-side TODO with the exact GLSL code.
+// GPU-computed animation: animation parameters are passed per-instance and the
+// vertex shader computes UV coordinates from u_time. When anim_frame_count > 0
+// the shader ignores uv_min/uv_max and computes them from the animation state.
+// Non-animated sprites set anim_frame_count = 0 and use uv_min/uv_max as-is.
 
 #[repr(C)]
 #[derive(Clone, Copy)]
@@ -161,9 +158,17 @@ pub(super) struct SpriteInstanceData {
     pub tex_index: f32,
     pub tiling_factor: f32,
     pub entity_id: i32,
-    pub _pad: i32,
+    // GPU animation parameters (0 = not GPU-animated):
+    pub anim_start_time: f32,
+    pub anim_fps: f32,
+    pub anim_start_frame: f32,
+    pub anim_frame_count: f32,
+    pub anim_columns: f32,
+    pub anim_looping: f32,
+    pub anim_cell_size: [f32; 2],
+    pub anim_tex_size: [f32; 2],
 }
-// Size: 4×16 + 16 + 8 + 8 + 4 + 4 + 4 + 4 = 112 bytes
+// Size: 4×16 + 16 + 8 + 8 + 4 + 4 + 4 + 4×6 + 8 + 8 = 144 bytes
 
 /// Buffer layout for per-instance data (binding 1, per-instance).
 fn sprite_instance_layout() -> BufferLayout {
@@ -178,7 +183,14 @@ fn sprite_instance_layout() -> BufferLayout {
         BufferElement::new(ShaderDataType::Float, "a_tex_index"),
         BufferElement::new(ShaderDataType::Float, "a_tiling_factor"),
         BufferElement::new(ShaderDataType::Int, "a_entity_id"),
-        BufferElement::new(ShaderDataType::Int, "a_pad"),
+        BufferElement::new(ShaderDataType::Float, "a_anim_start_time"),
+        BufferElement::new(ShaderDataType::Float, "a_anim_fps"),
+        BufferElement::new(ShaderDataType::Float, "a_anim_start_frame"),
+        BufferElement::new(ShaderDataType::Float, "a_anim_frame_count"),
+        BufferElement::new(ShaderDataType::Float, "a_anim_columns"),
+        BufferElement::new(ShaderDataType::Float, "a_anim_looping"),
+        BufferElement::new(ShaderDataType::Float2, "a_anim_cell_size"),
+        BufferElement::new(ShaderDataType::Float2, "a_anim_tex_size"),
     ])
 }
 

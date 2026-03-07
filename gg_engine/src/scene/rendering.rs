@@ -1,7 +1,8 @@
 use super::{
-    CircleRendererComponent, Entity, IdComponent, ParticleEmitterComponent, Scene,
-    SpriteAnimatorComponent, SpriteRendererComponent, TextComponent,
-    TilemapComponent, TransformComponent, TILE_FLIP_H, TILE_FLIP_V, TILE_ID_MASK,
+    AnimationControllerComponent, CircleRendererComponent, Entity, IdComponent,
+    InstancedSpriteAnimator, ParticleEmitterComponent, Scene, SpriteAnimatorComponent,
+    SpriteRendererComponent, TextComponent, TilemapComponent, TransformComponent,
+    TILE_FLIP_H, TILE_FLIP_V, TILE_ID_MASK,
 };
 use crate::renderer::{Font, Renderer, SubTexture2D};
 
@@ -20,7 +21,10 @@ impl Scene {
     /// callbacks for any non-looping clips that just ended, then transitions
     /// to the default clip if one is configured.
     pub fn on_update_animations(&mut self, dt: f32) {
-        // Phase 1: tick all animators, collect finished events.
+        // Advance scene global time.
+        self.global_time += dt as f64;
+
+        // Phase 1: tick all SpriteAnimatorComponent timers, collect finished events.
         let mut finished_events: Vec<(u64, String, String)> = Vec::new();
         for (id_comp, animator) in self
             .world
@@ -32,24 +36,84 @@ impl Scene {
             }
         }
 
+        // Phase 2: check InstancedSpriteAnimator non-looping clips for completion.
+        let gt = self.global_time;
+        for (id_comp, anim) in self
+            .world
+            .query_mut::<(&IdComponent, &mut InstancedSpriteAnimator)>()
+        {
+            if anim.is_finished(gt) {
+                let clip_name = anim
+                    .current_clip_name()
+                    .unwrap_or("")
+                    .to_owned();
+                let default = anim.default_clip.clone();
+                anim.playing = false;
+                finished_events.push((id_comp.id.raw(), clip_name, default));
+            }
+        }
+
         if finished_events.is_empty() {
+            self.evaluate_animation_controllers();
             return;
         }
 
-        // Phase 2: dispatch Lua callbacks.
+        // Phase 3: dispatch Lua callbacks.
         #[cfg(feature = "lua-scripting")]
         self.dispatch_animation_finished_events(&finished_events);
 
-        // Phase 3: transition to default clip for entities that have one.
+        // Phase 4: transition to default clip for entities that have one.
+        let gt = self.global_time;
         for (uuid, _, default_clip) in &finished_events {
             if default_clip.is_empty() {
                 continue;
             }
             if let Some(entity) = self.find_entity_by_uuid(*uuid) {
+                let has_sa = self.has_component::<SpriteAnimatorComponent>(entity);
+                if has_sa {
+                    if let Some(mut animator) =
+                        self.get_component_mut::<SpriteAnimatorComponent>(entity)
+                    {
+                        animator.play(default_clip);
+                    }
+                } else if let Some(mut anim) =
+                    self.get_component_mut::<InstancedSpriteAnimator>(entity)
+                {
+                    anim.play_by_name(default_clip, gt);
+                }
+            }
+        }
+
+        // Phase 5: evaluate animation controllers.
+        self.evaluate_animation_controllers();
+    }
+
+    /// Evaluate all [`AnimationControllerComponent`]s and apply transitions.
+    ///
+    /// Checks each entity that has both a controller and an animator.
+    /// If a transition fires, plays the target clip on the animator.
+    fn evaluate_animation_controllers(&mut self) {
+        // Collect transitions to apply (uuid, target_clip).
+        let mut to_play: Vec<(u64, String)> = Vec::new();
+
+        for (id_comp, animator, ctrl) in self.world.query_mut::<(
+            &IdComponent,
+            &SpriteAnimatorComponent,
+            &AnimationControllerComponent,
+        )>() {
+            let current = animator.current_clip_name();
+            let finished = !animator.is_playing() && animator.current_clip_index().is_some();
+            if let Some(target) = ctrl.evaluate(current, finished) {
+                to_play.push((id_comp.id.raw(), target.to_owned()));
+            }
+        }
+
+        for (uuid, target) in to_play {
+            if let Some(entity) = self.find_entity_by_uuid(uuid) {
                 if let Some(mut animator) =
                     self.get_component_mut::<SpriteAnimatorComponent>(entity)
                 {
-                    animator.play(default_clip);
+                    animator.play(&target);
                 }
             }
         }
@@ -57,6 +121,8 @@ impl Scene {
 
     /// Advance animations only for entities with `previewing` set (editor preview).
     pub fn on_update_animation_previews(&mut self, dt: f32) {
+        // Advance global time for instanced animators in editor preview.
+        self.global_time += dt as f64;
         for animator in self.world.query_mut::<&mut SpriteAnimatorComponent>() {
             if animator.previewing {
                 animator.update(dt);
@@ -237,7 +303,7 @@ impl Scene {
         asset_manager: &mut crate::asset::EditorAssetManager,
         renderer: Option<&Renderer>,
     ) {
-        // Collect (entity, clip_index, handle) for clips needing resolution.
+        // Collect (entity, clip_index, handle) for SpriteAnimatorComponent clips.
         let needs: Vec<(hecs::Entity, usize, crate::uuid::Uuid)> = self
             .world
             .query::<(hecs::Entity, &SpriteAnimatorComponent)>()
@@ -258,6 +324,36 @@ impl Scene {
             }
             if let Some(texture) = asset_manager.get_texture(&asset_handle) {
                 if let Ok(mut animator) = self.world.get::<&mut SpriteAnimatorComponent>(entity) {
+                    if let Some(clip) = animator.clips.get_mut(clip_idx) {
+                        clip.texture = Some(texture);
+                    }
+                }
+            } else if renderer.is_none() {
+                asset_manager.request_load(&asset_handle);
+            }
+        }
+
+        // Collect for InstancedSpriteAnimator clips.
+        let instanced_needs: Vec<(hecs::Entity, usize, crate::uuid::Uuid)> = self
+            .world
+            .query::<(hecs::Entity, &InstancedSpriteAnimator)>()
+            .iter()
+            .flat_map(|(entity, animator)| {
+                animator
+                    .clips
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, clip)| clip.texture_handle.raw() != 0 && clip.texture.is_none())
+                    .map(move |(i, clip)| (entity, i, clip.texture_handle))
+            })
+            .collect();
+
+        for (entity, clip_idx, asset_handle) in instanced_needs {
+            if let Some(r) = renderer {
+                asset_manager.load_asset(&asset_handle, r);
+            }
+            if let Some(texture) = asset_manager.get_texture(&asset_handle) {
+                if let Ok(mut animator) = self.world.get::<&mut InstancedSpriteAnimator>(entity) {
                     if let Some(clip) = animator.clips.get_mut(clip_idx) {
                         clip.texture = Some(texture);
                     }
@@ -319,6 +415,10 @@ impl Scene {
     /// the renderer before calling this.
     fn render_scene(&self, renderer: &mut Renderer) {
         let _timer = crate::profiling::ProfileTimer::new("Scene::render_scene");
+
+        // Write scene time to the camera UBO for GPU-computed animation.
+        renderer.set_scene_time(self.global_time as f32);
+
         // Pre-compute world transforms for all entities once.
         let wt_cache = {
             crate::profile_scope!("Scene::build_world_transform_cache");
@@ -388,44 +488,130 @@ impl Scene {
                 0 => {
                     // Sprite
                     let sprite = self.world.get::<&SpriteRendererComponent>(handle).unwrap();
-                    let animated = self
+
+                    // GPU animation path: InstancedSpriteAnimator with active playback.
+                    // The vertex shader computes UVs from animation params + u_time.
+                    let gpu_animated = self
                         .world
-                        .get::<&SpriteAnimatorComponent>(handle)
+                        .get::<&InstancedSpriteAnimator>(handle)
                         .ok()
+                        .filter(|anim| anim.playing && anim.frame_count > 0)
                         .and_then(|anim| {
-                            let (col, row) = anim.current_grid_coords()?;
-                            // Per-clip texture takes priority over the sprite's texture.
                             let texture =
                                 anim.current_clip_texture().or(sprite.texture.as_ref())?;
-                            Some(SubTexture2D::from_coords(
-                                texture,
-                                glam::Vec2::new(col as f32, row as f32),
-                                anim.cell_size,
-                                glam::Vec2::ONE,
+                            let tex_idx = texture.bindless_index() as f32;
+                            let tw = texture.width() as f32;
+                            let th = texture.height() as f32;
+                            Some((
+                                tex_idx,
+                                anim.start_time as f32,
+                                anim.effective_fps() as f32,
+                                anim.start_frame as f32,
+                                anim.frame_count as f32,
+                                anim.columns as f32,
+                                if anim.looping { 1.0f32 } else { 0.0 },
+                                [anim.cell_size.x, anim.cell_size.y],
+                                [tw, th],
                             ))
                         });
-                    if let Some(sub_tex) = animated {
-                        renderer.draw_sub_textured_quad_transformed(
+
+                    if let Some((
+                        tex_idx,
+                        start_time,
+                        fps,
+                        start_frame,
+                        frame_count,
+                        columns,
+                        looping,
+                        cell_size,
+                        tex_size,
+                    )) = gpu_animated
+                    {
+                        renderer.draw_gpu_animated_sprite(
                             &world_transform,
-                            &sub_tex,
                             sprite.color,
+                            tex_idx,
                             handle.id() as i32,
+                            start_time,
+                            fps,
+                            start_frame,
+                            frame_count,
+                            columns,
+                            looping,
+                            cell_size,
+                            tex_size,
                         );
-                    } else if sprite.is_atlas() {
-                        if let Some(ref tex) = sprite.texture {
-                            let sub_tex =
-                                SubTexture2D::new(tex, sprite.atlas_min, sprite.atlas_max);
+                    } else {
+                        // CPU animation path: SpriteAnimatorComponent (per-entity timers).
+                        let animated = self
+                            .world
+                            .get::<&SpriteAnimatorComponent>(handle)
+                            .ok()
+                            .and_then(|anim| {
+                                let (col, row) = anim.current_grid_coords()?;
+                                let texture =
+                                    anim.current_clip_texture().or(sprite.texture.as_ref())?;
+                                Some(SubTexture2D::from_coords(
+                                    texture,
+                                    glam::Vec2::new(col as f32, row as f32),
+                                    anim.cell_size,
+                                    glam::Vec2::ONE,
+                                ))
+                            });
+
+                        // Stopped InstancedSpriteAnimator: compute last frame UVs on CPU.
+                        let instanced_anim = if animated.is_none() {
+                            self.world
+                                .get::<&InstancedSpriteAnimator>(handle)
+                                .ok()
+                                .and_then(|anim| {
+                                    let gt = self.global_time;
+                                    let (col, row) = anim.current_grid_coords(gt)?;
+                                    let texture =
+                                        anim.current_clip_texture().or(sprite.texture.as_ref())?;
+                                    Some(SubTexture2D::from_coords(
+                                        texture,
+                                        glam::Vec2::new(col as f32, row as f32),
+                                        anim.cell_size,
+                                        glam::Vec2::ONE,
+                                    ))
+                                })
+                        } else {
+                            None
+                        };
+
+                        let sub_tex = animated.or(instanced_anim);
+                        if let Some(sub_tex) = sub_tex {
                             renderer.draw_sub_textured_quad_transformed(
                                 &world_transform,
                                 &sub_tex,
                                 sprite.color,
                                 handle.id() as i32,
                             );
+                        } else if sprite.is_atlas() {
+                            if let Some(ref tex) = sprite.texture {
+                                let sub_tex =
+                                    SubTexture2D::new(tex, sprite.atlas_min, sprite.atlas_max);
+                                renderer.draw_sub_textured_quad_transformed(
+                                    &world_transform,
+                                    &sub_tex,
+                                    sprite.color,
+                                    handle.id() as i32,
+                                );
+                            } else {
+                                renderer.draw_sprite(
+                                    &world_transform,
+                                    &sprite,
+                                    handle.id() as i32,
+                                );
+                            }
                         } else {
-                            renderer.draw_sprite(&world_transform, &sprite, handle.id() as i32);
+                            renderer.draw_sprite(
+                                &world_transform,
+                                &sprite,
+                                handle.id() as i32,
+                            );
                         }
-                    } else {
-                        renderer.draw_sprite(&world_transform, &sprite, handle.id() as i32);
                     }
                 }
                 1 => {

@@ -842,3 +842,484 @@ pub(crate) fn draw_circle_renderer_component(
 
     remove
 }
+
+// ---------------------------------------------------------------------------
+// InstancedSpriteAnimator
+// ---------------------------------------------------------------------------
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn draw_instanced_sprite_animator(
+    ui: &mut egui::Ui,
+    scene: &mut Scene,
+    entity: Entity,
+    bold_family: &egui::FontFamily,
+    asset_manager: &mut Option<EditorAssetManager>,
+    assets_root: &std::path::Path,
+    scene_dirty: &mut bool,
+    _undo_system: &mut crate::undo::UndoSystem,
+) -> bool {
+    let mut remove = false;
+
+    if scene.has_component::<InstancedSpriteAnimator>(entity) {
+        let cr = egui::CollapsingHeader::new(
+            egui::RichText::new("Instanced Sprite Animator")
+                .font(egui::FontId::new(14.0, bold_family.clone())),
+        )
+        .id_salt(("instanced_sprite_animator", entity.id()))
+        .default_open(true)
+        .show(ui, |ui| {
+            let (mut cell_w, mut cell_h, mut columns, mut default_clip, mut speed_scale, clip_count) = {
+                let ia = scene
+                    .get_component::<InstancedSpriteAnimator>(entity)
+                    .unwrap();
+                (
+                    ia.cell_size.x,
+                    ia.cell_size.y,
+                    ia.columns,
+                    ia.default_clip.clone(),
+                    ia.speed_scale,
+                    ia.clips.len(),
+                )
+            };
+
+            ui.label(
+                egui::RichText::new("Stateless (mass entities)")
+                    .italics()
+                    .color(egui::Color32::from_gray(160)),
+            );
+
+            let mut changed = false;
+            ui.horizontal(|ui| {
+                ui.label("Cell Size");
+                changed |= ui
+                    .add(egui::DragValue::new(&mut cell_w).speed(1.0).prefix("W: "))
+                    .changed();
+                changed |= ui
+                    .add(egui::DragValue::new(&mut cell_h).speed(1.0).prefix("H: "))
+                    .changed();
+            });
+            ui.horizontal(|ui| {
+                ui.label("Columns");
+                changed |= ui
+                    .add(egui::DragValue::new(&mut columns).speed(0.1).range(1..=256))
+                    .changed();
+            });
+            ui.horizontal(|ui| {
+                ui.label("Speed Scale");
+                changed |= ui
+                    .add(
+                        egui::DragValue::new(&mut speed_scale)
+                            .speed(0.01)
+                            .range(0.0..=10.0),
+                    )
+                    .changed();
+            });
+            ui.horizontal(|ui| {
+                ui.label("Default Clip");
+                changed |= ui
+                    .add(egui::TextEdit::singleline(&mut default_clip).desired_width(100.0))
+                    .changed();
+            });
+
+            if changed {
+                if let Some(mut ia) =
+                    scene.get_component_mut::<InstancedSpriteAnimator>(entity)
+                {
+                    ia.cell_size.x = cell_w;
+                    ia.cell_size.y = cell_h;
+                    ia.columns = columns;
+                    ia.speed_scale = speed_scale;
+                    ia.default_clip = default_clip;
+                }
+                *scene_dirty = true;
+            }
+
+            // --- Clip list ---
+            ui.separator();
+            ui.label(egui::RichText::new("Clips").strong());
+
+            if ui.button("+ Add Clip").clicked() {
+                if let Some(mut ia) =
+                    scene.get_component_mut::<InstancedSpriteAnimator>(entity)
+                {
+                    let idx = ia.clips.len();
+                    ia.clips.push(AnimationClip {
+                        name: format!("clip_{idx}"),
+                        ..Default::default()
+                    });
+                }
+                *scene_dirty = true;
+            }
+
+            let mut clip_to_remove: Option<usize> = None;
+            for i in 0..clip_count {
+                let clip_data = {
+                    let ia = scene
+                        .get_component::<InstancedSpriteAnimator>(entity)
+                        .unwrap();
+                    let c = &ia.clips[i];
+                    (c.name.clone(), c.start_frame, c.end_frame, c.fps, c.looping)
+                };
+                let (mut name, mut start, mut end, mut fps, mut looping) = clip_data;
+
+                let id = ui.make_persistent_id(("instanced_clip", entity.id(), i));
+                egui::CollapsingHeader::new(&name)
+                    .id_salt(id)
+                    .default_open(false)
+                    .show(ui, |ui| {
+                        let mut clip_changed = false;
+                        ui.horizontal(|ui| {
+                            ui.label("Name");
+                            clip_changed |= ui
+                                .add(
+                                    egui::TextEdit::singleline(&mut name)
+                                        .desired_width(100.0),
+                                )
+                                .changed();
+                        });
+                        ui.horizontal(|ui| {
+                            ui.label("Frames");
+                            clip_changed |= ui
+                                .add(
+                                    egui::DragValue::new(&mut start)
+                                        .speed(0.1)
+                                        .prefix("Start: "),
+                                )
+                                .changed();
+                            clip_changed |= ui
+                                .add(
+                                    egui::DragValue::new(&mut end)
+                                        .speed(0.1)
+                                        .prefix("End: "),
+                                )
+                                .changed();
+                        });
+                        ui.horizontal(|ui| {
+                            ui.label("FPS");
+                            clip_changed |= ui
+                                .add(
+                                    egui::DragValue::new(&mut fps)
+                                        .speed(0.1)
+                                        .range(0.1..=120.0),
+                                )
+                                .changed();
+                        });
+                        clip_changed |= ui.checkbox(&mut looping, "Looping").changed();
+
+                        if clip_changed {
+                            if let Some(mut ia) =
+                                scene.get_component_mut::<InstancedSpriteAnimator>(entity)
+                            {
+                                if let Some(c) = ia.clips.get_mut(i) {
+                                    c.name = name;
+                                    c.start_frame = start;
+                                    c.end_frame = end;
+                                    c.fps = fps;
+                                    c.looping = looping;
+                                }
+                            }
+                            *scene_dirty = true;
+                        }
+
+                        if ui
+                            .button(egui::RichText::new("Remove Clip").color(egui::Color32::RED))
+                            .clicked()
+                        {
+                            clip_to_remove = Some(i);
+                        }
+                    });
+            }
+
+            if let Some(idx) = clip_to_remove {
+                if let Some(mut ia) =
+                    scene.get_component_mut::<InstancedSpriteAnimator>(entity)
+                {
+                    ia.clips.remove(idx);
+                }
+                *scene_dirty = true;
+            }
+
+            let _ = (asset_manager, assets_root);
+        });
+
+        cr.header_response.context_menu(|ui| {
+            if ui.button("Remove Component").clicked() {
+                remove = true;
+                ui.close();
+            }
+        });
+    }
+
+    remove
+}
+
+// ---------------------------------------------------------------------------
+// AnimationControllerComponent
+// ---------------------------------------------------------------------------
+
+pub(crate) fn draw_animation_controller(
+    ui: &mut egui::Ui,
+    scene: &mut Scene,
+    entity: Entity,
+    bold_family: &egui::FontFamily,
+    scene_dirty: &mut bool,
+    _undo_system: &mut crate::undo::UndoSystem,
+) -> bool {
+    let mut remove = false;
+
+    if scene.has_component::<AnimationControllerComponent>(entity) {
+        let cr = egui::CollapsingHeader::new(
+            egui::RichText::new("Animation Controller")
+                .font(egui::FontId::new(14.0, bold_family.clone())),
+        )
+        .id_salt(("animation_controller", entity.id()))
+        .default_open(true)
+        .show(ui, |ui| {
+            let transition_count = {
+                let ctrl = scene
+                    .get_component::<AnimationControllerComponent>(entity)
+                    .unwrap();
+                ctrl.transitions.len()
+            };
+
+            // --- Parameters ---
+            ui.label(egui::RichText::new("Parameters").strong());
+            {
+                let ctrl = scene
+                    .get_component::<AnimationControllerComponent>(entity)
+                    .unwrap();
+                let bools: Vec<(String, bool)> = ctrl
+                    .bool_params
+                    .iter()
+                    .map(|(k, v)| (k.clone(), *v))
+                    .collect();
+                let floats: Vec<(String, f32)> = ctrl
+                    .float_params
+                    .iter()
+                    .map(|(k, v)| (k.clone(), *v))
+                    .collect();
+                drop(ctrl);
+
+                for (name, val) in &bools {
+                    ui.horizontal(|ui| {
+                        ui.label(format!("{name} (bool)"));
+                        ui.label(if *val { "true" } else { "false" });
+                    });
+                }
+                for (name, val) in &floats {
+                    ui.horizontal(|ui| {
+                        ui.label(format!("{name} (float)"));
+                        ui.label(format!("{val:.2}"));
+                    });
+                }
+            }
+
+            ui.horizontal(|ui| {
+                if ui.button("+ Bool Param").clicked() {
+                    if let Some(mut ctrl) =
+                        scene.get_component_mut::<AnimationControllerComponent>(entity)
+                    {
+                        let name = format!("param_{}", ctrl.bool_params.len());
+                        ctrl.bool_params.insert(name, false);
+                    }
+                    *scene_dirty = true;
+                }
+                if ui.button("+ Float Param").clicked() {
+                    if let Some(mut ctrl) =
+                        scene.get_component_mut::<AnimationControllerComponent>(entity)
+                    {
+                        let name = format!("param_{}", ctrl.float_params.len());
+                        ctrl.float_params.insert(name, 0.0);
+                    }
+                    *scene_dirty = true;
+                }
+            });
+
+            // --- Transitions ---
+            ui.separator();
+            ui.label(egui::RichText::new("Transitions").strong());
+
+            if ui.button("+ Add Transition").clicked() {
+                if let Some(mut ctrl) =
+                    scene.get_component_mut::<AnimationControllerComponent>(entity)
+                {
+                    ctrl.transitions.push(AnimationTransition {
+                        from: String::new(),
+                        to: String::new(),
+                        condition: TransitionCondition::OnFinished,
+                    });
+                }
+                *scene_dirty = true;
+            }
+
+            let mut transition_to_remove: Option<usize> = None;
+            for i in 0..transition_count {
+                let t_data = {
+                    let ctrl = scene
+                        .get_component::<AnimationControllerComponent>(entity)
+                        .unwrap();
+                    let t = &ctrl.transitions[i];
+                    let cond_idx = match &t.condition {
+                        TransitionCondition::OnFinished => 0usize,
+                        TransitionCondition::ParamBool(_, _) => 1,
+                        TransitionCondition::ParamFloat(_, _, _) => 2,
+                    };
+                    let (pname, bval, ford_idx, fthresh) = match &t.condition {
+                        TransitionCondition::OnFinished => {
+                            (String::new(), false, 0usize, 0.0f32)
+                        }
+                        TransitionCondition::ParamBool(n, v) => (n.clone(), *v, 0, 0.0),
+                        TransitionCondition::ParamFloat(n, ord, th) => {
+                            let oi = match ord {
+                                FloatOrdering::Greater => 0,
+                                FloatOrdering::Less => 1,
+                                FloatOrdering::GreaterOrEqual => 2,
+                                FloatOrdering::LessOrEqual => 3,
+                            };
+                            (n.clone(), false, oi, *th)
+                        }
+                    };
+                    (t.from.clone(), t.to.clone(), cond_idx, pname, bval, ford_idx, fthresh)
+                };
+
+                let (mut from, mut to, mut cond_idx, mut pname, mut bval, mut ford_idx, mut fthresh) =
+                    t_data;
+
+                let id = ui.make_persistent_id(("anim_transition", entity.id(), i));
+                egui::CollapsingHeader::new(format!("Transition {i}"))
+                    .id_salt(id)
+                    .default_open(true)
+                    .show(ui, |ui| {
+                        let mut changed = false;
+                        ui.horizontal(|ui| {
+                            ui.label("From");
+                            changed |= ui
+                                .add(
+                                    egui::TextEdit::singleline(&mut from)
+                                        .desired_width(80.0)
+                                        .hint_text("(any)"),
+                                )
+                                .changed();
+                        });
+                        ui.horizontal(|ui| {
+                            ui.label("To");
+                            changed |= ui
+                                .add(
+                                    egui::TextEdit::singleline(&mut to)
+                                        .desired_width(80.0),
+                                )
+                                .changed();
+                        });
+
+                        let cond_labels = ["OnFinished", "ParamBool", "ParamFloat"];
+                        ui.horizontal(|ui| {
+                            ui.label("Condition");
+                            changed |= egui::ComboBox::from_id_salt(("cond_type", entity.id(), i))
+                                .selected_text(cond_labels[cond_idx])
+                                .show_index(ui, &mut cond_idx, cond_labels.len(), |idx| {
+                                    cond_labels[idx].to_string()
+                                })
+                                .changed();
+                        });
+
+                        if cond_idx == 1 {
+                            ui.horizontal(|ui| {
+                                ui.label("Param");
+                                changed |= ui
+                                    .add(
+                                        egui::TextEdit::singleline(&mut pname)
+                                            .desired_width(80.0),
+                                    )
+                                    .changed();
+                                changed |= ui.checkbox(&mut bval, "Value").changed();
+                            });
+                        } else if cond_idx == 2 {
+                            ui.horizontal(|ui| {
+                                ui.label("Param");
+                                changed |= ui
+                                    .add(
+                                        egui::TextEdit::singleline(&mut pname)
+                                            .desired_width(80.0),
+                                    )
+                                    .changed();
+                            });
+                            let ord_labels = [">", "<", ">=", "<="];
+                            ui.horizontal(|ui| {
+                                ui.label("Ordering");
+                                changed |= egui::ComboBox::from_id_salt((
+                                    "float_ord",
+                                    entity.id(),
+                                    i,
+                                ))
+                                .selected_text(ord_labels[ford_idx])
+                                .show_index(ui, &mut ford_idx, ord_labels.len(), |idx| {
+                                    ord_labels[idx].to_string()
+                                })
+                                .changed();
+                                ui.label("Threshold");
+                                changed |= ui
+                                    .add(egui::DragValue::new(&mut fthresh).speed(0.1))
+                                    .changed();
+                            });
+                        }
+
+                        if changed {
+                            let condition = match cond_idx {
+                                0 => TransitionCondition::OnFinished,
+                                1 => TransitionCondition::ParamBool(pname, bval),
+                                2 => {
+                                    let ordering = match ford_idx {
+                                        0 => FloatOrdering::Greater,
+                                        1 => FloatOrdering::Less,
+                                        2 => FloatOrdering::GreaterOrEqual,
+                                        3 => FloatOrdering::LessOrEqual,
+                                        _ => FloatOrdering::Greater,
+                                    };
+                                    TransitionCondition::ParamFloat(pname, ordering, fthresh)
+                                }
+                                _ => TransitionCondition::OnFinished,
+                            };
+                            if let Some(mut ctrl) =
+                                scene.get_component_mut::<AnimationControllerComponent>(entity)
+                            {
+                                if let Some(t) = ctrl.transitions.get_mut(i) {
+                                    t.from = from;
+                                    t.to = to;
+                                    t.condition = condition;
+                                }
+                            }
+                            *scene_dirty = true;
+                        }
+
+                        if ui
+                            .button(
+                                egui::RichText::new("Remove Transition")
+                                    .color(egui::Color32::RED),
+                            )
+                            .clicked()
+                        {
+                            transition_to_remove = Some(i);
+                        }
+                    });
+            }
+
+            if let Some(idx) = transition_to_remove {
+                if let Some(mut ctrl) =
+                    scene.get_component_mut::<AnimationControllerComponent>(entity)
+                {
+                    ctrl.transitions.remove(idx);
+                }
+                *scene_dirty = true;
+            }
+        });
+
+        cr.header_response.context_menu(|ui| {
+            if ui.button("Remove Component").clicked() {
+                remove = true;
+                ui.close();
+            }
+        });
+    }
+
+    remove
+}

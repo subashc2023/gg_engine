@@ -3,6 +3,7 @@
 
 layout(set = 0, binding = 0) uniform CameraBuffer {
     mat4 u_view_projection;
+    float u_time;
 } camera;
 
 // Per-vertex data (binding 0, rate = VERTEX)
@@ -19,6 +20,16 @@ layout(location = 7) in vec2 a_uv_min;
 layout(location = 8) in vec2 a_uv_max;
 layout(location = 9) in float a_tex_index;
 layout(location = 10) in float a_tiling_factor;
+// location 11 = a_entity_id (not used by swapchain variant)
+// GPU animation parameters (frame_count > 0 activates GPU animation)
+layout(location = 12) in float a_anim_start_time;
+layout(location = 13) in float a_anim_fps;
+layout(location = 14) in float a_anim_start_frame;
+layout(location = 15) in float a_anim_frame_count;
+layout(location = 16) in float a_anim_columns;
+layout(location = 17) in float a_anim_looping;
+layout(location = 18) in vec2 a_anim_cell_size;
+layout(location = 19) in vec2 a_anim_tex_size;
 
 layout(location = 0) out vec4 v_color;
 layout(location = 1) out vec2 v_tex_coord;
@@ -27,8 +38,30 @@ layout(location = 2) out flat float v_tex_index;
 void main() {
     mat4 model = mat4(a_transform_col0, a_transform_col1, a_transform_col2, a_transform_col3);
     v_color = a_color;
-    v_tex_coord = (a_uv_min + a_tex_coord * (a_uv_max - a_uv_min)) * a_tiling_factor;
     v_tex_index = a_tex_index;
+
+    // GPU-computed animation: when frame_count > 0, compute UV coords from
+    // animation parameters and u_time instead of using a_uv_min / a_uv_max.
+    if (a_anim_frame_count > 0.0) {
+        float elapsed = max(camera.u_time - a_anim_start_time, 0.0);
+        float raw_frame = floor(elapsed * a_anim_fps);
+        float frame_in_clip;
+        if (a_anim_looping > 0.5) {
+            frame_in_clip = mod(raw_frame, a_anim_frame_count);
+        } else {
+            frame_in_clip = min(raw_frame, a_anim_frame_count - 1.0);
+        }
+        float frame = a_anim_start_frame + frame_in_clip;
+        float col = mod(frame, a_anim_columns);
+        float row = floor(frame / a_anim_columns);
+        vec2 cell_uv = a_anim_cell_size / a_anim_tex_size;
+        vec2 uv_min = vec2(col, row) * cell_uv;
+        vec2 uv_max = uv_min + cell_uv;
+        v_tex_coord = uv_min + a_tex_coord * (uv_max - uv_min);
+    } else {
+        v_tex_coord = (a_uv_min + a_tex_coord * (a_uv_max - a_uv_min)) * a_tiling_factor;
+    }
+
     gl_Position = camera.u_view_projection * model * vec4(a_position, 1.0);
 }
 

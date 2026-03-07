@@ -13,7 +13,10 @@ use super::gpu_allocation::{GpuAllocation, GpuAllocator};
 #[repr(C)]
 pub(crate) struct CameraData {
     pub view_projection: Mat4,
+    pub time: f32,
+    pub _pad: [f32; 3],
 }
+// std140 layout: mat4 (64) + float (4) + pad (12) = 80 bytes
 
 impl CameraData {
     pub const SIZE: usize = std::mem::size_of::<Self>();

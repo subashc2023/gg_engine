@@ -68,10 +68,13 @@ pub struct Renderer {
     descriptor_pool: vk::DescriptorPool,
     texture_descriptor_set_layout: vk::DescriptorSetLayout,
 
-    // Camera UBO (per-frame VP matrix).
+    // Camera UBO (per-frame VP matrix + time).
     camera_ubo: UniformBuffer,
     camera_ubo_ds_layout: vk::DescriptorSetLayout,
     camera_ubo_ds: [vk::DescriptorSet; 2],
+
+    // Scene time for GPU animation (written to camera UBO as u_time).
+    scene_time: f32,
 
     // Format info for framebuffer creation.
     color_format: vk::Format,
@@ -150,7 +153,7 @@ impl Renderer {
             unsafe { device.create_descriptor_set_layout(&ubo_layout_info, None) }
                 .map_err(|e| format!("Failed to create camera UBO descriptor set layout: {e}"))?;
 
-        // -- Camera UBO buffer (64 bytes, double-buffered) --
+        // -- Camera UBO buffer (80 bytes: mat4 + float + pad, double-buffered) --
         let camera_ubo = UniformBuffer::new(allocator, device, CameraData::SIZE)?;
 
         // -- Allocate 2 descriptor sets for the camera UBO --
@@ -205,6 +208,7 @@ impl Renderer {
             camera_ubo,
             camera_ubo_ds_layout,
             camera_ubo_ds,
+            scene_time: 0.0,
             color_format,
             depth_format,
             pipeline_cache,
@@ -792,11 +796,71 @@ impl Renderer {
             tex_index,
             tiling_factor,
             entity_id,
-            _pad: 0,
+            anim_start_time: 0.0,
+            anim_fps: 0.0,
+            anim_start_frame: 0.0,
+            anim_frame_count: 0.0,
+            anim_columns: 0.0,
+            anim_looping: 0.0,
+            anim_cell_size: [0.0, 0.0],
+            anim_tex_size: [0.0, 0.0],
         };
 
         if !data.push_instance(instance) {
             // Batch full — flush and retry.
+            self.flush_instance_batch();
+            data.push_instance(instance);
+        }
+    }
+
+    /// Push a GPU-animated sprite instance.
+    ///
+    /// The vertex shader computes UV coordinates from the animation parameters
+    /// and `u_time`, eliminating per-entity CPU UV computation.
+    #[allow(clippy::too_many_arguments)]
+    pub fn draw_gpu_animated_sprite(
+        &self,
+        transform: &Mat4,
+        color: Vec4,
+        tex_index: f32,
+        entity_id: i32,
+        anim_start_time: f32,
+        anim_fps: f32,
+        anim_start_frame: f32,
+        anim_frame_count: f32,
+        anim_columns: f32,
+        anim_looping: f32,
+        anim_cell_size: [f32; 2],
+        anim_tex_size: [f32; 2],
+    ) {
+        let data = self
+            .renderer_2d
+            .as_ref()
+            .expect("Renderer2D not initialized — call init_2d first");
+
+        let cols = transform.to_cols_array_2d();
+        let instance = SpriteInstanceData {
+            transform_col0: cols[0],
+            transform_col1: cols[1],
+            transform_col2: cols[2],
+            transform_col3: cols[3],
+            color: [color.x, color.y, color.z, color.w],
+            uv_min: [0.0, 0.0],
+            uv_max: [1.0, 1.0],
+            tex_index,
+            tiling_factor: 1.0,
+            entity_id,
+            anim_start_time,
+            anim_fps,
+            anim_start_frame,
+            anim_frame_count,
+            anim_columns,
+            anim_looping,
+            anim_cell_size,
+            anim_tex_size,
+        };
+
+        if !data.push_instance(instance) {
             self.flush_instance_batch();
             data.push_instance(instance);
         }
@@ -1285,17 +1349,8 @@ impl Renderer {
         self.draw_context = Some(ctx);
         RenderCommand::set_viewport(&self.api, &ctx);
 
-        // Write VP matrix to the camera UBO for this frame.
-        let camera_data = CameraData {
-            view_projection: *camera_vp,
-        };
-        let bytes = unsafe {
-            std::slice::from_raw_parts(
-                &camera_data as *const CameraData as *const u8,
-                CameraData::SIZE,
-            )
-        };
-        self.camera_ubo.update(ctx.current_frame, bytes);
+        // Write VP matrix + time to the camera UBO for this frame.
+        self.write_camera_ubo(*camera_vp, ctx.current_frame);
 
         // Reset batch state for this frame.
         if let Some(data) = &self.renderer_2d {
@@ -1318,17 +1373,32 @@ impl Renderer {
 
         // Update the camera UBO if we have an active draw context.
         if let Some(ctx) = self.draw_context {
-            let camera_data = CameraData {
-                view_projection: vp,
-            };
-            let bytes = unsafe {
-                std::slice::from_raw_parts(
-                    &camera_data as *const CameraData as *const u8,
-                    CameraData::SIZE,
-                )
-            };
-            self.camera_ubo.update(ctx.current_frame, bytes);
+            self.write_camera_ubo(vp, ctx.current_frame);
         }
+    }
+
+    /// Set the scene time used for GPU-computed animation.
+    ///
+    /// Call this before [`set_view_projection`] so the UBO includes the
+    /// correct time value for the current frame.
+    pub fn set_scene_time(&mut self, t: f32) {
+        self.scene_time = t;
+    }
+
+    /// Write the camera UBO (VP matrix + time) for the given frame-in-flight.
+    fn write_camera_ubo(&self, vp: Mat4, current_frame: usize) {
+        let camera_data = CameraData {
+            view_projection: vp,
+            time: self.scene_time,
+            _pad: [0.0; 3],
+        };
+        let bytes = unsafe {
+            std::slice::from_raw_parts(
+                &camera_data as *const CameraData as *const u8,
+                CameraData::SIZE,
+            )
+        };
+        self.camera_ubo.update(current_frame, bytes);
     }
 
     /// End the current scene — flushes any pending batches (quads + circles + lines),

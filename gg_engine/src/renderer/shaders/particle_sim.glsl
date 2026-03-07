@@ -38,9 +38,17 @@ struct InstanceData {
     float tex_index;
     float tiling_factor;
     int entity_id;
-    int _pad;
+    // GPU animation parameters (unused by particles — zeroed)
+    float anim_start_time;
+    float anim_fps;
+    float anim_start_frame;
+    float anim_frame_count;
+    float anim_columns;
+    float anim_looping;
+    vec2 anim_cell_size;
+    vec2 anim_tex_size;
 };
-// total: 112 bytes, struct alignment 16
+// total: 144 bytes, struct alignment 16
 
 // ---------------------------------------------------------------------------
 // Descriptor bindings
@@ -121,5 +129,12 @@ void main() {
     instances[slot].tex_index = 0.0;
     instances[slot].tiling_factor = 1.0;
     instances[slot].entity_id = -1;
-    instances[slot]._pad = 0;
+    instances[slot].anim_start_time = 0.0;
+    instances[slot].anim_fps = 0.0;
+    instances[slot].anim_start_frame = 0.0;
+    instances[slot].anim_frame_count = 0.0;
+    instances[slot].anim_columns = 0.0;
+    instances[slot].anim_looping = 0.0;
+    instances[slot].anim_cell_size = vec2(0.0);
+    instances[slot].anim_tex_size = vec2(0.0);
 }

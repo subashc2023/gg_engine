@@ -344,6 +344,34 @@ fn draw_components(
         *scene_dirty = true;
     }
 
+    if sprite::draw_instanced_sprite_animator(
+        ui,
+        scene,
+        entity,
+        &bold_family,
+        asset_manager,
+        assets_root,
+        scene_dirty,
+        undo_system,
+    ) {
+        undo_system.record(scene);
+        scene.remove_component::<InstancedSpriteAnimator>(entity);
+        *scene_dirty = true;
+    }
+
+    if sprite::draw_animation_controller(
+        ui,
+        scene,
+        entity,
+        &bold_family,
+        scene_dirty,
+        undo_system,
+    ) {
+        undo_system.record(scene);
+        scene.remove_component::<AnimationControllerComponent>(entity);
+        *scene_dirty = true;
+    }
+
     if sprite::draw_circle_renderer_component(
         ui,
         scene,

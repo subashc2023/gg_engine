@@ -184,7 +184,7 @@ impl GpuParticleSystem {
         let _timer = ProfileTimer::new("GpuParticleSystem::new");
 
         let particle_size = std::mem::size_of::<GpuParticle>() as u64;
-        let instance_size = 112u64; // SpriteInstanceData: 112 bytes
+        let instance_size = 144u64; // SpriteInstanceData: 144 bytes (with GPU anim fields)
         let indirect_size = std::mem::size_of::<DrawIndexedIndirectCommand>() as u64;
 
         // -- Particle state SSBO --

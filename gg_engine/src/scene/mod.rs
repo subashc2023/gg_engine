@@ -17,7 +17,10 @@ pub(crate) mod script_engine;
 #[cfg(feature = "lua-scripting")]
 mod script_glue;
 
-pub use animation::{AnimationClip, InstancedSpriteAnimator, SpriteAnimatorComponent};
+pub use animation::{
+    AnimationClip, AnimationControllerComponent, AnimationTransition, FloatOrdering,
+    InstancedSpriteAnimator, SpriteAnimatorComponent, TransitionCondition,
+};
 #[cfg(feature = "lua-scripting")]
 pub use components::LuaScriptComponent;
 pub use components::{
@@ -59,6 +62,9 @@ pub struct Scene {
     name_cache: Option<HashMap<String, u64>>,
     /// Deferred entity destruction queue (UUIDs). Flushed after script callbacks.
     pending_destroy: Vec<u64>,
+    /// Monotonic scene time in seconds. Incremented each frame by `dt`.
+    /// Used by [`InstancedSpriteAnimator`] for stateless frame computation.
+    global_time: f64,
 }
 
 /// Invokes `$callback!` with every cloneable component type.
@@ -79,6 +85,8 @@ macro_rules! for_each_cloneable_component {
             CircleCollider2DComponent,
             RelationshipComponent,
             SpriteAnimatorComponent,
+            InstancedSpriteAnimator,
+            AnimationControllerComponent,
             TilemapComponent,
             AudioSourceComponent,
             AudioListenerComponent,
@@ -101,6 +109,8 @@ macro_rules! for_each_addable_component {
             ($crate::scene::SpriteRendererComponent, "Sprite Renderer"),
             ($crate::scene::CircleRendererComponent, "Circle Renderer"),
             ($crate::scene::SpriteAnimatorComponent, "Sprite Animator"),
+            ($crate::scene::InstancedSpriteAnimator, "Instanced Sprite Animator"),
+            ($crate::scene::AnimationControllerComponent, "Animation Controller"),
             ($crate::scene::TextComponent, "Text"),
             ($crate::scene::RigidBody2DComponent, "Rigidbody 2D"),
             ($crate::scene::BoxCollider2DComponent, "Box Collider 2D"),
@@ -127,6 +137,7 @@ impl Scene {
             uuid_cache: HashMap::new(),
             name_cache: None,
             pending_destroy: Vec::new(),
+            global_time: 0.0,
         }
     }
 
@@ -586,6 +597,11 @@ impl Scene {
     // Viewport
     // -----------------------------------------------------------------
 
+    /// Returns the current scene global time in seconds.
+    pub fn global_time(&self) -> f64 {
+        self.global_time
+    }
+
     /// Notify the scene that the viewport (or framebuffer) dimensions changed.
     ///
     /// Iterates all [`CameraComponent`]s whose `fixed_aspect_ratio` is `false`
@@ -966,7 +982,7 @@ mod tests {
         }
         for_each_cloneable_component!(count_types);
         // Update this constant when adding or removing cloneable components.
-        const EXPECTED_COUNT: usize = 14;
+        const EXPECTED_COUNT: usize = 16;
         assert_eq!(
             MACRO_COUNT, EXPECTED_COUNT,
             "for_each_cloneable_component! has {} types but expected {}. \

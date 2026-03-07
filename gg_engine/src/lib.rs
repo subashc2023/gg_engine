@@ -46,12 +46,13 @@ pub use renderer::{
     VertexBuffer,
 };
 pub use scene::{
-    AnimationClip, AudioListenerComponent, AudioSourceComponent, BoxCollider2DComponent,
-    CameraComponent, CircleCollider2DComponent, CircleRendererComponent, Entity, IdComponent,
-    InstancedSpriteAnimator, NativeScript, NativeScriptComponent, ParticleEmitterComponent,
-    RelationshipComponent, RigidBody2DComponent, RigidBody2DType, Scene, SceneSerializer,
-    SpriteAnimatorComponent, SpriteRendererComponent, TagComponent, TextComponent,
-    TilemapComponent, TransformComponent, TILE_FLIP_H, TILE_FLIP_V, TILE_ID_MASK,
+    AnimationClip, AnimationControllerComponent, AnimationTransition, AudioListenerComponent,
+    AudioSourceComponent, BoxCollider2DComponent, CameraComponent, CircleCollider2DComponent,
+    CircleRendererComponent, Entity, FloatOrdering, IdComponent, InstancedSpriteAnimator,
+    NativeScript, NativeScriptComponent, ParticleEmitterComponent, RelationshipComponent,
+    RigidBody2DComponent, RigidBody2DType, Scene, SceneSerializer, SpriteAnimatorComponent,
+    SpriteRendererComponent, TagComponent, TextComponent, TilemapComponent, TransformComponent,
+    TransitionCondition, TILE_FLIP_H, TILE_FLIP_V, TILE_ID_MASK,
 };
 #[cfg(feature = "lua-scripting")]
 pub use scene::{LuaScriptComponent, ScriptEngine, ScriptFieldValue};
@@ -85,12 +86,14 @@ pub mod prelude {
         VertexBuffer,
     };
     pub use crate::scene::{
-        AnimationClip, AudioListenerComponent, AudioSourceComponent, BoxCollider2DComponent,
-        CameraComponent, CircleCollider2DComponent, CircleRendererComponent, Entity, IdComponent,
+        AnimationClip, AnimationControllerComponent, AnimationTransition,
+        AudioListenerComponent, AudioSourceComponent, BoxCollider2DComponent, CameraComponent,
+        CircleCollider2DComponent, CircleRendererComponent, Entity, FloatOrdering, IdComponent,
         InstancedSpriteAnimator, NativeScript, NativeScriptComponent, ParticleEmitterComponent,
         RelationshipComponent, RigidBody2DComponent, RigidBody2DType, Scene, SceneSerializer,
         SpriteAnimatorComponent, SpriteRendererComponent, TagComponent, TextComponent,
-        TilemapComponent, TransformComponent, TILE_FLIP_H, TILE_FLIP_V, TILE_ID_MASK,
+        TilemapComponent, TransformComponent, TransitionCondition, TILE_FLIP_H, TILE_FLIP_V,
+        TILE_ID_MASK,
     };
     #[cfg(feature = "lua-scripting")]
     pub use crate::scene::{LuaScriptComponent, ScriptEngine, ScriptFieldValue};

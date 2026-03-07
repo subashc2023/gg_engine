@@ -210,6 +210,30 @@ pub fn register_all(lua: &Lua) -> LuaResult<()> {
         lua.create_function(lua_set_animation_speed)?,
     )?;
 
+    // Instanced animation
+    engine.set(
+        "play_instanced_animation",
+        lua.create_function(lua_play_instanced_animation)?,
+    )?;
+    engine.set(
+        "stop_instanced_animation",
+        lua.create_function(lua_stop_instanced_animation)?,
+    )?;
+    engine.set(
+        "get_instanced_animation",
+        lua.create_function(lua_get_instanced_animation)?,
+    )?;
+
+    // Animation controller
+    engine.set(
+        "set_anim_param",
+        lua.create_function(lua_set_anim_param)?,
+    )?;
+    engine.set(
+        "get_anim_param",
+        lua.create_function(lua_get_anim_param)?,
+    )?;
+
     // Audio
     engine.set("play_sound", lua.create_function(lua_play_sound)?)?;
     engine.set("stop_sound", lua.create_function(lua_stop_sound)?)?;
@@ -790,6 +814,94 @@ fn lua_set_animation_speed(lua: &Lua, (entity_id, speed): (u64, f32)) -> LuaResu
         if let Some(mut a) = scene.get_component_mut::<super::SpriteAnimatorComponent>(entity) {
             a.speed_scale = speed;
         }
+    })
+}
+
+// ---------------------------------------------------------------------------
+// Instanced animation bindings
+// ---------------------------------------------------------------------------
+
+/// `Engine.play_instanced_animation(entity_id, clip_name)` — play a clip on
+/// an InstancedSpriteAnimator by name. Returns true if the clip was found.
+fn lua_play_instanced_animation(
+    lua: &Lua,
+    (entity_id, name): (u64, String),
+) -> LuaResult<bool> {
+    with_entity_mut(lua, entity_id, false, |scene, entity| {
+        let gt = scene.global_time();
+        scene
+            .get_component_mut::<super::InstancedSpriteAnimator>(entity)
+            .map(|mut a| a.play_by_name(&name, gt))
+            .unwrap_or(false)
+    })
+}
+
+/// `Engine.stop_instanced_animation(entity_id)` — stop an InstancedSpriteAnimator.
+fn lua_stop_instanced_animation(lua: &Lua, entity_id: u64) -> LuaResult<()> {
+    with_entity_mut(lua, entity_id, (), |scene, entity| {
+        if let Some(mut a) = scene.get_component_mut::<super::InstancedSpriteAnimator>(entity) {
+            a.stop();
+        }
+    })
+}
+
+/// `Engine.get_instanced_animation(entity_id)` — get current clip name, or nil.
+fn lua_get_instanced_animation(lua: &Lua, entity_id: u64) -> LuaResult<LuaValue> {
+    let name = with_entity(lua, entity_id, None, |scene, entity| {
+        scene
+            .get_component::<super::InstancedSpriteAnimator>(entity)
+            .and_then(|a| a.current_clip_name().map(|s| s.to_owned()))
+    })?;
+    match name {
+        Some(s) => Ok(LuaValue::String(lua.create_string(&s)?)),
+        None => Ok(LuaValue::Nil),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Animation controller bindings
+// ---------------------------------------------------------------------------
+
+/// `Engine.set_anim_param(entity_id, name, value)` — set a bool or float
+/// parameter on an AnimationControllerComponent. Auto-detects type.
+fn lua_set_anim_param(lua: &Lua, (entity_id, name, value): (u64, String, LuaValue)) -> LuaResult<()> {
+    with_entity_mut(lua, entity_id, (), |scene, entity| {
+        if let Some(mut ctrl) =
+            scene.get_component_mut::<super::AnimationControllerComponent>(entity)
+        {
+            match value {
+                LuaValue::Boolean(b) => {
+                    ctrl.bool_params.insert(name, b);
+                }
+                LuaValue::Number(n) => {
+                    ctrl.float_params.insert(name, n as f32);
+                }
+                LuaValue::Integer(n) => {
+                    ctrl.float_params.insert(name, n as f32);
+                }
+                _ => {
+                    log::warn!("set_anim_param: unsupported value type, expected bool or number");
+                }
+            }
+        }
+    })
+}
+
+/// `Engine.get_anim_param(entity_id, name)` — get a parameter value.
+/// Returns the bool or float value, or nil if not found.
+fn lua_get_anim_param(lua: &Lua, (entity_id, name): (u64, String)) -> LuaResult<LuaValue> {
+    with_entity(lua, entity_id, LuaValue::Nil, |scene, entity| {
+        if let Some(ctrl) =
+            scene.get_component::<super::AnimationControllerComponent>(entity)
+        {
+            if let Some(&b) = ctrl.bool_params.get(&name) {
+                return LuaValue::Boolean(b);
+            }
+            if let Some(&f) = ctrl.float_params.get(&name) {
+                return LuaValue::Number(f as f64);
+            }
+        }
+        LuaValue::Nil
     })
 }
 

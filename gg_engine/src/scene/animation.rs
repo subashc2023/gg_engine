@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use glam::Vec2;
 
 use crate::renderer::Texture2D;
@@ -15,19 +17,13 @@ use crate::Ref;
 // (frame = start_frame + floor((time - start_time) * fps) % count) and
 // the existing instanced rendering pipeline, avoiding per-entity updates.
 //
-// TODO(feature): Animation state machine / controller — data-driven
-// transitions between clips. An AnimationControllerComponent would define
-// transition rules (from_clip → to_clip with conditions like OnFinished,
-// ParamBool, ParamFloat). Lua scripts would set parameters via
-// Engine.set_anim_param(entity_id, "speed", 5.0) and the engine evaluates
-// transitions automatically. This replaces the manual if/elseif chains
-// currently written in Lua (see 2dguy_controller.lua). Editor UI would
-// show a simple transition list (not a visual graph). See AUDIT.md item 25.
+// AnimationControllerComponent (below) provides data-driven transitions
+// between clips. Lua scripts set parameters via Engine.set_anim_param()
+// and the engine evaluates transitions automatically.
 //
-// TODO(perf): GPU-computed animation — move frame-to-UV math into the
-// vertex shader. Extend SpriteInstanceData with animation parameters and
-// compute UVs from a global u_time uniform. Zero CPU animation cost.
-// Only needed if the CPU stateless path becomes a bottleneck at 10K+.
+// GPU-computed animation is implemented: when an InstancedSpriteAnimator
+// is playing, the vertex shader computes UVs from u_time + per-instance
+// animation parameters. Zero CPU animation cost for playing entities.
 // ==========================================================================
 
 /// A named animation clip within a sprite sheet.
@@ -280,48 +276,8 @@ impl Default for SpriteAnimatorComponent {
 // During batching, the scene computes uv_min/uv_max with stateless math
 // and submits a SpriteInstanceData — no timer ticking, no branching.
 //
-// INTEGRATION PLAN (remaining work):
-//
-// 1. Scene rendering path (mod.rs render_scene):
-//    - Entities with InstancedSpriteAnimator go through push_instance()
-//      instead of draw_sprite(). Compute uv_min/uv_max with stateless
-//      math from current_grid_coords(global_time).
-//
-// 2. Scene update (mod.rs):
-//    - Add on_update_instanced_animations(global_time) that only checks
-//      non-looping clips for completion: is_finished(global_time).
-//      Fires on_animation_finished Lua callback and transitions to idle.
-//      No per-entity timer ticking — just one comparison per non-looping entity.
-//
-// 3. Serialization (scene_serializer.rs):
-//    - Add InstancedSpriteAnimatorData serde struct.
-//    - Serialize: cell_size, columns, clips (reuse AnimationClipData).
-//    - Clips stored as named presets; active clip restored by name.
-//
-// 4. Lua API (script_glue.rs):
-//    - Engine.play_instanced_animation(entity_id, clip_name)
-//    - Engine.stop_instanced_animation(entity_id)
-//    - Clip lookup: InstancedSpriteAnimator stores a Vec<AnimationClip>
-//      alongside the active clip params, so play() looks up by name
-//      and writes start_frame/frame_count/fps/looping/start_time.
-//
-// 5. Editor (properties/sprite.rs):
-//    - UI for InstancedSpriteAnimator: cell_size, columns, clip list.
-//    - Same clip editing as SpriteAnimatorComponent.
-//    - Entities with this component skip the timeline panel (no
-//      per-frame state to scrub).
-//
-// 6. for_each_cloneable_component! macro (mod.rs):
-//    - Add InstancedSpriteAnimator to the clone list.
-//
-// TODO(perf): GPU-computed animation — move the frame-to-UV calculation
-// into the instance vertex shader. Add animation fields to SpriteInstanceData
-// (start_time, fps, start_frame, frame_count, columns, cell_size, tex_size)
-// and a u_time uniform to the camera UBO. The vertex shader computes:
-//   uint frame = start_frame + uint(floor((u_time - start_time) * fps)) % frame_count;
-//   uint col = frame % columns; uint row = frame / columns;
-//   vec2 uv_min = vec2(col, row) * cell_size / tex_size;
-// This eliminates ALL CPU animation work, even during batching.
+// GPU-computed animation: when playing, the vertex shader computes UVs
+// from u_time + per-instance animation params. See instance.glsl.
 // ==========================================================================
 
 /// Lightweight animation component for mass-instanced sprites.
@@ -342,11 +298,20 @@ pub struct InstancedSpriteAnimator {
     pub cell_size: Vec2,
     /// Number of columns in the sprite sheet grid.
     pub columns: u32,
+    /// Animation clips defined for this sprite sheet.
+    pub clips: Vec<AnimationClip>,
+    /// Name of the default/idle clip. Played on create and when a
+    /// non-looping clip finishes (if set).
+    pub default_clip: String,
+    /// Playback speed multiplier (1.0 = normal, 0.5 = half, 2.0 = double).
+    pub speed_scale: f32,
+
+    // -- Active clip parameters (written by play/play_by_name) --
     /// First frame index of the current clip (0-based, row-major).
     pub start_frame: u32,
     /// Number of frames in the current clip.
     pub frame_count: u32,
-    /// Playback speed in frames per second.
+    /// Playback speed in frames per second (from clip definition).
     pub fps: f32,
     /// Whether the current clip loops.
     pub looping: bool,
@@ -354,6 +319,8 @@ pub struct InstancedSpriteAnimator {
     pub start_time: f64,
     /// Whether the animator is actively playing.
     pub playing: bool,
+    /// Index of the currently playing clip in `clips`, or `None`.
+    pub(crate) current_clip_index: Option<usize>,
     /// Optional per-clip texture asset handle. 0 = use sprite's texture.
     pub texture_handle: Uuid,
     /// Runtime-only loaded texture. Not serialized.
@@ -361,17 +328,24 @@ pub struct InstancedSpriteAnimator {
 }
 
 impl InstancedSpriteAnimator {
+    /// Effective fps accounting for speed_scale.
+    #[inline]
+    pub fn effective_fps(&self) -> f64 {
+        self.fps as f64 * self.speed_scale as f64
+    }
+
     /// Compute the current frame index using stateless math.
     ///
     /// Returns `None` if not playing or `frame_count` is zero.
     #[inline]
     pub fn current_frame(&self, global_time: f64) -> Option<u32> {
-        if !self.playing || self.frame_count == 0 || self.fps <= 0.0 {
+        let efps = self.effective_fps();
+        if !self.playing || self.frame_count == 0 || efps <= 0.0 {
             return None;
         }
 
         let elapsed = (global_time - self.start_time).max(0.0);
-        let frame_in_clip = (elapsed * self.fps as f64).floor() as u32;
+        let frame_in_clip = (elapsed * efps).floor() as u32;
 
         if self.looping {
             Some(self.start_frame + frame_in_clip % self.frame_count)
@@ -385,11 +359,12 @@ impl InstancedSpriteAnimator {
     /// Returns `true` if a non-looping clip has finished at `global_time`.
     #[inline]
     pub fn is_finished(&self, global_time: f64) -> bool {
-        if !self.playing || self.looping || self.frame_count == 0 || self.fps <= 0.0 {
+        let efps = self.effective_fps();
+        if !self.playing || self.looping || self.frame_count == 0 || efps <= 0.0 {
             return false;
         }
         let elapsed = (global_time - self.start_time).max(0.0);
-        let frame_in_clip = (elapsed * self.fps as f64).floor() as u32;
+        let frame_in_clip = (elapsed * efps).floor() as u32;
         frame_in_clip >= self.frame_count
     }
 
@@ -403,7 +378,33 @@ impl InstancedSpriteAnimator {
         Some((frame % self.columns, frame / self.columns))
     }
 
-    /// Start playing a clip. Only writes fields — no per-frame cost.
+    /// Play a clip by name. Returns `true` if the clip was found.
+    ///
+    /// Looks up the clip in `clips`, copies its parameters to the active
+    /// fields, and records `global_time` as the start time.
+    pub fn play_by_name(&mut self, name: &str, global_time: f64) -> bool {
+        if let Some(index) = self.clips.iter().position(|c| c.name == name) {
+            // Only reset if switching to a different clip.
+            if self.current_clip_index != Some(index) {
+                let clip = &self.clips[index];
+                self.start_frame = clip.start_frame;
+                self.frame_count = clip.end_frame - clip.start_frame + 1;
+                self.fps = clip.fps;
+                self.looping = clip.looping;
+                self.texture_handle = clip.texture_handle;
+                self.texture = clip.texture.clone();
+                self.start_time = global_time;
+                self.current_clip_index = Some(index);
+            }
+            self.playing = true;
+            true
+        } else {
+            log::warn!("InstancedSpriteAnimator: clip '{}' not found", name);
+            false
+        }
+    }
+
+    /// Start playing a clip by raw parameters. Only writes fields — no per-frame cost.
     pub fn play(
         &mut self,
         start_frame: u32,
@@ -417,12 +418,24 @@ impl InstancedSpriteAnimator {
         self.fps = fps;
         self.looping = looping;
         self.start_time = global_time;
+        self.current_clip_index = None;
         self.playing = true;
     }
 
     /// Stop playback.
     pub fn stop(&mut self) {
         self.playing = false;
+    }
+
+    /// Returns the name of the currently playing clip, or `None`.
+    pub fn current_clip_name(&self) -> Option<&str> {
+        let idx = self.current_clip_index?;
+        self.clips.get(idx).map(|c| c.name.as_str())
+    }
+
+    /// Returns the current clip's per-clip texture, if any.
+    pub fn current_clip_texture(&self) -> Option<&Ref<Texture2D>> {
+        self.texture.as_ref()
     }
 }
 
@@ -431,15 +444,124 @@ impl Default for InstancedSpriteAnimator {
         Self {
             cell_size: Vec2::new(32.0, 32.0),
             columns: 1,
+            clips: Vec::new(),
+            default_clip: String::new(),
+            speed_scale: 1.0,
             start_frame: 0,
             frame_count: 0,
             fps: 12.0,
             looping: true,
             start_time: 0.0,
             playing: false,
+            current_clip_index: None,
             texture_handle: Uuid::from_raw(0),
             texture: None,
         }
+    }
+}
+
+// ==========================================================================
+// Animation state machine / controller
+//
+// Data-driven transitions between animation clips. Works alongside
+// SpriteAnimatorComponent — the controller evaluates transition rules
+// each frame and calls play() on the animator when a transition fires.
+//
+// Lua scripts set parameters (bool/float) and the engine evaluates
+// transitions automatically, replacing manual if/elseif chains.
+// ==========================================================================
+
+/// Ordering comparison for float parameter conditions.
+#[derive(Clone, Debug, PartialEq)]
+pub enum FloatOrdering {
+    Greater,
+    Less,
+    GreaterOrEqual,
+    LessOrEqual,
+}
+
+/// Condition that triggers an animation transition.
+#[derive(Clone, Debug)]
+pub enum TransitionCondition {
+    /// Transition fires when the current clip finishes (non-looping only).
+    OnFinished,
+    /// Transition fires when a bool parameter matches the expected value.
+    ParamBool(String, bool),
+    /// Transition fires when a float parameter satisfies the comparison.
+    ParamFloat(String, FloatOrdering, f32),
+}
+
+/// A single transition rule between animation clips.
+#[derive(Clone, Debug)]
+pub struct AnimationTransition {
+    /// Source clip name. Empty string means "any state".
+    pub from: String,
+    /// Target clip name to transition to.
+    pub to: String,
+    /// Condition that must be met for the transition to fire.
+    pub condition: TransitionCondition,
+}
+
+/// Data-driven animation controller that evaluates transitions between clips.
+///
+/// Attach this alongside a [`SpriteAnimatorComponent`] to get automatic
+/// clip transitions based on parameter values. Lua scripts set parameters
+/// via `Engine.set_anim_param(entity_id, name, value)` and the engine
+/// evaluates transitions each frame.
+///
+/// Transitions are evaluated in order — the first matching transition wins.
+#[derive(Clone, Default)]
+pub struct AnimationControllerComponent {
+    /// Ordered list of transition rules. First match wins.
+    pub transitions: Vec<AnimationTransition>,
+    /// Named boolean parameters set by gameplay code.
+    pub bool_params: HashMap<String, bool>,
+    /// Named float parameters set by gameplay code.
+    pub float_params: HashMap<String, f32>,
+}
+
+impl AnimationControllerComponent {
+    /// Evaluate transitions against the currently playing clip.
+    ///
+    /// Returns the name of the target clip if a transition fires, or `None`.
+    /// `current_clip` is the name of the currently playing clip (or `None` if stopped).
+    /// `clip_finished` is `true` if the current non-looping clip just finished.
+    pub fn evaluate(
+        &self,
+        current_clip: Option<&str>,
+        clip_finished: bool,
+    ) -> Option<&str> {
+        for t in &self.transitions {
+            // Check "from" constraint.
+            if !t.from.is_empty() {
+                match current_clip {
+                    Some(name) if name == t.from => {}
+                    _ => continue,
+                }
+            }
+
+            // Check condition.
+            let fires = match &t.condition {
+                TransitionCondition::OnFinished => clip_finished,
+                TransitionCondition::ParamBool(name, expected) => {
+                    self.bool_params.get(name).copied().unwrap_or(false) == *expected
+                }
+                TransitionCondition::ParamFloat(name, ordering, threshold) => {
+                    let val = self.float_params.get(name).copied().unwrap_or(0.0);
+                    match ordering {
+                        FloatOrdering::Greater => val > *threshold,
+                        FloatOrdering::Less => val < *threshold,
+                        FloatOrdering::GreaterOrEqual => val >= *threshold,
+                        FloatOrdering::LessOrEqual => val <= *threshold,
+                    }
+                }
+            };
+
+            if fires {
+                return Some(&t.to);
+            }
+        }
+        None
     }
 }
 
@@ -562,6 +684,26 @@ mod tests {
         InstancedSpriteAnimator {
             cell_size: Vec2::new(32.0, 32.0),
             columns: 4,
+            clips: vec![
+                AnimationClip {
+                    name: "idle".into(),
+                    start_frame: 0,
+                    end_frame: 3,
+                    fps: 10.0,
+                    looping: true,
+                    ..Default::default()
+                },
+                AnimationClip {
+                    name: "attack".into(),
+                    start_frame: 4,
+                    end_frame: 7,
+                    fps: 10.0,
+                    looping: false,
+                    ..Default::default()
+                },
+            ],
+            default_clip: "idle".into(),
+            speed_scale: 1.0,
             start_frame: 0,
             frame_count: 4,
             fps: 10.0,
@@ -634,5 +776,182 @@ mod tests {
         assert_eq!(anim.current_grid_coords(0.0), Some((0, 1)));
         // At t=0.15, frame = 4 + 1 = 5 → (1, 1)
         assert_eq!(anim.current_grid_coords(0.15), Some((1, 1)));
+    }
+
+    #[test]
+    fn instanced_play_by_name() {
+        let mut anim = make_instanced_animator();
+        assert!(anim.play_by_name("attack", 1.0));
+        assert_eq!(anim.start_frame, 4);
+        assert_eq!(anim.frame_count, 4);
+        assert!(!anim.looping);
+        assert_eq!(anim.current_clip_index, Some(1));
+        // At t=1.15 → elapsed=0.15 → frame 5
+        assert_eq!(anim.current_frame(1.15), Some(5));
+    }
+
+    #[test]
+    fn instanced_play_by_name_unknown() {
+        let mut anim = make_instanced_animator();
+        assert!(!anim.play_by_name("nonexistent", 0.0));
+    }
+
+    #[test]
+    fn instanced_speed_scale() {
+        let mut anim = make_instanced_animator();
+        anim.speed_scale = 2.0;
+        // fps=10 * speed_scale=2 = 20 effective fps
+        // At t=0.05 → elapsed=0.05 → floor(0.05*20) = 1
+        assert_eq!(anim.current_frame(0.05), Some(1));
+    }
+
+    #[test]
+    fn instanced_speed_scale_half() {
+        let mut anim = make_instanced_animator();
+        anim.speed_scale = 0.5;
+        // fps=10 * speed_scale=0.5 = 5 effective fps
+        // At t=0.15 → floor(0.15*5) = 0
+        assert_eq!(anim.current_frame(0.15), Some(0));
+        // At t=0.25 → floor(0.25*5) = 1
+        assert_eq!(anim.current_frame(0.25), Some(1));
+    }
+
+    #[test]
+    fn instanced_clip_name() {
+        let mut anim = make_instanced_animator();
+        assert_eq!(anim.current_clip_name(), None);
+        anim.play_by_name("idle", 0.0);
+        assert_eq!(anim.current_clip_name(), Some("idle"));
+    }
+
+    // -----------------------------------------------------------------------
+    // AnimationControllerComponent tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn controller_param_bool_transition() {
+        let ctrl = AnimationControllerComponent {
+            transitions: vec![
+                AnimationTransition {
+                    from: "idle".into(),
+                    to: "walk".into(),
+                    condition: TransitionCondition::ParamBool("moving".into(), true),
+                },
+            ],
+            bool_params: [("moving".into(), true)].into_iter().collect(),
+            float_params: HashMap::new(),
+        };
+        assert_eq!(ctrl.evaluate(Some("idle"), false), Some("walk"));
+    }
+
+    #[test]
+    fn controller_param_bool_no_match() {
+        let ctrl = AnimationControllerComponent {
+            transitions: vec![
+                AnimationTransition {
+                    from: "idle".into(),
+                    to: "walk".into(),
+                    condition: TransitionCondition::ParamBool("moving".into(), true),
+                },
+            ],
+            bool_params: [("moving".into(), false)].into_iter().collect(),
+            float_params: HashMap::new(),
+        };
+        assert_eq!(ctrl.evaluate(Some("idle"), false), None);
+    }
+
+    #[test]
+    fn controller_on_finished_transition() {
+        let ctrl = AnimationControllerComponent {
+            transitions: vec![
+                AnimationTransition {
+                    from: "attack".into(),
+                    to: "idle".into(),
+                    condition: TransitionCondition::OnFinished,
+                },
+            ],
+            bool_params: HashMap::new(),
+            float_params: HashMap::new(),
+        };
+        // Not finished yet.
+        assert_eq!(ctrl.evaluate(Some("attack"), false), None);
+        // Finished.
+        assert_eq!(ctrl.evaluate(Some("attack"), true), Some("idle"));
+    }
+
+    #[test]
+    fn controller_float_param_transition() {
+        let ctrl = AnimationControllerComponent {
+            transitions: vec![
+                AnimationTransition {
+                    from: String::new(), // any state
+                    to: "run".into(),
+                    condition: TransitionCondition::ParamFloat(
+                        "speed".into(),
+                        FloatOrdering::Greater,
+                        5.0,
+                    ),
+                },
+            ],
+            bool_params: HashMap::new(),
+            float_params: [("speed".into(), 6.0)].into_iter().collect(),
+        };
+        assert_eq!(ctrl.evaluate(Some("walk"), false), Some("run"));
+    }
+
+    #[test]
+    fn controller_any_state_transition() {
+        let ctrl = AnimationControllerComponent {
+            transitions: vec![
+                AnimationTransition {
+                    from: String::new(), // any state
+                    to: "death".into(),
+                    condition: TransitionCondition::ParamBool("dead".into(), true),
+                },
+            ],
+            bool_params: [("dead".into(), true)].into_iter().collect(),
+            float_params: HashMap::new(),
+        };
+        assert_eq!(ctrl.evaluate(Some("walk"), false), Some("death"));
+        assert_eq!(ctrl.evaluate(Some("idle"), false), Some("death"));
+        assert_eq!(ctrl.evaluate(None, false), Some("death"));
+    }
+
+    #[test]
+    fn controller_first_match_wins() {
+        let ctrl = AnimationControllerComponent {
+            transitions: vec![
+                AnimationTransition {
+                    from: String::new(),
+                    to: "first".into(),
+                    condition: TransitionCondition::ParamBool("a".into(), true),
+                },
+                AnimationTransition {
+                    from: String::new(),
+                    to: "second".into(),
+                    condition: TransitionCondition::ParamBool("a".into(), true),
+                },
+            ],
+            bool_params: [("a".into(), true)].into_iter().collect(),
+            float_params: HashMap::new(),
+        };
+        assert_eq!(ctrl.evaluate(Some("idle"), false), Some("first"));
+    }
+
+    #[test]
+    fn controller_wrong_from_state() {
+        let ctrl = AnimationControllerComponent {
+            transitions: vec![
+                AnimationTransition {
+                    from: "idle".into(),
+                    to: "walk".into(),
+                    condition: TransitionCondition::ParamBool("moving".into(), true),
+                },
+            ],
+            bool_params: [("moving".into(), true)].into_iter().collect(),
+            float_params: HashMap::new(),
+        };
+        // Current clip is "run", not "idle" — transition should not fire.
+        assert_eq!(ctrl.evaluate(Some("run"), false), None);
     }
 }
