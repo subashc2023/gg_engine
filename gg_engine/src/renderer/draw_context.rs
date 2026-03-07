@@ -9,4 +9,8 @@ pub(crate) struct DrawContext {
     pub cmd_buf: vk::CommandBuffer,
     pub extent: vk::Extent2D,
     pub current_frame: usize,
+    /// Which viewport is being rendered (0..MAX_VIEWPORTS).
+    /// Used to select the correct camera UBO slot so multiple viewports
+    /// don't overwrite each other's VP data within the same frame.
+    pub viewport_index: usize,
 }

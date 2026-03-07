@@ -22,7 +22,9 @@ use transform_gizmo_egui::Gizmo;
 use editor_settings::EditorSettings;
 use gizmo::GizmoOperation;
 use panels::content_browser::{render_dnd_ghost, ASSETS_DIR};
-use panels::{EditorTabViewer, ProjectContext, Tab, TilesetPreviewInfo, ViewportState};
+use panels::{
+    EditorTabViewer, GameViewportState, ProjectContext, Tab, TilesetPreviewInfo, ViewportState,
+};
 
 // ---------------------------------------------------------------------------
 // Scene state (edit vs play mode)
@@ -103,6 +105,11 @@ struct ViewportInfo {
     hovered: bool,
     mouse_pos: Option<(f32, f32)>,
     hovered_entity: i32,
+    // Game camera viewport (lazy — created on first enable)
+    game_fb: Option<Framebuffer>,
+    game_size: (u32, u32),
+    game_hovered: bool,
+    game_viewport_enabled: bool,
 }
 
 /// Transform gizmo tool configuration and drag state.
@@ -159,6 +166,8 @@ struct UiState {
     reload_shaders_requested: bool,
     /// UUID of the entity last copied via Ctrl+C. Used by Ctrl+V to duplicate.
     clipboard_entity_uuid: Option<u64>,
+    /// Deferred game viewport framebuffer creation (set in on_egui, consumed in on_render).
+    create_game_fb: bool,
 }
 
 // ---------------------------------------------------------------------------
@@ -304,11 +313,16 @@ impl Application for GGEditor {
         let initial_cam_state = editor_settings.camera_state.clone();
 
         // Restore dock layout from settings, or build default layout.
-        let dock_state = if let Some(saved) = editor_settings.dock_layout.take() {
+        let mut dock_state = if let Some(saved) = editor_settings.dock_layout.take() {
             saved
         } else {
             Self::default_dock_layout()
         };
+        // If saved layout contains GameViewport from a previous session, remove it.
+        // The user re-enables it via View > Game Viewport.
+        if let Some((s, n, t)) = dock_state.find_tab(&Tab::GameViewport) {
+            dock_state[s][n].remove_tab(t);
+        }
 
         GGEditor {
             editor_mode,
@@ -337,6 +351,7 @@ impl Application for GGEditor {
                 hierarchy_filter: String::new(),
                 reload_shaders_requested: false,
                 clipboard_entity_uuid: None,
+                create_game_fb: false,
             },
             viewport: ViewportInfo {
                 scene_fb: None,
@@ -345,6 +360,10 @@ impl Application for GGEditor {
                 hovered: false,
                 mouse_pos: None,
                 hovered_entity: -1,
+                game_fb: None,
+                game_size: (0, 0),
+                game_hovered: false,
+                game_viewport_enabled: false,
             },
             playback: PlaybackState {
                 scene_state: SceneState::Edit,
@@ -411,6 +430,7 @@ impl Application for GGEditor {
             Ok(fb) => self.viewport.scene_fb = Some(fb),
             Err(e) => warn!("Failed to create scene framebuffer: {e}"),
         }
+        // Game viewport FB created lazily when enabled via View menu.
     }
 
     fn scene_framebuffer(&self) -> Option<&Framebuffer> {
@@ -426,6 +446,62 @@ impl Application for GGEditor {
             Some(self.viewport.size)
         } else {
             None
+        }
+    }
+
+    // --- Multi-viewport ---
+
+    fn viewport_count(&self) -> usize {
+        let mut count = 0;
+        if self.viewport.scene_fb.is_some() {
+            count += 1;
+        }
+        if self.viewport.game_viewport_enabled && self.viewport.game_fb.is_some() {
+            count += 1;
+        }
+        count
+    }
+
+    fn viewport_framebuffer(&self, index: usize) -> Option<&Framebuffer> {
+        match index {
+            0 => self.viewport.scene_fb.as_ref(),
+            1 => self.viewport.game_fb.as_ref(),
+            _ => None,
+        }
+    }
+
+    fn viewport_framebuffer_mut(&mut self, index: usize) -> Option<&mut Framebuffer> {
+        match index {
+            0 => self.viewport.scene_fb.as_mut(),
+            1 => self.viewport.game_fb.as_mut(),
+            _ => None,
+        }
+    }
+
+    fn viewport_desired_size(&self, index: usize) -> Option<(u32, u32)> {
+        let (w, h) = match index {
+            0 => self.viewport.size,
+            1 => self.viewport.game_size,
+            _ => return None,
+        };
+        if w > 0 && h > 0 {
+            Some((w, h))
+        } else {
+            None
+        }
+    }
+
+    fn on_render_viewport(&mut self, renderer: &mut Renderer, viewport_index: usize) {
+        match viewport_index {
+            0 => {
+                // Editor viewport — full render + overlays (existing on_render logic)
+                self.on_render(renderer);
+            }
+            1 => {
+                // Game viewport — always render from game camera perspective
+                self.render_game_viewport(renderer);
+            }
+            _ => {}
         }
     }
 
@@ -711,6 +787,24 @@ impl Application for GGEditor {
 
     fn on_render(&mut self, renderer: &mut Renderer) {
         profile_scope!("GGEditor::on_render");
+
+        // Deferred game viewport framebuffer creation (toggled from View menu).
+        if self.ui.create_game_fb && self.viewport.game_fb.is_none() {
+            self.ui.create_game_fb = false;
+            match renderer.create_framebuffer(FramebufferSpec {
+                width: 800,
+                height: 600,
+                attachments: vec![
+                    FramebufferTextureFormat::RGBA8.into(),
+                    FramebufferTextureFormat::RedInteger.into(),
+                    FramebufferTextureFormat::Depth.into(),
+                ],
+            }) {
+                Ok(fb) => self.viewport.game_fb = Some(fb),
+                Err(e) => warn!("Failed to create game framebuffer: {e}"),
+            }
+        }
+
         // Drop old scenes that may hold GPU resources (textures). We must
         // wait for all in-flight GPU work to finish before destroying them,
         // since previous frames' command buffers may still reference them.
@@ -956,6 +1050,12 @@ impl Application for GGEditor {
             .as_ref()
             .and_then(|fb| fb.egui_texture_id());
 
+        let game_fb_tex_id = self
+            .viewport
+            .game_fb
+            .as_ref()
+            .and_then(|fb| fb.egui_texture_id());
+
         let mut dock_style = egui_dock::Style::from_egui(ctx.style().as_ref());
 
         // Tab bar background and separator line.
@@ -1058,6 +1158,11 @@ impl Application for GGEditor {
                     snap_to_grid: current_snap_to_grid,
                     grid_size: current_grid_size,
                     gizmo_local: &mut self.gizmo_state.local,
+                },
+                game_viewport: GameViewportState {
+                    size: &mut self.viewport.game_size,
+                    hovered: &mut self.viewport.game_hovered,
+                    fb_tex_id: game_fb_tex_id,
                 },
                 project: ProjectContext {
                     assets_root: &self.project_state.assets_root,
@@ -1252,6 +1357,16 @@ impl GGEditor {
         let [left_sidebar, _viewport] = surface.split_right(top_left, 0.20, vec![Tab::Viewport]);
         surface.split_below(left_sidebar, 0.5, vec![Tab::Settings]);
         dock_state
+    }
+
+    /// Render the game camera viewport (viewport index 1).
+    /// Always uses the scene's primary camera, regardless of editor mode.
+    fn render_game_viewport(&mut self, renderer: &mut Renderer) {
+        if self.editor_mode == EditorMode::Hub {
+            return;
+        }
+        // The game viewport always renders from the primary camera's perspective.
+        self.scene.on_update_runtime(renderer);
     }
 
     fn on_overlay_render(&self, renderer: &mut Renderer) {

@@ -1,6 +1,7 @@
 pub(crate) mod animation_timeline;
 mod console;
 pub(crate) mod content_browser;
+pub(crate) mod game_viewport;
 pub(crate) mod project;
 pub(crate) mod properties;
 pub(crate) mod scene_hierarchy;
@@ -102,6 +103,7 @@ pub(crate) fn tile_uv_max(
 pub(crate) enum Tab {
     SceneHierarchy,
     Viewport,
+    GameViewport,
     Properties,
     ContentBrowser,
     Settings,
@@ -131,6 +133,13 @@ pub(crate) struct ViewportState<'a> {
     pub(crate) snap_to_grid: bool,
     pub(crate) grid_size: f32,
     pub(crate) gizmo_local: &'a mut bool,
+}
+
+/// Game viewport state (game camera preview).
+pub(crate) struct GameViewportState<'a> {
+    pub(crate) size: &'a mut (u32, u32),
+    pub(crate) hovered: &'a mut bool,
+    pub(crate) fb_tex_id: Option<egui::TextureId>,
 }
 
 /// Project and asset context shared across content browser, properties, project panels.
@@ -167,6 +176,7 @@ pub(crate) struct EditorTabViewer<'a> {
     pub(crate) theme: &'a mut EditorTheme,
     pub(crate) reload_shaders_requested: &'a mut bool,
     pub(crate) viewport: ViewportState<'a>,
+    pub(crate) game_viewport: GameViewportState<'a>,
     pub(crate) project: ProjectContext<'a>,
     pub(crate) hierarchy_action: &'a mut Option<scene_hierarchy::HierarchyExternalAction>,
 }
@@ -187,6 +197,7 @@ impl egui_dock::TabViewer for EditorTabViewer<'_> {
         match tab {
             Tab::SceneHierarchy => "Scene Hierarchy".into(),
             Tab::Viewport => "Viewport".into(),
+            Tab::GameViewport => "Game".into(),
             Tab::Properties => "Properties".into(),
             Tab::ContentBrowser => "Content Browser".into(),
             Tab::Settings => "Settings".into(),
@@ -237,6 +248,15 @@ impl egui_dock::TabViewer for EditorTabViewer<'_> {
                     self.viewport.snap_to_grid,
                     self.viewport.grid_size,
                     self.viewport.gizmo_local,
+                );
+            }
+
+            Tab::GameViewport => {
+                game_viewport::game_viewport_ui(
+                    ui,
+                    self.game_viewport.size,
+                    self.game_viewport.hovered,
+                    self.game_viewport.fb_tex_id,
                 );
             }
 
@@ -326,7 +346,7 @@ impl egui_dock::TabViewer for EditorTabViewer<'_> {
     }
 
     fn clear_background(&self, tab: &Tab) -> bool {
-        !matches!(tab, Tab::Viewport)
+        !matches!(tab, Tab::Viewport | Tab::GameViewport)
     }
 
     fn scroll_bars(&self, tab: &Tab) -> [bool; 2] {

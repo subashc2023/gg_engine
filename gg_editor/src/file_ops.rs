@@ -4,6 +4,7 @@ use gg_engine::egui;
 use gg_engine::prelude::*;
 
 
+use super::panels::Tab;
 use super::{panels, EditorMode, GGEditor, SceneState};
 
 impl GGEditor {
@@ -141,6 +142,12 @@ impl GGEditor {
                 ui.close();
             }
             ui.separator();
+            let mut game_vp = self.viewport.game_viewport_enabled;
+            if ui.checkbox(&mut game_vp, "Game Viewport").clicked() {
+                self.toggle_game_viewport();
+                ui.close();
+            }
+            ui.separator();
             if ui.button("Reset Layout").clicked() {
                 self.ui.dock_state = Self::default_dock_layout();
                 ui.close();
@@ -163,6 +170,29 @@ impl GGEditor {
                 ui.close();
             }
         });
+    }
+
+    pub(super) fn toggle_game_viewport(&mut self) {
+        self.viewport.game_viewport_enabled = !self.viewport.game_viewport_enabled;
+        if self.viewport.game_viewport_enabled {
+            // Defer framebuffer creation to on_render (needs renderer access).
+            if self.viewport.game_fb.is_none() {
+                self.ui.create_game_fb = true;
+            }
+            // Add the Game tab next to the Viewport tab if not already present.
+            if self.ui.dock_state.find_tab(&Tab::GameViewport).is_none() {
+                if let Some((surface, node, _)) = self.ui.dock_state.find_tab(&Tab::Viewport) {
+                    self.ui.dock_state[surface][node].append_tab(Tab::GameViewport);
+                } else {
+                    self.ui.dock_state.push_to_first_leaf(Tab::GameViewport);
+                }
+            }
+        } else {
+            // Remove the Game tab from the dock.
+            if let Some((surface, node, tab)) = self.ui.dock_state.find_tab(&Tab::GameViewport) {
+                self.ui.dock_state[surface][node].remove_tab(tab);
+            }
+        }
     }
 
     pub(super) fn new_scene(&mut self) {

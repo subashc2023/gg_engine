@@ -75,6 +75,11 @@ use ash::vk;
 /// use this single constant to stay in sync.
 pub(crate) const MAX_FRAMES_IN_FLIGHT: usize = 2;
 
+/// Maximum number of viewports (offscreen framebuffers) that can be rendered
+/// per frame. Each viewport gets its own camera UBO slot to avoid conflicts
+/// when multiple viewports render in the same command buffer.
+pub(crate) const MAX_VIEWPORTS: usize = 4;
+
 // ---------------------------------------------------------------------------
 // PresentMode
 // ---------------------------------------------------------------------------
