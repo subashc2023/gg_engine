@@ -1562,7 +1562,7 @@ mod tests {
             SceneSerializer::deserialize_from_string(&mut scene, yaml),
             "Failed to deserialize audio_test scene"
         );
-        assert_eq!(scene.entity_count(), 7);
+        assert_eq!(scene.entity_count(), 11);
 
         let entities = scene.each_entity_with_tag();
 
@@ -1584,6 +1584,35 @@ mod tests {
         assert!(!ac2.looping);
         assert!((ac2.pitch - 1.5).abs() < 0.001);
         assert!((ac2.volume - 0.3).abs() < 0.001);
+
+        // Verify spatial audio entity.
+        let (spatial_ent, _) = entities.iter().find(|(_, n)| n == "Spatial Source").unwrap();
+        let ac3 = scene
+            .get_component::<crate::scene::AudioSourceComponent>(*spatial_ent)
+            .unwrap();
+        assert!(ac3.spatial);
+        assert!(ac3.play_on_start);
+        assert!(ac3.looping);
+        assert!((ac3.min_distance - 2.0).abs() < 0.001);
+        assert!((ac3.max_distance - 15.0).abs() < 0.001);
+        assert!((ac3.pitch - 0.8).abs() < 0.001);
+
+        // Verify streaming audio entity.
+        let (stream_ent, _) = entities.iter().find(|(_, n)| n == "Streaming Source").unwrap();
+        let ac4 = scene
+            .get_component::<crate::scene::AudioSourceComponent>(*stream_ent)
+            .unwrap();
+        assert!(ac4.streaming);
+        assert!(ac4.play_on_start);
+        assert!(ac4.looping);
+        assert!((ac4.volume - 0.5).abs() < 0.001);
+
+        // Verify audio listener on camera.
+        let (cam_ent, _) = entities.iter().find(|(_, n)| n == "Camera").unwrap();
+        let listener = scene
+            .get_component::<crate::scene::AudioListenerComponent>(*cam_ent)
+            .unwrap();
+        assert!(listener.active);
     }
 
     #[test]

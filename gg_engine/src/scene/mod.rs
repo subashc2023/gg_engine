@@ -2175,7 +2175,14 @@ impl Scene {
         let vp_inv = renderer.view_projection().inverse();
 
         // Render in sorted order.
+        // Flush all pending batches when the renderable type changes so that
+        // cross-type draw ordering (e.g. text behind a sprite) is respected.
+        let mut prev_kind: u8 = u8::MAX;
         for &(_, _, _, kind, handle) in &renderables {
+            if kind != prev_kind {
+                renderer.flush_all_batches();
+                prev_kind = kind;
+            }
             let world_transform = wt_cache
                 .get(&handle)
                 .copied()

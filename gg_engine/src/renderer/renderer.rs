@@ -695,6 +695,54 @@ impl Renderer {
         );
     }
 
+    /// Flush all pending batches (quads, circles, lines, text, instances).
+    ///
+    /// Used by [`Scene::render_scene`](crate::scene::Scene) to ensure correct
+    /// cross-type draw ordering when the renderable type changes during sorted
+    /// iteration. Empty batches are no-ops.
+    pub fn flush_all_batches(&self) {
+        if let Some(data) = &self.renderer_2d {
+            if let Some(ctx) = self.draw_context {
+                if data.has_pending_quads() {
+                    data.flush_quads(
+                        ctx.cmd_buf,
+                        self.camera_ubo_ds[ctx.current_frame],
+                        ctx.current_frame,
+                    );
+                }
+                if data.has_pending_circles() {
+                    data.flush_circles(
+                        ctx.cmd_buf,
+                        self.camera_ubo_ds[ctx.current_frame],
+                        ctx.current_frame,
+                    );
+                }
+                if data.has_pending_lines() {
+                    data.flush_lines(
+                        ctx.cmd_buf,
+                        self.camera_ubo_ds[ctx.current_frame],
+                        ctx.current_frame,
+                        self.line_width,
+                    );
+                }
+                if data.has_pending_text() {
+                    data.flush_text(
+                        ctx.cmd_buf,
+                        self.camera_ubo_ds[ctx.current_frame],
+                        ctx.current_frame,
+                    );
+                }
+                if data.has_pending_instances() {
+                    data.flush_instances(
+                        ctx.cmd_buf,
+                        self.camera_ubo_ds[ctx.current_frame],
+                        ctx.current_frame,
+                    );
+                }
+            }
+        }
+    }
+
     // -- Internal: push a sprite instance into the instanced batch -----------
 
     fn push_sprite_instance(

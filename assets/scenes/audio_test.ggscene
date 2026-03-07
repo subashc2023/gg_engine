@@ -28,6 +28,8 @@ Entities:
       OrthographicFar: 1.0
     Primary: true
     FixedAspectRatio: false
+  AudioListenerComponent:
+    Active: true
 
 # ── Audio Entity (manual play via Lua) ────────────────────────
 # Uses test_tone.wav (handle 1001). Script controls playback.
@@ -93,7 +95,78 @@ Entities:
     Volume: 0.3
     Pitch: 1.5
     Looping: false
-    PlayOnStart: true
+    PlayOnStart: false
+
+# ── Spatial Audio Entity (orbiting) ───────────────────────────
+# Spatial sound positioned to the right. Panning and volume
+# computed from distance to the AudioListener (camera).
+- Entity: 350
+  TagComponent:
+    Tag: Spatial Source
+  TransformComponent:
+    Translation:
+    - 6.0
+    - 0.0
+    - 0.0
+    Rotation:
+    - 0.0
+    - 0.0
+    - 0.0
+    Scale:
+    - 0.6
+    - 0.6
+    - 1.0
+  CircleRendererComponent:
+    Color:
+    - 0.2
+    - 0.9
+    - 0.4
+    - 1.0
+    Thickness: 1.0
+    Fade: 0.005
+  AudioSourceComponent:
+    AudioHandle: 1001
+    Volume: 0.8
+    Pitch: 0.8
+    Looping: true
+    PlayOnStart: false
+    Spatial: true
+    MinDistance: 2.0
+    MaxDistance: 15.0
+
+# ── Streaming Audio Entity ────────────────────────────────────
+# Uses streaming playback (decode from disk gradually).
+# Better for long music tracks.
+- Entity: 370
+  TagComponent:
+    Tag: Streaming Source
+  TransformComponent:
+    Translation:
+    - -3.0
+    - 0.0
+    - 0.0
+    Rotation:
+    - 0.0
+    - 0.0
+    - 0.0
+    Scale:
+    - 0.5
+    - 0.5
+    - 1.0
+  SpriteRendererComponent:
+    Color:
+    - 0.8
+    - 0.2
+    - 0.8
+    - 1.0
+    TilingFactor: 1.0
+  AudioSourceComponent:
+    AudioHandle: 1001
+    Volume: 0.5
+    Pitch: 1.0
+    Looping: true
+    PlayOnStart: false
+    Streaming: true
 
 # ── Controls Label ────────────────────────────────────────────
 - Entity: 400
@@ -113,7 +186,7 @@ Entities:
     - 1.0
     - 1.0
   TextComponent:
-    Text: 'Audio Test: P=play  S=stop  Up/Down=volume'
+    Text: '1-4=toggle sources  S=stop all  Up/Down=volume'
     FontPath: assets/fonts/JetBrainsMono-Regular.ttf
     FontSize: 0.5
     Color:
@@ -142,7 +215,7 @@ Entities:
     - 1.0
     - 1.0
   TextComponent:
-    Text: 'Lua-controlled (looping)'
+    Text: '[1] Lua-controlled (looping)'
     FontPath: assets/fonts/JetBrainsMono-Regular.ttf
     FontSize: 0.3
     Color:
@@ -171,13 +244,71 @@ Entities:
     - 1.0
     - 1.0
   TextComponent:
-    Text: 'Auto-play (one-shot, 1.5x pitch)'
+    Text: '[2] One-shot (1.5x pitch)'
     FontPath: assets/fonts/JetBrainsMono-Regular.ttf
     FontSize: 0.3
     Color:
     - 1.0
     - 0.6
     - 0.3
+    - 1.0
+    LineSpacing: 1.0
+    Kerning: 0.0
+
+# ── Spatial label ─────────────────────────────────────────────
+- Entity: 650
+  TagComponent:
+    Tag: Spatial Label
+  TransformComponent:
+    Translation:
+    - 4.5
+    - -1.5
+    - 0.0
+    Rotation:
+    - 0.0
+    - 0.0
+    - 0.0
+    Scale:
+    - 1.0
+    - 1.0
+    - 1.0
+  TextComponent:
+    Text: '[3] Spatial (3D panning)'
+    FontPath: assets/fonts/JetBrainsMono-Regular.ttf
+    FontSize: 0.3
+    Color:
+    - 0.3
+    - 1.0
+    - 0.5
+    - 1.0
+    LineSpacing: 1.0
+    Kerning: 0.0
+
+# ── Streaming label ───────────────────────────────────────────
+- Entity: 670
+  TagComponent:
+    Tag: Streaming Label
+  TransformComponent:
+    Translation:
+    - -4.5
+    - -1.5
+    - 0.0
+    Rotation:
+    - 0.0
+    - 0.0
+    - 0.0
+    Scale:
+    - 1.0
+    - 1.0
+    - 1.0
+  TextComponent:
+    Text: '[4] Streaming (from disk)'
+    FontPath: assets/fonts/JetBrainsMono-Regular.ttf
+    FontSize: 0.3
+    Color:
+    - 0.9
+    - 0.3
+    - 0.9
     - 1.0
     LineSpacing: 1.0
     Kerning: 0.0
@@ -206,3 +337,4 @@ Entities:
     - 0.2
     - 1.0
     TilingFactor: 1.0
+    SortingLayer: -1

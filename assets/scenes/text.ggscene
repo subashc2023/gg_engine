@@ -242,3 +242,4 @@ Entities:
     - 0.15
     - 1.0
     TilingFactor: 1.0
+    SortingLayer: -1

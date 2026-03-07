@@ -1,0 +1,318 @@
+Scene: GPU Particle Test
+Entities:
+# ── Camera ──────────────────────────────────────────────────
+- Entity: 100
+  TagComponent:
+    Tag: Camera
+  TransformComponent:
+    Translation:
+    - 0.0
+    - 0.0
+    - 0.0
+    Rotation:
+    - 0.0
+    - 0.0
+    - 0.0
+    Scale:
+    - 1.0
+    - 1.0
+    - 1.0
+  CameraComponent:
+    Camera:
+      ProjectionType: 1
+      PerspectiveFOV: 0.7853982
+      PerspectiveNear: 0.01
+      PerspectiveFar: 1000.0
+      OrthographicSize: 15.0
+      OrthographicNear: -1.0
+      OrthographicFar: 1.0
+    Primary: true
+    FixedAspectRatio: false
+
+# ── Fire Emitter (center) ──────────────────────────────────
+# Fast upward particles with warm colors, simulating fire.
+- Entity: 200
+  TagComponent:
+    Tag: Fire Emitter
+  TransformComponent:
+    Translation:
+    - 0.0
+    - -3.0
+    - 0.0
+    Rotation:
+    - 0.0
+    - 0.0
+    - 0.0
+    Scale:
+    - 1.0
+    - 1.0
+    - 1.0
+  SpriteRendererComponent:
+    Color:
+    - 0.9
+    - 0.3
+    - 0.1
+    - 1.0
+    TilingFactor: 1.0
+  ParticleEmitterComponent:
+    EmitRate: 15
+    MaxParticles: 100000
+    Playing: true
+    Velocity:
+    - 0.0
+    - 2.0
+    VelocityVariation:
+    - 1.5
+    - 1.0
+    ColorBegin:
+    - 1.0
+    - 0.4
+    - 0.1
+    - 1.0
+    ColorEnd:
+    - 0.9
+    - 0.1
+    - 0.0
+    - 0.0
+    SizeBegin: 0.15
+    SizeEnd: 0.0
+    SizeVariation: 0.05
+    Lifetime: 2.0
+
+# ── Fountain Emitter (left) ────────────────────────────────
+# Upward burst with gravity-like spread, cool blue tones.
+- Entity: 300
+  TagComponent:
+    Tag: Fountain Emitter
+  TransformComponent:
+    Translation:
+    - -5.0
+    - -2.0
+    - 0.0
+    Rotation:
+    - 0.0
+    - 0.0
+    - 0.0
+    Scale:
+    - 1.0
+    - 1.0
+    - 1.0
+  SpriteRendererComponent:
+    Color:
+    - 0.2
+    - 0.5
+    - 0.9
+    - 1.0
+    TilingFactor: 1.0
+  ParticleEmitterComponent:
+    EmitRate: 10
+    MaxParticles: 100000
+    Playing: true
+    Velocity:
+    - 0.0
+    - 5.0
+    VelocityVariation:
+    - 2.0
+    - 1.0
+    ColorBegin:
+    - 0.3
+    - 0.6
+    - 1.0
+    - 1.0
+    ColorEnd:
+    - 0.1
+    - 0.2
+    - 0.8
+    - 0.0
+    SizeBegin: 0.08
+    SizeEnd: 0.02
+    SizeVariation: 0.03
+    Lifetime: 3.0
+
+# ── Sparkle Emitter (right) ────────────────────────────────
+# Slow drifting particles with wide spread, green/yellow.
+- Entity: 400
+  TagComponent:
+    Tag: Sparkle Emitter
+  TransformComponent:
+    Translation:
+    - 5.0
+    - 0.0
+    - 0.0
+    Rotation:
+    - 0.0
+    - 0.0
+    - 0.0
+    Scale:
+    - 1.0
+    - 1.0
+    - 1.0
+  SpriteRendererComponent:
+    Color:
+    - 0.4
+    - 0.9
+    - 0.2
+    - 1.0
+    TilingFactor: 1.0
+  ParticleEmitterComponent:
+    EmitRate: 8
+    MaxParticles: 100000
+    Playing: true
+    Velocity:
+    - 0.0
+    - 0.5
+    VelocityVariation:
+    - 4.0
+    - 4.0
+    ColorBegin:
+    - 0.5
+    - 1.0
+    - 0.2
+    - 1.0
+    ColorEnd:
+    - 1.0
+    - 0.9
+    - 0.1
+    - 0.0
+    SizeBegin: 0.12
+    SizeEnd: 0.0
+    SizeVariation: 0.08
+    Lifetime: 5.0
+
+# ── Labels ──────────────────────────────────────────────────
+- Entity: 500
+  TagComponent:
+    Tag: Title
+  TransformComponent:
+    Translation:
+    - -5.0
+    - 5.5
+    - 0.0
+    Rotation:
+    - 0.0
+    - 0.0
+    - 0.0
+    Scale:
+    - 1.0
+    - 1.0
+    - 1.0
+  TextComponent:
+    Text: 'GPU Particle System Test'
+    FontPath: assets/fonts/JetBrainsMono-Regular.ttf
+    FontSize: 0.6
+    Color:
+    - 1.0
+    - 1.0
+    - 1.0
+    - 1.0
+    LineSpacing: 1.0
+    Kerning: 0.0
+
+- Entity: 600
+  TagComponent:
+    Tag: Fire Label
+  TransformComponent:
+    Translation:
+    - -1.0
+    - -4.5
+    - 0.0
+    Rotation:
+    - 0.0
+    - 0.0
+    - 0.0
+    Scale:
+    - 1.0
+    - 1.0
+    - 1.0
+  TextComponent:
+    Text: 'Fire (fast, warm)'
+    FontPath: assets/fonts/JetBrainsMono-Regular.ttf
+    FontSize: 0.3
+    Color:
+    - 1.0
+    - 0.5
+    - 0.2
+    - 1.0
+    LineSpacing: 1.0
+    Kerning: 0.0
+
+- Entity: 700
+  TagComponent:
+    Tag: Fountain Label
+  TransformComponent:
+    Translation:
+    - -6.5
+    - -3.5
+    - 0.0
+    Rotation:
+    - 0.0
+    - 0.0
+    - 0.0
+    Scale:
+    - 1.0
+    - 1.0
+    - 1.0
+  TextComponent:
+    Text: 'Fountain (burst, cool)'
+    FontPath: assets/fonts/JetBrainsMono-Regular.ttf
+    FontSize: 0.3
+    Color:
+    - 0.4
+    - 0.7
+    - 1.0
+    - 1.0
+    LineSpacing: 1.0
+    Kerning: 0.0
+
+- Entity: 800
+  TagComponent:
+    Tag: Sparkle Label
+  TransformComponent:
+    Translation:
+    - 3.5
+    - -1.5
+    - 0.0
+    Rotation:
+    - 0.0
+    - 0.0
+    - 0.0
+    Scale:
+    - 1.0
+    - 1.0
+    - 1.0
+  TextComponent:
+    Text: 'Sparkle (drift, wide)'
+    FontPath: assets/fonts/JetBrainsMono-Regular.ttf
+    FontSize: 0.3
+    Color:
+    - 0.6
+    - 1.0
+    - 0.3
+    - 1.0
+    LineSpacing: 1.0
+    Kerning: 0.0
+
+# ── Background ──────────────────────────────────────────────
+- Entity: 900
+  TagComponent:
+    Tag: Background
+  TransformComponent:
+    Translation:
+    - 0.0
+    - 0.0
+    - 0.5
+    Rotation:
+    - 0.0
+    - 0.0
+    - 0.0
+    Scale:
+    - 30.0
+    - 20.0
+    - 1.0
+  SpriteRendererComponent:
+    Color:
+    - 0.08
+    - 0.08
+    - 0.12
+    - 1.0
+    TilingFactor: 1.0
