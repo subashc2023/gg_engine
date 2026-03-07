@@ -20,7 +20,9 @@ layout(location = 7) in vec2 a_uv_min;
 layout(location = 8) in vec2 a_uv_max;
 layout(location = 9) in float a_tex_index;
 layout(location = 10) in float a_tiling_factor;
+#ifdef OFFSCREEN
 layout(location = 11) in int a_entity_id;
+#endif
 // GPU animation parameters (frame_count > 0 activates GPU animation)
 layout(location = 12) in float a_anim_start_time;
 layout(location = 13) in float a_anim_fps;
@@ -34,13 +36,17 @@ layout(location = 19) in vec2 a_anim_tex_size;
 layout(location = 0) out vec4 v_color;
 layout(location = 1) out vec2 v_tex_coord;
 layout(location = 2) out flat float v_tex_index;
+#ifdef OFFSCREEN
 layout(location = 3) out flat int v_entity_id;
+#endif
 
 void main() {
     mat4 model = mat4(a_transform_col0, a_transform_col1, a_transform_col2, a_transform_col3);
     v_color = a_color;
     v_tex_index = a_tex_index;
+#ifdef OFFSCREEN
     v_entity_id = a_entity_id;
+#endif
 
     // GPU-computed animation: when frame_count > 0, compute UV coords from
     // animation parameters and u_time instead of using a_uv_min / a_uv_max.
@@ -76,10 +82,14 @@ layout(set = 1, binding = 0) uniform sampler2D u_textures[];
 layout(location = 0) in vec4 v_color;
 layout(location = 1) in vec2 v_tex_coord;
 layout(location = 2) in flat float v_tex_index;
+#ifdef OFFSCREEN
 layout(location = 3) in flat int v_entity_id;
+#endif
 
 layout(location = 0) out vec4 out_color;
+#ifdef OFFSCREEN
 layout(location = 1) out int out_entity_id;
+#endif
 
 void main() {
     int index = clamp(int(v_tex_index), 0, 4095);
@@ -87,5 +97,7 @@ void main() {
     if (tex_color.a < 0.01)
         discard;
     out_color = tex_color;
+#ifdef OFFSCREEN
     out_entity_id = v_entity_id;
+#endif
 }

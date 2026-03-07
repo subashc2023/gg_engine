@@ -16,14 +16,18 @@ layout(location = 0) out vec3 v_local_position;
 layout(location = 1) out vec4 v_color;
 layout(location = 2) out float v_thickness;
 layout(location = 3) out float v_fade;
+#ifdef OFFSCREEN
 layout(location = 4) out flat int v_entity_id;
+#endif
 
 void main() {
     v_local_position = a_local_position;
     v_color = a_color;
     v_thickness = a_thickness;
     v_fade = a_fade;
+#ifdef OFFSCREEN
     v_entity_id = a_entity_id;
+#endif
     gl_Position = camera.u_view_projection * vec4(a_world_position, 1.0);
 }
 
@@ -34,10 +38,14 @@ layout(location = 0) in vec3 v_local_position;
 layout(location = 1) in vec4 v_color;
 layout(location = 2) in float v_thickness;
 layout(location = 3) in float v_fade;
+#ifdef OFFSCREEN
 layout(location = 4) in flat int v_entity_id;
+#endif
 
 layout(location = 0) out vec4 out_color;
+#ifdef OFFSCREEN
 layout(location = 1) out int out_entity_id;
+#endif
 
 void main() {
     float distance = 1.0 - length(v_local_position.xy);
@@ -49,5 +57,7 @@ void main() {
 
     out_color = v_color;
     out_color.a *= circle;
+#ifdef OFFSCREEN
     out_entity_id = v_entity_id;
+#endif
 }

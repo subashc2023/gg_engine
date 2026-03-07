@@ -18,15 +18,11 @@ pub(crate) fn draw_tilemap_component(
     tilemap_paint: &mut TilemapPaintState,
     egui_texture_map: &std::collections::HashMap<u64, egui::TextureId>,
 ) -> bool {
-    let mut remove = false;
+    if !scene.has_component::<TilemapComponent>(entity) {
+        return false;
+    }
 
-    if scene.has_component::<TilemapComponent>(entity) {
-        let cr = egui::CollapsingHeader::new(
-            egui::RichText::new("Tilemap").font(egui::FontId::new(14.0, bold_family.clone())),
-        )
-        .id_salt(("tilemap", entity.id()))
-        .default_open(true)
-        .show(ui, |ui| {
+    super::component_header(ui, "Tilemap", "tilemap", bold_family, entity, |ui| {
             let (
                 mut width,
                 mut height,
@@ -180,19 +176,8 @@ pub(crate) fn draw_tilemap_component(
             });
 
             // Sorting layer & order.
-            let mut sort_changed = false;
-            ui.horizontal(|ui| {
-                ui.label("Sorting Layer");
-                sort_changed |= ui
-                    .add(egui::DragValue::new(&mut sorting_layer).speed(0.1))
-                    .changed();
-            });
-            ui.horizontal(|ui| {
-                ui.label("Order in Layer");
-                sort_changed |= ui
-                    .add(egui::DragValue::new(&mut order_in_layer).speed(0.1))
-                    .changed();
-            });
+            let sort_changed =
+                super::sorting_layer_controls(ui, &mut sorting_layer, &mut order_in_layer);
             if sort_changed {
                 if let Some(mut tm) = scene.get_component_mut::<TilemapComponent>(entity) {
                     tm.sorting_layer = sorting_layer;
@@ -457,15 +442,5 @@ pub(crate) fn draw_tilemap_component(
                         });
                     }
                 });
-        });
-
-        cr.header_response.context_menu(|ui| {
-            if ui.button("Remove Component").clicked() {
-                remove = true;
-                ui.close();
-            }
-        });
-    }
-
-    remove
+    })
 }

@@ -36,6 +36,7 @@ fn main() {
         match shader_type {
             ShaderType::Graphics => {
                 let (vert_src, frag_src) = split_glsl_source(&source, glsl_path);
+                let has_offscreen = source.contains("#ifdef OFFSCREEN");
 
                 let vert_tmp = out_dir.join(format!("{stem}.vert"));
                 let frag_tmp = out_dir.join(format!("{stem}.frag"));
@@ -44,10 +45,13 @@ fn main() {
                 fs::write(&frag_tmp, &frag_src)
                     .unwrap_or_else(|e| panic!("Cannot write {}: {e}", frag_tmp.display()));
 
+                // Offscreen shaders are compiled with -DOFFSCREEN; plain shaders without defines.
+                let defines: &[&str] = if has_offscreen { &["OFFSCREEN"] } else { &[] };
+
                 let vert_spv = out_dir.join(format!("{stem}_vert.spv"));
                 let frag_spv = out_dir.join(format!("{stem}_frag.spv"));
-                compile_glslc(&vert_tmp, &vert_spv, &profile);
-                compile_glslc(&frag_tmp, &frag_spv, &profile);
+                compile_glslc(&vert_tmp, &vert_spv, &profile, defines);
+                compile_glslc(&frag_tmp, &frag_spv, &profile, defines);
 
                 validate_spirv(&vert_spv);
                 validate_spirv(&frag_spv);
@@ -59,6 +63,25 @@ fn main() {
                 generated.push_str(&format!(
                     "pub const {upper}_FRAG_SPV: &[u8] = include_bytes!(concat!(env!(\"OUT_DIR\"), \"/{stem}_frag.spv\"));\n"
                 ));
+
+                // For shaders with #ifdef OFFSCREEN, also compile a swapchain variant (no defines).
+                if has_offscreen {
+                    let sw_vert_spv = out_dir.join(format!("{stem}_swapchain_vert.spv"));
+                    let sw_frag_spv = out_dir.join(format!("{stem}_swapchain_frag.spv"));
+                    compile_glslc(&vert_tmp, &sw_vert_spv, &profile, &[]);
+                    compile_glslc(&frag_tmp, &sw_frag_spv, &profile, &[]);
+
+                    validate_spirv(&sw_vert_spv);
+                    validate_spirv(&sw_frag_spv);
+
+                    let sw_upper = format!("{upper}_SWAPCHAIN");
+                    generated.push_str(&format!(
+                        "pub const {sw_upper}_VERT_SPV: &[u8] = include_bytes!(concat!(env!(\"OUT_DIR\"), \"/{stem}_swapchain_vert.spv\"));\n"
+                    ));
+                    generated.push_str(&format!(
+                        "pub const {sw_upper}_FRAG_SPV: &[u8] = include_bytes!(concat!(env!(\"OUT_DIR\"), \"/{stem}_swapchain_frag.spv\"));\n"
+                    ));
+                }
             }
             ShaderType::Compute => {
                 let comp_src = extract_compute_source(&source, glsl_path);
@@ -68,7 +91,7 @@ fn main() {
                     .unwrap_or_else(|e| panic!("Cannot write {}: {e}", comp_tmp.display()));
 
                 let comp_spv = out_dir.join(format!("{stem}_comp.spv"));
-                compile_glslc(&comp_tmp, &comp_spv, &profile);
+                compile_glslc(&comp_tmp, &comp_spv, &profile, &[]);
                 validate_spirv(&comp_spv);
 
                 let upper = stem.to_uppercase();
@@ -177,9 +200,14 @@ fn extract_compute_source(source: &str, path: &Path) -> String {
 
 /// Invoke `glslc` to compile a GLSL source file to SPIR-V.
 /// Adds `-O` optimization flag when building in release mode.
-fn compile_glslc(input: &Path, output: &Path, profile: &str) {
+/// Preprocessor `defines` are passed as `-DNAME` flags.
+fn compile_glslc(input: &Path, output: &Path, profile: &str, defines: &[&str]) {
     let mut cmd = Command::new("glslc");
     cmd.arg("--target-env=vulkan1.2");
+
+    for def in defines {
+        cmd.arg(format!("-D{def}"));
+    }
 
     if profile == "release" || profile == "dist" {
         cmd.arg("-O");

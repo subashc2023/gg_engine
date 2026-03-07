@@ -40,6 +40,88 @@ impl Drop for Pipeline {
 }
 
 // ---------------------------------------------------------------------------
+// Shared pipeline helpers
+// ---------------------------------------------------------------------------
+
+/// Standard rasterizer state: fill mode, no culling, CCW front face.
+fn default_rasterizer() -> vk::PipelineRasterizationStateCreateInfo<'static> {
+    vk::PipelineRasterizationStateCreateInfo::default()
+        .polygon_mode(vk::PolygonMode::FILL)
+        .cull_mode(vk::CullModeFlags::NONE)
+        .front_face(vk::FrontFace::COUNTER_CLOCKWISE)
+        .line_width(1.0)
+}
+
+/// Standard multisampling state: 1 sample (no MSAA).
+fn default_multisampling() -> vk::PipelineMultisampleStateCreateInfo<'static> {
+    vk::PipelineMultisampleStateCreateInfo::default()
+        .rasterization_samples(vk::SampleCountFlags::TYPE_1)
+}
+
+/// Build color blend attachment states for batch pipelines.
+///
+/// Attachment 0: standard alpha blending (RGBA).
+/// Attachments 1+: no blending, R channel only (integer entity ID attachment).
+fn batch_blend_attachments(
+    color_attachment_count: u32,
+) -> Vec<vk::PipelineColorBlendAttachmentState> {
+    let mut attachments = Vec::with_capacity(color_attachment_count as usize);
+    attachments.push(
+        vk::PipelineColorBlendAttachmentState::default()
+            .color_write_mask(vk::ColorComponentFlags::RGBA)
+            .blend_enable(true)
+            .src_color_blend_factor(vk::BlendFactor::SRC_ALPHA)
+            .dst_color_blend_factor(vk::BlendFactor::ONE_MINUS_SRC_ALPHA)
+            .color_blend_op(vk::BlendOp::ADD)
+            .src_alpha_blend_factor(vk::BlendFactor::ONE)
+            .dst_alpha_blend_factor(vk::BlendFactor::ZERO)
+            .alpha_blend_op(vk::BlendOp::ADD),
+    );
+    for _ in 1..color_attachment_count {
+        attachments.push(
+            vk::PipelineColorBlendAttachmentState::default()
+                .color_write_mask(vk::ColorComponentFlags::R)
+                .blend_enable(false),
+        );
+    }
+    attachments
+}
+
+/// Prepend camera UBO layout (set 0) before caller-provided descriptor set layouts.
+fn prepare_descriptor_layouts(
+    camera_ubo_ds_layout: vk::DescriptorSetLayout,
+    extra_layouts: &[vk::DescriptorSetLayout],
+) -> Vec<vk::DescriptorSetLayout> {
+    let mut all = Vec::with_capacity(1 + extra_layouts.len());
+    all.push(camera_ubo_ds_layout);
+    all.extend_from_slice(extra_layouts);
+    all
+}
+
+/// Create the Vulkan pipeline + wrap in [`Pipeline`]. Cleans up layout on failure.
+fn create_and_wrap_pipeline(
+    device: &ash::Device,
+    pipeline_info: &vk::GraphicsPipelineCreateInfo<'_>,
+    pipeline_cache: vk::PipelineCache,
+    pipeline_layout: vk::PipelineLayout,
+) -> Result<Pipeline, String> {
+    let pipeline =
+        unsafe { device.create_graphics_pipelines(pipeline_cache, &[*pipeline_info], None) }
+            .map_err(|(_, e)| {
+                unsafe {
+                    device.destroy_pipeline_layout(pipeline_layout, None);
+                }
+                format!("Failed to create graphics pipeline: {e}")
+            })?[0];
+
+    Ok(Pipeline {
+        pipeline,
+        layout: pipeline_layout,
+        device: device.clone(),
+    })
+}
+
+// ---------------------------------------------------------------------------
 // Pipeline creation
 // ---------------------------------------------------------------------------
 
@@ -102,14 +184,8 @@ pub(crate) fn create_pipeline(
         .viewport_count(1)
         .scissor_count(1);
 
-    let rasterizer = vk::PipelineRasterizationStateCreateInfo::default()
-        .polygon_mode(vk::PolygonMode::FILL)
-        .cull_mode(vk::CullModeFlags::NONE)
-        .front_face(vk::FrontFace::COUNTER_CLOCKWISE)
-        .line_width(1.0);
-
-    let multisampling = vk::PipelineMultisampleStateCreateInfo::default()
-        .rasterization_samples(vk::SampleCountFlags::TYPE_1);
+    let rasterizer = default_rasterizer();
+    let multisampling = default_multisampling();
 
     let depth_stencil = vk::PipelineDepthStencilStateCreateInfo::default()
         .depth_test_enable(true)
@@ -139,7 +215,6 @@ pub(crate) fn create_pipeline(
         vk::PipelineColorBlendStateCreateInfo::default().attachments(&blend_attachments);
 
     // Push constant range: transform matrix only (1 × mat4 = 64 bytes).
-    // VP matrix is now in a UBO (set 0, binding 0).
     let vertex_range = vk::PushConstantRange {
         stage_flags: vk::ShaderStageFlags::VERTEX,
         offset: 0,
@@ -161,10 +236,7 @@ pub(crate) fn create_pipeline(
         &ranges_without
     };
 
-    // Prepend UBO layout (set 0) before caller-provided layouts.
-    let mut all_layouts = Vec::with_capacity(1 + descriptor_set_layouts.len());
-    all_layouts.push(camera_ubo_ds_layout);
-    all_layouts.extend_from_slice(descriptor_set_layouts);
+    let all_layouts = prepare_descriptor_layouts(camera_ubo_ds_layout, descriptor_set_layouts);
 
     let layout_info = vk::PipelineLayoutCreateInfo::default()
         .push_constant_ranges(push_constant_ranges)
@@ -186,20 +258,7 @@ pub(crate) fn create_pipeline(
         .render_pass(render_pass)
         .subpass(0);
 
-    let pipeline =
-        unsafe { device.create_graphics_pipelines(pipeline_cache, &[pipeline_info], None) }
-            .map_err(|(_, e)| {
-                unsafe {
-                    device.destroy_pipeline_layout(pipeline_layout, None);
-                }
-                format!("Failed to create graphics pipeline: {e}")
-            })?[0];
-
-    Ok(Pipeline {
-        pipeline,
-        layout: pipeline_layout,
-        device: device.clone(),
-    })
+    create_and_wrap_pipeline(device, &pipeline_info, pipeline_cache, pipeline_layout)
 }
 
 /// Create a Vulkan graphics pipeline for batch rendering.
@@ -253,14 +312,8 @@ pub(crate) fn create_batch_pipeline(
         .viewport_count(1)
         .scissor_count(1);
 
-    let rasterizer = vk::PipelineRasterizationStateCreateInfo::default()
-        .polygon_mode(vk::PolygonMode::FILL)
-        .cull_mode(vk::CullModeFlags::NONE)
-        .front_face(vk::FrontFace::COUNTER_CLOCKWISE)
-        .line_width(1.0);
-
-    let multisampling = vk::PipelineMultisampleStateCreateInfo::default()
-        .rasterization_samples(vk::SampleCountFlags::TYPE_1);
+    let rasterizer = default_rasterizer();
+    let multisampling = default_multisampling();
 
     // 2D batch rendering uses painter's algorithm (draw order); no depth test needed.
     let depth_stencil = vk::PipelineDepthStencilStateCreateInfo::default()
@@ -269,37 +322,11 @@ pub(crate) fn create_batch_pipeline(
         .depth_bounds_test_enable(false)
         .stencil_test_enable(false);
 
-    // Attachment 0: standard alpha blending (RGBA).
-    // Attachments 1+: blend disabled, R write mask only (integer formats).
-    let mut blend_attachments = Vec::with_capacity(color_attachment_count as usize);
-    blend_attachments.push(
-        vk::PipelineColorBlendAttachmentState::default()
-            .color_write_mask(vk::ColorComponentFlags::RGBA)
-            .blend_enable(true)
-            .src_color_blend_factor(vk::BlendFactor::SRC_ALPHA)
-            .dst_color_blend_factor(vk::BlendFactor::ONE_MINUS_SRC_ALPHA)
-            .color_blend_op(vk::BlendOp::ADD)
-            .src_alpha_blend_factor(vk::BlendFactor::ONE)
-            .dst_alpha_blend_factor(vk::BlendFactor::ZERO)
-            .alpha_blend_op(vk::BlendOp::ADD),
-    );
-    for _ in 1..color_attachment_count {
-        blend_attachments.push(
-            vk::PipelineColorBlendAttachmentState::default()
-                .color_write_mask(vk::ColorComponentFlags::R)
-                .blend_enable(false),
-        );
-    }
-
+    let blend_attachments = batch_blend_attachments(color_attachment_count);
     let color_blending =
         vk::PipelineColorBlendStateCreateInfo::default().attachments(&blend_attachments);
 
-    // No push constants — VP is in UBO (set 0), transform is baked into vertices.
-
-    // Prepend UBO layout (set 0) before caller-provided layouts (bindless at set 1).
-    let mut all_layouts = Vec::with_capacity(1 + descriptor_set_layouts.len());
-    all_layouts.push(camera_ubo_ds_layout);
-    all_layouts.extend_from_slice(descriptor_set_layouts);
+    let all_layouts = prepare_descriptor_layouts(camera_ubo_ds_layout, descriptor_set_layouts);
 
     let layout_info = vk::PipelineLayoutCreateInfo::default().set_layouts(&all_layouts);
     let pipeline_layout = unsafe { device.create_pipeline_layout(&layout_info, None) }
@@ -319,20 +346,7 @@ pub(crate) fn create_batch_pipeline(
         .render_pass(render_pass)
         .subpass(0);
 
-    let pipeline =
-        unsafe { device.create_graphics_pipelines(pipeline_cache, &[pipeline_info], None) }
-            .map_err(|(_, e)| {
-                unsafe {
-                    device.destroy_pipeline_layout(pipeline_layout, None);
-                }
-                format!("Failed to create batch graphics pipeline: {e}")
-            })?[0];
-
-    Ok(Pipeline {
-        pipeline,
-        layout: pipeline_layout,
-        device: device.clone(),
-    })
+    create_and_wrap_pipeline(device, &pipeline_info, pipeline_cache, pipeline_layout)
 }
 
 /// Create a Vulkan graphics pipeline for **instanced** sprite rendering.
@@ -395,14 +409,8 @@ pub(crate) fn create_instanced_batch_pipeline(
         .viewport_count(1)
         .scissor_count(1);
 
-    let rasterizer = vk::PipelineRasterizationStateCreateInfo::default()
-        .polygon_mode(vk::PolygonMode::FILL)
-        .cull_mode(vk::CullModeFlags::NONE)
-        .front_face(vk::FrontFace::COUNTER_CLOCKWISE)
-        .line_width(1.0);
-
-    let multisampling = vk::PipelineMultisampleStateCreateInfo::default()
-        .rasterization_samples(vk::SampleCountFlags::TYPE_1);
+    let rasterizer = default_rasterizer();
+    let multisampling = default_multisampling();
 
     let depth_stencil = vk::PipelineDepthStencilStateCreateInfo::default()
         .depth_test_enable(false)
@@ -410,32 +418,11 @@ pub(crate) fn create_instanced_batch_pipeline(
         .depth_bounds_test_enable(false)
         .stencil_test_enable(false);
 
-    let mut blend_attachments = Vec::with_capacity(color_attachment_count as usize);
-    blend_attachments.push(
-        vk::PipelineColorBlendAttachmentState::default()
-            .color_write_mask(vk::ColorComponentFlags::RGBA)
-            .blend_enable(true)
-            .src_color_blend_factor(vk::BlendFactor::SRC_ALPHA)
-            .dst_color_blend_factor(vk::BlendFactor::ONE_MINUS_SRC_ALPHA)
-            .color_blend_op(vk::BlendOp::ADD)
-            .src_alpha_blend_factor(vk::BlendFactor::ONE)
-            .dst_alpha_blend_factor(vk::BlendFactor::ZERO)
-            .alpha_blend_op(vk::BlendOp::ADD),
-    );
-    for _ in 1..color_attachment_count {
-        blend_attachments.push(
-            vk::PipelineColorBlendAttachmentState::default()
-                .color_write_mask(vk::ColorComponentFlags::R)
-                .blend_enable(false),
-        );
-    }
-
+    let blend_attachments = batch_blend_attachments(color_attachment_count);
     let color_blending =
         vk::PipelineColorBlendStateCreateInfo::default().attachments(&blend_attachments);
 
-    let mut all_layouts = Vec::with_capacity(1 + descriptor_set_layouts.len());
-    all_layouts.push(camera_ubo_ds_layout);
-    all_layouts.extend_from_slice(descriptor_set_layouts);
+    let all_layouts = prepare_descriptor_layouts(camera_ubo_ds_layout, descriptor_set_layouts);
 
     let layout_info = vk::PipelineLayoutCreateInfo::default().set_layouts(&all_layouts);
     let pipeline_layout = unsafe { device.create_pipeline_layout(&layout_info, None) }
@@ -455,20 +442,7 @@ pub(crate) fn create_instanced_batch_pipeline(
         .render_pass(render_pass)
         .subpass(0);
 
-    let pipeline =
-        unsafe { device.create_graphics_pipelines(pipeline_cache, &[pipeline_info], None) }
-            .map_err(|(_, e)| {
-                unsafe {
-                    device.destroy_pipeline_layout(pipeline_layout, None);
-                }
-                format!("Failed to create instanced batch graphics pipeline: {e}")
-            })?[0];
-
-    Ok(Pipeline {
-        pipeline,
-        layout: pipeline_layout,
-        device: device.clone(),
-    })
+    create_and_wrap_pipeline(device, &pipeline_info, pipeline_cache, pipeline_layout)
 }
 
 /// Create a Vulkan graphics pipeline for batch **line** rendering.
@@ -526,14 +500,8 @@ pub(crate) fn create_line_batch_pipeline(
         .viewport_count(1)
         .scissor_count(1);
 
-    let rasterizer = vk::PipelineRasterizationStateCreateInfo::default()
-        .polygon_mode(vk::PolygonMode::FILL)
-        .cull_mode(vk::CullModeFlags::NONE)
-        .front_face(vk::FrontFace::COUNTER_CLOCKWISE)
-        .line_width(1.0);
-
-    let multisampling = vk::PipelineMultisampleStateCreateInfo::default()
-        .rasterization_samples(vk::SampleCountFlags::TYPE_1);
+    let rasterizer = default_rasterizer();
+    let multisampling = default_multisampling();
 
     // 2D batch rendering uses painter's algorithm (draw order); no depth test needed.
     let depth_stencil = vk::PipelineDepthStencilStateCreateInfo::default()
@@ -542,28 +510,7 @@ pub(crate) fn create_line_batch_pipeline(
         .depth_bounds_test_enable(false)
         .stencil_test_enable(false);
 
-    // Attachment 0: standard alpha blending (RGBA).
-    // Attachments 1+: blend disabled, R write mask only (integer formats).
-    let mut blend_attachments = Vec::with_capacity(color_attachment_count as usize);
-    blend_attachments.push(
-        vk::PipelineColorBlendAttachmentState::default()
-            .color_write_mask(vk::ColorComponentFlags::RGBA)
-            .blend_enable(true)
-            .src_color_blend_factor(vk::BlendFactor::SRC_ALPHA)
-            .dst_color_blend_factor(vk::BlendFactor::ONE_MINUS_SRC_ALPHA)
-            .color_blend_op(vk::BlendOp::ADD)
-            .src_alpha_blend_factor(vk::BlendFactor::ONE)
-            .dst_alpha_blend_factor(vk::BlendFactor::ZERO)
-            .alpha_blend_op(vk::BlendOp::ADD),
-    );
-    for _ in 1..color_attachment_count {
-        blend_attachments.push(
-            vk::PipelineColorBlendAttachmentState::default()
-                .color_write_mask(vk::ColorComponentFlags::R)
-                .blend_enable(false),
-        );
-    }
-
+    let blend_attachments = batch_blend_attachments(color_attachment_count);
     let color_blending =
         vk::PipelineColorBlendStateCreateInfo::default().attachments(&blend_attachments);
 
@@ -588,18 +535,5 @@ pub(crate) fn create_line_batch_pipeline(
         .render_pass(render_pass)
         .subpass(0);
 
-    let pipeline =
-        unsafe { device.create_graphics_pipelines(pipeline_cache, &[pipeline_info], None) }
-            .map_err(|(_, e)| {
-                unsafe {
-                    device.destroy_pipeline_layout(pipeline_layout, None);
-                }
-                format!("Failed to create line batch graphics pipeline: {e}")
-            })?[0];
-
-    Ok(Pipeline {
-        pipeline,
-        layout: pipeline_layout,
-        device: device.clone(),
-    })
+    create_and_wrap_pipeline(device, &pipeline_info, pipeline_cache, pipeline_layout)
 }

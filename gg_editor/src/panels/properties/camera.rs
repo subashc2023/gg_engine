@@ -9,15 +9,10 @@ pub(crate) fn draw_camera_component(
     scene_dirty: &mut bool,
     _undo_system: &mut crate::undo::UndoSystem,
 ) -> bool {
-    let mut remove = false;
-
-    if scene.has_component::<CameraComponent>(entity) {
-        let cr = egui::CollapsingHeader::new(
-            egui::RichText::new("Camera").font(egui::FontId::new(14.0, bold_family.clone())),
-        )
-        .id_salt(("camera", entity.id()))
-        .default_open(true)
-        .show(ui, |ui| {
+    if !scene.has_component::<CameraComponent>(entity) {
+        return false;
+    }
+    super::component_header(ui, "Camera", "camera", bold_family, entity, |ui| {
             let (
                 mut primary,
                 mut fixed_aspect,
@@ -189,15 +184,5 @@ pub(crate) fn draw_camera_component(
                     }
                 }
             }
-        });
-
-        cr.header_response.context_menu(|ui| {
-            if ui.button("Remove Component").clicked() {
-                remove = true;
-                ui.close();
-            }
-        });
-    }
-
-    remove
+    })
 }

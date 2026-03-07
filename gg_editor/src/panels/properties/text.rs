@@ -10,15 +10,10 @@ pub(crate) fn draw_text_component(
     scene_dirty: &mut bool,
     _undo_system: &mut crate::undo::UndoSystem,
 ) -> bool {
-    let mut remove = false;
-
-    if scene.has_component::<TextComponent>(entity) {
-        let cr = egui::CollapsingHeader::new(
-            egui::RichText::new("Text").font(egui::FontId::new(14.0, bold_family.clone())),
-        )
-        .id_salt(("text", entity.id()))
-        .default_open(true)
-        .show(ui, |ui| {
+    if !scene.has_component::<TextComponent>(entity) {
+        return false;
+    }
+    super::component_header(ui, "Text", "text", bold_family, entity, |ui| {
             let (
                 mut text_str,
                 mut font_path,
@@ -83,34 +78,12 @@ pub(crate) fn draw_text_component(
             });
 
             // Color.
-            let mut egui_color = egui::Color32::from_rgba_unmultiplied(
-                (color_arr[0] * 255.0) as u8,
-                (color_arr[1] * 255.0) as u8,
-                (color_arr[2] * 255.0) as u8,
-                (color_arr[3] * 255.0) as u8,
-            );
-            ui.horizontal(|ui| {
-                ui.label("Color");
-                if egui::color_picker::color_edit_button_srgba(
-                    ui,
-                    &mut egui_color,
-                    egui::color_picker::Alpha::OnlyBlend,
-                )
-                .changed()
-                {
-                    let [r, g, b, a] = egui_color.to_srgba_unmultiplied();
-                    color_arr = [
-                        r as f32 / 255.0,
-                        g as f32 / 255.0,
-                        b as f32 / 255.0,
-                        a as f32 / 255.0,
-                    ];
-                    if let Some(mut tc) = scene.get_component_mut::<TextComponent>(entity) {
-                        tc.color = Vec4::from(color_arr);
-                        *scene_dirty = true;
-                    }
+            if super::color_picker_rgba(ui, "Color", &mut color_arr) {
+                if let Some(mut tc) = scene.get_component_mut::<TextComponent>(entity) {
+                    tc.color = Vec4::from(color_arr);
+                    *scene_dirty = true;
                 }
-            });
+            }
 
             // Font size.
             ui.horizontal(|ui| {
@@ -167,35 +140,12 @@ pub(crate) fn draw_text_component(
             });
 
             // Sorting layer & order.
-            let mut sort_changed = false;
-            ui.horizontal(|ui| {
-                ui.label("Sorting Layer");
-                sort_changed |= ui
-                    .add(egui::DragValue::new(&mut sorting_layer).speed(0.1))
-                    .changed();
-            });
-            ui.horizontal(|ui| {
-                ui.label("Order in Layer");
-                sort_changed |= ui
-                    .add(egui::DragValue::new(&mut order_in_layer).speed(0.1))
-                    .changed();
-            });
-            if sort_changed {
+            if super::sorting_layer_controls(ui, &mut sorting_layer, &mut order_in_layer) {
                 if let Some(mut tc) = scene.get_component_mut::<TextComponent>(entity) {
                     tc.sorting_layer = sorting_layer;
                     tc.order_in_layer = order_in_layer;
                 }
                 *scene_dirty = true;
             }
-        });
-
-        cr.header_response.context_menu(|ui| {
-            if ui.button("Remove Component").clicked() {
-                remove = true;
-                ui.close();
-            }
-        });
-    }
-
-    remove
+    })
 }

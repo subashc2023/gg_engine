@@ -9,16 +9,11 @@ pub(crate) fn draw_particle_emitter_component(
     scene_dirty: &mut bool,
     _undo_system: &mut crate::undo::UndoSystem,
 ) -> bool {
-    let mut remove = false;
+    if !scene.has_component::<ParticleEmitterComponent>(entity) {
+        return false;
+    }
 
-    if scene.has_component::<ParticleEmitterComponent>(entity) {
-        let cr = egui::CollapsingHeader::new(
-            egui::RichText::new("Particle Emitter")
-                .font(egui::FontId::new(14.0, bold_family.clone())),
-        )
-        .id_salt(("particle_emitter", entity.id()))
-        .default_open(true)
-        .show(ui, |ui| {
+    super::component_header(ui, "Particle Emitter", "particle_emitter", bold_family, entity, |ui| {
             let (
                 mut playing,
                 mut emit_rate,
@@ -155,54 +150,8 @@ pub(crate) fn draw_particle_emitter_component(
             ui.separator();
             ui.strong("Color");
             let mut color_changed = false;
-            ui.horizontal(|ui| {
-                ui.label("Begin");
-                let mut c = egui::Color32::from_rgba_unmultiplied(
-                    (color_begin[0] * 255.0) as u8,
-                    (color_begin[1] * 255.0) as u8,
-                    (color_begin[2] * 255.0) as u8,
-                    (color_begin[3] * 255.0) as u8,
-                );
-                if egui::color_picker::color_edit_button_srgba(
-                    ui,
-                    &mut c,
-                    egui::color_picker::Alpha::OnlyBlend,
-                )
-                .changed()
-                {
-                    let [r, g, b, a] = c.to_srgba_unmultiplied();
-                    color_begin = [
-                        r as f32 / 255.0,
-                        g as f32 / 255.0,
-                        b as f32 / 255.0,
-                        a as f32 / 255.0,
-                    ];
-                    color_changed = true;
-                }
-                ui.label("End");
-                let mut c2 = egui::Color32::from_rgba_unmultiplied(
-                    (color_end[0] * 255.0) as u8,
-                    (color_end[1] * 255.0) as u8,
-                    (color_end[2] * 255.0) as u8,
-                    (color_end[3] * 255.0) as u8,
-                );
-                if egui::color_picker::color_edit_button_srgba(
-                    ui,
-                    &mut c2,
-                    egui::color_picker::Alpha::OnlyBlend,
-                )
-                .changed()
-                {
-                    let [r, g, b, a] = c2.to_srgba_unmultiplied();
-                    color_end = [
-                        r as f32 / 255.0,
-                        g as f32 / 255.0,
-                        b as f32 / 255.0,
-                        a as f32 / 255.0,
-                    ];
-                    color_changed = true;
-                }
-            });
+            color_changed |= super::color_picker_rgba(ui, "Begin", &mut color_begin);
+            color_changed |= super::color_picker_rgba(ui, "End", &mut color_end);
             if color_changed {
                 if let Some(mut pe) = scene.get_component_mut::<ParticleEmitterComponent>(entity) {
                     pe.color_begin = Vec4::from(color_begin);
@@ -272,15 +221,5 @@ pub(crate) fn draw_particle_emitter_component(
                     *scene_dirty = true;
                 }
             });
-        });
-
-        cr.header_response.context_menu(|ui| {
-            if ui.button("Remove Component").clicked() {
-                remove = true;
-                ui.close();
-            }
-        });
-    }
-
-    remove
+    })
 }

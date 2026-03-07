@@ -184,6 +184,90 @@ fn draw_vec3_control(
 }
 
 // ---------------------------------------------------------------------------
+// Shared UI helpers (used by per-component modules)
+// ---------------------------------------------------------------------------
+
+/// Draw a collapsing component header with a "Remove Component" context menu.
+/// Returns `true` if the user requested removal.
+fn component_header(
+    ui: &mut egui::Ui,
+    label: &str,
+    id_salt: &str,
+    bold_family: &egui::FontFamily,
+    entity: Entity,
+    body: impl FnOnce(&mut egui::Ui),
+) -> bool {
+    let mut remove = false;
+    let cr = egui::CollapsingHeader::new(
+        egui::RichText::new(label).font(egui::FontId::new(14.0, bold_family.clone())),
+    )
+    .id_salt((id_salt, entity.id()))
+    .default_open(true)
+    .show(ui, |ui| body(ui));
+
+    cr.header_response.context_menu(|ui| {
+        if ui.button("Remove Component").clicked() {
+            remove = true;
+            ui.close();
+        }
+    });
+    remove
+}
+
+/// Draw a color picker for an RGBA f32 array. Returns `true` if changed.
+fn color_picker_rgba(ui: &mut egui::Ui, label: &str, color: &mut [f32; 4]) -> bool {
+    let mut egui_color = egui::Color32::from_rgba_unmultiplied(
+        (color[0] * 255.0) as u8,
+        (color[1] * 255.0) as u8,
+        (color[2] * 255.0) as u8,
+        (color[3] * 255.0) as u8,
+    );
+    let mut changed = false;
+    ui.horizontal(|ui| {
+        ui.label(label);
+        if egui::color_picker::color_edit_button_srgba(
+            ui,
+            &mut egui_color,
+            egui::color_picker::Alpha::OnlyBlend,
+        )
+        .changed()
+        {
+            let [r, g, b, a] = egui_color.to_srgba_unmultiplied();
+            *color = [
+                r as f32 / 255.0,
+                g as f32 / 255.0,
+                b as f32 / 255.0,
+                a as f32 / 255.0,
+            ];
+            changed = true;
+        }
+    });
+    changed
+}
+
+/// Draw sorting layer and order-in-layer drag values. Returns `true` if changed.
+fn sorting_layer_controls(
+    ui: &mut egui::Ui,
+    sorting_layer: &mut i32,
+    order_in_layer: &mut i32,
+) -> bool {
+    let mut changed = false;
+    ui.horizontal(|ui| {
+        ui.label("Sorting Layer");
+        changed |= ui
+            .add(egui::DragValue::new(sorting_layer).speed(0.1))
+            .changed();
+    });
+    ui.horizontal(|ui| {
+        ui.label("Order in Layer");
+        changed |= ui
+            .add(egui::DragValue::new(order_in_layer).speed(0.1))
+            .changed();
+    });
+    changed
+}
+
+// ---------------------------------------------------------------------------
 // Component inspector — dispatches to per-component modules
 // ---------------------------------------------------------------------------
 

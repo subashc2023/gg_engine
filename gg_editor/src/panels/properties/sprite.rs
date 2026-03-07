@@ -15,16 +15,10 @@ pub(crate) fn draw_sprite_renderer_component(
     scene_dirty: &mut bool,
     _undo_system: &mut crate::undo::UndoSystem,
 ) -> bool {
-    let mut remove = false;
-
-    if scene.has_component::<SpriteRendererComponent>(entity) {
-        let cr = egui::CollapsingHeader::new(
-            egui::RichText::new("Sprite Renderer")
-                .font(egui::FontId::new(14.0, bold_family.clone())),
-        )
-        .id_salt(("sprite_renderer", entity.id()))
-        .default_open(true)
-        .show(ui, |ui| {
+    if !scene.has_component::<SpriteRendererComponent>(entity) {
+        return false;
+    }
+    super::component_header(ui, "Sprite Renderer", "sprite_renderer", bold_family, entity, |ui| {
             let (
                 mut color_arr,
                 texture_handle_raw,
@@ -53,36 +47,13 @@ pub(crate) fn draw_sprite_renderer_component(
                 )
             };
 
-            let mut egui_color = egui::Color32::from_rgba_unmultiplied(
-                (color_arr[0] * 255.0) as u8,
-                (color_arr[1] * 255.0) as u8,
-                (color_arr[2] * 255.0) as u8,
-                (color_arr[3] * 255.0) as u8,
-            );
-
-            ui.horizontal(|ui| {
-                ui.label("Color");
-                if egui::color_picker::color_edit_button_srgba(
-                    ui,
-                    &mut egui_color,
-                    egui::color_picker::Alpha::OnlyBlend,
-                )
-                .changed()
+            if super::color_picker_rgba(ui, "Color", &mut color_arr) {
+                if let Some(mut sprite) =
+                    scene.get_component_mut::<SpriteRendererComponent>(entity)
                 {
-                    let [r, g, b, a] = egui_color.to_srgba_unmultiplied();
-                    color_arr = [
-                        r as f32 / 255.0,
-                        g as f32 / 255.0,
-                        b as f32 / 255.0,
-                        a as f32 / 255.0,
-                    ];
-                    if let Some(mut sprite) =
-                        scene.get_component_mut::<SpriteRendererComponent>(entity)
-                    {
-                        sprite.color = Vec4::from(color_arr);
-                    }
+                    sprite.color = Vec4::from(color_arr);
                 }
-            });
+            }
 
             // Texture button label: show filename from asset metadata or "None".
             let texture_label = if texture_handle_raw != 0 {
@@ -200,20 +171,7 @@ pub(crate) fn draw_sprite_renderer_component(
             });
 
             // Sorting layer & order.
-            let mut sort_changed = false;
-            ui.horizontal(|ui| {
-                ui.label("Sorting Layer");
-                sort_changed |= ui
-                    .add(egui::DragValue::new(&mut sorting_layer).speed(0.1))
-                    .changed();
-            });
-            ui.horizontal(|ui| {
-                ui.label("Order in Layer");
-                sort_changed |= ui
-                    .add(egui::DragValue::new(&mut order_in_layer).speed(0.1))
-                    .changed();
-            });
-            if sort_changed {
+            if super::sorting_layer_controls(ui, &mut sorting_layer, &mut order_in_layer) {
                 if let Some(mut sprite) = scene.get_component_mut::<SpriteRendererComponent>(entity)
                 {
                     sprite.sorting_layer = sorting_layer;
@@ -273,17 +231,7 @@ pub(crate) fn draw_sprite_renderer_component(
                     *scene_dirty = true;
                 }
             }
-        });
-
-        cr.header_response.context_menu(|ui| {
-            if ui.button("Remove Component").clicked() {
-                remove = true;
-                ui.close();
-            }
-        });
-    }
-
-    remove
+    })
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -297,16 +245,10 @@ pub(crate) fn draw_sprite_animator_component(
     scene_dirty: &mut bool,
     _undo_system: &mut crate::undo::UndoSystem,
 ) -> bool {
-    let mut remove = false;
-
-    if scene.has_component::<SpriteAnimatorComponent>(entity) {
-        let cr = egui::CollapsingHeader::new(
-            egui::RichText::new("Sprite Animator")
-                .font(egui::FontId::new(14.0, bold_family.clone())),
-        )
-        .id_salt(("sprite_animator", entity.id()))
-        .default_open(true)
-        .show(ui, |ui| {
+    if !scene.has_component::<SpriteAnimatorComponent>(entity) {
+        return false;
+    }
+    super::component_header(ui, "Sprite Animator", "sprite_animator", bold_family, entity, |ui| {
             let (
                 mut cell_w,
                 mut cell_h,
@@ -706,17 +648,7 @@ pub(crate) fn draw_sprite_animator_component(
                     *scene_dirty = true;
                 }
             }
-        });
-
-        cr.header_response.context_menu(|ui| {
-            if ui.button("Remove Component").clicked() {
-                remove = true;
-                ui.close();
-            }
-        });
-    }
-
-    remove
+    })
 }
 
 pub(crate) fn draw_circle_renderer_component(
@@ -727,16 +659,10 @@ pub(crate) fn draw_circle_renderer_component(
     scene_dirty: &mut bool,
     _undo_system: &mut crate::undo::UndoSystem,
 ) -> bool {
-    let mut remove = false;
-
-    if scene.has_component::<CircleRendererComponent>(entity) {
-        let cr = egui::CollapsingHeader::new(
-            egui::RichText::new("Circle Renderer")
-                .font(egui::FontId::new(14.0, bold_family.clone())),
-        )
-        .id_salt(("circle_renderer", entity.id()))
-        .default_open(true)
-        .show(ui, |ui| {
+    if !scene.has_component::<CircleRendererComponent>(entity) {
+        return false;
+    }
+    super::component_header(ui, "Circle Renderer", "circle_renderer", bold_family, entity, |ui| {
             let (mut color_arr, mut thickness, mut fade, mut sorting_layer, mut order_in_layer) = {
                 let circle = scene
                     .get_component::<CircleRendererComponent>(entity)
@@ -755,37 +681,14 @@ pub(crate) fn draw_circle_renderer_component(
                 )
             };
 
-            let mut egui_color = egui::Color32::from_rgba_unmultiplied(
-                (color_arr[0] * 255.0) as u8,
-                (color_arr[1] * 255.0) as u8,
-                (color_arr[2] * 255.0) as u8,
-                (color_arr[3] * 255.0) as u8,
-            );
-
-            ui.horizontal(|ui| {
-                ui.label("Color");
-                if egui::color_picker::color_edit_button_srgba(
-                    ui,
-                    &mut egui_color,
-                    egui::color_picker::Alpha::OnlyBlend,
-                )
-                .changed()
+            if super::color_picker_rgba(ui, "Color", &mut color_arr) {
+                if let Some(mut circle) =
+                    scene.get_component_mut::<CircleRendererComponent>(entity)
                 {
-                    let [r, g, b, a] = egui_color.to_srgba_unmultiplied();
-                    color_arr = [
-                        r as f32 / 255.0,
-                        g as f32 / 255.0,
-                        b as f32 / 255.0,
-                        a as f32 / 255.0,
-                    ];
-                    if let Some(mut circle) =
-                        scene.get_component_mut::<CircleRendererComponent>(entity)
-                    {
-                        circle.color = Vec4::from(color_arr);
-                    }
-                    *scene_dirty = true;
+                    circle.color = Vec4::from(color_arr);
                 }
-            });
+                *scene_dirty = true;
+            }
 
             ui.horizontal(|ui| {
                 ui.label("Thickness");
@@ -826,20 +729,7 @@ pub(crate) fn draw_circle_renderer_component(
             });
 
             // Sorting layer & order.
-            let mut sort_changed = false;
-            ui.horizontal(|ui| {
-                ui.label("Sorting Layer");
-                sort_changed |= ui
-                    .add(egui::DragValue::new(&mut sorting_layer).speed(0.1))
-                    .changed();
-            });
-            ui.horizontal(|ui| {
-                ui.label("Order in Layer");
-                sort_changed |= ui
-                    .add(egui::DragValue::new(&mut order_in_layer).speed(0.1))
-                    .changed();
-            });
-            if sort_changed {
+            if super::sorting_layer_controls(ui, &mut sorting_layer, &mut order_in_layer) {
                 if let Some(mut circle) = scene.get_component_mut::<CircleRendererComponent>(entity)
                 {
                     circle.sorting_layer = sorting_layer;
@@ -847,17 +737,7 @@ pub(crate) fn draw_circle_renderer_component(
                 }
                 *scene_dirty = true;
             }
-        });
-
-        cr.header_response.context_menu(|ui| {
-            if ui.button("Remove Component").clicked() {
-                remove = true;
-                ui.close();
-            }
-        });
-    }
-
-    remove
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -875,16 +755,10 @@ pub(crate) fn draw_instanced_sprite_animator(
     scene_dirty: &mut bool,
     _undo_system: &mut crate::undo::UndoSystem,
 ) -> bool {
-    let mut remove = false;
-
-    if scene.has_component::<InstancedSpriteAnimator>(entity) {
-        let cr = egui::CollapsingHeader::new(
-            egui::RichText::new("Instanced Sprite Animator")
-                .font(egui::FontId::new(14.0, bold_family.clone())),
-        )
-        .id_salt(("instanced_sprite_animator", entity.id()))
-        .default_open(true)
-        .show(ui, |ui| {
+    if !scene.has_component::<InstancedSpriteAnimator>(entity) {
+        return false;
+    }
+    super::component_header(ui, "Instanced Sprite Animator", "instanced_sprite_animator", bold_family, entity, |ui| {
             let (
                 mut cell_w,
                 mut cell_h,
@@ -1047,17 +921,7 @@ pub(crate) fn draw_instanced_sprite_animator(
             }
 
             let _ = (asset_manager, assets_root);
-        });
-
-        cr.header_response.context_menu(|ui| {
-            if ui.button("Remove Component").clicked() {
-                remove = true;
-                ui.close();
-            }
-        });
-    }
-
-    remove
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -1072,16 +936,10 @@ pub(crate) fn draw_animation_controller(
     scene_dirty: &mut bool,
     _undo_system: &mut crate::undo::UndoSystem,
 ) -> bool {
-    let mut remove = false;
-
-    if scene.has_component::<AnimationControllerComponent>(entity) {
-        let cr = egui::CollapsingHeader::new(
-            egui::RichText::new("Animation Controller")
-                .font(egui::FontId::new(14.0, bold_family.clone())),
-        )
-        .id_salt(("animation_controller", entity.id()))
-        .default_open(true)
-        .show(ui, |ui| {
+    if !scene.has_component::<AnimationControllerComponent>(entity) {
+        return false;
+    }
+    super::component_header(ui, "Animation Controller", "animation_controller", bold_family, entity, |ui| {
             let transition_count = {
                 let ctrl = scene
                     .get_component::<AnimationControllerComponent>(entity)
@@ -1318,15 +1176,5 @@ pub(crate) fn draw_animation_controller(
                 }
                 *scene_dirty = true;
             }
-        });
-
-        cr.header_response.context_menu(|ui| {
-            if ui.button("Remove Component").clicked() {
-                remove = true;
-                ui.close();
-            }
-        });
-    }
-
-    remove
+    })
 }

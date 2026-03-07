@@ -46,34 +46,20 @@ pub(crate) fn draw_native_script_component(
     _undo_system: &mut crate::undo::UndoSystem,
 ) -> bool {
     let _ = scene_dirty; // NativeScript has no editable properties, but accept for API consistency.
-    let mut remove = false;
 
-    if scene.has_component::<NativeScriptComponent>(entity) {
-        let cr = egui::CollapsingHeader::new(
-            egui::RichText::new("Native Script").font(egui::FontId::new(14.0, bold_family.clone())),
-        )
-        .id_salt(("native_script", entity.id()))
-        .default_open(true)
-        .show(ui, |ui| {
-            ui.horizontal(|ui| {
-                ui.label("Script");
-                ui.label(
-                    egui::RichText::new("(bound in code)")
-                        .color(egui::Color32::from_rgb(0x96, 0x96, 0x96))
-                        .italics(),
-                );
-            });
-        });
-
-        cr.header_response.context_menu(|ui| {
-            if ui.button("Remove Component").clicked() {
-                remove = true;
-                ui.close();
-            }
-        });
+    if !scene.has_component::<NativeScriptComponent>(entity) {
+        return false;
     }
-
-    remove
+    super::component_header(ui, "Native Script", "native_script", bold_family, entity, |ui| {
+        ui.horizontal(|ui| {
+            ui.label("Script");
+            ui.label(
+                egui::RichText::new("(bound in code)")
+                    .color(egui::Color32::from_rgb(0x96, 0x96, 0x96))
+                    .italics(),
+            );
+        });
+    })
 }
 
 #[cfg(feature = "lua-scripting")]
@@ -88,16 +74,11 @@ pub(crate) fn draw_lua_script_component(
     scene_dirty: &mut bool,
     _undo_system: &mut crate::undo::UndoSystem,
 ) -> bool {
-    let mut remove = false;
-
-    if scene.has_component::<LuaScriptComponent>(entity) {
-        let cr = egui::CollapsingHeader::new(
-            egui::RichText::new("Lua Script").font(egui::FontId::new(14.0, bold_family.clone())),
-        )
-        .id_salt(("lua_script", entity.id()))
-        .default_open(true)
-        .show(ui, |ui| {
-            let (script_path, field_overrides) = scene
+    if !scene.has_component::<LuaScriptComponent>(entity) {
+        return false;
+    }
+    super::component_header(ui, "Lua Script", "lua_script", bold_family, entity, |ui| {
+        let (script_path, field_overrides) = scene
                 .get_component::<LuaScriptComponent>(entity)
                 .map(|lsc| (lsc.script_path.clone(), lsc.field_overrides.clone()))
                 .unwrap_or_default();
@@ -253,15 +234,5 @@ pub(crate) fn draw_lua_script_component(
                     });
                 }
             }
-        });
-
-        cr.header_response.context_menu(|ui| {
-            if ui.button("Remove Component").clicked() {
-                remove = true;
-                ui.close();
-            }
-        });
-    }
-
-    remove
+    })
 }

@@ -14,13 +14,17 @@ layout(location = 4) in int a_entity_id;
 layout(location = 0) out vec4 v_color;
 layout(location = 1) out vec2 v_tex_coord;
 layout(location = 2) out flat float v_tex_index;
+#ifdef OFFSCREEN
 layout(location = 3) out flat int v_entity_id;
+#endif
 
 void main() {
     v_color = a_color;
     v_tex_coord = a_tex_coord;
     v_tex_index = a_tex_index;
+#ifdef OFFSCREEN
     v_entity_id = a_entity_id;
+#endif
     gl_Position = camera.u_view_projection * vec4(a_position, 1.0);
 }
 
@@ -33,10 +37,14 @@ layout(set = 1, binding = 0) uniform sampler2D u_textures[];
 layout(location = 0) in vec4 v_color;
 layout(location = 1) in vec2 v_tex_coord;
 layout(location = 2) in flat float v_tex_index;
+#ifdef OFFSCREEN
 layout(location = 3) in flat int v_entity_id;
+#endif
 
 layout(location = 0) out vec4 out_color;
+#ifdef OFFSCREEN
 layout(location = 1) out int out_entity_id;
+#endif
 
 float median(float r, float g, float b) {
     return max(min(r, g), min(max(r, g), b));
@@ -55,5 +63,7 @@ void main() {
         discard;
 
     out_color = vec4(v_color.rgb, v_color.a * opacity);
+#ifdef OFFSCREEN
     out_entity_id = v_entity_id;
+#endif
 }
