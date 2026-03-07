@@ -6,7 +6,7 @@ use super::{
     asset_type_from_extension, validate_asset_path, AssetHandle, AssetMetadata, AssetRegistry,
     AssetType,
 };
-use crate::renderer::{Renderer, Texture2D, TextureSpecification};
+use crate::renderer::{Font, Renderer, Texture2D, TextureSpecification};
 use crate::uuid::Uuid;
 use crate::Ref;
 
@@ -23,6 +23,8 @@ pub struct EditorAssetManager {
     loaded_assets: HashMap<AssetHandle, AssetData>,
     asset_directory: PathBuf,
     loader: AssetLoader,
+    /// Cached fonts keyed by file path (shared across entities via Arc).
+    loaded_fonts: HashMap<PathBuf, Ref<Font>>,
     /// Lazily-created magenta/black checkerboard texture used for missing assets.
     fallback_texture: Option<Ref<Texture2D>>,
     /// Monotonic counter bumped on each asset access, used for LRU eviction.
@@ -44,6 +46,7 @@ impl EditorAssetManager {
             loaded_assets: HashMap::new(),
             asset_directory: asset_directory.into(),
             loader: AssetLoader::new(),
+            loaded_fonts: HashMap::new(),
             fallback_texture: None,
             access_counter: 0,
             access_times: HashMap::new(),
@@ -333,12 +336,13 @@ impl EditorAssetManager {
             .request_texture(*handle, abs_path, TextureSpecification::default());
     }
 
-    /// Poll completed async loads, perform GPU upload for textures,
-    /// and store them in `loaded_assets`. Returns any font results for
-    /// the caller to process.
-    pub fn poll_loaded(&mut self, renderer: &mut Renderer) -> Vec<LoadResult> {
+    /// Poll completed async loads and perform GPU uploads.
+    ///
+    /// Textures are stored in `loaded_assets`; fonts are cached in
+    /// `loaded_fonts`. Call [`flush_transfers`](Renderer::flush_transfers)
+    /// after this to submit the upload batch.
+    pub fn poll_loaded(&mut self, renderer: &mut Renderer) {
         let results = self.loader.poll_results();
-        let mut font_results = Vec::new();
 
         for result in results {
             match result {
@@ -366,14 +370,23 @@ impl EditorAssetManager {
                         }
                     }
                 }
-                font_result @ LoadResult::Font { .. } => {
-                    font_results.push(font_result);
-                }
+                LoadResult::Font { font_key, data } => match data {
+                    Ok(cpu_data) => match renderer.upload_font(cpu_data) {
+                        Ok(font) => {
+                            self.loaded_fonts.insert(font_key, Ref::new(font));
+                        }
+                        Err(e) => {
+                            log::warn!("Font GPU upload failed: {e}");
+                        }
+                    },
+                    Err(e) => {
+                        log::warn!("Async font load failed: {e}");
+                    }
+                },
             }
         }
 
         self.evict_lru();
-        font_results
     }
 
     /// Unload a specific asset from GPU memory.
@@ -448,6 +461,24 @@ impl EditorAssetManager {
         if evict_count > 0 {
             log::debug!("LRU cache eviction: removed {} textures", evict_count);
         }
+    }
+
+    /// Get a cached font by file path.
+    pub fn get_font(&self, path: &Path) -> Option<Ref<Font>> {
+        self.loaded_fonts.get(path).cloned()
+    }
+
+    /// Request async font loading. No-op if already loaded or pending.
+    pub fn request_font_load(&mut self, path: PathBuf) {
+        if self.loaded_fonts.contains_key(&path) {
+            return;
+        }
+        self.loader.request_font(path);
+    }
+
+    /// Number of pending (in-flight) load requests (textures + fonts).
+    pub fn pending_load_count(&self) -> usize {
+        self.loader.pending_count()
     }
 
     /// Access the underlying asset loader (e.g., for font loading from editor).

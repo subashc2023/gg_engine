@@ -525,8 +525,7 @@ impl GGEditor {
             if w > 0 && h > 0 {
                 self.scene.on_viewport_resize(w, h);
             }
-            self.queue_font_loads_from_scene();
-            self.scene_ctx.dirty = true;
+                        self.scene_ctx.dirty = true;
         }
     }
 
@@ -545,8 +544,7 @@ impl GGEditor {
             if w > 0 && h > 0 {
                 self.scene.on_viewport_resize(w, h);
             }
-            self.queue_font_loads_from_scene();
-            self.scene_ctx.dirty = true;
+                        self.scene_ctx.dirty = true;
         }
     }
 
@@ -620,8 +618,7 @@ impl GGEditor {
                     }
                     self.selection_context = Some(root);
                     self.scene_ctx.dirty = true;
-                    self.queue_font_loads_from_scene();
-                }
+                                    }
             }
         }
     }
@@ -648,27 +645,6 @@ impl GGEditor {
             let (w, h) = self.viewport.size;
             if w > 0 && h > 0 {
                 self.scene.on_viewport_resize(w, h);
-            }
-            self.queue_font_loads_from_scene();
-        }
-    }
-
-    /// Queue font loads for the current scene.
-    ///
-    /// Textures are now resolved via the asset manager in `on_render`
-    /// (using `resolve_texture_handles`). Only fonts still need queuing.
-    pub(super) fn queue_font_loads_from_scene(&mut self) {
-        let entities = self.scene.each_entity_with_tag();
-        for (entity, _tag) in &entities {
-            if let Some(tc) = self.scene.get_component::<TextComponent>(*entity) {
-                if !tc.font_path.is_empty() && tc.font.is_none() {
-                    let path = PathBuf::from(&tc.font_path);
-                    if path.exists() {
-                        self.fonts.pending_loads.push((*entity, path));
-                    } else {
-                        warn!("Font not found: {}", tc.font_path);
-                    }
-                }
             }
         }
     }
@@ -721,8 +697,7 @@ impl GGEditor {
                 self.scene_ctx.pending_drop_scenes.push(old);
                 self.scene_ctx.editor_scene_path = Some(path_str);
                 self.scene_ctx.dirty = recovered;
-                self.queue_font_loads_from_scene();
-            }
+                            }
         } else {
             let old = std::mem::replace(&mut self.scene, Scene::new());
             self.scene_ctx.pending_drop_scenes.push(old);

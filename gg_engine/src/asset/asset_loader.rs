@@ -152,6 +152,11 @@ impl AssetLoader {
     pub fn is_font_pending(&self, font_key: &PathBuf) -> bool {
         self.pending_fonts.contains(font_key)
     }
+
+    /// Number of pending (in-flight) load requests (textures + fonts).
+    pub fn pending_count(&self) -> usize {
+        self.pending_textures.len() + self.pending_fonts.len()
+    }
 }
 
 impl Default for AssetLoader {

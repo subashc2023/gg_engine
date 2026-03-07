@@ -364,6 +364,47 @@ impl Scene {
         }
     }
 
+    /// Async variant of [`load_fonts`](Self::load_fonts).
+    ///
+    /// For text components with unresolved fonts:
+    /// - If the font is already cached in the asset manager, assigns it immediately.
+    /// - Otherwise, requests an async background load (non-blocking).
+    ///
+    /// On subsequent frames, `poll_loaded` will upload completed fonts,
+    /// and this method will find them in the cache and assign them.
+    pub fn load_fonts_async(
+        &mut self,
+        asset_manager: &mut crate::asset::EditorAssetManager,
+    ) {
+        let needs: Vec<(hecs::Entity, std::path::PathBuf)> = self
+            .world
+            .query::<(hecs::Entity, &TextComponent)>()
+            .iter()
+            .filter_map(|(handle, tc)| {
+                if tc.font.is_none() && !tc.font_path.is_empty() {
+                    let path = std::path::PathBuf::from(&tc.font_path);
+                    if path.exists() {
+                        Some((handle, path))
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        for (handle, path) in needs {
+            if let Some(font) = asset_manager.get_font(&path) {
+                if let Ok(mut tc) = self.world.get::<&mut TextComponent>(handle) {
+                    tc.font = Some(font);
+                }
+            } else {
+                asset_manager.request_font_load(path);
+            }
+        }
+    }
+
     /// Load fonts for all [`TextComponent`]s that have a `font_path` set
     /// but no loaded font. Similar to [`resolve_texture_handles`](Self::resolve_texture_handles).
     pub fn load_fonts(&mut self, renderer: &Renderer) {

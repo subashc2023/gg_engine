@@ -113,12 +113,6 @@ struct GizmoState {
     local: bool,
 }
 
-/// Font loading pipeline: pending loads and cache of loaded fonts.
-struct FontState {
-    pending_loads: Vec<(Entity, PathBuf)>,
-    cache: HashMap<PathBuf, Ref<Font>>,
-}
-
 /// Scene lifecycle: path, dirty flag, auto-save, warnings, deferred drops.
 struct SceneContext {
     editor_scene_path: Option<String>,
@@ -185,7 +179,6 @@ struct GGEditor {
     scene: Scene,
     selection_context: Option<Entity>,
     editor_camera: EditorCamera,
-    fonts: FontState,
     tilemap_paint: TilemapPaintState,
     undo_system: undo::UndoSystem,
     should_exit: bool,
@@ -378,10 +371,6 @@ impl Application for GGEditor {
                     initial_cam_state.pitch,
                 );
                 cam
-            },
-            fonts: FontState {
-                pending_loads: Vec::new(),
-                cache: HashMap::new(),
             },
             tilemap_paint: TilemapPaintState::new(),
             undo_system: undo::UndoSystem::new(),
@@ -761,79 +750,19 @@ impl Application for GGEditor {
             return;
         }
 
-        // Step 1: Poll completed async loads.
+        // Step 1: Poll completed async loads (textures + fonts).
         if let Some(ref mut am) = self.project_state.asset_manager {
-            let font_results = am.poll_loaded(renderer);
-            for result in font_results {
-                if let gg_engine::asset::LoadResult::Font { font_key, data } = result {
-                    match data {
-                        Ok(cpu_data) => match renderer.upload_font(cpu_data) {
-                            Ok(font) => {
-                                self.fonts.cache.insert(font_key, Ref::new(font));
-                            }
-                            Err(e) => {
-                                warn!("Font GPU upload failed: {e}");
-                            }
-                        },
-                        Err(e) => {
-                            warn!("Async font load failed: {e}");
-                        }
-                    }
-                }
-            }
+            am.poll_loaded(renderer);
         }
 
         // Submit any batched texture/font uploads before rendering.
         renderer.flush_transfers();
 
-        // Step 2: Resolve texture handles (async — requests loads, assigns ready textures).
+        // Step 2: Resolve texture, audio, and font handles (async — non-blocking).
         if let Some(ref mut am) = self.project_state.asset_manager {
             self.scene.resolve_texture_handles_async(am);
             self.scene.resolve_audio_handles(am);
-        }
-
-        // Step 3: Process deferred font loads for TextComponents.
-        for (entity, path) in self.fonts.pending_loads.drain(..) {
-            if self.scene.is_alive(entity) {
-                if let Some(font) = self.fonts.cache.get(&path) {
-                    if let Some(mut tc) = self.scene.get_component_mut::<TextComponent>(entity) {
-                        tc.font = Some(font.clone());
-                    }
-                } else if let Some(ref mut am) = self.project_state.asset_manager {
-                    am.loader().request_font(path);
-                }
-            }
-        }
-
-        // Step 4: Check for TextComponents that need fonts loaded (e.g. after font_path change).
-        {
-            let needs_load: Vec<(Entity, std::path::PathBuf)> = self
-                .scene
-                .each_entity_with_tag()
-                .iter()
-                .filter_map(|(entity, _)| {
-                    let tc = self.scene.get_component::<TextComponent>(*entity)?;
-                    if tc.font.is_none() && !tc.font_path.is_empty() {
-                        let path = std::path::PathBuf::from(&tc.font_path);
-                        if path.exists() {
-                            Some((*entity, path))
-                        } else {
-                            None
-                        }
-                    } else {
-                        None
-                    }
-                })
-                .collect();
-            for (entity, path) in needs_load {
-                if let Some(font) = self.fonts.cache.get(&path) {
-                    if let Some(mut tc) = self.scene.get_component_mut::<TextComponent>(entity) {
-                        tc.font = Some(font.clone());
-                    }
-                } else if let Some(ref mut am) = self.project_state.asset_manager {
-                    am.loader().request_font(path);
-                }
-            }
+            self.scene.load_fonts_async(am);
         }
 
         match self.playback.scene_state {

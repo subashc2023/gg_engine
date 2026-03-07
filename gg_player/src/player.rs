@@ -117,7 +117,8 @@ pub struct GGPlayer {
     asset_manager: Option<EditorAssetManager>,
     window_width: u32,
     window_height: u32,
-    textures_loaded: bool,
+    /// Set after the first frame kicks off async loading.
+    loading_started: bool,
     runtime_started: bool,
     present_mode: PresentMode,
 }
@@ -211,7 +212,7 @@ impl Application for GGPlayer {
             asset_manager: Some(asset_manager),
             window_width: config.width,
             window_height: config.height,
-            textures_loaded: false,
+            loading_started: false,
             runtime_started: false,
             present_mode,
         }
@@ -276,21 +277,43 @@ impl Application for GGPlayer {
 
     fn on_render(&mut self, renderer: &mut Renderer) {
         profile_scope!("GGPlayer::on_render");
-        // First-frame initialization: load textures and start runtime.
-        if !self.textures_loaded {
+
+        // First frame: set viewport and kick off async loading.
+        if !self.loading_started {
             self.scene
                 .on_viewport_resize(self.window_width, self.window_height);
             if let Some(ref mut am) = self.asset_manager {
-                self.scene.resolve_texture_handles(am, renderer);
                 self.scene.resolve_audio_handles(am);
+                self.scene.resolve_texture_handles_async(am);
+                self.scene.load_fonts_async(am);
             }
-            self.scene.load_fonts(renderer);
-            self.textures_loaded = true;
+            self.loading_started = true;
         }
 
-        if !self.runtime_started && self.textures_loaded {
-            self.scene.on_runtime_start();
-            self.runtime_started = true;
+        // Per-frame: poll async completions and GPU-upload.
+        if let Some(ref mut am) = self.asset_manager {
+            am.poll_loaded(renderer);
+        }
+        renderer.flush_transfers();
+        renderer.poll_transfers();
+
+        // Assign newly loaded textures and fonts to entities.
+        if let Some(ref mut am) = self.asset_manager {
+            self.scene.resolve_texture_handles_async(am);
+            self.scene.load_fonts_async(am);
+        }
+
+        // Start runtime once all pending loads are complete.
+        if !self.runtime_started {
+            let pending = self
+                .asset_manager
+                .as_ref()
+                .map(|am| am.pending_load_count())
+                .unwrap_or(0);
+            if pending == 0 {
+                self.scene.on_runtime_start();
+                self.runtime_started = true;
+            }
         }
 
         // Render through the scene's primary ECS camera.
