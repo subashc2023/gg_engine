@@ -3,8 +3,10 @@ use std::path::Path;
 
 /// Write data to a file atomically by writing to a temp file first, then renaming.
 ///
-/// This prevents data corruption if the process crashes mid-write. The rename
-/// is atomic on most filesystems (including NTFS on Windows).
+/// On Unix, `rename()` is atomic — it overwrites the target in a single operation.
+/// On Windows, `rename()` fails if the target exists, so we remove then rename.
+/// The Windows path has a small non-atomic gap, but this is inherent to the
+/// platform without Win32 `ReplaceFile`.
 pub fn atomic_write(path: impl AsRef<Path>, data: &str) -> std::io::Result<()> {
     let path = path.as_ref();
     let temp_path = path.with_extension("tmp");
@@ -15,12 +17,19 @@ pub fn atomic_write(path: impl AsRef<Path>, data: &str) -> std::io::Result<()> {
     file.sync_all()?;
     drop(file);
 
-    // Atomic rename (overwrites existing file on Windows via rename).
-    // On Windows, std::fs::rename can fail if the target exists, so remove first.
-    if path.exists() {
-        std::fs::remove_file(path)?;
+    // On Unix, rename atomically overwrites the target.
+    // On Windows, we must remove first (small non-atomic gap).
+    #[cfg(unix)]
+    {
+        std::fs::rename(&temp_path, path)
     }
-    std::fs::rename(&temp_path, path)
+    #[cfg(not(unix))]
+    {
+        if path.exists() {
+            std::fs::remove_file(path)?;
+        }
+        std::fs::rename(&temp_path, path)
+    }
 }
 
 /// Platform-specific utilities implemented per-platform.

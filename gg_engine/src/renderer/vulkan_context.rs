@@ -99,6 +99,12 @@ impl VulkanContext {
         #[cfg(debug_assertions)]
         required_extensions.push(ash::ext::debug_utils::NAME.as_ptr());
 
+        // macOS (MoltenVK) requires portability enumeration to discover devices.
+        #[cfg(target_os = "macos")]
+        {
+            required_extensions.push(vk::KHR_PORTABILITY_ENUMERATION_NAME.as_ptr());
+        }
+
         // Step 3: Validation layers (debug only)
         #[cfg(debug_assertions)]
         let layer_names = [c"VK_LAYER_KHRONOS_validation"];
@@ -117,7 +123,15 @@ impl VulkanContext {
             .engine_version(vk::make_api_version(0, 0, 1, 0))
             .api_version(vk::API_VERSION_1_3);
 
+        #[allow(unused_mut)]
+        let mut instance_flags = vk::InstanceCreateFlags::empty();
+        #[cfg(target_os = "macos")]
+        {
+            instance_flags |= vk::InstanceCreateFlags::ENUMERATE_PORTABILITY_KHR;
+        }
+
         let instance_create_info = vk::InstanceCreateInfo::default()
+            .flags(instance_flags)
             .application_info(&app_info)
             .enabled_extension_names(&required_extensions)
             .enabled_layer_names(&layer_name_ptrs);
@@ -183,12 +197,20 @@ impl VulkanContext {
             .queue_family_index(graphics_queue_family_index)
             .queue_priorities(&queue_priorities);
 
+        #[cfg(not(target_os = "macos"))]
         let device_extensions = [ash::khr::swapchain::NAME.as_ptr()];
+        // macOS (MoltenVK) requires the portability subset extension.
+        #[cfg(target_os = "macos")]
+        let device_extensions = [
+            ash::khr::swapchain::NAME.as_ptr(),
+            vk::KHR_PORTABILITY_SUBSET_NAME.as_ptr(),
+        ];
 
         let features10 = vk::PhysicalDeviceFeatures::default()
             .sampler_anisotropy(true)
             .independent_blend(true)
-            .wide_lines(true);
+            // wide_lines is not supported on macOS (MoltenVK / Metal).
+            .wide_lines(!cfg!(target_os = "macos"));
 
         let mut features12 = vk::PhysicalDeviceVulkan12Features::default()
             .descriptor_binding_partially_bound(true)

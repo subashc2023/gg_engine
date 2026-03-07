@@ -46,8 +46,14 @@ impl AssetRegistry {
 
     pub fn insert(&mut self, handle: AssetHandle, metadata: AssetMetadata) {
         let normalized_path = metadata.file_path.replace('\\', "/");
-        self.path_index.insert(normalized_path, handle);
-        self.assets.insert(handle, metadata);
+        self.path_index.insert(normalized_path.clone(), handle);
+        self.assets.insert(
+            handle,
+            AssetMetadata {
+                file_path: normalized_path,
+                asset_type: metadata.asset_type,
+            },
+        );
     }
 
     pub fn get(&self, handle: &AssetHandle) -> Option<&AssetMetadata> {
@@ -250,6 +256,12 @@ mod tests {
         reg.insert(
             handle,
             make_metadata("textures\\sprites\\player.png", AssetType::Texture2D),
+        );
+
+        // Stored file_path should be normalized to forward slashes.
+        assert_eq!(
+            reg.get(&handle).unwrap().file_path,
+            "textures/sprites/player.png"
         );
 
         // Lookup with forward slashes should work.

@@ -1163,8 +1163,13 @@ impl Renderer {
 
     /// Set the line width used for line rendering.
     /// Requires `wideLines` device feature for values other than 1.0.
+    /// On macOS (MoltenVK), wide lines are not supported — width is clamped to 1.0.
     /// Flushes any pending lines so they render at the previous width.
     pub fn set_line_width(&mut self, width: f32) {
+        // macOS / MoltenVK does not support wide lines; clamp to 1.0.
+        #[cfg(target_os = "macos")]
+        let width = 1.0_f32;
+
         if (self.line_width - width).abs() > f32::EPSILON {
             if self.draw_context.is_some() {
                 self.flush_line_batch();

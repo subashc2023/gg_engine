@@ -74,7 +74,9 @@ pub fn validate_asset_path(relative_path: &str) -> bool {
     }
 
     // Reject any `..` path component that could escape the asset directory.
-    for component in relative_path.split('/') {
+    // Split on both `/` and `\` for defense-in-depth (callers should normalize
+    // to forward slashes, but we handle both just in case).
+    for component in relative_path.split(['/', '\\']) {
         if component == ".." {
             return false;
         }
