@@ -644,14 +644,14 @@ impl Default for ParticleEmitterComponent {
 /// the camera.
 ///
 /// If multiple entities have this component, the last one found is used.
-#[derive(Clone, Default)]
+#[derive(Clone)]
 pub struct AudioListenerComponent {
     /// Whether this listener is active. Allows disabling without removing.
     pub active: bool,
 }
 
-impl AudioListenerComponent {
-    pub fn new() -> Self {
+impl Default for AudioListenerComponent {
+    fn default() -> Self {
         Self { active: true }
     }
 }

@@ -6,7 +6,7 @@
 
 use mlua::prelude::*;
 
-use super::Scene;
+use super::{Entity, Scene};
 use crate::events::{KeyCode, MouseButton};
 use crate::input::Input;
 
@@ -56,6 +56,76 @@ impl SceneScriptContext {
         } else {
             Some(&*self.input)
         }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Context helpers — eliminate repeated app_data_mut + unsafe boilerplate
+// ---------------------------------------------------------------------------
+
+/// Acquire immutable scene access, find entity, and call closure.
+/// Returns `default` if context unavailable or entity not found.
+fn with_entity<R>(
+    lua: &Lua,
+    entity_id: u64,
+    default: R,
+    f: impl FnOnce(&Scene, Entity) -> R,
+) -> LuaResult<R> {
+    let ctx = match lua.app_data_mut::<SceneScriptContext>() {
+        Some(ctx) => ctx,
+        None => return Ok(default),
+    };
+    let scene = unsafe { ctx.scene() };
+    let entity = scene.find_entity_by_uuid(entity_id);
+    Ok(entity.map(|e| f(scene, e)).unwrap_or(default))
+}
+
+/// Acquire mutable scene access, find entity, and call closure.
+/// Returns `default` if context unavailable or entity not found.
+fn with_entity_mut<R>(
+    lua: &Lua,
+    entity_id: u64,
+    default: R,
+    f: impl FnOnce(&mut Scene, Entity) -> R,
+) -> LuaResult<R> {
+    let mut ctx = match lua.app_data_mut::<SceneScriptContext>() {
+        Some(ctx) => ctx,
+        None => return Ok(default),
+    };
+    let scene = unsafe { ctx.scene_mut() };
+    let entity = scene.find_entity_by_uuid(entity_id);
+    Ok(entity.map(|e| f(scene, e)).unwrap_or(default))
+}
+
+/// Acquire mutable scene access (no entity lookup) and call closure.
+/// Returns `default` if context unavailable.
+fn with_scene_mut<R>(
+    lua: &Lua,
+    default: R,
+    f: impl FnOnce(&mut Scene) -> R,
+) -> LuaResult<R> {
+    let mut ctx = match lua.app_data_mut::<SceneScriptContext>() {
+        Some(ctx) => ctx,
+        None => return Ok(default),
+    };
+    let scene = unsafe { ctx.scene_mut() };
+    Ok(f(scene))
+}
+
+/// Acquire input access and call closure.
+/// Returns `default` if context or input unavailable.
+fn with_input<R>(
+    lua: &Lua,
+    default: R,
+    f: impl FnOnce(&Input) -> R,
+) -> LuaResult<R> {
+    let ctx = match lua.app_data_mut::<SceneScriptContext>() {
+        Some(ctx) => ctx,
+        None => return Ok(default),
+    };
+    match unsafe { ctx.input() } {
+        Some(input) => Ok(f(input)),
+        None => Ok(default),
     }
 }
 
@@ -323,133 +393,74 @@ fn mouse_button_name_to_enum(name: &str) -> Option<MouseButton> {
 
 /// `Engine.get_translation(entity_id)` — returns `(x, y, z)` from the entity's TransformComponent.
 fn get_translation(lua: &Lua, entity_id: u64) -> LuaResult<(f32, f32, f32)> {
-    let ctx = match lua.app_data_mut::<SceneScriptContext>() {
-        Some(ctx) => ctx,
-        None => return Ok((0.0, 0.0, 0.0)),
-    };
-
-    let scene = unsafe { ctx.scene() };
-    if let Some(entity) = scene.find_entity_by_uuid(entity_id) {
-        if let Some(tc) = scene.get_component::<super::TransformComponent>(entity) {
-            return Ok((tc.translation.x, tc.translation.y, tc.translation.z));
-        }
-    }
-
-    Ok((0.0, 0.0, 0.0))
+    with_entity(lua, entity_id, (0.0, 0.0, 0.0), |scene, entity| {
+        scene
+            .get_component::<super::TransformComponent>(entity)
+            .map(|tc| (tc.translation.x, tc.translation.y, tc.translation.z))
+            .unwrap_or((0.0, 0.0, 0.0))
+    })
 }
 
 /// `Engine.set_translation(entity_id, x, y, z)` — writes to the entity's TransformComponent.
 fn set_translation(lua: &Lua, (entity_id, x, y, z): (u64, f32, f32, f32)) -> LuaResult<()> {
-    let mut ctx = match lua.app_data_mut::<SceneScriptContext>() {
-        Some(ctx) => ctx,
-        None => return Ok(()),
-    };
-
-    let scene = unsafe { ctx.scene_mut() };
-    if let Some(entity) = scene.find_entity_by_uuid(entity_id) {
+    with_entity_mut(lua, entity_id, (), |scene, entity| {
         if let Some(mut tc) = scene.get_component_mut::<super::TransformComponent>(entity) {
-            tc.translation.x = x;
-            tc.translation.y = y;
-            tc.translation.z = z;
+            tc.translation = glam::Vec3::new(x, y, z);
         }
-    }
-
-    Ok(())
+    })
 }
 
 /// `Engine.is_key_down(key_name)` — returns true if the named key is currently pressed.
 fn is_key_down(lua: &Lua, key_name: String) -> LuaResult<bool> {
-    let ctx = match lua.app_data_mut::<SceneScriptContext>() {
-        Some(ctx) => ctx,
-        None => return Ok(false),
-    };
-
-    let input = match unsafe { ctx.input() } {
-        Some(input) => input,
-        None => return Ok(false),
-    };
-
-    if let Some(key_code) = key_name_to_keycode(&key_name) {
-        Ok(input.is_key_pressed(key_code))
-    } else {
-        log::warn!("ScriptGlue: unknown key name '{}'", key_name);
-        Ok(false)
-    }
+    with_input(lua, false, |input| {
+        key_name_to_keycode(&key_name)
+            .map(|kc| input.is_key_pressed(kc))
+            .unwrap_or_else(|| {
+                log::warn!("ScriptGlue: unknown key name '{}'", key_name);
+                false
+            })
+    })
 }
 
 /// `Engine.is_key_pressed(key_name)` — returns true only on the first frame the key is pressed.
 fn is_key_just_pressed(lua: &Lua, key_name: String) -> LuaResult<bool> {
-    let ctx = match lua.app_data_mut::<SceneScriptContext>() {
-        Some(ctx) => ctx,
-        None => return Ok(false),
-    };
-
-    let input = match unsafe { ctx.input() } {
-        Some(input) => input,
-        None => return Ok(false),
-    };
-
-    if let Some(key_code) = key_name_to_keycode(&key_name) {
-        Ok(input.is_key_just_pressed(key_code))
-    } else {
-        log::warn!("ScriptGlue: unknown key name '{}'", key_name);
-        Ok(false)
-    }
+    with_input(lua, false, |input| {
+        key_name_to_keycode(&key_name)
+            .map(|kc| input.is_key_just_pressed(kc))
+            .unwrap_or_else(|| {
+                log::warn!("ScriptGlue: unknown key name '{}'", key_name);
+                false
+            })
+    })
 }
 
 /// `Engine.is_mouse_button_down(button_name)` — returns true if the named mouse button is currently pressed.
 fn is_mouse_button_down(lua: &Lua, button_name: String) -> LuaResult<bool> {
-    let ctx = match lua.app_data_mut::<SceneScriptContext>() {
-        Some(ctx) => ctx,
-        None => return Ok(false),
-    };
-
-    let input = match unsafe { ctx.input() } {
-        Some(input) => input,
-        None => return Ok(false),
-    };
-
-    if let Some(button) = mouse_button_name_to_enum(&button_name) {
-        Ok(input.is_mouse_button_pressed(button))
-    } else {
-        log::warn!("ScriptGlue: unknown mouse button name '{}'", button_name);
-        Ok(false)
-    }
+    with_input(lua, false, |input| {
+        mouse_button_name_to_enum(&button_name)
+            .map(|btn| input.is_mouse_button_pressed(btn))
+            .unwrap_or_else(|| {
+                log::warn!("ScriptGlue: unknown mouse button name '{}'", button_name);
+                false
+            })
+    })
 }
 
 /// `Engine.is_mouse_button_pressed(button_name)` — returns true only on the first frame the button is pressed.
 fn is_mouse_button_just_pressed(lua: &Lua, button_name: String) -> LuaResult<bool> {
-    let ctx = match lua.app_data_mut::<SceneScriptContext>() {
-        Some(ctx) => ctx,
-        None => return Ok(false),
-    };
-
-    let input = match unsafe { ctx.input() } {
-        Some(input) => input,
-        None => return Ok(false),
-    };
-
-    if let Some(button) = mouse_button_name_to_enum(&button_name) {
-        Ok(input.is_mouse_button_just_pressed(button))
-    } else {
-        log::warn!("ScriptGlue: unknown mouse button name '{}'", button_name);
-        Ok(false)
-    }
+    with_input(lua, false, |input| {
+        mouse_button_name_to_enum(&button_name)
+            .map(|btn| input.is_mouse_button_just_pressed(btn))
+            .unwrap_or_else(|| {
+                log::warn!("ScriptGlue: unknown mouse button name '{}'", button_name);
+                false
+            })
+    })
 }
 
 /// `Engine.get_mouse_position()` — returns `(x, y)` screen-space mouse position.
 fn get_mouse_position(lua: &Lua, _: ()) -> LuaResult<(f64, f64)> {
-    let ctx = match lua.app_data_mut::<SceneScriptContext>() {
-        Some(ctx) => ctx,
-        None => return Ok((0.0, 0.0)),
-    };
-
-    let input = match unsafe { ctx.input() } {
-        Some(input) => input,
-        None => return Ok((0.0, 0.0)),
-    };
-
-    Ok(input.mouse_position())
+    with_input(lua, (0.0, 0.0), |input| input.mouse_position())
 }
 
 // ---------------------------------------------------------------------------
@@ -458,74 +469,40 @@ fn get_mouse_position(lua: &Lua, _: ()) -> LuaResult<(f64, f64)> {
 
 /// `Engine.get_rotation(entity_id)` — returns `(rx, ry, rz)` in radians.
 fn get_rotation(lua: &Lua, entity_id: u64) -> LuaResult<(f32, f32, f32)> {
-    let ctx = match lua.app_data_mut::<SceneScriptContext>() {
-        Some(ctx) => ctx,
-        None => return Ok((0.0, 0.0, 0.0)),
-    };
-
-    let scene = unsafe { ctx.scene() };
-    if let Some(entity) = scene.find_entity_by_uuid(entity_id) {
-        if let Some(tc) = scene.get_component::<super::TransformComponent>(entity) {
-            return Ok((tc.rotation.x, tc.rotation.y, tc.rotation.z));
-        }
-    }
-
-    Ok((0.0, 0.0, 0.0))
+    with_entity(lua, entity_id, (0.0, 0.0, 0.0), |scene, entity| {
+        scene
+            .get_component::<super::TransformComponent>(entity)
+            .map(|tc| (tc.rotation.x, tc.rotation.y, tc.rotation.z))
+            .unwrap_or((0.0, 0.0, 0.0))
+    })
 }
 
 /// `Engine.set_rotation(entity_id, rx, ry, rz)` — sets rotation in radians.
 fn set_rotation(lua: &Lua, (entity_id, rx, ry, rz): (u64, f32, f32, f32)) -> LuaResult<()> {
-    let mut ctx = match lua.app_data_mut::<SceneScriptContext>() {
-        Some(ctx) => ctx,
-        None => return Ok(()),
-    };
-
-    let scene = unsafe { ctx.scene_mut() };
-    if let Some(entity) = scene.find_entity_by_uuid(entity_id) {
+    with_entity_mut(lua, entity_id, (), |scene, entity| {
         if let Some(mut tc) = scene.get_component_mut::<super::TransformComponent>(entity) {
-            tc.rotation.x = rx;
-            tc.rotation.y = ry;
-            tc.rotation.z = rz;
+            tc.rotation = glam::Vec3::new(rx, ry, rz);
         }
-    }
-
-    Ok(())
+    })
 }
 
 /// `Engine.get_scale(entity_id)` — returns `(sx, sy, sz)`.
 fn get_scale(lua: &Lua, entity_id: u64) -> LuaResult<(f32, f32, f32)> {
-    let ctx = match lua.app_data_mut::<SceneScriptContext>() {
-        Some(ctx) => ctx,
-        None => return Ok((1.0, 1.0, 1.0)),
-    };
-
-    let scene = unsafe { ctx.scene() };
-    if let Some(entity) = scene.find_entity_by_uuid(entity_id) {
-        if let Some(tc) = scene.get_component::<super::TransformComponent>(entity) {
-            return Ok((tc.scale.x, tc.scale.y, tc.scale.z));
-        }
-    }
-
-    Ok((1.0, 1.0, 1.0))
+    with_entity(lua, entity_id, (1.0, 1.0, 1.0), |scene, entity| {
+        scene
+            .get_component::<super::TransformComponent>(entity)
+            .map(|tc| (tc.scale.x, tc.scale.y, tc.scale.z))
+            .unwrap_or((1.0, 1.0, 1.0))
+    })
 }
 
 /// `Engine.set_scale(entity_id, sx, sy, sz)` — sets scale.
 fn set_scale(lua: &Lua, (entity_id, sx, sy, sz): (u64, f32, f32, f32)) -> LuaResult<()> {
-    let mut ctx = match lua.app_data_mut::<SceneScriptContext>() {
-        Some(ctx) => ctx,
-        None => return Ok(()),
-    };
-
-    let scene = unsafe { ctx.scene_mut() };
-    if let Some(entity) = scene.find_entity_by_uuid(entity_id) {
+    with_entity_mut(lua, entity_id, (), |scene, entity| {
         if let Some(mut tc) = scene.get_component_mut::<super::TransformComponent>(entity) {
-            tc.scale.x = sx;
-            tc.scale.y = sy;
-            tc.scale.z = sz;
+            tc.scale = glam::Vec3::new(sx, sy, sz);
         }
-    }
-
-    Ok(())
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -534,18 +511,7 @@ fn set_scale(lua: &Lua, (entity_id, sx, sy, sz): (u64, f32, f32, f32)) -> LuaRes
 
 /// `Engine.has_component(entity_id, component_name)` — string-based component check.
 fn has_component(lua: &Lua, (entity_id, name): (u64, String)) -> LuaResult<bool> {
-    let ctx = match lua.app_data_mut::<SceneScriptContext>() {
-        Some(ctx) => ctx,
-        None => return Ok(false),
-    };
-
-    let scene = unsafe { ctx.scene() };
-    let entity = match scene.find_entity_by_uuid(entity_id) {
-        Some(e) => e,
-        None => return Ok(false),
-    };
-
-    let result = match name.as_str() {
+    with_entity(lua, entity_id, false, |scene, entity| match name.as_str() {
         "Transform" => scene.has_component::<super::TransformComponent>(entity),
         "Camera" => scene.has_component::<super::CameraComponent>(entity),
         "SpriteRenderer" => scene.has_component::<super::SpriteRendererComponent>(entity),
@@ -574,9 +540,7 @@ fn has_component(lua: &Lua, (entity_id, name): (u64, String)) -> LuaResult<bool>
             log::warn!("ScriptGlue: unknown component name '{}'", name);
             false
         }
-    };
-
-    Ok(result)
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -586,16 +550,12 @@ fn has_component(lua: &Lua, (entity_id, name): (u64, String)) -> LuaResult<bool>
 /// `Engine.find_entity_by_name(name)` — returns the UUID of the first entity
 /// with the given tag name, or `nil` if not found.
 fn find_entity_by_name(lua: &Lua, name: String) -> LuaResult<LuaValue> {
-    let mut ctx = match lua.app_data_mut::<SceneScriptContext>() {
-        Some(ctx) => ctx,
-        None => return Ok(LuaValue::Nil),
-    };
-
-    let scene = unsafe { ctx.scene_mut() };
-    match scene.find_entity_by_name(&name) {
-        Some((_entity, uuid)) => Ok(LuaValue::Integer(uuid as i64)),
-        None => Ok(LuaValue::Nil),
-    }
+    with_scene_mut(lua, LuaValue::Nil, |scene| {
+        match scene.find_entity_by_name(&name) {
+            Some((_entity, uuid)) => LuaValue::Integer(uuid as i64),
+            None => LuaValue::Nil,
+        }
+    })
 }
 
 /// `Engine.get_script_field(entity_id, field_name)` — read a field from
@@ -673,46 +633,32 @@ fn set_script_field(
 
 /// `Engine.create_entity(name)` — create a new entity with the given name, returns its UUID.
 fn lua_create_entity(lua: &Lua, name: String) -> LuaResult<LuaValue> {
-    let mut ctx = match lua.app_data_mut::<SceneScriptContext>() {
-        Some(ctx) => ctx,
-        None => return Ok(LuaValue::Integer(0)),
-    };
-
-    let scene = unsafe { ctx.scene_mut() };
-    let entity = scene.create_entity_with_tag(&name);
-    let uuid = scene
-        .get_component::<super::IdComponent>(entity)
-        .map(|id| id.id.raw())
-        .unwrap_or(0);
-    Ok(LuaValue::Integer(uuid as i64))
+    with_scene_mut(lua, LuaValue::Integer(0), |scene| {
+        let entity = scene.create_entity_with_tag(&name);
+        let uuid = scene
+            .get_component::<super::IdComponent>(entity)
+            .map(|id| id.id.raw())
+            .unwrap_or(0);
+        LuaValue::Integer(uuid as i64)
+    })
 }
 
 /// `Engine.destroy_entity(uuid)` — queue an entity for deferred destruction.
 fn lua_destroy_entity(lua: &Lua, uuid: u64) -> LuaResult<()> {
-    let mut ctx = match lua.app_data_mut::<SceneScriptContext>() {
-        Some(ctx) => ctx,
-        None => return Ok(()),
-    };
-
-    let scene = unsafe { ctx.scene_mut() };
-    scene.queue_entity_destroy(uuid);
-    Ok(())
+    with_scene_mut(lua, (), |scene| scene.queue_entity_destroy(uuid))
 }
 
 /// `Engine.get_entity_name(uuid)` — returns the entity's tag name, or nil.
 fn lua_get_entity_name(lua: &Lua, uuid: u64) -> LuaResult<LuaValue> {
-    let ctx = match lua.app_data_mut::<SceneScriptContext>() {
-        Some(ctx) => ctx,
-        None => return Ok(LuaValue::Nil),
-    };
-
-    let scene = unsafe { ctx.scene() };
-    if let Some(entity) = scene.find_entity_by_uuid(uuid) {
-        if let Some(tag) = scene.get_component::<super::TagComponent>(entity) {
-            return Ok(LuaValue::String(lua.create_string(&tag.tag)?));
-        }
+    let name = with_entity(lua, uuid, None, |scene, entity| {
+        scene
+            .get_component::<super::TagComponent>(entity)
+            .map(|tag| tag.tag.clone())
+    })?;
+    match name {
+        Some(s) => Ok(LuaValue::String(lua.create_string(&s)?)),
+        None => Ok(LuaValue::Nil),
     }
-    Ok(LuaValue::Nil)
 }
 
 // ---------------------------------------------------------------------------
@@ -742,35 +688,19 @@ fn lua_set_parent(lua: &Lua, (child_id, parent_id): (u64, u64)) -> LuaResult<boo
 
 /// `Engine.detach_from_parent(entity_id)` — make an entity a root entity, preserving world transform.
 fn lua_detach_from_parent(lua: &Lua, entity_id: u64) -> LuaResult<()> {
-    let mut ctx = match lua.app_data_mut::<SceneScriptContext>() {
-        Some(ctx) => ctx,
-        None => return Ok(()),
-    };
-
-    let scene = unsafe { ctx.scene_mut() };
-    if let Some(entity) = scene.find_entity_by_uuid(entity_id) {
+    with_entity_mut(lua, entity_id, (), |scene, entity| {
         scene.detach_from_parent(entity, true);
-    }
-
-    Ok(())
+    })
 }
 
 /// `Engine.get_parent(entity_id)` — returns parent UUID as integer, or `nil` if root entity.
 fn lua_get_parent(lua: &Lua, entity_id: u64) -> LuaResult<LuaValue> {
-    let ctx = match lua.app_data_mut::<SceneScriptContext>() {
-        Some(ctx) => ctx,
-        None => return Ok(LuaValue::Nil),
-    };
-
-    let scene = unsafe { ctx.scene() };
-    if let Some(entity) = scene.find_entity_by_uuid(entity_id) {
+    with_entity(lua, entity_id, LuaValue::Nil, |scene, entity| {
         match scene.get_parent(entity) {
-            Some(parent_uuid) => Ok(LuaValue::Integer(parent_uuid as i64)),
-            None => Ok(LuaValue::Nil),
+            Some(parent_uuid) => LuaValue::Integer(parent_uuid as i64),
+            None => LuaValue::Nil,
         }
-    } else {
-        Ok(LuaValue::Nil)
-    }
+    })
 }
 
 /// `Engine.get_children(entity_id)` — returns a Lua table (1-indexed array) of child UUIDs.
@@ -800,111 +730,67 @@ fn lua_get_children(lua: &Lua, entity_id: u64) -> LuaResult<LuaValue> {
 
 /// `Engine.play_animation(entity_id, name)` — play an animation clip by name. Returns true if found.
 fn lua_play_animation(lua: &Lua, (entity_id, name): (u64, String)) -> LuaResult<bool> {
-    let mut ctx = match lua.app_data_mut::<SceneScriptContext>() {
-        Some(ctx) => ctx,
-        None => return Ok(false),
-    };
-
-    let scene = unsafe { ctx.scene_mut() };
-    if let Some(entity) = scene.find_entity_by_uuid(entity_id) {
-        if let Some(mut animator) =
-            scene.get_component_mut::<super::SpriteAnimatorComponent>(entity)
-        {
-            return Ok(animator.play(&name));
-        }
-    }
-    Ok(false)
+    with_entity_mut(lua, entity_id, false, |scene, entity| {
+        scene
+            .get_component_mut::<super::SpriteAnimatorComponent>(entity)
+            .map(|mut a| a.play(&name))
+            .unwrap_or(false)
+    })
 }
 
 /// `Engine.stop_animation(entity_id)` — stop the current animation.
 fn lua_stop_animation(lua: &Lua, entity_id: u64) -> LuaResult<()> {
-    let mut ctx = match lua.app_data_mut::<SceneScriptContext>() {
-        Some(ctx) => ctx,
-        None => return Ok(()),
-    };
-
-    let scene = unsafe { ctx.scene_mut() };
-    if let Some(entity) = scene.find_entity_by_uuid(entity_id) {
-        if let Some(mut animator) =
-            scene.get_component_mut::<super::SpriteAnimatorComponent>(entity)
-        {
-            animator.stop();
+    with_entity_mut(lua, entity_id, (), |scene, entity| {
+        if let Some(mut a) = scene.get_component_mut::<super::SpriteAnimatorComponent>(entity) {
+            a.stop();
         }
-    }
-    Ok(())
+    })
 }
 
 /// `Engine.is_animation_playing(entity_id)` — returns true if an animation is currently playing.
 fn lua_is_animation_playing(lua: &Lua, entity_id: u64) -> LuaResult<bool> {
-    let ctx = match lua.app_data_mut::<SceneScriptContext>() {
-        Some(ctx) => ctx,
-        None => return Ok(false),
-    };
-
-    let scene = unsafe { ctx.scene() };
-    if let Some(entity) = scene.find_entity_by_uuid(entity_id) {
-        if let Some(animator) = scene.get_component::<super::SpriteAnimatorComponent>(entity) {
-            return Ok(animator.is_playing());
-        }
-    }
-    Ok(false)
+    with_entity(lua, entity_id, false, |scene, entity| {
+        scene
+            .get_component::<super::SpriteAnimatorComponent>(entity)
+            .map(|a| a.is_playing())
+            .unwrap_or(false)
+    })
 }
 
 /// `Engine.get_current_animation(entity_id)` — returns the name of the currently
 /// playing clip, or `nil` if no clip is active.
 fn lua_get_current_animation(lua: &Lua, entity_id: u64) -> LuaResult<LuaValue> {
-    let ctx = match lua.app_data_mut::<SceneScriptContext>() {
-        Some(ctx) => ctx,
-        None => return Ok(LuaValue::Nil),
-    };
-
-    let scene = unsafe { ctx.scene() };
-    if let Some(entity) = scene.find_entity_by_uuid(entity_id) {
-        if let Some(animator) = scene.get_component::<super::SpriteAnimatorComponent>(entity) {
-            if let Some(name) = animator.current_clip_name() {
-                return Ok(LuaValue::String(lua.create_string(name)?));
-            }
-        }
+    let name = with_entity(lua, entity_id, None, |scene, entity| {
+        scene
+            .get_component::<super::SpriteAnimatorComponent>(entity)
+            .and_then(|a| a.current_clip_name().map(|s| s.to_owned()))
+    })?;
+    match name {
+        Some(s) => Ok(LuaValue::String(lua.create_string(&s)?)),
+        None => Ok(LuaValue::Nil),
     }
-    Ok(LuaValue::Nil)
 }
 
 /// `Engine.get_animation_frame(entity_id)` — returns the current frame number,
 /// or `-1` if no animation is active.
 fn lua_get_animation_frame(lua: &Lua, entity_id: u64) -> LuaResult<i32> {
-    let ctx = match lua.app_data_mut::<SceneScriptContext>() {
-        Some(ctx) => ctx,
-        None => return Ok(-1),
-    };
-
-    let scene = unsafe { ctx.scene() };
-    if let Some(entity) = scene.find_entity_by_uuid(entity_id) {
-        if let Some(animator) = scene.get_component::<super::SpriteAnimatorComponent>(entity) {
-            if animator.current_clip_index().is_some() {
-                return Ok(animator.current_frame() as i32);
-            }
-        }
-    }
-    Ok(-1)
+    with_entity(lua, entity_id, -1, |scene, entity| {
+        scene
+            .get_component::<super::SpriteAnimatorComponent>(entity)
+            .filter(|a| a.current_clip_index().is_some())
+            .map(|a| a.current_frame() as i32)
+            .unwrap_or(-1)
+    })
 }
 
 /// `Engine.set_animation_speed(entity_id, speed_scale)` — sets the playback
 /// speed multiplier (1.0 = normal, 0.5 = half speed, 2.0 = double speed).
 fn lua_set_animation_speed(lua: &Lua, (entity_id, speed): (u64, f32)) -> LuaResult<()> {
-    let mut ctx = match lua.app_data_mut::<SceneScriptContext>() {
-        Some(ctx) => ctx,
-        None => return Ok(()),
-    };
-
-    let scene = unsafe { ctx.scene_mut() };
-    if let Some(entity) = scene.find_entity_by_uuid(entity_id) {
-        if let Some(mut animator) =
-            scene.get_component_mut::<super::SpriteAnimatorComponent>(entity)
-        {
-            animator.speed_scale = speed;
+    with_entity_mut(lua, entity_id, (), |scene, entity| {
+        if let Some(mut a) = scene.get_component_mut::<super::SpriteAnimatorComponent>(entity) {
+            a.speed_scale = speed;
         }
-    }
-    Ok(())
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -913,63 +799,31 @@ fn lua_set_animation_speed(lua: &Lua, (entity_id, speed): (u64, f32)) -> LuaResu
 
 /// `Engine.play_sound(entity_id)` — play the entity's audio source.
 fn lua_play_sound(lua: &Lua, entity_id: u64) -> LuaResult<()> {
-    let mut ctx = match lua.app_data_mut::<SceneScriptContext>() {
-        Some(ctx) => ctx,
-        None => return Ok(()),
-    };
-
-    let scene = unsafe { ctx.scene_mut() };
-    if let Some(entity) = scene.find_entity_by_uuid(entity_id) {
+    with_entity_mut(lua, entity_id, (), |scene, entity| {
         scene.play_entity_sound(entity);
-    }
-
-    Ok(())
+    })
 }
 
 /// `Engine.stop_sound(entity_id)` — stop the entity's audio playback.
 fn lua_stop_sound(lua: &Lua, entity_id: u64) -> LuaResult<()> {
-    let mut ctx = match lua.app_data_mut::<SceneScriptContext>() {
-        Some(ctx) => ctx,
-        None => return Ok(()),
-    };
-
-    let scene = unsafe { ctx.scene_mut() };
-    if let Some(entity) = scene.find_entity_by_uuid(entity_id) {
+    with_entity_mut(lua, entity_id, (), |scene, entity| {
         scene.stop_entity_sound(entity);
-    }
-
-    Ok(())
+    })
 }
 
 /// `Engine.set_volume(entity_id, volume)` — adjust volume at runtime.
 fn lua_set_volume(lua: &Lua, (entity_id, volume): (u64, f32)) -> LuaResult<()> {
-    let mut ctx = match lua.app_data_mut::<SceneScriptContext>() {
-        Some(ctx) => ctx,
-        None => return Ok(()),
-    };
-
-    let scene = unsafe { ctx.scene_mut() };
-    if let Some(entity) = scene.find_entity_by_uuid(entity_id) {
+    with_entity_mut(lua, entity_id, (), |scene, entity| {
         scene.set_entity_volume(entity, volume);
-    }
-
-    Ok(())
+    })
 }
 
 /// `Engine.set_panning(entity_id, panning)` — adjust stereo panning at runtime.
 /// Panning: -1.0 = hard left, 0.0 = center, 1.0 = hard right.
 fn lua_set_panning(lua: &Lua, (entity_id, panning): (u64, f32)) -> LuaResult<()> {
-    let mut ctx = match lua.app_data_mut::<SceneScriptContext>() {
-        Some(ctx) => ctx,
-        None => return Ok(()),
-    };
-
-    let scene = unsafe { ctx.scene_mut() };
-    if let Some(entity) = scene.find_entity_by_uuid(entity_id) {
+    with_entity_mut(lua, entity_id, (), |scene, entity| {
         scene.set_entity_panning(entity, panning);
-    }
-
-    Ok(())
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -978,36 +832,21 @@ fn lua_set_panning(lua: &Lua, (entity_id, panning): (u64, f32)) -> LuaResult<()>
 
 /// `Engine.set_tile(entity_id, x, y, tile_id)` — set tile at grid position.
 fn lua_set_tile(lua: &Lua, (entity_id, x, y, tile_id): (u64, u32, u32, i32)) -> LuaResult<()> {
-    let mut ctx = match lua.app_data_mut::<SceneScriptContext>() {
-        Some(ctx) => ctx,
-        None => return Ok(()),
-    };
-
-    let scene = unsafe { ctx.scene_mut() };
-    if let Some(entity) = scene.find_entity_by_uuid(entity_id) {
+    with_entity_mut(lua, entity_id, (), |scene, entity| {
         if let Some(mut tilemap) = scene.get_component_mut::<super::TilemapComponent>(entity) {
             tilemap.set_tile(x, y, tile_id);
         }
-    }
-
-    Ok(())
+    })
 }
 
 /// `Engine.get_tile(entity_id, x, y)` — returns tile ID at grid position, -1 if empty/OOB.
 fn lua_get_tile(lua: &Lua, (entity_id, x, y): (u64, u32, u32)) -> LuaResult<i32> {
-    let ctx = match lua.app_data_mut::<SceneScriptContext>() {
-        Some(ctx) => ctx,
-        None => return Ok(-1),
-    };
-
-    let scene = unsafe { ctx.scene() };
-    if let Some(entity) = scene.find_entity_by_uuid(entity_id) {
-        if let Some(tilemap) = scene.get_component::<super::TilemapComponent>(entity) {
-            return Ok(tilemap.get_tile(x, y));
-        }
-    }
-
-    Ok(-1)
+    with_entity(lua, entity_id, -1, |scene, entity| {
+        scene
+            .get_component::<super::TilemapComponent>(entity)
+            .map(|tm| tm.get_tile(x, y))
+            .unwrap_or(-1)
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -1016,17 +855,9 @@ fn lua_get_tile(lua: &Lua, (entity_id, x, y): (u64, u32, u32)) -> LuaResult<i32>
 
 /// `Engine.apply_impulse(entity_id, ix, iy)`
 fn lua_apply_impulse(lua: &Lua, (entity_id, ix, iy): (u64, f32, f32)) -> LuaResult<()> {
-    let mut ctx = match lua.app_data_mut::<SceneScriptContext>() {
-        Some(ctx) => ctx,
-        None => return Ok(()),
-    };
-
-    let scene = unsafe { ctx.scene_mut() };
-    if let Some(entity) = scene.find_entity_by_uuid(entity_id) {
+    with_entity_mut(lua, entity_id, (), |scene, entity| {
         scene.apply_impulse(entity, glam::Vec2::new(ix, iy));
-    }
-
-    Ok(())
+    })
 }
 
 /// `Engine.apply_impulse_at_point(entity_id, ix, iy, px, py)`
@@ -1034,96 +865,47 @@ fn lua_apply_impulse_at_point(
     lua: &Lua,
     (entity_id, ix, iy, px, py): (u64, f32, f32, f32, f32),
 ) -> LuaResult<()> {
-    let mut ctx = match lua.app_data_mut::<SceneScriptContext>() {
-        Some(ctx) => ctx,
-        None => return Ok(()),
-    };
-
-    let scene = unsafe { ctx.scene_mut() };
-    if let Some(entity) = scene.find_entity_by_uuid(entity_id) {
+    with_entity_mut(lua, entity_id, (), |scene, entity| {
         scene.apply_impulse_at_point(entity, glam::Vec2::new(ix, iy), glam::Vec2::new(px, py));
-    }
-
-    Ok(())
+    })
 }
 
 /// `Engine.apply_force(entity_id, fx, fy)`
 fn lua_apply_force(lua: &Lua, (entity_id, fx, fy): (u64, f32, f32)) -> LuaResult<()> {
-    let mut ctx = match lua.app_data_mut::<SceneScriptContext>() {
-        Some(ctx) => ctx,
-        None => return Ok(()),
-    };
-
-    let scene = unsafe { ctx.scene_mut() };
-    if let Some(entity) = scene.find_entity_by_uuid(entity_id) {
+    with_entity_mut(lua, entity_id, (), |scene, entity| {
         scene.apply_force(entity, glam::Vec2::new(fx, fy));
-    }
-
-    Ok(())
+    })
 }
 
 /// `Engine.get_linear_velocity(entity_id)` — returns `(vx, vy)`.
 fn lua_get_linear_velocity(lua: &Lua, entity_id: u64) -> LuaResult<(f32, f32)> {
-    let ctx = match lua.app_data_mut::<SceneScriptContext>() {
-        Some(ctx) => ctx,
-        None => return Ok((0.0, 0.0)),
-    };
-
-    let scene = unsafe { ctx.scene() };
-    if let Some(entity) = scene.find_entity_by_uuid(entity_id) {
-        if let Some(v) = scene.get_linear_velocity(entity) {
-            return Ok((v.x, v.y));
-        }
-    }
-
-    Ok((0.0, 0.0))
+    with_entity(lua, entity_id, (0.0, 0.0), |scene, entity| {
+        scene
+            .get_linear_velocity(entity)
+            .map(|v| (v.x, v.y))
+            .unwrap_or((0.0, 0.0))
+    })
 }
 
 /// `Engine.set_linear_velocity(entity_id, vx, vy)`
 fn lua_set_linear_velocity(lua: &Lua, (entity_id, vx, vy): (u64, f32, f32)) -> LuaResult<()> {
-    let mut ctx = match lua.app_data_mut::<SceneScriptContext>() {
-        Some(ctx) => ctx,
-        None => return Ok(()),
-    };
-
-    let scene = unsafe { ctx.scene_mut() };
-    if let Some(entity) = scene.find_entity_by_uuid(entity_id) {
+    with_entity_mut(lua, entity_id, (), |scene, entity| {
         scene.set_linear_velocity(entity, glam::Vec2::new(vx, vy));
-    }
-
-    Ok(())
+    })
 }
 
 /// `Engine.get_angular_velocity(entity_id)` — returns angular velocity in rad/s.
 fn lua_get_angular_velocity(lua: &Lua, entity_id: u64) -> LuaResult<f32> {
-    let ctx = match lua.app_data_mut::<SceneScriptContext>() {
-        Some(ctx) => ctx,
-        None => return Ok(0.0),
-    };
-
-    let scene = unsafe { ctx.scene() };
-    if let Some(entity) = scene.find_entity_by_uuid(entity_id) {
-        if let Some(omega) = scene.get_angular_velocity(entity) {
-            return Ok(omega);
-        }
-    }
-
-    Ok(0.0)
+    with_entity(lua, entity_id, 0.0, |scene, entity| {
+        scene.get_angular_velocity(entity).unwrap_or(0.0)
+    })
 }
 
 /// `Engine.set_angular_velocity(entity_id, omega)`
 fn lua_set_angular_velocity(lua: &Lua, (entity_id, omega): (u64, f32)) -> LuaResult<()> {
-    let mut ctx = match lua.app_data_mut::<SceneScriptContext>() {
-        Some(ctx) => ctx,
-        None => return Ok(()),
-    };
-
-    let scene = unsafe { ctx.scene_mut() };
-    if let Some(entity) = scene.find_entity_by_uuid(entity_id) {
+    with_entity_mut(lua, entity_id, (), |scene, entity| {
         scene.set_angular_velocity(entity, omega);
-    }
-
-    Ok(())
+    })
 }
 
 /// `Engine.raycast(origin_x, origin_y, dir_x, dir_y, max_distance, exclude_entity_id)`
@@ -1134,25 +916,22 @@ fn lua_raycast(
     lua: &Lua,
     (ox, oy, dx, dy, max_dist, exclude_id): (f32, f32, f32, f32, f32, Option<u64>),
 ) -> LuaResult<(Option<u64>, f32, f32, f32, f32, f32)> {
+    let zero = (None, 0.0, 0.0, 0.0, 0.0, 0.0);
     let ctx = match lua.app_data_mut::<SceneScriptContext>() {
         Some(ctx) => ctx,
-        None => return Ok((None, 0.0, 0.0, 0.0, 0.0, 0.0)),
+        None => return Ok(zero),
     };
-
     let scene = unsafe { ctx.scene() };
-
     let exclude_entity = exclude_id.and_then(|uuid| scene.find_entity_by_uuid(uuid));
-
-    if let Some((uuid, hx, hy, nx, ny, toi)) = scene.raycast(
-        glam::Vec2::new(ox, oy),
-        glam::Vec2::new(dx, dy),
-        max_dist,
-        exclude_entity,
-    ) {
-        Ok((Some(uuid), hx, hy, nx, ny, toi))
-    } else {
-        Ok((None, 0.0, 0.0, 0.0, 0.0, 0.0))
-    }
+    Ok(scene
+        .raycast(
+            glam::Vec2::new(ox, oy),
+            glam::Vec2::new(dx, dy),
+            max_dist,
+            exclude_entity,
+        )
+        .map(|(uuid, hx, hy, nx, ny, toi)| (Some(uuid), hx, hy, nx, ny, toi))
+        .unwrap_or(zero))
 }
 
 // ---------------------------------------------------------------------------
@@ -1213,48 +992,34 @@ fn vector_normalize(_lua: &Lua, (x, y, z): (f32, f32, f32)) -> LuaResult<(f32, f
 /// `Engine.set_timeout(callback, delay_seconds)` → timer_id
 /// Schedules `callback` to be called once after `delay_seconds`.
 fn lua_set_timeout(lua: &Lua, (callback, delay): (LuaFunction, f32)) -> LuaResult<usize> {
-    let mut ctx = match lua.app_data_mut::<SceneScriptContext>() {
-        Some(ctx) => ctx,
-        None => return Ok(0),
-    };
-    let scene = unsafe { ctx.scene_mut() };
-    let id = if let Some(ref mut engine) = scene.script_engine {
-        // Get entity_id from the calling environment (set during create_entity_env).
-        let entity_uuid = 0u64; // Will be set properly below.
-        engine.add_timer(entity_uuid, delay, false, callback)
-    } else {
-        0
-    };
-    Ok(id)
+    with_scene_mut(lua, 0, |scene| {
+        scene
+            .script_engine
+            .as_mut()
+            .map(|e| e.add_timer(0, delay, false, callback))
+            .unwrap_or(0)
+    })
 }
 
 /// `Engine.set_interval(callback, interval_seconds)` → timer_id
 /// Schedules `callback` to be called repeatedly every `interval_seconds`.
 fn lua_set_interval(lua: &Lua, (callback, interval): (LuaFunction, f32)) -> LuaResult<usize> {
-    let mut ctx = match lua.app_data_mut::<SceneScriptContext>() {
-        Some(ctx) => ctx,
-        None => return Ok(0),
-    };
-    let scene = unsafe { ctx.scene_mut() };
-    let id = if let Some(ref mut engine) = scene.script_engine {
-        engine.add_timer(0, interval, true, callback)
-    } else {
-        0
-    };
-    Ok(id)
+    with_scene_mut(lua, 0, |scene| {
+        scene
+            .script_engine
+            .as_mut()
+            .map(|e| e.add_timer(0, interval, true, callback))
+            .unwrap_or(0)
+    })
 }
 
 /// `Engine.cancel_timer(timer_id)` — cancel a pending timeout or interval.
 fn lua_cancel_timer(lua: &Lua, timer_id: usize) -> LuaResult<()> {
-    let mut ctx = match lua.app_data_mut::<SceneScriptContext>() {
-        Some(ctx) => ctx,
-        None => return Ok(()),
-    };
-    let scene = unsafe { ctx.scene_mut() };
-    if let Some(ref mut engine) = scene.script_engine {
-        engine.cancel_timer(timer_id);
-    }
-    Ok(())
+    with_scene_mut(lua, (), |scene| {
+        if let Some(ref mut engine) = scene.script_engine {
+            engine.cancel_timer(timer_id);
+        }
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -1319,22 +1084,12 @@ fn lua_find_entities_with_component(lua: &Lua, name: String) -> LuaResult<LuaTab
 
 /// `Engine.get_sprite_color(entity_id)` → (r, g, b, a) or (1,1,1,1) if not found.
 fn lua_get_sprite_color(lua: &Lua, entity_id: u64) -> LuaResult<(f32, f32, f32, f32)> {
-    let ctx = match lua.app_data_mut::<SceneScriptContext>() {
-        Some(ctx) => ctx,
-        None => return Ok((1.0, 1.0, 1.0, 1.0)),
-    };
-    let scene = unsafe { ctx.scene() };
-    if let Some(entity) = scene.find_entity_by_uuid(entity_id) {
-        if let Some(sprite) = scene.get_component::<super::SpriteRendererComponent>(entity) {
-            return Ok((
-                sprite.color.x,
-                sprite.color.y,
-                sprite.color.z,
-                sprite.color.w,
-            ));
-        }
-    }
-    Ok((1.0, 1.0, 1.0, 1.0))
+    with_entity(lua, entity_id, (1.0, 1.0, 1.0, 1.0), |scene, entity| {
+        scene
+            .get_component::<super::SpriteRendererComponent>(entity)
+            .map(|s| (s.color.x, s.color.y, s.color.z, s.color.w))
+            .unwrap_or((1.0, 1.0, 1.0, 1.0))
+    })
 }
 
 /// `Engine.set_sprite_color(entity_id, r, g, b, a)` — set sprite tint color.
@@ -1342,18 +1097,11 @@ fn lua_set_sprite_color(
     lua: &Lua,
     (entity_id, r, g, b, a): (u64, f32, f32, f32, f32),
 ) -> LuaResult<()> {
-    let mut ctx = match lua.app_data_mut::<SceneScriptContext>() {
-        Some(ctx) => ctx,
-        None => return Ok(()),
-    };
-    let scene = unsafe { ctx.scene_mut() };
-    if let Some(entity) = scene.find_entity_by_uuid(entity_id) {
-        if let Some(mut sprite) = scene.get_component_mut::<super::SpriteRendererComponent>(entity)
-        {
-            sprite.color = glam::Vec4::new(r, g, b, a);
+    with_entity_mut(lua, entity_id, (), |scene, entity| {
+        if let Some(mut s) = scene.get_component_mut::<super::SpriteRendererComponent>(entity) {
+            s.color = glam::Vec4::new(r, g, b, a);
         }
-    }
-    Ok(())
+    })
 }
 
 /// `Engine.set_sprite_texture(entity_id, texture_handle)` — swap the sprite's texture at runtime.
@@ -1362,51 +1110,31 @@ fn lua_set_sprite_color(
 /// (e.g. used elsewhere in the scene or pre-loaded via the asset manager).
 /// Pass 0 to clear the texture.
 fn lua_set_sprite_texture(lua: &Lua, (entity_id, handle_raw): (u64, u64)) -> LuaResult<()> {
-    let mut ctx = match lua.app_data_mut::<SceneScriptContext>() {
-        Some(ctx) => ctx,
-        None => return Ok(()),
-    };
-    let scene = unsafe { ctx.scene_mut() };
-    if let Some(entity) = scene.find_entity_by_uuid(entity_id) {
-        if let Some(mut sprite) = scene.get_component_mut::<super::SpriteRendererComponent>(entity)
-        {
-            let uuid = crate::uuid::Uuid::from_raw(handle_raw);
-            sprite.texture_handle = uuid;
-            // Clear the loaded texture so it gets re-resolved next frame.
-            sprite.texture = None;
+    with_entity_mut(lua, entity_id, (), |scene, entity| {
+        if let Some(mut s) = scene.get_component_mut::<super::SpriteRendererComponent>(entity) {
+            s.texture_handle = crate::uuid::Uuid::from_raw(handle_raw);
+            s.texture = None;
         }
-    }
-    Ok(())
+    })
 }
 
 /// `Engine.get_text(entity_id)` → string or "" if not found.
 fn lua_get_text(lua: &Lua, entity_id: u64) -> LuaResult<String> {
-    let ctx = match lua.app_data_mut::<SceneScriptContext>() {
-        Some(ctx) => ctx,
-        None => return Ok(String::new()),
-    };
-    let scene = unsafe { ctx.scene() };
-    if let Some(entity) = scene.find_entity_by_uuid(entity_id) {
-        if let Some(text) = scene.get_component::<super::TextComponent>(entity) {
-            return Ok(text.text.clone());
-        }
-    }
-    Ok(String::new())
+    with_entity(lua, entity_id, String::new(), |scene, entity| {
+        scene
+            .get_component::<super::TextComponent>(entity)
+            .map(|tc| tc.text.clone())
+            .unwrap_or_default()
+    })
 }
 
 /// `Engine.set_text(entity_id, text)` — set text component content.
 fn lua_set_text(lua: &Lua, (entity_id, text): (u64, String)) -> LuaResult<()> {
-    let mut ctx = match lua.app_data_mut::<SceneScriptContext>() {
-        Some(ctx) => ctx,
-        None => return Ok(()),
-    };
-    let scene = unsafe { ctx.scene_mut() };
-    if let Some(entity) = scene.find_entity_by_uuid(entity_id) {
+    with_entity_mut(lua, entity_id, (), |scene, entity| {
         if let Some(mut tc) = scene.get_component_mut::<super::TextComponent>(entity) {
             tc.text = text;
         }
-    }
-    Ok(())
+    })
 }
 
 #[cfg(test)]

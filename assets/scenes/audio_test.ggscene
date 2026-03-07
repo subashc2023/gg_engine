@@ -95,7 +95,7 @@ Entities:
     Volume: 0.3
     Pitch: 1.5
     Looping: false
-    PlayOnStart: false
+    PlayOnStart: true
 
 # ── Spatial Audio Entity (orbiting) ───────────────────────────
 # Spatial sound positioned to the right. Panning and volume
@@ -129,7 +129,7 @@ Entities:
     Volume: 0.8
     Pitch: 0.8
     Looping: true
-    PlayOnStart: false
+    PlayOnStart: true
     Spatial: true
     MinDistance: 2.0
     MaxDistance: 15.0
@@ -165,7 +165,7 @@ Entities:
     Volume: 0.5
     Pitch: 1.0
     Looping: true
-    PlayOnStart: false
+    PlayOnStart: true
     Streaming: true
 
 # ── Controls Label ────────────────────────────────────────────

@@ -881,11 +881,6 @@ impl Renderer {
         self.push_quad_to_batch(&transform, color, 0.0, 1.0, -1);
     }
 
-    /// Draw a flat-colored quad at a 2D position (z = 0).
-    pub fn draw_quad_2d(&self, position: &Vec2, size: &Vec2, color: Vec4) {
-        self.draw_quad(&Vec3::new(position.x, position.y, 0.0), size, color);
-    }
-
     /// Draw a textured quad at a 3D position with the given size.
     ///
     /// `tiling_factor` scales the texture coordinates (e.g. 10.0 tiles the
@@ -913,24 +908,6 @@ impl Renderer {
         );
     }
 
-    /// Draw a textured quad at a 2D position (z = 0).
-    pub fn draw_textured_quad_2d(
-        &self,
-        position: &Vec2,
-        size: &Vec2,
-        texture: &Texture2D,
-        tiling_factor: f32,
-        tint_color: Vec4,
-    ) {
-        self.draw_textured_quad(
-            &Vec3::new(position.x, position.y, 0.0),
-            size,
-            texture,
-            tiling_factor,
-            tint_color,
-        );
-    }
-
     // -- Rotated quads --------------------------------------------------------
 
     /// Draw a rotated flat-colored quad. `rotation` is in radians (Z-axis).
@@ -941,17 +918,6 @@ impl Renderer {
             *position,
         );
         self.push_quad_to_batch(&transform, color, 0.0, 1.0, -1);
-    }
-
-    /// Draw a rotated flat-colored quad at a 2D position (z = 0).
-    /// `rotation` is in radians (Z-axis).
-    pub fn draw_rotated_quad_2d(&self, position: &Vec2, size: &Vec2, rotation: f32, color: Vec4) {
-        self.draw_rotated_quad(
-            &Vec3::new(position.x, position.y, 0.0),
-            size,
-            rotation,
-            color,
-        );
     }
 
     /// Draw a rotated textured quad. `rotation` is in radians (Z-axis).
@@ -975,27 +941,6 @@ impl Renderer {
             texture.bindless_index() as f32,
             tiling_factor,
             -1,
-        );
-    }
-
-    /// Draw a rotated textured quad at a 2D position (z = 0).
-    /// `rotation` is in radians (Z-axis).
-    pub fn draw_rotated_textured_quad_2d(
-        &self,
-        position: &Vec2,
-        size: &Vec2,
-        rotation: f32,
-        texture: &Texture2D,
-        tiling_factor: f32,
-        tint_color: Vec4,
-    ) {
-        self.draw_rotated_textured_quad(
-            &Vec3::new(position.x, position.y, 0.0),
-            size,
-            rotation,
-            texture,
-            tiling_factor,
-            tint_color,
         );
     }
 
@@ -1026,22 +971,6 @@ impl Renderer {
             sub_texture.tex_coords(),
             1.0,
             -1,
-        );
-    }
-
-    /// Draw a sub-textured quad at a 2D position (z = 0).
-    pub fn draw_sub_textured_quad_2d(
-        &self,
-        position: &Vec2,
-        size: &Vec2,
-        sub_texture: &SubTexture2D,
-        tint_color: Vec4,
-    ) {
-        self.draw_sub_textured_quad(
-            &Vec3::new(position.x, position.y, 0.0),
-            size,
-            sub_texture,
-            tint_color,
         );
     }
 
@@ -1108,25 +1037,6 @@ impl Renderer {
             sub_texture.tex_coords(),
             1.0,
             -1,
-        );
-    }
-
-    /// Draw a rotated sub-textured quad at a 2D position (z = 0).
-    /// `rotation` is in radians (Z-axis).
-    pub fn draw_rotated_sub_textured_quad_2d(
-        &self,
-        position: &Vec2,
-        size: &Vec2,
-        rotation: f32,
-        sub_texture: &SubTexture2D,
-        tint_color: Vec4,
-    ) {
-        self.draw_rotated_sub_textured_quad(
-            &Vec3::new(position.x, position.y, 0.0),
-            size,
-            rotation,
-            sub_texture,
-            tint_color,
         );
     }
 

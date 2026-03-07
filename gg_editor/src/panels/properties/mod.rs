@@ -236,87 +236,20 @@ fn draw_components(
             );
 
             egui::Popup::from_toggle_button_response(&add_btn).show(|ui| {
-                if !scene.has_component::<CameraComponent>(entity) && ui.button("Camera").clicked()
-                {
-                    undo_system.record(scene);
-                    scene.add_component(entity, CameraComponent::default());
-                    *scene_dirty = true;
+                macro_rules! add_component_buttons {
+                    ($(($type:path, $name:expr)),* $(,)?) => {
+                        $(
+                            if !scene.has_component::<$type>(entity)
+                                && ui.button($name).clicked()
+                            {
+                                undo_system.record(scene);
+                                scene.add_component(entity, <$type>::default());
+                                *scene_dirty = true;
+                            }
+                        )*
+                    };
                 }
-                if !scene.has_component::<SpriteRendererComponent>(entity)
-                    && ui.button("Sprite Renderer").clicked()
-                {
-                    undo_system.record(scene);
-                    scene.add_component(entity, SpriteRendererComponent::default());
-                    *scene_dirty = true;
-                }
-                if !scene.has_component::<CircleRendererComponent>(entity)
-                    && ui.button("Circle Renderer").clicked()
-                {
-                    undo_system.record(scene);
-                    scene.add_component(entity, CircleRendererComponent::default());
-                    *scene_dirty = true;
-                }
-                if !scene.has_component::<SpriteAnimatorComponent>(entity)
-                    && ui.button("Sprite Animator").clicked()
-                {
-                    undo_system.record(scene);
-                    scene.add_component(entity, SpriteAnimatorComponent::default());
-                    *scene_dirty = true;
-                }
-                if !scene.has_component::<TextComponent>(entity) && ui.button("Text").clicked() {
-                    undo_system.record(scene);
-                    scene.add_component(entity, TextComponent::default());
-                    *scene_dirty = true;
-                }
-                if !scene.has_component::<RigidBody2DComponent>(entity)
-                    && ui.button("Rigidbody 2D").clicked()
-                {
-                    undo_system.record(scene);
-                    scene.add_component(entity, RigidBody2DComponent::default());
-                    *scene_dirty = true;
-                }
-                if !scene.has_component::<BoxCollider2DComponent>(entity)
-                    && ui.button("Box Collider 2D").clicked()
-                {
-                    undo_system.record(scene);
-                    scene.add_component(entity, BoxCollider2DComponent::default());
-                    *scene_dirty = true;
-                }
-                if !scene.has_component::<CircleCollider2DComponent>(entity)
-                    && ui.button("Circle Collider 2D").clicked()
-                {
-                    undo_system.record(scene);
-                    scene.add_component(entity, CircleCollider2DComponent::default());
-                    *scene_dirty = true;
-                }
-                if !scene.has_component::<TilemapComponent>(entity)
-                    && ui.button("Tilemap").clicked()
-                {
-                    undo_system.record(scene);
-                    scene.add_component(entity, TilemapComponent::default());
-                    *scene_dirty = true;
-                }
-                if !scene.has_component::<AudioSourceComponent>(entity)
-                    && ui.button("Audio Source").clicked()
-                {
-                    undo_system.record(scene);
-                    scene.add_component(entity, AudioSourceComponent::default());
-                    *scene_dirty = true;
-                }
-                if !scene.has_component::<AudioListenerComponent>(entity)
-                    && ui.button("Audio Listener").clicked()
-                {
-                    undo_system.record(scene);
-                    scene.add_component(entity, AudioListenerComponent::new());
-                    *scene_dirty = true;
-                }
-                if !scene.has_component::<ParticleEmitterComponent>(entity)
-                    && ui.button("Particle Emitter").clicked()
-                {
-                    undo_system.record(scene);
-                    scene.add_component(entity, ParticleEmitterComponent::default());
-                    *scene_dirty = true;
-                }
+                gg_engine::for_each_addable_component!(add_component_buttons);
 
                 #[cfg(feature = "lua-scripting")]
                 {
