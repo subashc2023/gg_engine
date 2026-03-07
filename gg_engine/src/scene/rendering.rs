@@ -193,8 +193,11 @@ impl Scene {
     }
 
     /// Advance animations only for entities with `previewing` set (editor preview).
+    ///
+    /// Also advances `global_time` so instanced GPU animation works in edit mode.
+    /// **Must not be called in the same frame as `on_update_animations`** to avoid
+    /// double-incrementing `global_time`.
     pub fn on_update_animation_previews(&mut self, dt: f32) {
-        // Advance global time for instanced animators in editor preview.
         self.global_time += dt as f64;
         for animator in self.world.query_mut::<&mut SpriteAnimatorComponent>() {
             if animator.previewing {

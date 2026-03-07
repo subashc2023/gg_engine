@@ -110,6 +110,9 @@ static LOGGER: EngineLogger = EngineLogger;
 /// Called automatically by [`gg_main!`] before the application starts.
 pub fn init() {
     START_TIME.get_or_init(Instant::now);
-    log::set_logger(&LOGGER).expect("Logger already initialized");
+    if log::set_logger(&LOGGER).is_err() {
+        // Logger already initialized (e.g. in tests or restart scenarios).
+        return;
+    }
     log::set_max_level(LevelFilter::Trace);
 }

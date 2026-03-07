@@ -42,9 +42,10 @@ pub(crate) fn draw_native_script_component(
     scene: &mut Scene,
     entity: Entity,
     bold_family: &egui::FontFamily,
-    _scene_dirty: &mut bool,
+    scene_dirty: &mut bool,
     _undo_system: &mut crate::undo::UndoSystem,
 ) -> bool {
+    let _ = scene_dirty; // NativeScript has no editable properties, but accept for API consistency.
     let mut remove = false;
 
     if scene.has_component::<NativeScriptComponent>(entity) {
@@ -84,7 +85,7 @@ pub(crate) fn draw_lua_script_component(
     bold_family: &egui::FontFamily,
     assets_root: &std::path::Path,
     is_playing: bool,
-    _scene_dirty: &mut bool,
+    scene_dirty: &mut bool,
     _undo_system: &mut crate::undo::UndoSystem,
 ) -> bool {
     let mut remove = false;
@@ -163,6 +164,7 @@ pub(crate) fn draw_lua_script_component(
                     }
                     lsc.script_path = path;
                 }
+                *scene_dirty = true;
             }
 
             // ----- Script Fields -----
@@ -212,6 +214,7 @@ pub(crate) fn draw_lua_script_component(
                                     {
                                         lsc.field_overrides.insert(name.clone(), new_val);
                                     }
+                                    *scene_dirty = true;
                                 }
                             }
                             ScriptFieldValue::Bool(mut v) => {
@@ -227,6 +230,7 @@ pub(crate) fn draw_lua_script_component(
                                     {
                                         lsc.field_overrides.insert(name.clone(), new_val);
                                     }
+                                    *scene_dirty = true;
                                 }
                             }
                             ScriptFieldValue::String(mut v) => {
@@ -242,6 +246,7 @@ pub(crate) fn draw_lua_script_component(
                                     {
                                         lsc.field_overrides.insert(name.clone(), new_val);
                                     }
+                                    *scene_dirty = true;
                                 }
                             }
                         }

@@ -230,8 +230,13 @@ impl Scene {
                     let t = (dist - asc.min_distance) / (asc.max_distance - asc.min_distance);
                     -60.0 * t
                 };
-                // Combine: component volume (dB-ish) + distance attenuation.
-                let effective_volume = asc.volume + atten_db;
+                // Convert component volume (linear amplitude) to dB, then combine.
+                let volume_db = if asc.volume <= 0.0 {
+                    -60.0
+                } else {
+                    20.0 * asc.volume.log10()
+                };
+                let effective_volume = volume_db + atten_db;
                 (id.id.raw(), panning, effective_volume)
             })
             .collect();

@@ -6,7 +6,7 @@ pub(crate) fn draw_camera_component(
     scene: &mut Scene,
     entity: Entity,
     bold_family: &egui::FontFamily,
-    _scene_dirty: &mut bool,
+    scene_dirty: &mut bool,
     _undo_system: &mut crate::undo::UndoSystem,
 ) -> bool {
     let mut remove = false;
@@ -159,6 +159,7 @@ pub(crate) fn draw_camera_component(
                 .changed();
 
             if changed {
+                *scene_dirty = true;
                 if let Some(mut cam) = scene.get_component_mut::<CameraComponent>(entity) {
                     cam.fixed_aspect_ratio = fixed_aspect;
 

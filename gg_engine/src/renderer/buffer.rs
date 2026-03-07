@@ -17,9 +17,9 @@ use crate::profiling::ProfileTimer;
 /// with internal padding contain uninitialized memory, and reading those
 /// bytes is undefined behavior. All built-in vertex types (`BatchQuadVertex`,
 /// `BatchCircleVertex`, etc.) satisfy this requirement.
-pub fn as_bytes<T: Copy>(data: &[T]) -> &[u8] {
+pub unsafe fn as_bytes<T: Copy>(data: &[T]) -> &[u8] {
     // Safety: T: Copy ensures no drop glue. Caller guarantees #[repr(C)], no padding.
-    unsafe { std::slice::from_raw_parts(data.as_ptr() as *const u8, std::mem::size_of_val(data)) }
+    std::slice::from_raw_parts(data.as_ptr() as *const u8, std::mem::size_of_val(data))
 }
 
 // ---------------------------------------------------------------------------

@@ -243,9 +243,15 @@ impl Scene {
         };
         engine.lua().set_app_data(ctx);
 
+        // Initialize deferred timer ops so Lua timer bindings work during scripts.
+        engine.init_pending_timer_ops();
+
         for uuid in &uuids {
             engine.call_entity_on_update(*uuid, dt.seconds());
         }
+
+        // Apply any timer creates/cancels that scripts requested.
+        engine.apply_pending_timer_ops();
 
         // Tick timers (set_timeout / set_interval).
         // Context must be active so timer callbacks can access the scene.

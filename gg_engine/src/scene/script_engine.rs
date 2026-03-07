@@ -1,7 +1,14 @@
 use mlua::prelude::*;
+use mlua::{LuaOptions, StdLib};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::Path;
+
+/// Lua standard libraries allowed in game scripts.
+/// Excludes: io, os, package (filesystem/process access), debug, ffi.
+fn script_stdlib() -> StdLib {
+    StdLib::TABLE | StdLib::STRING | StdLib::MATH | StdLib::BIT | StdLib::JIT
+}
 
 /// A value that can be exposed from a Lua script's `fields` table.
 /// Supports the Lua primitive types that map to editor UI widgets.
@@ -67,6 +74,27 @@ pub(crate) struct ScriptTimer {
     pub callback_key: LuaRegistryKey,
 }
 
+/// Stored in Lua app_data during `call_entity_function` so timer/callback
+/// bindings can identify which entity is currently executing.
+pub(crate) struct CurrentEntityUuid(pub u64);
+
+/// Deferred timer operations queued by Lua scripts during execution.
+/// Stored in Lua app_data because `scene.script_engine` is temporarily
+/// taken during script execution.
+pub(crate) struct PendingTimerOps {
+    pub creates: Vec<PendingTimerCreate>,
+    pub cancels: Vec<usize>,
+    pub next_id: usize,
+}
+
+pub(crate) struct PendingTimerCreate {
+    pub id: usize,
+    pub entity_uuid: u64,
+    pub delay: f32,
+    pub repeating: bool,
+    pub callback_key: LuaRegistryKey,
+}
+
 pub struct ScriptEngine {
     lua: Lua,
     /// Per-entity Lua environments keyed by entity UUID (u64).
@@ -75,8 +103,8 @@ pub struct ScriptEngine {
     /// Keyed by (entity UUID, callback name) so errors in one callback don't
     /// reset the count for a different callback on the same entity.
     error_counts: HashMap<(u64, String), u32>,
-    /// Active timers. Indices are used as timer IDs.
-    pub(crate) timers: Vec<Option<ScriptTimer>>,
+    /// Active timers keyed by timer ID.
+    pub(crate) timers: HashMap<usize, ScriptTimer>,
     /// Next timer ID (monotonically increasing to avoid reuse within a session).
     pub(crate) next_timer_id: usize,
 }
@@ -96,7 +124,14 @@ impl ScriptEngine {
     const INSTRUCTION_LIMIT: u32 = 10_000_000;
 
     pub fn new() -> Self {
-        let lua = Lua::new();
+        let lua = match Lua::new_with(script_stdlib(), LuaOptions::default()) {
+            Ok(l) => l,
+            Err(e) => {
+                log::error!("ScriptEngine: failed to create sandboxed Lua state: {e}");
+                // Fallback: this shouldn't happen since we only request safe libs.
+                Lua::new()
+            }
+        };
 
         // Install an instruction count hook to prevent infinite loops.
         lua.set_hook(
@@ -131,7 +166,7 @@ impl ScriptEngine {
             lua,
             entity_envs: HashMap::new(),
             error_counts: HashMap::new(),
-            timers: Vec::new(),
+            timers: HashMap::new(),
             next_timer_id: 0,
         }
     }
@@ -347,6 +382,9 @@ impl ScriptEngine {
             }
         };
 
+        // Track which entity is currently executing (used by timer bindings).
+        self.lua.set_app_data(CurrentEntityUuid(uuid));
+
         if let Err(e) = func.call::<()>(args) {
             let count = self.error_counts.entry(err_key).or_insert(0);
             *count += 1;
@@ -369,8 +407,11 @@ impl ScriptEngine {
                     e
                 );
             }
+            self.lua.remove_app_data::<CurrentEntityUuid>();
             return false;
         }
+
+        self.lua.remove_app_data::<CurrentEntityUuid>();
 
         // Reset error count for this specific callback on success.
         self.error_counts.remove(&err_key);
@@ -398,7 +439,27 @@ impl ScriptEngine {
             }
         };
 
-        let lua = Lua::new();
+        let lua = match Lua::new_with(script_stdlib(), LuaOptions::default()) {
+            Ok(l) => l,
+            Err(e) => {
+                log::warn!(
+                    "ScriptEngine::discover_fields: failed to create Lua state: {}",
+                    e
+                );
+                return Vec::new();
+            }
+        };
+
+        // Apply the same instruction limit as the main engine to prevent hangs.
+        lua.set_hook(
+            mlua::HookTriggers::new().every_nth_instruction(Self::INSTRUCTION_LIMIT),
+            |_lua, _debug| {
+                Err(mlua::Error::RuntimeError(
+                    "Script exceeded instruction limit (possible infinite loop)".into(),
+                ))
+            },
+        );
+
         if let Err(e) = lua.load(&source).exec() {
             log::warn!(
                 "ScriptEngine::discover_fields: error executing '{}': {}",
@@ -645,67 +706,95 @@ impl ScriptEngine {
             callback_key: key,
         };
 
-        // Try to reuse a vacant slot.
-        if let Some(slot) = self.timers.iter_mut().find(|s| s.is_none()) {
-            *slot = Some(timer);
-        } else {
-            self.timers.push(Some(timer));
-        }
+        self.timers.insert(id, timer);
         id
     }
 
     /// Cancel a timer by ID.
     pub fn cancel_timer(&mut self, timer_id: usize) {
-        if timer_id < self.timers.len() {
-            self.timers[timer_id] = None;
-        }
+        self.timers.remove(&timer_id);
     }
 
     /// Tick all timers, firing callbacks whose time has elapsed.
     pub fn tick_timers(&mut self, dt: f32) {
-        for i in 0..self.timers.len() {
-            let (fire, entity_uuid) = if let Some(ref mut timer) = self.timers[i] {
+        // Collect IDs of timers that need to fire (avoids borrow conflict).
+        let fire_ids: Vec<usize> = self
+            .timers
+            .iter_mut()
+            .filter_map(|(&id, timer)| {
                 timer.remaining -= dt;
                 if timer.remaining <= 0.0 {
-                    (true, timer.entity_uuid)
+                    Some(id)
                 } else {
-                    continue;
+                    None
                 }
-            } else {
+            })
+            .collect();
+
+        for id in fire_ids {
+            // Temporarily remove the timer to call its callback.
+            let Some(mut timer) = self.timers.remove(&id) else {
                 continue;
             };
 
-            if fire {
-                // Temporarily take the timer to call its callback.
-                let mut timer = self.timers[i].take().unwrap();
-                let callback: Result<LuaFunction, _> = self.lua.registry_value(&timer.callback_key);
-                if let Ok(func) = callback {
-                    if let Err(e) = func.call::<()>(()) {
-                        log::error!(
-                            "ScriptEngine: timer callback error for entity {}: {}",
-                            entity_uuid,
-                            e
-                        );
-                    }
+            let callback: Result<LuaFunction, _> = self.lua.registry_value(&timer.callback_key);
+            if let Ok(func) = callback {
+                if let Err(e) = func.call::<()>(()) {
+                    log::error!(
+                        "ScriptEngine: timer callback error for entity {}: {}",
+                        timer.entity_uuid,
+                        e
+                    );
                 }
+            }
 
-                // Re-arm if repeating, otherwise drop.
-                if let Some(interval) = timer.interval {
-                    timer.remaining = interval;
-                    self.timers[i] = Some(timer);
-                }
+            // Re-arm if repeating, otherwise drop.
+            if let Some(interval) = timer.interval {
+                timer.remaining = interval;
+                self.timers.insert(id, timer);
             }
         }
     }
 
     /// Remove all timers owned by a specific entity.
     pub fn remove_entity_timers(&mut self, entity_uuid: u64) {
-        for slot in &mut self.timers {
-            if let Some(timer) = slot {
-                if timer.entity_uuid == entity_uuid {
-                    *slot = None;
-                }
-            }
+        self.timers.retain(|_, timer| timer.entity_uuid != entity_uuid);
+    }
+
+    /// Initialize pending timer ops in Lua app_data before script execution.
+    /// Must be called before `call_entity_on_update` so Lua timer bindings work.
+    pub fn init_pending_timer_ops(&mut self) {
+        self.lua.set_app_data(PendingTimerOps {
+            creates: Vec::new(),
+            cancels: Vec::new(),
+            next_id: self.next_timer_id,
+        });
+    }
+
+    /// Drain pending timer ops from Lua app_data into the engine.
+    /// Must be called after all `call_entity_on_update` calls.
+    pub fn apply_pending_timer_ops(&mut self) {
+        let Some(pending) = self.lua.remove_app_data::<PendingTimerOps>() else {
+            return;
+        };
+
+        // Update next_timer_id to stay in sync with deferred allocations.
+        self.next_timer_id = pending.next_id;
+
+        // Process cancellations first.
+        for id in pending.cancels {
+            self.timers.remove(&id);
+        }
+
+        // Process creations.
+        for op in pending.creates {
+            let timer = ScriptTimer {
+                entity_uuid: op.entity_uuid,
+                remaining: op.delay,
+                interval: if op.repeating { Some(op.delay) } else { None },
+                callback_key: op.callback_key,
+            };
+            self.timers.insert(op.id, timer);
         }
     }
 }

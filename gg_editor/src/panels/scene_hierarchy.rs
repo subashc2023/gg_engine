@@ -143,7 +143,6 @@ pub(crate) fn scene_hierarchy_ui(
     }
 
     // Process deferred action.
-    let mut external_action = None;
     if let Some(action) = deferred_action {
         match action {
             DeferredHierarchyAction::DeleteEntity(entity) => {

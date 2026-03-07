@@ -1088,34 +1088,63 @@ fn vector_normalize(_lua: &Lua, (x, y, z): (f32, f32, f32)) -> LuaResult<(f32, f
 /// `Engine.set_timeout(callback, delay_seconds)` → timer_id
 /// Schedules `callback` to be called once after `delay_seconds`.
 fn lua_set_timeout(lua: &Lua, (callback, delay): (LuaFunction, f32)) -> LuaResult<usize> {
-    with_scene_mut(lua, 0, |scene| {
-        scene
-            .script_engine
-            .as_mut()
-            .map(|e| e.add_timer(0, delay, false, callback))
-            .unwrap_or(0)
-    })
+    use super::script_engine::{CurrentEntityUuid, PendingTimerCreate, PendingTimerOps};
+
+    let entity_uuid = lua
+        .app_data_ref::<CurrentEntityUuid>()
+        .map(|u| u.0)
+        .unwrap_or(0);
+    let callback_key = lua.create_registry_value(callback)?;
+
+    let mut ops = lua
+        .app_data_mut::<PendingTimerOps>()
+        .ok_or_else(|| mlua::Error::RuntimeError("Timer system not available".into()))?;
+    let id = ops.next_id;
+    ops.next_id += 1;
+    ops.creates.push(PendingTimerCreate {
+        id,
+        entity_uuid,
+        delay,
+        repeating: false,
+        callback_key,
+    });
+    Ok(id)
 }
 
 /// `Engine.set_interval(callback, interval_seconds)` → timer_id
 /// Schedules `callback` to be called repeatedly every `interval_seconds`.
 fn lua_set_interval(lua: &Lua, (callback, interval): (LuaFunction, f32)) -> LuaResult<usize> {
-    with_scene_mut(lua, 0, |scene| {
-        scene
-            .script_engine
-            .as_mut()
-            .map(|e| e.add_timer(0, interval, true, callback))
-            .unwrap_or(0)
-    })
+    use super::script_engine::{CurrentEntityUuid, PendingTimerCreate, PendingTimerOps};
+
+    let entity_uuid = lua
+        .app_data_ref::<CurrentEntityUuid>()
+        .map(|u| u.0)
+        .unwrap_or(0);
+    let callback_key = lua.create_registry_value(callback)?;
+
+    let mut ops = lua
+        .app_data_mut::<PendingTimerOps>()
+        .ok_or_else(|| mlua::Error::RuntimeError("Timer system not available".into()))?;
+    let id = ops.next_id;
+    ops.next_id += 1;
+    ops.creates.push(PendingTimerCreate {
+        id,
+        entity_uuid,
+        delay: interval,
+        repeating: true,
+        callback_key,
+    });
+    Ok(id)
 }
 
 /// `Engine.cancel_timer(timer_id)` — cancel a pending timeout or interval.
 fn lua_cancel_timer(lua: &Lua, timer_id: usize) -> LuaResult<()> {
-    with_scene_mut(lua, (), |scene| {
-        if let Some(ref mut engine) = scene.script_engine {
-            engine.cancel_timer(timer_id);
-        }
-    })
+    use super::script_engine::PendingTimerOps;
+
+    if let Some(mut ops) = lua.app_data_mut::<PendingTimerOps>() {
+        ops.cancels.push(timer_id);
+    }
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------

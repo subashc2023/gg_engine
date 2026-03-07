@@ -195,6 +195,7 @@ pub(crate) fn draw_sprite_renderer_component(
                     {
                         sprite.tiling_factor = tiling_factor;
                     }
+                    *scene_dirty = true;
                 }
             });
 
@@ -723,7 +724,7 @@ pub(crate) fn draw_circle_renderer_component(
     scene: &mut Scene,
     entity: Entity,
     bold_family: &egui::FontFamily,
-    _scene_dirty: &mut bool,
+    scene_dirty: &mut bool,
     _undo_system: &mut crate::undo::UndoSystem,
 ) -> bool {
     let mut remove = false;
@@ -782,6 +783,7 @@ pub(crate) fn draw_circle_renderer_component(
                     {
                         circle.color = Vec4::from(color_arr);
                     }
+                    *scene_dirty = true;
                 }
             });
 
@@ -800,6 +802,7 @@ pub(crate) fn draw_circle_renderer_component(
                     {
                         circle.thickness = thickness;
                     }
+                    *scene_dirty = true;
                 }
             });
 
@@ -818,6 +821,7 @@ pub(crate) fn draw_circle_renderer_component(
                     {
                         circle.fade = fade;
                     }
+                    *scene_dirty = true;
                 }
             });
 
@@ -841,7 +845,7 @@ pub(crate) fn draw_circle_renderer_component(
                     circle.sorting_layer = sorting_layer;
                     circle.order_in_layer = order_in_layer;
                 }
-                *_scene_dirty = true;
+                *scene_dirty = true;
             }
         });
 

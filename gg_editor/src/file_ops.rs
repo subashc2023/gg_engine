@@ -744,7 +744,10 @@ impl GGEditor {
             .add_recent_project(project.name(), &abs_path.to_string_lossy());
         self.project_state.project = Some(project);
         self.selection_context = None;
-        self.scene_ctx.dirty = false;
+        // Don't overwrite dirty=true set by autosave recovery above.
+        if !self.scene_ctx.dirty {
+            self.scene_ctx.dirty = false;
+        }
         self.undo_system.clear();
         self.editor_mode = EditorMode::Editor;
 

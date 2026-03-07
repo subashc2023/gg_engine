@@ -1,6 +1,7 @@
 target/
 CLAUDE.md
 AUDIT.md
+AUDIT_DETAILED.md
 .claude/
 *.spv
 gg_profile_*.json

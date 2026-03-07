@@ -15,7 +15,7 @@ use crate::layer::LayerStack;
 use crate::profiling::ProfileTimer;
 use crate::renderer::{
     ClearValues, DrawContext, Framebuffer, GpuAllocator, OrthographicCamera, PresentMode, Renderer,
-    Swapchain, VulkanContext, MAX_FRAMES_IN_FLIGHT,
+    Swapchain, VulkanContext, MAX_FRAMES_IN_FLIGHT, MAX_VIEWPORTS,
 };
 use crate::timestep::Timestep;
 use glam::Mat4;
@@ -754,7 +754,7 @@ impl<T: Application> ApplicationHandler for EngineRunner<T> {
             // Extract offscreen framebuffer info for ALL viewports (all Copy values)
             // so the immutable borrow on self.app drops before render_frame
             // takes &mut self.app.
-            let viewport_count = self.app.viewport_count();
+            let viewport_count = self.app.viewport_count().min(MAX_VIEWPORTS);
             let mut viewport_infos: Vec<(SceneFbInfo, ClearValues)> =
                 Vec::with_capacity(viewport_count);
             for vi in 0..viewport_count {

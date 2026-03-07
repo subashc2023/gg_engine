@@ -184,10 +184,10 @@ impl AudioEngine {
     }
 
     /// Set volume for all active sounds on an entity.
-    /// Volume is passed as a raw value to kira (f32 → Decibels).
-    pub fn set_volume(&mut self, entity_uuid: u64, volume: f32) {
+    /// Volume is in decibels (0.0 = unity gain, -60.0 = near-silent).
+    pub fn set_volume(&mut self, entity_uuid: u64, volume_db: f32) {
         if let Some(handles) = self.active_sounds.get_mut(&entity_uuid) {
-            let db = Decibels::from(volume);
+            let db = Decibels(volume_db);
             for handle in handles.iter_mut() {
                 handle.set_volume(db, Tween::default());
             }
