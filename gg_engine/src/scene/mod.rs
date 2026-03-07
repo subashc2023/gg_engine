@@ -11,6 +11,7 @@ mod physics_2d;
 mod physics_ops;
 mod rendering;
 mod runtime;
+pub(crate) mod spatial;
 mod scene_serializer;
 #[cfg(feature = "lua-scripting")]
 pub(crate) mod script_engine;
@@ -35,12 +36,25 @@ pub use native_script::NativeScript;
 pub use scene_serializer::SceneSerializer;
 #[cfg(feature = "lua-scripting")]
 pub use script_engine::{ScriptEngine, ScriptFieldValue};
+pub use spatial::{Aabb2D, Frustum2D, SpatialGrid};
 
 use crate::uuid::Uuid;
 
+use std::cell::Cell;
 use std::collections::HashMap;
 
 use physics_2d::PhysicsWorld2D;
+
+/// Per-frame frustum culling statistics.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct CullingStats {
+    /// Total renderable entities (sprites + circles) considered.
+    pub total_cullable: u32,
+    /// Entities that passed the frustum test (rendered).
+    pub rendered: u32,
+    /// Entities culled (skipped because they were off-screen).
+    pub culled: u32,
+}
 
 /// A scene is a container for entities and their components.
 ///
@@ -65,6 +79,11 @@ pub struct Scene {
     /// Monotonic scene time in seconds. Incremented each frame by `dt`.
     /// Used by [`InstancedSpriteAnimator`] for stateless frame computation.
     global_time: f64,
+    /// Spatial grid for efficient 2D region queries.
+    /// Rebuilt on demand via [`rebuild_spatial_grid`](Self::rebuild_spatial_grid).
+    spatial_grid: Option<SpatialGrid>,
+    /// Per-frame frustum culling statistics (interior-mutable, written by render_scene).
+    culling_stats: Cell<CullingStats>,
 }
 
 /// Invokes `$callback!` with every cloneable component type.
@@ -138,6 +157,8 @@ impl Scene {
             name_cache: None,
             pending_destroy: Vec::new(),
             global_time: 0.0,
+            spatial_grid: None,
+            culling_stats: Cell::new(CullingStats::default()),
         }
     }
 
@@ -591,6 +612,86 @@ impl Scene {
         {
             camera.primary = handle == entity.handle();
         }
+    }
+
+    // -----------------------------------------------------------------
+    // Spatial queries
+    // -----------------------------------------------------------------
+
+    /// Rebuild the spatial grid from current entity transforms.
+    ///
+    /// Call once per frame (during the update phase) to enable spatial
+    /// queries via [`query_entities_in_region`](Self::query_entities_in_region)
+    /// and [`query_entities_in_radius`](Self::query_entities_in_radius).
+    ///
+    /// `cell_size` controls the grid granularity in world units. Smaller
+    /// cells give more precise culling but use more memory. A good default
+    /// is 16.0 for typical 2D scenes.
+    pub fn rebuild_spatial_grid(&mut self, cell_size: f32) {
+        let wt_cache = self.build_world_transform_cache();
+        let mut grid = SpatialGrid::new(cell_size);
+        for (&handle, wt) in &wt_cache {
+            let aabb = Aabb2D::from_unit_quad_transform(wt);
+            grid.insert(handle, &aabb);
+        }
+        self.spatial_grid = Some(grid);
+    }
+
+    /// Query all entities whose AABB overlaps the given world-space region.
+    ///
+    /// Returns an empty Vec if [`rebuild_spatial_grid`](Self::rebuild_spatial_grid)
+    /// has not been called.
+    pub fn query_entities_in_region(&self, min: glam::Vec2, max: glam::Vec2) -> Vec<Entity> {
+        let Some(ref grid) = self.spatial_grid else {
+            return Vec::new();
+        };
+        let region = Aabb2D::new(min, max);
+        grid.query_region_dedup(&region)
+            .into_iter()
+            .map(Entity::new)
+            .collect()
+    }
+
+    /// Query all entities within `radius` world units of `center`.
+    ///
+    /// Uses the spatial grid for a broad-phase AABB query, then refines
+    /// with an exact distance check against each entity's world position.
+    ///
+    /// Returns an empty Vec if [`rebuild_spatial_grid`](Self::rebuild_spatial_grid)
+    /// has not been called.
+    pub fn query_entities_in_radius(
+        &self,
+        center: glam::Vec2,
+        radius: f32,
+    ) -> Vec<Entity> {
+        let Some(ref grid) = self.spatial_grid else {
+            return Vec::new();
+        };
+        let region = Aabb2D::new(
+            center - glam::Vec2::splat(radius),
+            center + glam::Vec2::splat(radius),
+        );
+        let r2 = radius * radius;
+        grid.query_region_dedup(&region)
+            .into_iter()
+            .filter(|&handle| {
+                let entity = Entity::new(handle);
+                let wt = self.get_world_transform(entity);
+                let pos = glam::Vec2::new(wt.w_axis.x, wt.w_axis.y);
+                (pos - center).length_squared() <= r2
+            })
+            .map(Entity::new)
+            .collect()
+    }
+
+    /// Returns a reference to the spatial grid, if built.
+    pub fn spatial_grid(&self) -> Option<&SpatialGrid> {
+        self.spatial_grid.as_ref()
+    }
+
+    /// Returns the frustum culling statistics from the last `render_scene` call.
+    pub fn culling_stats(&self) -> CullingStats {
+        self.culling_stats.get()
     }
 
     // -----------------------------------------------------------------

@@ -35,6 +35,14 @@ pub(crate) fn settings_ui(
     ui.label(format!("Vertices: {}", render_stats.total_vertex_count()));
     ui.label(format!("Indices: {}", render_stats.total_index_count()));
 
+    let cull = scene.culling_stats();
+    if cull.total_cullable > 0 {
+        ui.label(format!(
+            "Frustum culling: {}/{} rendered ({} culled)",
+            cull.rendered, cull.total_cullable, cull.culled
+        ));
+    }
+
     ui.add_space(8.0);
     ui.checkbox(vsync, "VSync");
 

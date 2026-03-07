@@ -54,6 +54,7 @@ pub use scene::{
     SpriteRendererComponent, TagComponent, TextComponent, TilemapComponent, TransformComponent,
     TransitionCondition, TILE_FLIP_H, TILE_FLIP_V, TILE_ID_MASK,
 };
+pub use scene::{Aabb2D, CullingStats, SpatialGrid};
 #[cfg(feature = "lua-scripting")]
 pub use scene::{LuaScriptComponent, ScriptEngine, ScriptFieldValue};
 pub use timestep::Timestep;
@@ -95,6 +96,7 @@ pub mod prelude {
         TilemapComponent, TransformComponent, TransitionCondition, TILE_FLIP_H, TILE_FLIP_V,
         TILE_ID_MASK,
     };
+    pub use crate::scene::{Aabb2D, SpatialGrid};
     #[cfg(feature = "lua-scripting")]
     pub use crate::scene::{LuaScriptComponent, ScriptEngine, ScriptFieldValue};
     pub use crate::timestep::Timestep;

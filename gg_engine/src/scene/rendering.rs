@@ -466,17 +466,35 @@ impl Scene {
             self.build_world_transform_cache()
         };
 
+        // Extract frustum half-planes for entity-level frustum culling.
+        let vp = renderer.view_projection();
+        let frustum = super::spatial::Frustum2D::from_view_projection(&vp);
+        let vp_inv = vp.inverse();
+
         // Collect all renderable entities with sort keys.
+        // Sprites and circles are frustum-culled via AABB overlap test.
+        // Text is not culled (bounds depend on string content).
+        // Tilemaps are not culled here (tile-level culling happens during rendering).
         // 0 = Sprite, 1 = Circle, 2 = Text, 3 = Tilemap
         let mut renderables: Vec<(i32, i32, f32, u8, hecs::Entity)> = Vec::new();
+        let mut total_cullable: u32 = 0;
+        let mut culled: u32 = 0;
 
         for (handle, sprite) in self
             .world
             .query::<(hecs::Entity, &SpriteRendererComponent)>()
             .iter()
         {
-            let z = wt_cache.get(&handle).map(|m| m.w_axis.z).unwrap_or(0.0);
-            renderables.push((sprite.sorting_layer, sprite.order_in_layer, z, 0, handle));
+            let Some(wt) = wt_cache.get(&handle) else {
+                continue;
+            };
+            total_cullable += 1;
+            let aabb = super::spatial::Aabb2D::from_unit_quad_transform(wt);
+            if !frustum.contains_aabb(&aabb) {
+                culled += 1;
+                continue;
+            }
+            renderables.push((sprite.sorting_layer, sprite.order_in_layer, wt.w_axis.z, 0, handle));
         }
 
         for (handle, circle) in self
@@ -484,9 +502,23 @@ impl Scene {
             .query::<(hecs::Entity, &CircleRendererComponent)>()
             .iter()
         {
-            let z = wt_cache.get(&handle).map(|m| m.w_axis.z).unwrap_or(0.0);
-            renderables.push((circle.sorting_layer, circle.order_in_layer, z, 1, handle));
+            let Some(wt) = wt_cache.get(&handle) else {
+                continue;
+            };
+            total_cullable += 1;
+            let aabb = super::spatial::Aabb2D::from_unit_quad_transform(wt);
+            if !frustum.contains_aabb(&aabb) {
+                culled += 1;
+                continue;
+            }
+            renderables.push((circle.sorting_layer, circle.order_in_layer, wt.w_axis.z, 1, handle));
         }
+
+        self.culling_stats.set(super::CullingStats {
+            total_cullable,
+            rendered: total_cullable - culled,
+            culled,
+        });
 
         for (handle, text) in self.world.query::<(hecs::Entity, &TextComponent)>().iter() {
             let z = wt_cache.get(&handle).map(|m| m.w_axis.z).unwrap_or(0.0);
@@ -508,9 +540,6 @@ impl Scene {
                 .then(a.1.cmp(&b.1))
                 .then(a.2.partial_cmp(&b.2).unwrap_or(std::cmp::Ordering::Equal))
         });
-
-        // Precompute inverse VP for tilemap frustum culling.
-        let vp_inv = renderer.view_projection().inverse();
 
         // Render in sorted order.
         // Flush all pending batches when the renderable type changes so that
