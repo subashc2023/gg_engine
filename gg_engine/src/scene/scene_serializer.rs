@@ -190,12 +190,12 @@ struct CameraData {
 struct SpriteData {
     #[serde(rename = "Color")]
     color: [f32; 4],
-    #[serde(rename = "TilingFactor", default = "default_tiling_factor")]
+    #[serde(rename = "TilingFactor", default = "default_one_f32")]
     tiling_factor: f32,
     #[serde(
         rename = "TextureHandle",
         default,
-        skip_serializing_if = "is_zero_handle"
+        skip_serializing_if = "is_zero_u64"
     )]
     texture_handle: u64,
     #[serde(rename = "SortingLayer", default)]
@@ -212,11 +212,11 @@ struct SpriteData {
     atlas_max: [f32; 2],
 }
 
-fn is_zero_handle(v: &u64) -> bool {
+fn is_zero_u64(v: &u64) -> bool {
     *v == 0
 }
 
-fn default_tiling_factor() -> f32 {
+fn default_one_f32() -> f32 {
     1.0
 }
 
@@ -232,7 +232,7 @@ fn default_one_vec2() -> [f32; 2] {
 struct CircleData {
     #[serde(rename = "Color")]
     color: [f32; 4],
-    #[serde(rename = "Thickness", default = "default_thickness")]
+    #[serde(rename = "Thickness", default = "default_one_f32")]
     thickness: f32,
     #[serde(rename = "Fade", default = "default_fade")]
     fade: f32,
@@ -240,10 +240,6 @@ struct CircleData {
     sorting_layer: i32,
     #[serde(rename = "OrderInLayer", default)]
     order_in_layer: i32,
-}
-
-fn default_thickness() -> f32 {
-    1.0
 }
 
 fn default_fade() -> f32 {
@@ -256,11 +252,11 @@ struct TextData {
     text: String,
     #[serde(rename = "FontPath")]
     font_path: String,
-    #[serde(rename = "FontSize", default = "default_font_size")]
+    #[serde(rename = "FontSize", default = "default_one_f32")]
     font_size: f32,
     #[serde(rename = "Color")]
     color: [f32; 4],
-    #[serde(rename = "LineSpacing", default = "default_line_spacing")]
+    #[serde(rename = "LineSpacing", default = "default_one_f32")]
     line_spacing: f32,
     #[serde(rename = "Kerning", default)]
     kerning: f32,
@@ -268,14 +264,6 @@ struct TextData {
     sorting_layer: i32,
     #[serde(rename = "OrderInLayer", default)]
     order_in_layer: i32,
-}
-
-fn default_font_size() -> f32 {
-    1.0
-}
-
-fn default_line_spacing() -> f32 {
-    1.0
 }
 
 #[derive(Serialize, Deserialize)]
@@ -363,7 +351,7 @@ struct AnimationClipData {
     #[serde(
         rename = "TextureHandle",
         default,
-        skip_serializing_if = "is_zero_uuid"
+        skip_serializing_if = "is_zero_u64"
     )]
     texture_handle: u64,
 }
@@ -384,17 +372,13 @@ struct SpriteAnimatorData {
     default_clip: String,
     #[serde(
         rename = "SpeedScale",
-        default = "default_speed_scale",
-        skip_serializing_if = "is_default_speed_scale"
+        default = "default_one_f32",
+        skip_serializing_if = "is_one_f32"
     )]
     speed_scale: f32,
 }
 
-fn default_speed_scale() -> f32 {
-    1.0
-}
-
-fn is_default_speed_scale(v: &f32) -> bool {
+fn is_one_f32(v: &f32) -> bool {
     (*v - 1.0).abs() < f32::EPSILON
 }
 
@@ -414,10 +398,6 @@ fn is_zero_vec2(v: &[f32; 2]) -> bool {
     v[0] == 0.0 && v[1] == 0.0
 }
 
-fn is_zero_uuid(v: &u64) -> bool {
-    *v == 0
-}
-
 #[derive(Serialize, Deserialize)]
 struct TilemapData {
     #[serde(rename = "Width")]
@@ -429,7 +409,7 @@ struct TilemapData {
     #[serde(
         rename = "TextureHandle",
         default,
-        skip_serializing_if = "is_zero_handle"
+        skip_serializing_if = "is_zero_u64"
     )]
     texture_handle: u64,
     #[serde(rename = "TilesetColumns", default = "default_tileset_columns")]
@@ -461,12 +441,12 @@ struct AudioSourceData {
     #[serde(
         rename = "AudioHandle",
         default,
-        skip_serializing_if = "is_zero_handle"
+        skip_serializing_if = "is_zero_u64"
     )]
     audio_handle: u64,
-    #[serde(rename = "Volume", default = "default_volume")]
+    #[serde(rename = "Volume", default = "default_one_f32")]
     volume: f32,
-    #[serde(rename = "Pitch", default = "default_pitch")]
+    #[serde(rename = "Pitch", default = "default_one_f32")]
     pitch: f32,
     #[serde(rename = "Looping", default)]
     looping: bool,
@@ -478,8 +458,8 @@ struct AudioSourceData {
     spatial: bool,
     #[serde(
         rename = "MinDistance",
-        default = "default_min_distance",
-        skip_serializing_if = "is_default_min_distance"
+        default = "default_one_f32",
+        skip_serializing_if = "is_one_f32"
     )]
     min_distance: f32,
     #[serde(
@@ -490,28 +470,12 @@ struct AudioSourceData {
     max_distance: f32,
 }
 
-fn default_min_distance() -> f32 {
-    1.0
-}
-
 fn default_max_distance() -> f32 {
     50.0
 }
 
-fn is_default_min_distance(v: &f32) -> bool {
-    (*v - 1.0).abs() < f32::EPSILON
-}
-
 fn is_default_max_distance(v: &f32) -> bool {
     (*v - 50.0).abs() < f32::EPSILON
-}
-
-fn default_volume() -> f32 {
-    1.0
-}
-
-fn default_pitch() -> f32 {
-    1.0
 }
 
 #[derive(Serialize, Deserialize)]
@@ -580,6 +544,34 @@ fn has_no_relationships(r: &Option<RelationshipData>) -> bool {
 // SceneSerializer
 // ---------------------------------------------------------------------------
 
+/// Serialize `data` to YAML and write it to `file_path`, creating parent
+/// directories as needed. `label` is used in log messages (e.g. "scene", "prefab").
+fn write_yaml_to_file<T: Serialize>(data: &T, file_path: &str, label: &str) -> bool {
+    if let Some(parent) = Path::new(file_path).parent() {
+        if !parent.as_os_str().is_empty() {
+            if let Err(e) = fs::create_dir_all(parent) {
+                log::error!("Failed to create directories for '{}': {}", file_path, e);
+                return false;
+            }
+        }
+    }
+    match serde_yaml_ng::to_string(data) {
+        Ok(yaml) => {
+            if let Err(e) = crate::platform_utils::atomic_write(file_path, &yaml) {
+                log::error!("Failed to write {} file '{}': {}", label, file_path, e);
+                false
+            } else {
+                log::info!("{} serialized to '{}'", label, file_path);
+                true
+            }
+        }
+        Err(e) => {
+            log::error!("Failed to serialize {}: {}", label, e);
+            false
+        }
+    }
+}
+
 /// Serializes and deserializes [`Scene`] data to/from YAML files.
 ///
 /// This is an external serializer — scene types themselves have no serialization
@@ -605,32 +597,7 @@ impl SceneSerializer {
     /// success, `false` on failure (errors are logged).
     pub fn serialize(scene: &Scene, file_path: &str, scene_name: Option<&str>) -> bool {
         let scene_data = Self::scene_to_data(scene, scene_name);
-
-        // Ensure parent directories exist.
-        if let Some(parent) = Path::new(file_path).parent() {
-            if !parent.as_os_str().is_empty() {
-                if let Err(e) = fs::create_dir_all(parent) {
-                    log::error!("Failed to create directories for '{}': {}", file_path, e);
-                    return false;
-                }
-            }
-        }
-
-        match serde_yaml_ng::to_string(&scene_data) {
-            Ok(yaml) => {
-                if let Err(e) = crate::platform_utils::atomic_write(file_path, &yaml) {
-                    log::error!("Failed to write scene file '{}': {}", file_path, e);
-                    false
-                } else {
-                    log::info!("Scene serialized to '{}'", file_path);
-                    true
-                }
-            }
-            Err(e) => {
-                log::error!("Failed to serialize scene: {}", e);
-                false
-            }
-        }
+        write_yaml_to_file(&scene_data, file_path, "scene")
     }
 
     /// Deserialize a scene from a YAML file.
@@ -735,30 +702,7 @@ impl SceneSerializer {
             entities: entities_data,
         };
 
-        if let Some(parent) = Path::new(file_path).parent() {
-            if !parent.as_os_str().is_empty() {
-                if let Err(e) = fs::create_dir_all(parent) {
-                    log::error!("Failed to create directories for '{}': {}", file_path, e);
-                    return false;
-                }
-            }
-        }
-
-        match serde_yaml_ng::to_string(&prefab_data) {
-            Ok(yaml) => {
-                if let Err(e) = crate::platform_utils::atomic_write(file_path, &yaml) {
-                    log::error!("Failed to write prefab file '{}': {}", file_path, e);
-                    false
-                } else {
-                    log::info!("Prefab serialized to '{}'", file_path);
-                    true
-                }
-            }
-            Err(e) => {
-                log::error!("Failed to serialize prefab: {}", e);
-                false
-            }
-        }
+        write_yaml_to_file(&prefab_data, file_path, "prefab")
     }
 
     /// Instantiate a prefab from a `.ggprefab` file, creating entities with

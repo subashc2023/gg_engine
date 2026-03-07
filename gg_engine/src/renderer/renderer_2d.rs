@@ -251,52 +251,61 @@ impl<V> BatchState<V> {
 }
 
 // ---------------------------------------------------------------------------
+// PipelineSet — shader + pipeline pair (swapchain + offscreen variants)
+// ---------------------------------------------------------------------------
+
+struct PipelineSet {
+    swapchain_shader: Arc<Shader>,
+    offscreen_shader: Arc<Shader>,
+    pipeline: Arc<Pipeline>,
+    offscreen_pipeline: Option<Arc<Pipeline>>,
+}
+
+impl PipelineSet {
+    /// Return the active pipeline (offscreen if enabled and available, else swapchain).
+    fn active(&self, use_offscreen: bool) -> &Arc<Pipeline> {
+        if use_offscreen {
+            self.offscreen_pipeline
+                .as_ref()
+                .unwrap_or(&self.pipeline)
+        } else {
+            &self.pipeline
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Renderer2DData — batch rendering resources (bindless)
 // ---------------------------------------------------------------------------
 
 pub(super) struct Renderer2DData {
-    // -- Quad batch resources --
-    batch_swapchain_shader: Arc<Shader>,
-    batch_offscreen_shader: Arc<Shader>,
-    batch_pipeline: Arc<Pipeline>,
-    offscreen_pipeline: Option<Arc<Pipeline>>,
+    // -- Per-batch-type shader/pipeline sets --
+    quad_ps: PipelineSet,
+    circle_ps: PipelineSet,
+    line_ps: PipelineSet,
+    text_ps: PipelineSet,
+    instance_ps: PipelineSet,
+
     use_offscreen: bool,
+
+    // -- Quad batch resources --
     vertex_buffers: [DynamicVertexBuffer; FRAMES_IN_FLIGHT],
     index_buffer: IndexBuffer,
     quad_batch: RefCell<BatchState<BatchQuadVertex>>,
 
     // -- Circle batch resources --
-    circle_swapchain_shader: Arc<Shader>,
-    circle_offscreen_shader: Arc<Shader>,
-    circle_pipeline: Arc<Pipeline>,
-    circle_offscreen_pipeline: Option<Arc<Pipeline>>,
     circle_vertex_buffers: [DynamicVertexBuffer; FRAMES_IN_FLIGHT],
-    // Circle reuses the same index_buffer (identical quad topology).
     circle_batch: RefCell<BatchState<BatchCircleVertex>>,
 
     // -- Line batch resources --
-    line_swapchain_shader: Arc<Shader>,
-    line_offscreen_shader: Arc<Shader>,
-    line_pipeline: Arc<Pipeline>,
-    line_offscreen_pipeline: Option<Arc<Pipeline>>,
     line_vertex_buffers: [DynamicVertexBuffer; FRAMES_IN_FLIGHT],
-    // Lines don't use an index buffer (drawn with vkCmdDraw).
     line_batch: RefCell<BatchState<BatchLineVertex>>,
 
     // -- Text batch resources (same vertex format as quads, MSDF shader) --
-    text_swapchain_shader: Arc<Shader>,
-    text_offscreen_shader: Arc<Shader>,
-    text_pipeline: Arc<Pipeline>,
-    text_offscreen_pipeline: Option<Arc<Pipeline>>,
     text_vertex_buffers: [DynamicVertexBuffer; FRAMES_IN_FLIGHT],
-    // Text reuses the same index_buffer (identical quad topology).
     text_batch: RefCell<BatchState<BatchQuadVertex>>,
 
     // -- Instanced sprite rendering resources --
-    instance_swapchain_shader: Arc<Shader>,
-    instance_offscreen_shader: Arc<Shader>,
-    instance_pipeline: Arc<Pipeline>,
-    instance_offscreen_pipeline: Option<Arc<Pipeline>>,
     /// Per-frame instance data buffers (binding 1, per-instance rate).
     instance_buffers: [DynamicVertexBuffer; FRAMES_IN_FLIGHT],
     /// Static unit quad vertex buffer (binding 0, shared by all instances).
@@ -610,40 +619,51 @@ impl Renderer2DData {
         let bindless_ds = [ds_vec[0], ds_vec[1]];
 
         Ok(Self {
-            batch_swapchain_shader,
-            batch_offscreen_shader: batch_shader,
-            batch_pipeline,
-            offscreen_pipeline: None,
+            quad_ps: PipelineSet {
+                swapchain_shader: batch_swapchain_shader,
+                offscreen_shader: batch_shader,
+                pipeline: batch_pipeline,
+                offscreen_pipeline: None,
+            },
+            circle_ps: PipelineSet {
+                swapchain_shader: circle_swapchain_shader,
+                offscreen_shader: circle_shader,
+                pipeline: circle_pipeline,
+                offscreen_pipeline: None,
+            },
+            line_ps: PipelineSet {
+                swapchain_shader: line_swapchain_shader,
+                offscreen_shader: line_shader,
+                pipeline: line_pipeline,
+                offscreen_pipeline: None,
+            },
+            text_ps: PipelineSet {
+                swapchain_shader: text_swapchain_shader,
+                offscreen_shader: text_shader,
+                pipeline: text_pipeline,
+                offscreen_pipeline: None,
+            },
+            instance_ps: PipelineSet {
+                swapchain_shader: instance_swapchain_shader,
+                offscreen_shader: instance_shader,
+                pipeline: instance_pipeline,
+                offscreen_pipeline: None,
+            },
+
             use_offscreen: false,
             vertex_buffers,
             index_buffer,
             quad_batch: RefCell::new(BatchState::new(MAX_VERTICES)),
 
-            circle_swapchain_shader,
-            circle_offscreen_shader: circle_shader,
-            circle_pipeline,
-            circle_offscreen_pipeline: None,
             circle_vertex_buffers,
             circle_batch: RefCell::new(BatchState::new(MAX_VERTICES)),
 
-            line_swapchain_shader,
-            line_offscreen_shader: line_shader,
-            line_pipeline,
-            line_offscreen_pipeline: None,
             line_vertex_buffers,
             line_batch: RefCell::new(BatchState::new(MAX_LINE_VERTICES)),
 
-            text_swapchain_shader,
-            text_offscreen_shader: text_shader,
-            text_pipeline,
-            text_offscreen_pipeline: None,
             text_vertex_buffers,
             text_batch: RefCell::new(BatchState::new(MAX_VERTICES)),
 
-            instance_swapchain_shader,
-            instance_offscreen_shader: instance_shader,
-            instance_pipeline,
-            instance_offscreen_pipeline: None,
             instance_buffers,
             unit_quad_vb,
             unit_quad_ib,
@@ -785,13 +805,7 @@ impl Renderer2DData {
 
         // 2. Record Vulkan commands.
         let index_count = (batch.count * 6) as u32;
-        let active_pipeline = if self.use_offscreen {
-            self.offscreen_pipeline
-                .as_ref()
-                .unwrap_or(&self.batch_pipeline)
-        } else {
-            &self.batch_pipeline
-        };
+        let active_pipeline = self.quad_ps.active(self.use_offscreen);
         let pipeline = active_pipeline.pipeline();
         let layout = active_pipeline.layout();
 
@@ -889,13 +903,7 @@ impl Renderer2DData {
 
         // 2. Record Vulkan commands.
         let index_count = (batch.count * 6) as u32;
-        let active_pipeline = if self.use_offscreen {
-            self.circle_offscreen_pipeline
-                .as_ref()
-                .unwrap_or(&self.circle_pipeline)
-        } else {
-            &self.circle_pipeline
-        };
+        let active_pipeline = self.circle_ps.active(self.use_offscreen);
         let pipeline = active_pipeline.pipeline();
         let layout = active_pipeline.layout();
 
@@ -1002,13 +1010,7 @@ impl Renderer2DData {
 
         // 2. Record Vulkan commands.
         let vertex_count = (batch.count * 2) as u32;
-        let active_pipeline = if self.use_offscreen {
-            self.line_offscreen_pipeline
-                .as_ref()
-                .unwrap_or(&self.line_pipeline)
-        } else {
-            &self.line_pipeline
-        };
+        let active_pipeline = self.line_ps.active(self.use_offscreen);
         let pipeline = active_pipeline.pipeline();
         let layout = active_pipeline.layout();
 
@@ -1103,13 +1105,7 @@ impl Renderer2DData {
 
         // 2. Record Vulkan commands.
         let index_count = (batch.count * 6) as u32;
-        let active_pipeline = if self.use_offscreen {
-            self.text_offscreen_pipeline
-                .as_ref()
-                .unwrap_or(&self.text_pipeline)
-        } else {
-            &self.text_pipeline
-        };
+        let active_pipeline = self.text_ps.active(self.use_offscreen);
         let pipeline = active_pipeline.pipeline();
         let layout = active_pipeline.layout();
 
@@ -1210,13 +1206,7 @@ impl Renderer2DData {
 
         // 2. Record Vulkan commands.
         let instance_count = batch.count as u32;
-        let active_pipeline = if self.use_offscreen {
-            self.instance_offscreen_pipeline
-                .as_ref()
-                .unwrap_or(&self.instance_pipeline)
-        } else {
-            &self.instance_pipeline
-        };
+        let active_pipeline = self.instance_ps.active(self.use_offscreen);
         let pipeline = active_pipeline.pipeline();
         let layout = active_pipeline.layout();
 
@@ -1303,9 +1293,9 @@ impl Renderer2DData {
         pipeline_cache: vk::PipelineCache,
     ) -> Result<(), String> {
         // Quad offscreen pipeline (with bindless textures at set 1).
-        self.offscreen_pipeline = Some(Arc::new(pipeline::create_batch_pipeline(
+        self.quad_ps.offscreen_pipeline = Some(Arc::new(pipeline::create_batch_pipeline(
             device,
-            &self.batch_offscreen_shader,
+            &self.quad_ps.offscreen_shader,
             self.vertex_buffers[0].layout(),
             render_pass,
             camera_ubo_ds_layout,
@@ -1315,9 +1305,9 @@ impl Renderer2DData {
         )?));
 
         // Circle offscreen pipeline (no textures).
-        self.circle_offscreen_pipeline = Some(Arc::new(pipeline::create_batch_pipeline(
+        self.circle_ps.offscreen_pipeline = Some(Arc::new(pipeline::create_batch_pipeline(
             device,
-            &self.circle_offscreen_shader,
+            &self.circle_ps.offscreen_shader,
             self.circle_vertex_buffers[0].layout(),
             render_pass,
             camera_ubo_ds_layout,
@@ -1327,9 +1317,9 @@ impl Renderer2DData {
         )?));
 
         // Line offscreen pipeline (no textures, LINE_LIST topology).
-        self.line_offscreen_pipeline = Some(Arc::new(pipeline::create_line_batch_pipeline(
+        self.line_ps.offscreen_pipeline = Some(Arc::new(pipeline::create_line_batch_pipeline(
             device,
-            &self.line_offscreen_shader,
+            &self.line_ps.offscreen_shader,
             self.line_vertex_buffers[0].layout(),
             render_pass,
             camera_ubo_ds_layout,
@@ -1338,9 +1328,9 @@ impl Renderer2DData {
         )?));
 
         // Text offscreen pipeline (with bindless textures at set 1, MSDF shader).
-        self.text_offscreen_pipeline = Some(Arc::new(pipeline::create_batch_pipeline(
+        self.text_ps.offscreen_pipeline = Some(Arc::new(pipeline::create_batch_pipeline(
             device,
-            &self.text_offscreen_shader,
+            &self.text_ps.offscreen_shader,
             self.text_vertex_buffers[0].layout(),
             render_pass,
             camera_ubo_ds_layout,
@@ -1350,10 +1340,10 @@ impl Renderer2DData {
         )?));
 
         // Instanced sprite offscreen pipeline.
-        self.instance_offscreen_pipeline =
+        self.instance_ps.offscreen_pipeline =
             Some(Arc::new(pipeline::create_instanced_batch_pipeline(
                 device,
-                &self.instance_offscreen_shader,
+                &self.instance_ps.offscreen_shader,
                 &self.unit_quad_layout,
                 &self.instance_layout,
                 render_pass,
@@ -1409,24 +1399,24 @@ impl Renderer2DData {
         // Phase 3: Swap in new shaders and rebuild pipelines.
         for (name, shader) in &new_shaders {
             match name.as_str() {
-                "batch_swapchain" => self.batch_swapchain_shader = shader.clone(),
-                "batch" => self.batch_offscreen_shader = shader.clone(),
-                "circle_swapchain" => self.circle_swapchain_shader = shader.clone(),
-                "circle" => self.circle_offscreen_shader = shader.clone(),
-                "line_swapchain" => self.line_swapchain_shader = shader.clone(),
-                "line" => self.line_offscreen_shader = shader.clone(),
-                "text_swapchain" => self.text_swapchain_shader = shader.clone(),
-                "text" => self.text_offscreen_shader = shader.clone(),
-                "instance_swapchain" => self.instance_swapchain_shader = shader.clone(),
-                "instance" => self.instance_offscreen_shader = shader.clone(),
+                "batch_swapchain" => self.quad_ps.swapchain_shader = shader.clone(),
+                "batch" => self.quad_ps.offscreen_shader = shader.clone(),
+                "circle_swapchain" => self.circle_ps.swapchain_shader = shader.clone(),
+                "circle" => self.circle_ps.offscreen_shader = shader.clone(),
+                "line_swapchain" => self.line_ps.swapchain_shader = shader.clone(),
+                "line" => self.line_ps.offscreen_shader = shader.clone(),
+                "text_swapchain" => self.text_ps.swapchain_shader = shader.clone(),
+                "text" => self.text_ps.offscreen_shader = shader.clone(),
+                "instance_swapchain" => self.instance_ps.swapchain_shader = shader.clone(),
+                "instance" => self.instance_ps.offscreen_shader = shader.clone(),
                 _ => {} // Unknown shader (e.g. legacy/) — skip.
             }
         }
 
         // Rebuild swapchain pipelines.
-        self.batch_pipeline = Arc::new(pipeline::create_batch_pipeline(
+        self.quad_ps.pipeline = Arc::new(pipeline::create_batch_pipeline(
             &self.device,
-            &self.batch_swapchain_shader,
+            &self.quad_ps.swapchain_shader,
             self.vertex_buffers[0].layout(),
             self.swapchain_render_pass,
             self.camera_ubo_ds_layout,
@@ -1435,9 +1425,9 @@ impl Renderer2DData {
             self.pipeline_cache,
         )?);
 
-        self.circle_pipeline = Arc::new(pipeline::create_batch_pipeline(
+        self.circle_ps.pipeline = Arc::new(pipeline::create_batch_pipeline(
             &self.device,
-            &self.circle_swapchain_shader,
+            &self.circle_ps.swapchain_shader,
             self.circle_vertex_buffers[0].layout(),
             self.swapchain_render_pass,
             self.camera_ubo_ds_layout,
@@ -1446,9 +1436,9 @@ impl Renderer2DData {
             self.pipeline_cache,
         )?);
 
-        self.line_pipeline = Arc::new(pipeline::create_line_batch_pipeline(
+        self.line_ps.pipeline = Arc::new(pipeline::create_line_batch_pipeline(
             &self.device,
-            &self.line_swapchain_shader,
+            &self.line_ps.swapchain_shader,
             self.line_vertex_buffers[0].layout(),
             self.swapchain_render_pass,
             self.camera_ubo_ds_layout,
@@ -1456,9 +1446,9 @@ impl Renderer2DData {
             self.pipeline_cache,
         )?);
 
-        self.text_pipeline = Arc::new(pipeline::create_batch_pipeline(
+        self.text_ps.pipeline = Arc::new(pipeline::create_batch_pipeline(
             &self.device,
-            &self.text_swapchain_shader,
+            &self.text_ps.swapchain_shader,
             self.text_vertex_buffers[0].layout(),
             self.swapchain_render_pass,
             self.camera_ubo_ds_layout,
@@ -1467,9 +1457,9 @@ impl Renderer2DData {
             self.pipeline_cache,
         )?);
 
-        self.instance_pipeline = Arc::new(pipeline::create_instanced_batch_pipeline(
+        self.instance_ps.pipeline = Arc::new(pipeline::create_instanced_batch_pipeline(
             &self.device,
-            &self.instance_swapchain_shader,
+            &self.instance_ps.swapchain_shader,
             &self.unit_quad_layout,
             &self.instance_layout,
             self.swapchain_render_pass,
@@ -1499,13 +1489,7 @@ impl Renderer2DData {
 
     /// Get the currently active instanced pipeline (offscreen or swapchain).
     pub(super) fn active_instance_pipeline(&self) -> &Arc<Pipeline> {
-        if self.use_offscreen {
-            self.instance_offscreen_pipeline
-                .as_ref()
-                .unwrap_or(&self.instance_pipeline)
-        } else {
-            &self.instance_pipeline
-        }
+        self.instance_ps.active(self.use_offscreen)
     }
 
     /// Get the bindless descriptor set for a given frame.

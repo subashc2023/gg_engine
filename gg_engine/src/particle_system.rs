@@ -202,7 +202,7 @@ impl ParticleSystem {
 
     /// Render all active particles. Call from `Application::on_render`.
     ///
-    /// Uses `draw_rotated_quad` — each particle is a rotated, colored quad
+    /// Each particle is a rotated, colored quad
     /// at z = -0.1 (in front of z=0 scene geometry). Color and size are
     /// interpolated from the particle's life fraction.
     pub fn on_render(&self, renderer: &Renderer) {

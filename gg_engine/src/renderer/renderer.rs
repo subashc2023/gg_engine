@@ -881,98 +881,7 @@ impl Renderer {
         self.push_quad_to_batch(&transform, color, 0.0, 1.0, -1);
     }
 
-    /// Draw a textured quad at a 3D position with the given size.
-    ///
-    /// `tiling_factor` scales the texture coordinates (e.g. 10.0 tiles the
-    /// texture 10x in each direction). `tint_color` is multiplied with the
-    /// sampled texel — pass `Vec4::ONE` for no tint.
-    pub fn draw_textured_quad(
-        &self,
-        position: &Vec3,
-        size: &Vec2,
-        texture: &Texture2D,
-        tiling_factor: f32,
-        tint_color: Vec4,
-    ) {
-        let transform = Mat4::from_scale_rotation_translation(
-            Vec3::new(size.x, size.y, 1.0),
-            Quat::IDENTITY,
-            *position,
-        );
-        self.push_quad_to_batch(
-            &transform,
-            tint_color,
-            texture.bindless_index() as f32,
-            tiling_factor,
-            -1,
-        );
-    }
-
-    // -- Rotated quads --------------------------------------------------------
-
-    /// Draw a rotated flat-colored quad. `rotation` is in radians (Z-axis).
-    pub fn draw_rotated_quad(&self, position: &Vec3, size: &Vec2, rotation: f32, color: Vec4) {
-        let transform = Mat4::from_scale_rotation_translation(
-            Vec3::new(size.x, size.y, 1.0),
-            Quat::from_rotation_z(rotation),
-            *position,
-        );
-        self.push_quad_to_batch(&transform, color, 0.0, 1.0, -1);
-    }
-
-    /// Draw a rotated textured quad. `rotation` is in radians (Z-axis).
-    pub fn draw_rotated_textured_quad(
-        &self,
-        position: &Vec3,
-        size: &Vec2,
-        rotation: f32,
-        texture: &Texture2D,
-        tiling_factor: f32,
-        tint_color: Vec4,
-    ) {
-        let transform = Mat4::from_scale_rotation_translation(
-            Vec3::new(size.x, size.y, 1.0),
-            Quat::from_rotation_z(rotation),
-            *position,
-        );
-        self.push_quad_to_batch(
-            &transform,
-            tint_color,
-            texture.bindless_index() as f32,
-            tiling_factor,
-            -1,
-        );
-    }
-
-    // -- Sub-textured quads (sprite sheet regions) ----------------------------
-
-    /// Draw a sub-textured quad at a 3D position.
-    ///
-    /// Uses the pre-computed texture coordinates from the [`SubTexture2D`] to
-    /// render a specific region of a sprite sheet / texture atlas.
-    /// `tint_color` is multiplied with the sampled texel — pass `Vec4::ONE`
-    /// for no tint.
-    pub fn draw_sub_textured_quad(
-        &self,
-        position: &Vec3,
-        size: &Vec2,
-        sub_texture: &SubTexture2D,
-        tint_color: Vec4,
-    ) {
-        let transform = Mat4::from_scale_rotation_translation(
-            Vec3::new(size.x, size.y, 1.0),
-            Quat::IDENTITY,
-            *position,
-        );
-        self.push_quad_to_batch_uv(
-            &transform,
-            tint_color,
-            sub_texture.bindless_index() as f32,
-            sub_texture.tex_coords(),
-            1.0,
-            -1,
-        );
-    }
+    // -- Sub-textured / transformed quads ------------------------------------
 
     /// Draw a sub-textured quad using a pre-built transform matrix.
     ///
@@ -1013,30 +922,6 @@ impl Renderer {
     ) {
         self.push_sprite_instance_uv(
             transform, tint_color, tex_index, 1.0, uv_min, uv_max, entity_id,
-        );
-    }
-
-    /// Draw a rotated sub-textured quad. `rotation` is in radians (Z-axis).
-    pub fn draw_rotated_sub_textured_quad(
-        &self,
-        position: &Vec3,
-        size: &Vec2,
-        rotation: f32,
-        sub_texture: &SubTexture2D,
-        tint_color: Vec4,
-    ) {
-        let transform = Mat4::from_scale_rotation_translation(
-            Vec3::new(size.x, size.y, 1.0),
-            Quat::from_rotation_z(rotation),
-            *position,
-        );
-        self.push_quad_to_batch_uv(
-            &transform,
-            tint_color,
-            sub_texture.bindless_index() as f32,
-            sub_texture.tex_coords(),
-            1.0,
-            -1,
         );
     }
 
