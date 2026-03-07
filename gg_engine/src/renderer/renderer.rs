@@ -5,6 +5,7 @@ use ash::vk;
 use glam::{Mat4, Quat, Vec2, Vec3, Vec4};
 
 use super::buffer::{IndexBuffer, VertexBuffer};
+use super::camera_system::CameraSystem;
 use super::draw_context::DrawContext;
 use super::font::{Font, FontCpuData};
 use super::framebuffer::{Framebuffer, FramebufferSpec};
@@ -21,9 +22,8 @@ use super::shader::Shader;
 use super::sub_texture::SubTexture2D;
 use super::texture::TextureCpuData;
 use super::texture::{Texture2D, TransferBatch};
-use super::uniform_buffer::{CameraData, UniformBuffer};
 use super::vertex_array::VertexArray;
-use super::{VulkanContext, MAX_FRAMES_IN_FLIGHT, MAX_VIEWPORTS};
+use super::VulkanContext;
 
 use crate::profiling::ProfileTimer;
 use crate::scene::{CircleRendererComponent, SpriteRendererComponent, TextComponent};
@@ -53,7 +53,6 @@ const QUAD_TEX_COORDS: [[f32; 2]; 4] = [
 pub struct Renderer {
     api: RendererAPI,
     draw_context: Option<DrawContext>,
-    view_projection: Mat4,
 
     // Handles needed for resource creation.
     device: ash::Device,
@@ -68,14 +67,8 @@ pub struct Renderer {
     descriptor_pool: vk::DescriptorPool,
     texture_descriptor_set_layout: vk::DescriptorSetLayout,
 
-    // Camera UBO (per-frame per-viewport VP matrix + time).
-    // Slots: MAX_FRAMES_IN_FLIGHT * MAX_VIEWPORTS (each with own buffer + descriptor set).
-    camera_ubo: UniformBuffer,
-    camera_ubo_ds_layout: vk::DescriptorSetLayout,
-    camera_ubo_ds: Vec<vk::DescriptorSet>,
-
-    // Scene time for GPU animation (written to camera UBO as u_time).
-    scene_time: f32,
+    // Per-frame per-viewport camera UBO (VP matrix + time).
+    camera: CameraSystem,
 
     // Format info for framebuffer creation.
     color_format: vk::Format,
@@ -114,7 +107,7 @@ impl Renderer {
 
         // Create descriptor pool for texture samplers + camera UBO sets.
         // Camera UBO needs one descriptor set per (frame, viewport) slot.
-        let ubo_slot_count = (MAX_FRAMES_IN_FLIGHT * MAX_VIEWPORTS) as u32;
+        let ubo_slot_count = (super::MAX_FRAMES_IN_FLIGHT * super::MAX_VIEWPORTS) as u32;
         let pool_sizes = [
             vk::DescriptorPoolSize {
                 ty: vk::DescriptorType::COMBINED_IMAGE_SAMPLER,
@@ -144,46 +137,8 @@ impl Renderer {
             unsafe { device.create_descriptor_set_layout(&layout_info, None) }
                 .map_err(|e| format!("Failed to create descriptor set layout: {e}"))?;
 
-        // -- Camera UBO descriptor set layout: binding 0, UNIFORM_BUFFER, vertex stage --
-        let ubo_binding = vk::DescriptorSetLayoutBinding::default()
-            .binding(0)
-            .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
-            .descriptor_count(1)
-            .stage_flags(vk::ShaderStageFlags::VERTEX);
-        let ubo_layout_info = vk::DescriptorSetLayoutCreateInfo::default()
-            .bindings(std::slice::from_ref(&ubo_binding));
-        let camera_ubo_ds_layout =
-            unsafe { device.create_descriptor_set_layout(&ubo_layout_info, None) }
-                .map_err(|e| format!("Failed to create camera UBO descriptor set layout: {e}"))?;
-
-        // -- Camera UBO buffers (80 bytes each, one per frame × viewport slot) --
-        let camera_ubo = UniformBuffer::new(allocator, device, CameraData::SIZE)?;
-
-        // -- Allocate descriptor sets for all camera UBO slots --
-        let total_ubo_slots = MAX_FRAMES_IN_FLIGHT * MAX_VIEWPORTS;
-        let ubo_layouts = vec![camera_ubo_ds_layout; total_ubo_slots];
-        let ubo_ds_alloc_info = vk::DescriptorSetAllocateInfo::default()
-            .descriptor_pool(descriptor_pool)
-            .set_layouts(&ubo_layouts);
-        let camera_ubo_ds = unsafe { device.allocate_descriptor_sets(&ubo_ds_alloc_info) }
-            .map_err(|e| format!("Failed to allocate camera UBO descriptor sets: {e}"))?;
-
-        // -- Write each descriptor set pointing to its UBO buffer --
-        for (i, &ds) in camera_ubo_ds.iter().enumerate() {
-            let buffer_info = vk::DescriptorBufferInfo::default()
-                .buffer(camera_ubo.buffer(i))
-                .offset(0)
-                .range(CameraData::SIZE as u64);
-            let write = vk::WriteDescriptorSet::default()
-                .dst_set(ds)
-                .dst_binding(0)
-                .dst_array_element(0)
-                .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
-                .buffer_info(std::slice::from_ref(&buffer_info));
-            unsafe {
-                device.update_descriptor_sets(&[write], &[]);
-            }
-        }
+        // Camera UBO: descriptor set layout, per-slot buffers, descriptor sets.
+        let camera = CameraSystem::new(allocator, device, descriptor_pool)?;
 
         // -- Pipeline cache (load from disk if available) --
         let cache_data = Self::load_pipeline_cache_data();
@@ -200,7 +155,6 @@ impl Renderer {
         Ok(Self {
             api,
             draw_context: None,
-            view_projection: Mat4::IDENTITY,
             device: device.clone(),
             render_pass,
             graphics_queue: vk_ctx.graphics_queue(),
@@ -208,10 +162,7 @@ impl Renderer {
             allocator: allocator.clone(),
             descriptor_pool,
             texture_descriptor_set_layout,
-            camera_ubo,
-            camera_ubo_ds_layout,
-            camera_ubo_ds,
-            scene_time: 0.0,
+            camera,
             color_format,
             depth_format,
             pipeline_cache,
@@ -308,7 +259,7 @@ impl Renderer {
             va,
             self.render_pass,
             has_material_color,
-            self.camera_ubo_ds_layout,
+            self.camera.ds_layout(),
             &[],
             blend_enable,
             self.pipeline_cache,
@@ -329,7 +280,7 @@ impl Renderer {
             va,
             self.render_pass,
             false,
-            self.camera_ubo_ds_layout,
+            self.camera.ds_layout(),
             &[self.texture_descriptor_set_layout],
             true,
             self.pipeline_cache,
@@ -489,7 +440,7 @@ impl Renderer {
             data.create_offscreen_pipeline(
                 &self.device,
                 render_pass,
-                self.camera_ubo_ds_layout,
+                self.camera.ds_layout(),
                 color_attachment_count,
                 self.pipeline_cache,
             )?;
@@ -534,7 +485,7 @@ impl Renderer {
             &self.allocator,
             &self.device,
             self.render_pass,
-            self.camera_ubo_ds_layout,
+            self.camera.ds_layout(),
             white_texture,
             self.pipeline_cache,
         )?;
@@ -680,7 +631,7 @@ impl Renderer {
 
         data.flush_quads(
             ctx.cmd_buf,
-            self.camera_ubo_ds[UniformBuffer::slot(ctx.current_frame, ctx.viewport_index)],
+            self.camera.descriptor_set(ctx.current_frame, ctx.viewport_index),
             ctx.current_frame,
         );
     }
@@ -697,7 +648,7 @@ impl Renderer {
 
         data.flush_circles(
             ctx.cmd_buf,
-            self.camera_ubo_ds[UniformBuffer::slot(ctx.current_frame, ctx.viewport_index)],
+            self.camera.descriptor_set(ctx.current_frame, ctx.viewport_index),
             ctx.current_frame,
         );
     }
@@ -710,47 +661,7 @@ impl Renderer {
     pub fn flush_all_batches(&self) {
         if let Some(data) = &self.renderer_2d {
             if let Some(ctx) = self.draw_context {
-                if data.has_pending_quads() {
-                    data.flush_quads(
-                        ctx.cmd_buf,
-                        self.camera_ubo_ds
-                            [UniformBuffer::slot(ctx.current_frame, ctx.viewport_index)],
-                        ctx.current_frame,
-                    );
-                }
-                if data.has_pending_circles() {
-                    data.flush_circles(
-                        ctx.cmd_buf,
-                        self.camera_ubo_ds
-                            [UniformBuffer::slot(ctx.current_frame, ctx.viewport_index)],
-                        ctx.current_frame,
-                    );
-                }
-                if data.has_pending_lines() {
-                    data.flush_lines(
-                        ctx.cmd_buf,
-                        self.camera_ubo_ds
-                            [UniformBuffer::slot(ctx.current_frame, ctx.viewport_index)],
-                        ctx.current_frame,
-                        self.line_width,
-                    );
-                }
-                if data.has_pending_text() {
-                    data.flush_text(
-                        ctx.cmd_buf,
-                        self.camera_ubo_ds
-                            [UniformBuffer::slot(ctx.current_frame, ctx.viewport_index)],
-                        ctx.current_frame,
-                    );
-                }
-                if data.has_pending_instances() {
-                    data.flush_instances(
-                        ctx.cmd_buf,
-                        self.camera_ubo_ds
-                            [UniformBuffer::slot(ctx.current_frame, ctx.viewport_index)],
-                        ctx.current_frame,
-                    );
-                }
+                self.flush_pending(data, &ctx);
             }
         }
     }
@@ -886,7 +797,7 @@ impl Renderer {
 
         data.flush_instances(
             ctx.cmd_buf,
-            self.camera_ubo_ds[UniformBuffer::slot(ctx.current_frame, ctx.viewport_index)],
+            self.camera.descriptor_set(ctx.current_frame, ctx.viewport_index),
             ctx.current_frame,
         );
     }
@@ -1110,7 +1021,7 @@ impl Renderer {
 
         data.flush_lines(
             ctx.cmd_buf,
-            self.camera_ubo_ds[UniformBuffer::slot(ctx.current_frame, ctx.viewport_index)],
+            self.camera.descriptor_set(ctx.current_frame, ctx.viewport_index),
             ctx.current_frame,
             self.line_width,
         );
@@ -1226,7 +1137,7 @@ impl Renderer {
 
         data.flush_text(
             ctx.cmd_buf,
-            self.camera_ubo_ds[UniformBuffer::slot(ctx.current_frame, ctx.viewport_index)],
+            self.camera.descriptor_set(ctx.current_frame, ctx.viewport_index),
             ctx.current_frame,
         );
     }
@@ -1358,12 +1269,12 @@ impl Renderer {
     /// saves the draw context, sets viewport/scissor, and resets the batch.
     pub(crate) fn begin_scene(&mut self, camera_vp: &Mat4, ctx: DrawContext) {
         let _timer = ProfileTimer::new("Renderer::begin_scene");
-        self.view_projection = *camera_vp;
         self.draw_context = Some(ctx);
         RenderCommand::set_viewport(&self.api, &ctx);
 
         // Write VP matrix + time to the camera UBO for this (frame, viewport) slot.
-        self.write_camera_ubo(*camera_vp, ctx.current_frame, ctx.viewport_index);
+        self.camera
+            .set_view_projection(*camera_vp, ctx.current_frame, ctx.viewport_index);
 
         // Reset batch state for this frame.
         if let Some(data) = &self.renderer_2d {
@@ -1373,7 +1284,7 @@ impl Renderer {
 
     /// Returns the current view-projection matrix.
     pub fn view_projection(&self) -> Mat4 {
-        self.view_projection
+        self.camera.view_projection()
     }
 
     /// Override the view-projection matrix for the current scene.
@@ -1382,11 +1293,9 @@ impl Renderer {
     /// used for subsequent draw calls. Used by [`Scene`](crate::scene::Scene)
     /// to render through the primary ECS camera entity.
     pub fn set_view_projection(&mut self, vp: Mat4) {
-        self.view_projection = vp;
-
-        // Update the camera UBO if we have an active draw context.
         if let Some(ctx) = self.draw_context {
-            self.write_camera_ubo(vp, ctx.current_frame, ctx.viewport_index);
+            self.camera
+                .set_view_projection(vp, ctx.current_frame, ctx.viewport_index);
         }
     }
 
@@ -1395,24 +1304,7 @@ impl Renderer {
     /// Call this before [`set_view_projection`] so the UBO includes the
     /// correct time value for the current frame.
     pub fn set_scene_time(&mut self, t: f32) {
-        self.scene_time = t;
-    }
-
-    /// Write the camera UBO (VP matrix + time) for the current (frame, viewport) slot.
-    fn write_camera_ubo(&self, vp: Mat4, current_frame: usize, viewport_index: usize) {
-        let camera_data = CameraData {
-            view_projection: vp,
-            time: self.scene_time,
-            _pad: [0.0; 3],
-        };
-        let bytes = unsafe {
-            std::slice::from_raw_parts(
-                &camera_data as *const CameraData as *const u8,
-                CameraData::SIZE,
-            )
-        };
-        let slot = UniformBuffer::slot(current_frame, viewport_index);
-        self.camera_ubo.update(slot, bytes);
+        self.camera.set_scene_time(t);
     }
 
     /// End the current scene — flushes any pending batches (quads + circles + lines),
@@ -1421,52 +1313,7 @@ impl Renderer {
         let _timer = ProfileTimer::new("Renderer::end_scene");
         if let Some(data) = &self.renderer_2d {
             if let Some(ctx) = self.draw_context {
-                // Flush any remaining quads.
-                if data.has_pending_quads() {
-                    data.flush_quads(
-                        ctx.cmd_buf,
-                        self.camera_ubo_ds
-                            [UniformBuffer::slot(ctx.current_frame, ctx.viewport_index)],
-                        ctx.current_frame,
-                    );
-                }
-                // Flush any remaining circles.
-                if data.has_pending_circles() {
-                    data.flush_circles(
-                        ctx.cmd_buf,
-                        self.camera_ubo_ds
-                            [UniformBuffer::slot(ctx.current_frame, ctx.viewport_index)],
-                        ctx.current_frame,
-                    );
-                }
-                // Flush any remaining lines.
-                if data.has_pending_lines() {
-                    data.flush_lines(
-                        ctx.cmd_buf,
-                        self.camera_ubo_ds
-                            [UniformBuffer::slot(ctx.current_frame, ctx.viewport_index)],
-                        ctx.current_frame,
-                        self.line_width,
-                    );
-                }
-                // Flush any remaining text.
-                if data.has_pending_text() {
-                    data.flush_text(
-                        ctx.cmd_buf,
-                        self.camera_ubo_ds
-                            [UniformBuffer::slot(ctx.current_frame, ctx.viewport_index)],
-                        ctx.current_frame,
-                    );
-                }
-                // Flush any remaining sprite instances.
-                if data.has_pending_instances() {
-                    data.flush_instances(
-                        ctx.cmd_buf,
-                        self.camera_ubo_ds
-                            [UniformBuffer::slot(ctx.current_frame, ctx.viewport_index)],
-                        ctx.current_frame,
-                    );
-                }
+                self.flush_pending(data, &ctx);
             }
             // Snapshot stats for this frame (available via stats_2d() until next end_scene).
             let quad_stats = data.quad_stats();
@@ -1490,6 +1337,29 @@ impl Renderer {
         self.draw_context = None;
     }
 
+    /// Flush all pending batch types (quads, circles, lines, text, instances).
+    /// Empty batches are no-ops.
+    fn flush_pending(&self, data: &Renderer2DData, ctx: &DrawContext) {
+        let ds = self
+            .camera
+            .descriptor_set(ctx.current_frame, ctx.viewport_index);
+        if data.has_pending_quads() {
+            data.flush_quads(ctx.cmd_buf, ds, ctx.current_frame);
+        }
+        if data.has_pending_circles() {
+            data.flush_circles(ctx.cmd_buf, ds, ctx.current_frame);
+        }
+        if data.has_pending_lines() {
+            data.flush_lines(ctx.cmd_buf, ds, ctx.current_frame, self.line_width);
+        }
+        if data.has_pending_text() {
+            data.flush_text(ctx.cmd_buf, ds, ctx.current_frame);
+        }
+        if data.has_pending_instances() {
+            data.flush_instances(ctx.cmd_buf, ds, ctx.current_frame);
+        }
+    }
+
     /// Submit a draw call: bind pipeline, push VP + transform matrices,
     /// optionally push material color, bind vertex array, draw indexed.
     pub fn submit(
@@ -1508,7 +1378,8 @@ impl Renderer {
             pipeline.pipeline(),
             pipeline.layout(),
             vertex_array,
-            self.camera_ubo_ds[UniformBuffer::slot(ctx.current_frame, ctx.viewport_index)],
+            self.camera
+                .descriptor_set(ctx.current_frame, ctx.viewport_index),
             transform,
             color.as_ref(),
             None,
@@ -1533,7 +1404,8 @@ impl Renderer {
             pipeline.pipeline(),
             pipeline.layout(),
             vertex_array,
-            self.camera_ubo_ds[UniformBuffer::slot(ctx.current_frame, ctx.viewport_index)],
+            self.camera
+                .descriptor_set(ctx.current_frame, ctx.viewport_index),
             transform,
             None,
             Some(texture.descriptor_set()),
@@ -1593,14 +1465,10 @@ impl Renderer {
         ps.render(
             ctx.cmd_buf,
             ctx.current_frame,
-            self.camera_ubo_ds[UniformBuffer::slot(ctx.current_frame, ctx.viewport_index)],
+            self.camera
+                .descriptor_set(ctx.current_frame, ctx.viewport_index),
             data,
         );
-    }
-
-    /// Returns true if a GPU particle system has been created.
-    pub fn has_gpu_particles(&self) -> bool {
-        self.gpu_particles.is_some()
     }
 }
 
@@ -1612,6 +1480,8 @@ impl Drop for Renderer {
         // Drop Renderer2DData (owns white_texture) before destroying the
         // descriptor pool, so Texture2D::Drop can still free its descriptor set.
         drop(self.renderer_2d.take());
+        // Drop GPU particle system (owns its own descriptor pool/layout).
+        drop(self.gpu_particles.take());
         unsafe {
             self.device
                 .destroy_pipeline_cache(self.pipeline_cache, None);
@@ -1619,9 +1489,8 @@ impl Drop for Renderer {
                 .destroy_descriptor_pool(self.descriptor_pool, None);
             self.device
                 .destroy_descriptor_set_layout(self.texture_descriptor_set_layout, None);
-            self.device
-                .destroy_descriptor_set_layout(self.camera_ubo_ds_layout, None);
-            // camera_ubo buffers/memory cleaned up by UniformBuffer::Drop.
+            // CameraSystem::Drop handles camera_ubo_ds_layout + UBO buffer cleanup.
+            // Camera descriptor sets are freed by the pool destruction above.
         }
     }
 }

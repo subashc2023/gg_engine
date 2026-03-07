@@ -1,4 +1,5 @@
 mod buffer;
+mod camera_system;
 mod compute;
 mod draw_context;
 mod editor_camera;
