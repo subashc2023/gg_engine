@@ -213,7 +213,13 @@ impl Application for GGEditor {
             if arg.ends_with(".ggproject") {
                 // Canonicalize the path so project_directory is absolute.
                 let abs_path = std::fs::canonicalize(&arg).unwrap_or_else(|_| PathBuf::from(&arg));
-                Project::load(&abs_path.to_string_lossy())
+                match Project::load(&abs_path.to_string_lossy()) {
+                    Ok(p) => Some(p),
+                    Err(e) => {
+                        warn!("Failed to load project '{}': {}", abs_path.display(), e);
+                        None
+                    }
+                }
             } else {
                 None
             }
@@ -265,7 +271,7 @@ impl Application for GGEditor {
             if start_path.exists() {
                 let mut scene = Scene::new();
                 let path_str = start_path.to_string_lossy().to_string();
-                if SceneSerializer::deserialize(&mut scene, &path_str) {
+                if SceneSerializer::deserialize(&mut scene, &path_str).is_ok() {
                     info!("Loaded project start scene: {}", path_str);
                     // Check for auto-save recovery.
                     if let Some(recovered) = Self::check_autosave_recovery(&path_str) {

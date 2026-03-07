@@ -58,7 +58,7 @@ impl EditorAssetManager {
     pub fn load_registry(&mut self) {
         let registry_path = self.asset_directory.join(REGISTRY_FILENAME);
         if registry_path.exists() {
-            if let Some(reg) = AssetRegistry::load(&registry_path) {
+            if let Ok(reg) = AssetRegistry::load(&registry_path) {
                 self.registry = reg;
             }
         } else {
@@ -72,7 +72,9 @@ impl EditorAssetManager {
     /// Save the registry to the `AssetRegistry.ggregistry` file in the asset directory.
     pub fn save_registry(&self) {
         let registry_path = self.asset_directory.join(REGISTRY_FILENAME);
-        self.registry.save(&registry_path);
+        if let Err(e) = self.registry.save(&registry_path) {
+            log::error!("Failed to save asset registry: {}", e);
+        }
     }
 
     /// Import an asset by its path relative to the asset directory.

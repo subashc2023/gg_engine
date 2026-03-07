@@ -378,7 +378,9 @@ impl GGEditor {
         let path_str = scene_path.to_string_lossy().to_string();
 
         // Serialize the empty scene to disk immediately.
-        SceneSerializer::serialize(&scene, &path_str, Some(name));
+        if let Err(e) = SceneSerializer::serialize(&scene, &path_str, Some(name)) {
+            warn!("Failed to create scene file '{}': {}", path_str, e);
+        }
 
         // Swap in the new scene.
         let old = std::mem::replace(&mut self.scene, scene);
@@ -413,12 +415,13 @@ impl GGEditor {
 
     pub(super) fn save_scene(&mut self) {
         if let Some(ref path) = self.scene_ctx.editor_scene_path {
-            if SceneSerializer::serialize(&self.scene, path, Self::scene_name_from_path(path)) {
-                self.scene_ctx.dirty = false;
-                self.scene_ctx.autosave_timer = Self::AUTOSAVE_INTERVAL_SECS;
-                Self::remove_autosave_file(path);
-            } else {
-                warn!("Failed to save scene to '{}'", path);
+            match SceneSerializer::serialize(&self.scene, path, Self::scene_name_from_path(path)) {
+                Ok(()) => {
+                    self.scene_ctx.dirty = false;
+                    self.scene_ctx.autosave_timer = Self::AUTOSAVE_INTERVAL_SECS;
+                    Self::remove_autosave_file(path);
+                }
+                Err(e) => warn!("Failed to save scene to '{}': {}", path, e),
             }
         } else {
             self.save_scene_as();
@@ -427,13 +430,14 @@ impl GGEditor {
 
     pub(super) fn save_scene_as(&mut self) {
         if let Some(path) = FileDialogs::save_file("GGScene files", &["ggscene"]) {
-            if SceneSerializer::serialize(&self.scene, &path, Self::scene_name_from_path(&path)) {
-                self.scene_ctx.editor_scene_path = Some(path);
-                self.scene_ctx.dirty = false;
-                self.scene_ctx.autosave_timer = Self::AUTOSAVE_INTERVAL_SECS;
-                panels::project::invalidate_scene_cache();
-            } else {
-                warn!("Failed to save scene to '{}'", path);
+            match SceneSerializer::serialize(&self.scene, &path, Self::scene_name_from_path(&path)) {
+                Ok(()) => {
+                    self.scene_ctx.editor_scene_path = Some(path);
+                    self.scene_ctx.dirty = false;
+                    self.scene_ctx.autosave_timer = Self::AUTOSAVE_INTERVAL_SECS;
+                    panels::project::invalidate_scene_cache();
+                }
+                Err(e) => warn!("Failed to save scene to '{}': {}", path, e),
             }
         }
     }
@@ -442,14 +446,13 @@ impl GGEditor {
     pub(super) fn perform_autosave(&self) {
         if let Some(ref path) = self.scene_ctx.editor_scene_path {
             let autosave_path = Self::autosave_path_for(path);
-            if SceneSerializer::serialize(
+            match SceneSerializer::serialize(
                 &self.scene,
                 &autosave_path,
                 Self::scene_name_from_path(path),
             ) {
-                info!("Auto-saved to '{}'", autosave_path);
-            } else {
-                warn!("Auto-save failed for '{}'", autosave_path);
+                Ok(()) => info!("Auto-saved to '{}'", autosave_path),
+                Err(e) => warn!("Auto-save failed for '{}': {}", autosave_path, e),
             }
         }
     }
@@ -513,12 +516,14 @@ impl GGEditor {
              Recover unsaved changes?",
         ) {
             let mut recovered = Scene::new();
-            if SceneSerializer::deserialize(&mut recovered, &autosave) {
-                info!("Recovered scene from auto-save: {}", autosave);
-                let _ = std::fs::remove_file(&autosave);
-                return Some(recovered);
+            match SceneSerializer::deserialize(&mut recovered, &autosave) {
+                Ok(()) => {
+                    info!("Recovered scene from auto-save: {}", autosave);
+                    let _ = std::fs::remove_file(&autosave);
+                    return Some(recovered);
+                }
+                Err(e) => warn!("Failed to deserialize auto-save file '{}': {}", autosave, e),
             }
-            warn!("Failed to deserialize auto-save file: {}", autosave);
         } else {
             // User declined — clean up stale auto-save.
             let _ = std::fs::remove_file(&autosave);
@@ -613,31 +618,36 @@ impl GGEditor {
                     return;
                 }
                 if let Some(path_str) = FileDialogs::save_file("GG Prefab", &["ggprefab"]) {
-                    if SceneSerializer::serialize_prefab(&self.scene, entity, &path_str) {
-                        // Auto-import to asset registry if inside assets directory.
-                        let path = Path::new(&path_str);
-                        if let Ok(rel) = path.strip_prefix(&self.project_state.assets_root) {
-                            let rel_str = rel.to_string_lossy().replace('\\', "/");
-                            if let Some(ref mut am) = self.project_state.asset_manager {
-                                am.import_asset(&rel_str);
+                    match SceneSerializer::serialize_prefab(&self.scene, entity, &path_str) {
+                        Ok(()) => {
+                            // Auto-import to asset registry if inside assets directory.
+                            let path = Path::new(&path_str);
+                            if let Ok(rel) = path.strip_prefix(&self.project_state.assets_root) {
+                                let rel_str = rel.to_string_lossy().replace('\\', "/");
+                                if let Some(ref mut am) = self.project_state.asset_manager {
+                                    am.import_asset(&rel_str);
+                                }
                             }
+                            panels::content_browser::invalidate_dir_cache();
                         }
-                        panels::content_browser::invalidate_dir_cache();
+                        Err(e) => warn!("Failed to save prefab '{}': {}", path_str, e),
                     }
                 }
             }
             HierarchyExternalAction::InstantiatePrefab { path, parent } => {
                 let path_str = path.to_string_lossy().to_string();
                 self.undo_system.record(&self.scene);
-                if let Some(root) = SceneSerializer::instantiate_prefab(&mut self.scene, &path_str)
-                {
-                    if let Some(parent_entity) = parent {
-                        if self.scene.is_alive(parent_entity) {
-                            self.scene.set_parent(root, parent_entity, false);
+                match SceneSerializer::instantiate_prefab(&mut self.scene, &path_str) {
+                    Ok(root) => {
+                        if let Some(parent_entity) = parent {
+                            if self.scene.is_alive(parent_entity) {
+                                self.scene.set_parent(root, parent_entity, false);
+                            }
                         }
+                        self.selection_context = Some(root);
+                        self.scene_ctx.dirty = true;
                     }
-                    self.selection_context = Some(root);
-                    self.scene_ctx.dirty = true;
+                    Err(e) => warn!("Failed to instantiate prefab '{}': {}", path_str, e),
                 }
             }
         }
@@ -646,7 +656,7 @@ impl GGEditor {
     pub(super) fn open_scene_from_path(&mut self, path: &std::path::Path) {
         let path_str = path.to_string_lossy().to_string();
         let mut new_scene = Scene::new();
-        if SceneSerializer::deserialize(&mut new_scene, &path_str) {
+        if SceneSerializer::deserialize(&mut new_scene, &path_str).is_ok() {
             // Check for auto-save recovery before committing the loaded scene.
             let recovered = if let Some(recovered) = Self::check_autosave_recovery(&path_str) {
                 new_scene = recovered;
@@ -672,9 +682,12 @@ impl GGEditor {
     pub(super) fn load_project_from_path(&mut self, project_path: &std::path::Path) {
         let abs_path =
             std::fs::canonicalize(project_path).unwrap_or_else(|_| project_path.to_path_buf());
-        let Some(project) = Project::load(&abs_path.to_string_lossy()) else {
-            warn!("Failed to load project: {}", abs_path.display());
-            return;
+        let project = match Project::load(&abs_path.to_string_lossy()) {
+            Ok(p) => p,
+            Err(e) => {
+                warn!("Failed to load project '{}': {}", abs_path.display(), e);
+                return;
+            }
         };
 
         // Stop playback if active.
@@ -705,7 +718,7 @@ impl GGEditor {
         if start_path.exists() {
             let path_str = start_path.to_string_lossy().to_string();
             let mut new_scene = Scene::new();
-            if SceneSerializer::deserialize(&mut new_scene, &path_str) {
+            if SceneSerializer::deserialize(&mut new_scene, &path_str).is_ok() {
                 // Check for auto-save recovery.
                 let recovered = if let Some(recovered) = Self::check_autosave_recovery(&path_str) {
                     new_scene = recovered;
@@ -784,8 +797,9 @@ impl GGEditor {
             .map(|s| s.to_string_lossy().to_string())
             .unwrap_or_else(|| "Untitled".into());
 
-        if Project::new(&path.to_string_lossy(), &name).is_some() {
-            self.load_project_from_path(path);
+        match Project::new(&path.to_string_lossy(), &name) {
+            Ok(_) => self.load_project_from_path(path),
+            Err(e) => warn!("Failed to create project '{}': {}", name, e),
         }
     }
 }

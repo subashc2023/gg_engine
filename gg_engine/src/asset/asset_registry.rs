@@ -5,6 +5,7 @@ use std::path::Path;
 use serde::{Deserialize, Serialize};
 
 use super::{AssetHandle, AssetMetadata, AssetType};
+use crate::error::EngineResult;
 use crate::uuid::Uuid;
 
 /// Maps asset handles (UUIDs) to asset metadata (file path + type).
@@ -94,30 +95,9 @@ impl AssetRegistry {
     }
 
     /// Load the registry from a `.ggregistry` YAML file.
-    pub fn load(file_path: &Path) -> Option<Self> {
-        let contents = match fs::read_to_string(file_path) {
-            Ok(s) => s,
-            Err(e) => {
-                log::warn!(
-                    "Failed to read registry file '{}': {}",
-                    file_path.display(),
-                    e
-                );
-                return None;
-            }
-        };
-
-        let file_data: RegistryFileData = match serde_yaml_ng::from_str(&contents) {
-            Ok(d) => d,
-            Err(e) => {
-                log::error!(
-                    "Failed to parse registry file '{}': {}",
-                    file_path.display(),
-                    e
-                );
-                return None;
-            }
-        };
+    pub fn load(file_path: &Path) -> EngineResult<Self> {
+        let contents = fs::read_to_string(file_path)?;
+        let file_data: RegistryFileData = serde_yaml_ng::from_str(&contents)?;
 
         let mut registry = Self::new();
         for entry in &file_data.assets {
@@ -137,11 +117,11 @@ impl AssetRegistry {
             file_path.display(),
             registry.len()
         );
-        Some(registry)
+        Ok(registry)
     }
 
     /// Save the registry to a `.ggregistry` YAML file.
-    pub fn save(&self, file_path: &Path) -> bool {
+    pub fn save(&self, file_path: &Path) -> EngineResult<()> {
         let mut entries: Vec<RegistryEntryData> = self
             .assets
             .iter()
@@ -157,25 +137,11 @@ impl AssetRegistry {
 
         let file_data = RegistryFileData { assets: entries };
 
-        match serde_yaml_ng::to_string(&file_data) {
-            Ok(yaml) => {
-                if let Err(e) = crate::platform_utils::atomic_write(file_path, &yaml) {
-                    log::error!(
-                        "Failed to write registry file '{}': {}",
-                        file_path.display(),
-                        e
-                    );
-                    false
-                } else {
-                    log::info!("Asset registry saved to '{}'", file_path.display());
-                    true
-                }
-            }
-            Err(e) => {
-                log::error!("Failed to serialize registry: {}", e);
-                false
-            }
-        }
+        let yaml = serde_yaml_ng::to_string(&file_data)?;
+        crate::platform_utils::atomic_write(file_path, &yaml)?;
+
+        log::info!("Asset registry saved to '{}'", file_path.display());
+        Ok(())
     }
 }
 
@@ -335,7 +301,7 @@ mod tests {
         let _ = std::fs::create_dir_all(&dir);
         let file_path = dir.join("TestRegistry.ggregistry");
 
-        assert!(reg.save(&file_path));
+        reg.save(&file_path).expect("save failed");
 
         let loaded = AssetRegistry::load(&file_path).expect("Failed to load registry");
         assert_eq!(loaded.len(), 2);
@@ -353,13 +319,13 @@ mod tests {
     }
 
     #[test]
-    fn load_nonexistent_file_returns_none() {
+    fn load_nonexistent_file_returns_err() {
         let result = AssetRegistry::load(Path::new("nonexistent_dir/fake.ggregistry"));
-        assert!(result.is_none());
+        assert!(result.is_err());
     }
 
     #[test]
-    fn load_malformed_yaml_returns_none() {
+    fn load_malformed_yaml_returns_err() {
         let dir = std::env::temp_dir().join("gg_asset_test_malformed");
         let _ = std::fs::create_dir_all(&dir);
         let file_path = dir.join("Bad.ggregistry");
@@ -368,7 +334,7 @@ mod tests {
         f.write_all(b"this is not valid yaml: [[[{{{").unwrap();
 
         let result = AssetRegistry::load(&file_path);
-        assert!(result.is_none());
+        assert!(result.is_err());
 
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -389,7 +355,7 @@ mod tests {
         let _ = std::fs::create_dir_all(&dir);
         let file_path = dir.join("Sorted.ggregistry");
 
-        assert!(reg.save(&file_path));
+        reg.save(&file_path).unwrap();
         let contents = std::fs::read_to_string(&file_path).unwrap();
 
         // a_first.png should appear before z_last.png in the output.

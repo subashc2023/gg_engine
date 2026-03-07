@@ -148,11 +148,11 @@ impl Application for GGPlayer {
             });
 
         let project = match Project::load(&project_path) {
-            Some(p) => p,
-            None => {
+            Ok(p) => p,
+            Err(e) => {
                 error_dialog(
                     "GGPlayer — Project Load Failed",
-                    &format!("Failed to load project:\n{}", project_path),
+                    &format!("Failed to load project:\n{}\n{}", project_path, e),
                 );
                 std::process::exit(1);
             }
@@ -182,10 +182,10 @@ impl Application for GGPlayer {
         }
 
         let mut scene = Scene::new();
-        if !SceneSerializer::deserialize(&mut scene, &path_str) {
+        if let Err(e) = SceneSerializer::deserialize(&mut scene, &path_str) {
             error_dialog(
                 "GGPlayer — Scene Load Failed",
-                &format!("Failed to deserialize scene:\n{}", path_str),
+                &format!("Failed to deserialize scene:\n{}\n{}", path_str, e),
             );
             std::process::exit(1);
         }

@@ -440,7 +440,7 @@ fn file_browser_ui(
                 .file_stem()
                 .and_then(|s| s.to_str())
                 .unwrap_or("Untitled");
-            SceneSerializer::serialize(&scene, &new_path.to_string_lossy(), Some(name));
+            let _ = SceneSerializer::serialize(&scene, &new_path.to_string_lossy(), Some(name));
         } else {
             let _ = std::fs::write(&new_path, template);
         }

@@ -37,7 +37,7 @@ impl UndoSystem {
             return;
         }
         self.editing_in_progress = true;
-        self.pending_before = SceneSerializer::serialize_to_string(scene);
+        self.pending_before = SceneSerializer::serialize_to_string(scene).ok();
     }
 
     /// End a continuous edit gesture. Pushes the "before" snapshot
@@ -57,7 +57,7 @@ impl UndoSystem {
     /// Captures the current state and pushes it to undo immediately.
     /// Clears the redo stack.
     pub fn record(&mut self, scene: &Scene) {
-        if let Some(snapshot) = SceneSerializer::serialize_to_string(scene) {
+        if let Ok(snapshot) = SceneSerializer::serialize_to_string(scene) {
             self.push_undo(snapshot);
         }
     }
@@ -66,7 +66,7 @@ impl UndoSystem {
     pub fn undo(&mut self, current_scene: &Scene) -> Option<Scene> {
         let snapshot = self.undo_stack.pop_back()?;
         // Push current state to redo.
-        if let Some(current_yaml) = SceneSerializer::serialize_to_string(current_scene) {
+        if let Ok(current_yaml) = SceneSerializer::serialize_to_string(current_scene) {
             self.redo_stack.push(current_yaml);
         }
         self.restore_from_yaml(&snapshot)
@@ -76,7 +76,7 @@ impl UndoSystem {
     pub fn redo(&mut self, current_scene: &Scene) -> Option<Scene> {
         let snapshot = self.redo_stack.pop()?;
         // Push current state to undo (with cap enforcement).
-        if let Some(current_yaml) = SceneSerializer::serialize_to_string(current_scene) {
+        if let Ok(current_yaml) = SceneSerializer::serialize_to_string(current_scene) {
             self.undo_stack.push_back(current_yaml);
             if self.undo_stack.len() > self.max_entries {
                 self.undo_stack.pop_front();
@@ -119,7 +119,7 @@ impl UndoSystem {
 
     fn restore_from_yaml(&self, yaml: &str) -> Option<Scene> {
         let mut scene = Scene::new();
-        if SceneSerializer::deserialize_from_string(&mut scene, yaml) {
+        if SceneSerializer::deserialize_from_string(&mut scene, yaml).is_ok() {
             Some(scene)
         } else {
             None

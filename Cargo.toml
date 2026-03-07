@@ -53,6 +53,9 @@ kira = "0.12"
 # Parallelism
 rayon = "1.10"
 
+# Error handling
+thiserror = "2"
+
 # Misc
 rfd = "0.15"
 rand = "0.9"

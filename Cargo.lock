@@ -1268,6 +1268,7 @@ dependencies = [
  "rfd",
  "serde",
  "serde_yaml_ng",
+ "thiserror 2.0.18",
  "ttf-parser",
  "winit",
 ]

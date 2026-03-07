@@ -3,6 +3,8 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
+use crate::error::EngineResult;
+
 /// Current project schema version. Bump this when changing the project file
 /// format so that older projects can be migrated automatically.
 pub const CURRENT_SCHEMA_VERSION: u32 = 1;
@@ -59,22 +61,9 @@ pub struct Project {
 
 impl Project {
     /// Load an existing project from a `.ggproject` YAML file.
-    pub fn load(file_path: &str) -> Option<Project> {
-        let contents = match fs::read_to_string(file_path) {
-            Ok(s) => s,
-            Err(e) => {
-                log::error!("Failed to read project file '{}': {}", file_path, e);
-                return None;
-            }
-        };
-
-        let data: ProjectData = match serde_yaml_ng::from_str(&contents) {
-            Ok(d) => d,
-            Err(e) => {
-                log::error!("Failed to parse project file '{}': {}", file_path, e);
-                return None;
-            }
-        };
+    pub fn load(file_path: &str) -> EngineResult<Project> {
+        let contents = fs::read_to_string(file_path)?;
+        let data: ProjectData = serde_yaml_ng::from_str(&contents)?;
 
         let project_directory = Path::new(file_path)
             .parent()
@@ -101,7 +90,7 @@ impl Project {
             file_path
         );
 
-        Some(Project {
+        Ok(Project {
             config: ProjectConfig {
                 schema_version: schema_version.min(CURRENT_SCHEMA_VERSION),
                 name: data.config.name,
@@ -115,7 +104,7 @@ impl Project {
     }
 
     /// Create a new project with default settings and save it.
-    pub fn new(file_path: &str, name: &str) -> Option<Project> {
+    pub fn new(file_path: &str, name: &str) -> EngineResult<Project> {
         let project_directory = Path::new(file_path)
             .parent()
             .map(|p| p.to_path_buf())
@@ -133,15 +122,12 @@ impl Project {
             project_file_path: file_path.to_string(),
         };
 
-        if project.save() {
-            Some(project)
-        } else {
-            None
-        }
+        project.save()?;
+        Ok(project)
     }
 
     /// Serialize the project to its YAML file.
-    pub fn save(&self) -> bool {
+    pub fn save(&self) -> EngineResult<()> {
         let data = ProjectData {
             config: ProjectConfigData {
                 schema_version: CURRENT_SCHEMA_VERSION,
@@ -152,26 +138,10 @@ impl Project {
             },
         };
 
-        match serde_yaml_ng::to_string(&data) {
-            Ok(yaml) => {
-                if let Err(e) = crate::platform_utils::atomic_write(&self.project_file_path, &yaml)
-                {
-                    log::error!(
-                        "Failed to write project file '{}': {}",
-                        self.project_file_path,
-                        e
-                    );
-                    false
-                } else {
-                    log::info!("Project saved to '{}'", self.project_file_path);
-                    true
-                }
-            }
-            Err(e) => {
-                log::error!("Failed to serialize project: {}", e);
-                false
-            }
-        }
+        let yaml = serde_yaml_ng::to_string(&data)?;
+        crate::platform_utils::atomic_write(&self.project_file_path, &yaml)?;
+        log::info!("Project saved to '{}'", self.project_file_path);
+        Ok(())
     }
 
     // -- Getters --------------------------------------------------------------

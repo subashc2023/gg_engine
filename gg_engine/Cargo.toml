@@ -31,3 +31,4 @@ ttf-parser.workspace = true
 gpu-allocator.workspace = true
 kira.workspace = true
 rayon.workspace = true
+thiserror.workspace = true

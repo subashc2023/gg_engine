@@ -5,6 +5,7 @@ use std::path::Path;
 use glam::{Vec2, Vec3, Vec4};
 use serde::{Deserialize, Serialize};
 
+use crate::error::{EngineError, EngineResult};
 use crate::renderer::{ProjectionType, SceneCamera};
 use crate::scene::entity::Entity;
 #[cfg(feature = "lua-scripting")]
@@ -624,30 +625,16 @@ fn has_no_relationships(r: &Option<RelationshipData>) -> bool {
 
 /// Serialize `data` to YAML and write it to `file_path`, creating parent
 /// directories as needed. `label` is used in log messages (e.g. "scene", "prefab").
-fn write_yaml_to_file<T: Serialize>(data: &T, file_path: &str, label: &str) -> bool {
+fn write_yaml_to_file<T: Serialize>(data: &T, file_path: &str, label: &str) -> EngineResult<()> {
     if let Some(parent) = Path::new(file_path).parent() {
         if !parent.as_os_str().is_empty() {
-            if let Err(e) = fs::create_dir_all(parent) {
-                log::error!("Failed to create directories for '{}': {}", file_path, e);
-                return false;
-            }
+            fs::create_dir_all(parent)?;
         }
     }
-    match serde_yaml_ng::to_string(data) {
-        Ok(yaml) => {
-            if let Err(e) = crate::platform_utils::atomic_write(file_path, &yaml) {
-                log::error!("Failed to write {} file '{}': {}", label, file_path, e);
-                false
-            } else {
-                log::info!("{} serialized to '{}'", label, file_path);
-                true
-            }
-        }
-        Err(e) => {
-            log::error!("Failed to serialize {}: {}", label, e);
-            false
-        }
-    }
+    let yaml = serde_yaml_ng::to_string(data)?;
+    crate::platform_utils::atomic_write(file_path, &yaml)?;
+    log::info!("{} serialized to '{}'", label, file_path);
+    Ok(())
 }
 
 /// Serializes and deserializes [`Scene`] data to/from YAML files.
@@ -671,9 +658,8 @@ pub struct SceneSerializer;
 impl SceneSerializer {
     /// Serialize a scene to a YAML file at the given path.
     ///
-    /// Creates parent directories if they don't exist. Returns `true` on
-    /// success, `false` on failure (errors are logged).
-    pub fn serialize(scene: &Scene, file_path: &str, scene_name: Option<&str>) -> bool {
+    /// Creates parent directories if they don't exist.
+    pub fn serialize(scene: &Scene, file_path: &str, scene_name: Option<&str>) -> EngineResult<()> {
         let scene_data = Self::scene_to_data(scene, scene_name);
         write_yaml_to_file(&scene_data, file_path, "scene")
     }
@@ -683,24 +669,9 @@ impl SceneSerializer {
     /// Entities are created in the provided `scene`. If the scene is not empty,
     /// deserialized entities are added to existing ones — callers should provide
     /// a fresh scene if a clean load is desired.
-    ///
-    /// Returns `true` on success, `false` on failure (errors are logged).
-    pub fn deserialize(scene: &mut Scene, file_path: &str) -> bool {
-        let contents = match fs::read_to_string(file_path) {
-            Ok(s) => s,
-            Err(e) => {
-                log::error!("Failed to read scene file '{}': {}", file_path, e);
-                return false;
-            }
-        };
-
-        let scene_data: SceneData = match serde_yaml_ng::from_str(&contents) {
-            Ok(d) => d,
-            Err(e) => {
-                log::error!("Failed to parse scene file '{}': {}", file_path, e);
-                return false;
-            }
-        };
+    pub fn deserialize(scene: &mut Scene, file_path: &str) -> EngineResult<()> {
+        let contents = fs::read_to_string(file_path)?;
+        let scene_data: SceneData = serde_yaml_ng::from_str(&contents)?;
 
         if scene_data.version > SCENE_VERSION {
             log::warn!(
@@ -717,36 +688,24 @@ impl SceneSerializer {
         );
 
         Self::data_to_scene(scene, &scene_data);
-        true
+        Ok(())
     }
 
     /// Serialize a scene to a YAML string (in-memory snapshot).
-    pub fn serialize_to_string(scene: &Scene) -> Option<String> {
+    pub fn serialize_to_string(scene: &Scene) -> EngineResult<String> {
         let scene_data = Self::scene_to_data(scene, None);
-        match serde_yaml_ng::to_string(&scene_data) {
-            Ok(yaml) => Some(yaml),
-            Err(e) => {
-                log::error!("Failed to serialize scene to string: {}", e);
-                None
-            }
-        }
+        let yaml = serde_yaml_ng::to_string(&scene_data)?;
+        Ok(yaml)
     }
 
     /// Deserialize a scene from a YAML string (in-memory snapshot restore).
     ///
     /// Entities are created in the provided `scene`. Callers should provide
     /// a fresh scene if a clean restore is desired.
-    pub fn deserialize_from_string(scene: &mut Scene, yaml: &str) -> bool {
-        let scene_data: SceneData = match serde_yaml_ng::from_str(yaml) {
-            Ok(d) => d,
-            Err(e) => {
-                log::error!("Failed to parse scene from string: {}", e);
-                return false;
-            }
-        };
-
+    pub fn deserialize_from_string(scene: &mut Scene, yaml: &str) -> EngineResult<()> {
+        let scene_data: SceneData = serde_yaml_ng::from_str(yaml)?;
         Self::data_to_scene(scene, &scene_data);
-        true
+        Ok(())
     }
 
     // -- Prefab serialization -------------------------------------------------
@@ -755,7 +714,7 @@ impl SceneSerializer {
     ///
     /// The root entity's parent reference is stripped — the prefab root is
     /// always a root-level entity when saved.
-    pub fn serialize_prefab(scene: &Scene, root: Entity, file_path: &str) -> bool {
+    pub fn serialize_prefab(scene: &Scene, root: Entity, file_path: &str) -> EngineResult<()> {
         let name = scene
             .get_component::<TagComponent>(root)
             .map(|t| t.tag.clone())
@@ -785,34 +744,22 @@ impl SceneSerializer {
 
     /// Instantiate a prefab from a `.ggprefab` file, creating entities with
     /// fresh UUIDs. Returns the root entity on success.
-    pub fn instantiate_prefab(scene: &mut Scene, file_path: &str) -> Option<Entity> {
-        let contents = match fs::read_to_string(file_path) {
-            Ok(s) => s,
-            Err(e) => {
-                log::error!("Failed to read prefab file '{}': {}", file_path, e);
-                return None;
-            }
-        };
+    pub fn instantiate_prefab(scene: &mut Scene, file_path: &str) -> EngineResult<Entity> {
+        let contents = fs::read_to_string(file_path)?;
         Self::instantiate_prefab_from_string(scene, &contents)
     }
 
     /// Instantiate a prefab from a YAML string, creating entities with
     /// fresh UUIDs. Returns the root entity on success.
-    pub fn instantiate_prefab_from_string(scene: &mut Scene, yaml: &str) -> Option<Entity> {
-        let prefab_data: PrefabData = match serde_yaml_ng::from_str(yaml) {
-            Ok(d) => d,
-            Err(e) => {
-                log::error!("Failed to parse prefab: {}", e);
-                return None;
-            }
-        };
+    pub fn instantiate_prefab_from_string(scene: &mut Scene, yaml: &str) -> EngineResult<Entity> {
+        let prefab_data: PrefabData = serde_yaml_ng::from_str(yaml)?;
 
         if prefab_data.entities.is_empty() {
-            log::warn!("Prefab contains no entities");
-            return None;
+            return Err(EngineError::Asset("Prefab contains no entities".into()));
         }
 
         Self::instantiate_prefab_entities(scene, &prefab_data.entities)
+            .ok_or_else(|| EngineError::Asset("Prefab instantiation produced no root entity".into()))
     }
 
     /// Core prefab instantiation: creates entities from `EntityData` with fresh
@@ -1576,15 +1523,15 @@ mod tests {
             .join("gg_test_scene.ggscene")
             .to_string_lossy()
             .to_string();
-        assert!(SceneSerializer::serialize(
+        SceneSerializer::serialize(
             &scene,
             &path,
             Some("gg_test_scene")
-        ));
+        ).unwrap();
 
         // Deserialize into a fresh scene.
         let mut loaded = Scene::new();
-        assert!(SceneSerializer::deserialize(&mut loaded, &path));
+        SceneSerializer::deserialize(&mut loaded, &path).unwrap();
         assert_eq!(loaded.entity_count(), 2);
 
         // Verify entities by tag.
@@ -1641,7 +1588,7 @@ mod tests {
 
         let yaml = SceneSerializer::serialize_to_string(&scene).unwrap();
         let mut loaded = Scene::new();
-        assert!(SceneSerializer::deserialize_from_string(&mut loaded, &yaml));
+        SceneSerializer::deserialize_from_string(&mut loaded, &yaml).unwrap();
         assert_eq!(loaded.entity_count(), 1);
 
         let entities = loaded.each_entity_with_tag();
@@ -1681,7 +1628,7 @@ mod tests {
 
         let yaml = SceneSerializer::serialize_to_string(&scene).unwrap();
         let mut loaded = Scene::new();
-        assert!(SceneSerializer::deserialize_from_string(&mut loaded, &yaml));
+        SceneSerializer::deserialize_from_string(&mut loaded, &yaml).unwrap();
         assert_eq!(loaded.entity_count(), 1);
 
         let entities = loaded.each_entity_with_tag();
@@ -1705,10 +1652,8 @@ mod tests {
     fn demo_scene_deserializes() {
         let yaml = include_str!("../../../assets/scenes/lua_camera_follow.ggscene");
         let mut scene = Scene::new();
-        assert!(
-            SceneSerializer::deserialize_from_string(&mut scene, yaml),
-            "Failed to deserialize demo scene"
-        );
+        SceneSerializer::deserialize_from_string(&mut scene, yaml)
+            .expect("Failed to deserialize demo scene");
         assert_eq!(scene.entity_count(), 6);
 
         let entities = scene.each_entity_with_tag();
@@ -1730,10 +1675,8 @@ mod tests {
     fn tilemap_test_scene_deserializes() {
         let yaml = include_str!("../../../assets/scenes/tilemap_test.ggscene");
         let mut scene = Scene::new();
-        assert!(
-            SceneSerializer::deserialize_from_string(&mut scene, yaml),
-            "Failed to deserialize tilemap_test scene"
-        );
+        SceneSerializer::deserialize_from_string(&mut scene, yaml)
+            .expect("Failed to deserialize tilemap_test scene");
         assert_eq!(scene.entity_count(), 2);
 
         let entities = scene.each_entity_with_tag();
@@ -1751,10 +1694,8 @@ mod tests {
     fn audio_test_scene_deserializes() {
         let yaml = include_str!("../../../assets/scenes/audio_test.ggscene");
         let mut scene = Scene::new();
-        assert!(
-            SceneSerializer::deserialize_from_string(&mut scene, yaml),
-            "Failed to deserialize audio_test scene"
-        );
+        SceneSerializer::deserialize_from_string(&mut scene, yaml)
+            .expect("Failed to deserialize audio_test scene");
         assert_eq!(scene.entity_count(), 11);
 
         let entities = scene.each_entity_with_tag();
@@ -1850,7 +1791,7 @@ mod tests {
             .join("gg_test.ggprefab")
             .to_string_lossy()
             .to_string();
-        assert!(SceneSerializer::serialize_prefab(&scene, parent, &path));
+        SceneSerializer::serialize_prefab(&scene, parent, &path).unwrap();
 
         // Instantiate prefab in a fresh scene.
         let mut loaded = Scene::new();

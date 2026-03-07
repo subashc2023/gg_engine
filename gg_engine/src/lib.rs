@@ -1,5 +1,6 @@
 mod application;
 pub mod asset;
+pub mod error;
 pub mod events;
 mod input;
 pub mod jobs;
@@ -24,6 +25,7 @@ pub type Ref<T> = std::sync::Arc<T>;
 pub type Scope<T> = Box<T>;
 
 pub use application::{run, Application, WindowConfig};
+pub use error::{EngineError, EngineResult};
 pub use asset::{AssetHandle, AssetMetadata, AssetRegistry, AssetType, EditorAssetManager};
 pub use egui;
 pub use glam;
@@ -102,6 +104,7 @@ pub mod prelude {
     pub use crate::timestep::Timestep;
     pub use crate::ui_theme::BOLD_FONT;
     pub use crate::uuid::Uuid;
+    pub use crate::error::{EngineError, EngineResult};
     pub use crate::{profile_scope, run, Application, Ref, Scope, WindowConfig};
     pub use glam::{Mat3, Mat4, Quat, Vec2, Vec3, Vec4};
     pub use log::{debug, error, info, trace, warn};
