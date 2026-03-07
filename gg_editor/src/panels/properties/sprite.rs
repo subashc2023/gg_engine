@@ -141,7 +141,8 @@ pub(crate) fn draw_sprite_renderer_component(
                             .to_lowercase();
                         if matches!(ext.as_str(), "png" | "jpg" | "jpeg") {
                             if let Some(am) = asset_manager.as_mut() {
-                                let rel_path = relative_asset_path(&payload.path, am.asset_directory());
+                                let rel_path =
+                                    relative_asset_path(&payload.path, am.asset_directory());
                                 let handle = am.import_asset(&rel_path);
                                 if let Some(mut sprite) =
                                     scene.get_component_mut::<SpriteRendererComponent>(entity)
@@ -305,7 +306,14 @@ pub(crate) fn draw_sprite_animator_component(
         .id_salt(("sprite_animator", entity.id()))
         .default_open(true)
         .show(ui, |ui| {
-            let (mut cell_w, mut cell_h, mut columns, mut default_clip, mut speed_scale, clip_names) = {
+            let (
+                mut cell_w,
+                mut cell_h,
+                mut columns,
+                mut default_clip,
+                mut speed_scale,
+                clip_names,
+            ) = {
                 let sa = scene
                     .get_component::<SpriteAnimatorComponent>(entity)
                     .unwrap();
@@ -472,8 +480,7 @@ pub(crate) fn draw_sprite_animator_component(
                     )
                     .changed()
                 {
-                    if let Some(mut sa) =
-                        scene.get_component_mut::<SpriteAnimatorComponent>(entity)
+                    if let Some(mut sa) = scene.get_component_mut::<SpriteAnimatorComponent>(entity)
                     {
                         sa.speed_scale = speed_scale;
                         *scene_dirty = true;
@@ -589,7 +596,8 @@ pub(crate) fn draw_sprite_animator_component(
                                     &start_dir_str,
                                 ) {
                                     let abs_path = std::path::PathBuf::from(&path_str);
-                                    let rel_path = relative_asset_path(&abs_path, am.asset_directory());
+                                    let rel_path =
+                                        relative_asset_path(&abs_path, am.asset_directory());
                                     let handle = am.import_asset(&rel_path);
                                     if let Some(mut sa) =
                                         scene.get_component_mut::<SpriteAnimatorComponent>(entity)
@@ -605,7 +613,9 @@ pub(crate) fn draw_sprite_animator_component(
                         }
 
                         // Drag-and-drop from content browser.
-                        if let Some(payload) = btn_resp.dnd_release_payload::<ContentBrowserPayload>() {
+                        if let Some(payload) =
+                            btn_resp.dnd_release_payload::<ContentBrowserPayload>()
+                        {
                             if !payload.is_directory {
                                 let ext = payload
                                     .path
@@ -615,10 +625,13 @@ pub(crate) fn draw_sprite_animator_component(
                                     .to_lowercase();
                                 if matches!(ext.as_str(), "png" | "jpg" | "jpeg") {
                                     if let Some(am) = asset_manager.as_mut() {
-                                        let rel_path = relative_asset_path(&payload.path, am.asset_directory());
+                                        let rel_path = relative_asset_path(
+                                            &payload.path,
+                                            am.asset_directory(),
+                                        );
                                         let handle = am.import_asset(&rel_path);
-                                        if let Some(mut sa) =
-                                            scene.get_component_mut::<SpriteAnimatorComponent>(entity)
+                                        if let Some(mut sa) = scene
+                                            .get_component_mut::<SpriteAnimatorComponent>(entity)
                                         {
                                             if let Some(c) = sa.clips.get_mut(i) {
                                                 c.texture_handle = handle;
@@ -868,7 +881,14 @@ pub(crate) fn draw_instanced_sprite_animator(
         .id_salt(("instanced_sprite_animator", entity.id()))
         .default_open(true)
         .show(ui, |ui| {
-            let (mut cell_w, mut cell_h, mut columns, mut default_clip, mut speed_scale, clip_count) = {
+            let (
+                mut cell_w,
+                mut cell_h,
+                mut columns,
+                mut default_clip,
+                mut speed_scale,
+                clip_count,
+            ) = {
                 let ia = scene
                     .get_component::<InstancedSpriteAnimator>(entity)
                     .unwrap();
@@ -922,9 +942,7 @@ pub(crate) fn draw_instanced_sprite_animator(
             });
 
             if changed {
-                if let Some(mut ia) =
-                    scene.get_component_mut::<InstancedSpriteAnimator>(entity)
-                {
+                if let Some(mut ia) = scene.get_component_mut::<InstancedSpriteAnimator>(entity) {
                     ia.cell_size.x = cell_w;
                     ia.cell_size.y = cell_h;
                     ia.columns = columns;
@@ -939,9 +957,7 @@ pub(crate) fn draw_instanced_sprite_animator(
             ui.label(egui::RichText::new("Clips").strong());
 
             if ui.button("+ Add Clip").clicked() {
-                if let Some(mut ia) =
-                    scene.get_component_mut::<InstancedSpriteAnimator>(entity)
-                {
+                if let Some(mut ia) = scene.get_component_mut::<InstancedSpriteAnimator>(entity) {
                     let idx = ia.clips.len();
                     ia.clips.push(AnimationClip {
                         name: format!("clip_{idx}"),
@@ -971,10 +987,7 @@ pub(crate) fn draw_instanced_sprite_animator(
                         ui.horizontal(|ui| {
                             ui.label("Name");
                             clip_changed |= ui
-                                .add(
-                                    egui::TextEdit::singleline(&mut name)
-                                        .desired_width(100.0),
-                                )
+                                .add(egui::TextEdit::singleline(&mut name).desired_width(100.0))
                                 .changed();
                         });
                         ui.horizontal(|ui| {
@@ -987,21 +1000,13 @@ pub(crate) fn draw_instanced_sprite_animator(
                                 )
                                 .changed();
                             clip_changed |= ui
-                                .add(
-                                    egui::DragValue::new(&mut end)
-                                        .speed(0.1)
-                                        .prefix("End: "),
-                                )
+                                .add(egui::DragValue::new(&mut end).speed(0.1).prefix("End: "))
                                 .changed();
                         });
                         ui.horizontal(|ui| {
                             ui.label("FPS");
                             clip_changed |= ui
-                                .add(
-                                    egui::DragValue::new(&mut fps)
-                                        .speed(0.1)
-                                        .range(0.1..=120.0),
-                                )
+                                .add(egui::DragValue::new(&mut fps).speed(0.1).range(0.1..=120.0))
                                 .changed();
                         });
                         clip_changed |= ui.checkbox(&mut looping, "Looping").changed();
@@ -1031,9 +1036,7 @@ pub(crate) fn draw_instanced_sprite_animator(
             }
 
             if let Some(idx) = clip_to_remove {
-                if let Some(mut ia) =
-                    scene.get_component_mut::<InstancedSpriteAnimator>(entity)
-                {
+                if let Some(mut ia) = scene.get_component_mut::<InstancedSpriteAnimator>(entity) {
                     ia.clips.remove(idx);
                 }
                 *scene_dirty = true;
@@ -1165,9 +1168,7 @@ pub(crate) fn draw_animation_controller(
                         TransitionCondition::ParamFloat(_, _, _) => 2,
                     };
                     let (pname, bval, ford_idx, fthresh) = match &t.condition {
-                        TransitionCondition::OnFinished => {
-                            (String::new(), false, 0usize, 0.0f32)
-                        }
+                        TransitionCondition::OnFinished => (String::new(), false, 0usize, 0.0f32),
                         TransitionCondition::ParamBool(n, v) => (n.clone(), *v, 0, 0.0),
                         TransitionCondition::ParamFloat(n, ord, th) => {
                             let oi = match ord {
@@ -1179,11 +1180,26 @@ pub(crate) fn draw_animation_controller(
                             (n.clone(), false, oi, *th)
                         }
                     };
-                    (t.from.clone(), t.to.clone(), cond_idx, pname, bval, ford_idx, fthresh)
+                    (
+                        t.from.clone(),
+                        t.to.clone(),
+                        cond_idx,
+                        pname,
+                        bval,
+                        ford_idx,
+                        fthresh,
+                    )
                 };
 
-                let (mut from, mut to, mut cond_idx, mut pname, mut bval, mut ford_idx, mut fthresh) =
-                    t_data;
+                let (
+                    mut from,
+                    mut to,
+                    mut cond_idx,
+                    mut pname,
+                    mut bval,
+                    mut ford_idx,
+                    mut fthresh,
+                ) = t_data;
 
                 let id = ui.make_persistent_id(("anim_transition", entity.id(), i));
                 egui::CollapsingHeader::new(format!("Transition {i}"))
@@ -1204,10 +1220,7 @@ pub(crate) fn draw_animation_controller(
                         ui.horizontal(|ui| {
                             ui.label("To");
                             changed |= ui
-                                .add(
-                                    egui::TextEdit::singleline(&mut to)
-                                        .desired_width(80.0),
-                                )
+                                .add(egui::TextEdit::singleline(&mut to).desired_width(80.0))
                                 .changed();
                         });
 
@@ -1226,10 +1239,7 @@ pub(crate) fn draw_animation_controller(
                             ui.horizontal(|ui| {
                                 ui.label("Param");
                                 changed |= ui
-                                    .add(
-                                        egui::TextEdit::singleline(&mut pname)
-                                            .desired_width(80.0),
-                                    )
+                                    .add(egui::TextEdit::singleline(&mut pname).desired_width(80.0))
                                     .changed();
                                 changed |= ui.checkbox(&mut bval, "Value").changed();
                             });
@@ -1237,25 +1247,19 @@ pub(crate) fn draw_animation_controller(
                             ui.horizontal(|ui| {
                                 ui.label("Param");
                                 changed |= ui
-                                    .add(
-                                        egui::TextEdit::singleline(&mut pname)
-                                            .desired_width(80.0),
-                                    )
+                                    .add(egui::TextEdit::singleline(&mut pname).desired_width(80.0))
                                     .changed();
                             });
                             let ord_labels = [">", "<", ">=", "<="];
                             ui.horizontal(|ui| {
                                 ui.label("Ordering");
-                                changed |= egui::ComboBox::from_id_salt((
-                                    "float_ord",
-                                    entity.id(),
-                                    i,
-                                ))
-                                .selected_text(ord_labels[ford_idx])
-                                .show_index(ui, &mut ford_idx, ord_labels.len(), |idx| {
-                                    ord_labels[idx].to_string()
-                                })
-                                .changed();
+                                changed |=
+                                    egui::ComboBox::from_id_salt(("float_ord", entity.id(), i))
+                                        .selected_text(ord_labels[ford_idx])
+                                        .show_index(ui, &mut ford_idx, ord_labels.len(), |idx| {
+                                            ord_labels[idx].to_string()
+                                        })
+                                        .changed();
                                 ui.label("Threshold");
                                 changed |= ui
                                     .add(egui::DragValue::new(&mut fthresh).speed(0.1))
@@ -1293,8 +1297,7 @@ pub(crate) fn draw_animation_controller(
 
                         if ui
                             .button(
-                                egui::RichText::new("Remove Transition")
-                                    .color(egui::Color32::RED),
+                                egui::RichText::new("Remove Transition").color(egui::Color32::RED),
                             )
                             .clicked()
                         {

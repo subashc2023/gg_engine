@@ -11,12 +11,12 @@ mod physics_2d;
 mod physics_ops;
 mod rendering;
 mod runtime;
-pub(crate) mod spatial;
 mod scene_serializer;
 #[cfg(feature = "lua-scripting")]
 pub(crate) mod script_engine;
 #[cfg(feature = "lua-scripting")]
 mod script_glue;
+pub(crate) mod spatial;
 
 pub use animation::{
     AnimationClip, AnimationControllerComponent, AnimationTransition, FloatOrdering,
@@ -128,12 +128,21 @@ macro_rules! for_each_addable_component {
             ($crate::scene::SpriteRendererComponent, "Sprite Renderer"),
             ($crate::scene::CircleRendererComponent, "Circle Renderer"),
             ($crate::scene::SpriteAnimatorComponent, "Sprite Animator"),
-            ($crate::scene::InstancedSpriteAnimator, "Instanced Sprite Animator"),
-            ($crate::scene::AnimationControllerComponent, "Animation Controller"),
+            (
+                $crate::scene::InstancedSpriteAnimator,
+                "Instanced Sprite Animator"
+            ),
+            (
+                $crate::scene::AnimationControllerComponent,
+                "Animation Controller"
+            ),
             ($crate::scene::TextComponent, "Text"),
             ($crate::scene::RigidBody2DComponent, "Rigidbody 2D"),
             ($crate::scene::BoxCollider2DComponent, "Box Collider 2D"),
-            ($crate::scene::CircleCollider2DComponent, "Circle Collider 2D"),
+            (
+                $crate::scene::CircleCollider2DComponent,
+                "Circle Collider 2D"
+            ),
             ($crate::scene::TilemapComponent, "Tilemap"),
             ($crate::scene::AudioSourceComponent, "Audio Source"),
             ($crate::scene::AudioListenerComponent, "Audio Listener"),
@@ -659,11 +668,7 @@ impl Scene {
     ///
     /// Returns an empty Vec if [`rebuild_spatial_grid`](Self::rebuild_spatial_grid)
     /// has not been called.
-    pub fn query_entities_in_radius(
-        &self,
-        center: glam::Vec2,
-        radius: f32,
-    ) -> Vec<Entity> {
+    pub fn query_entities_in_radius(&self, center: glam::Vec2, radius: f32) -> Vec<Entity> {
         let Some(ref grid) = self.spatial_grid else {
             return Vec::new();
         };
@@ -892,11 +897,7 @@ mod tests {
     fn copy_preserves_uuids() {
         let mut scene = Scene::new();
         let e = scene.create_entity();
-        let uuid = scene
-            .get_component::<IdComponent>(e)
-            .unwrap()
-            .id
-            .raw();
+        let uuid = scene.get_component::<IdComponent>(e).unwrap().id.raw();
         let copy = Scene::copy(&scene);
         // The copy should have an entity with the same UUID.
         let found = copy.find_entity_by_uuid(uuid);
@@ -911,14 +912,12 @@ mod tests {
             let mut tc = scene.get_component_mut::<TransformComponent>(e).unwrap();
             tc.translation = Vec3::new(10.0, 20.0, 30.0);
         }
-        let uuid = scene
-            .get_component::<IdComponent>(e)
-            .unwrap()
-            .id
-            .raw();
+        let uuid = scene.get_component::<IdComponent>(e).unwrap().id.raw();
         let copy = Scene::copy(&scene);
         let copy_entity = copy.find_entity_by_uuid(uuid).unwrap();
-        let tc = copy.get_component::<TransformComponent>(copy_entity).unwrap();
+        let tc = copy
+            .get_component::<TransformComponent>(copy_entity)
+            .unwrap();
         assert_eq!(tc.translation, Vec3::new(10.0, 20.0, 30.0));
     }
 
@@ -926,11 +925,7 @@ mod tests {
     fn copy_is_independent() {
         let mut scene = Scene::new();
         let e = scene.create_entity();
-        let uuid = scene
-            .get_component::<IdComponent>(e)
-            .unwrap()
-            .id
-            .raw();
+        let uuid = scene.get_component::<IdComponent>(e).unwrap().id.raw();
         let mut copy = Scene::copy(&scene);
         // Modify the copy.
         let copy_entity = copy.find_entity_by_uuid(uuid).unwrap();
@@ -1027,11 +1022,7 @@ mod tests {
     fn queue_and_flush_destroys_entity() {
         let mut scene = Scene::new();
         let e = scene.create_entity();
-        let uuid = scene
-            .get_component::<IdComponent>(e)
-            .unwrap()
-            .id
-            .raw();
+        let uuid = scene.get_component::<IdComponent>(e).unwrap().id.raw();
         assert_eq!(scene.entity_count(), 1);
         scene.queue_entity_destroy(uuid);
         scene.flush_pending_destroys();
@@ -1042,11 +1033,7 @@ mod tests {
     fn flush_deduplicates() {
         let mut scene = Scene::new();
         let e = scene.create_entity();
-        let uuid = scene
-            .get_component::<IdComponent>(e)
-            .unwrap()
-            .id
-            .raw();
+        let uuid = scene.get_component::<IdComponent>(e).unwrap().id.raw();
         scene.queue_entity_destroy(uuid);
         scene.queue_entity_destroy(uuid);
         scene.flush_pending_destroys(); // should not panic on double-destroy
@@ -1098,7 +1085,13 @@ mod tests {
         let handle = crate::uuid::Uuid::from_raw(42);
 
         let e = scene.create_entity_with_tag("Player");
-        scene.add_component(e, SpriteRendererComponent { texture_handle: handle, ..Default::default() });
+        scene.add_component(
+            e,
+            SpriteRendererComponent {
+                texture_handle: handle,
+                ..Default::default()
+            },
+        );
 
         let refs = scene.find_asset_references(handle);
         assert_eq!(refs.len(), 1);
@@ -1112,7 +1105,13 @@ mod tests {
         let handle = crate::uuid::Uuid::from_raw(99);
 
         let e = scene.create_entity_with_tag("BGM");
-        scene.add_component(e, AudioSourceComponent { audio_handle: handle, ..Default::default() });
+        scene.add_component(
+            e,
+            AudioSourceComponent {
+                audio_handle: handle,
+                ..Default::default()
+            },
+        );
 
         let refs = scene.find_asset_references(handle);
         assert_eq!(refs.len(), 1);
@@ -1126,7 +1125,13 @@ mod tests {
         let handle = crate::uuid::Uuid::from_raw(77);
 
         let e = scene.create_entity_with_tag("Level");
-        scene.add_component(e, TilemapComponent { texture_handle: handle, ..Default::default() });
+        scene.add_component(
+            e,
+            TilemapComponent {
+                texture_handle: handle,
+                ..Default::default()
+            },
+        );
 
         let refs = scene.find_asset_references(handle);
         assert_eq!(refs.len(), 1);
@@ -1149,10 +1154,22 @@ mod tests {
         let handle = crate::uuid::Uuid::from_raw(55);
 
         let e1 = scene.create_entity_with_tag("A");
-        scene.add_component(e1, SpriteRendererComponent { texture_handle: handle, ..Default::default() });
+        scene.add_component(
+            e1,
+            SpriteRendererComponent {
+                texture_handle: handle,
+                ..Default::default()
+            },
+        );
 
         let e2 = scene.create_entity_with_tag("B");
-        scene.add_component(e2, SpriteRendererComponent { texture_handle: handle, ..Default::default() });
+        scene.add_component(
+            e2,
+            SpriteRendererComponent {
+                texture_handle: handle,
+                ..Default::default()
+            },
+        );
 
         let refs = scene.find_asset_references(handle);
         assert_eq!(refs.len(), 2);

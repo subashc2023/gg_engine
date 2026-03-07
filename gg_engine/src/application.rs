@@ -316,6 +316,9 @@ impl<T: Application> ApplicationHandler for EngineRunner<T> {
                     self.window_config.title, self.window_config.width, self.window_config.height);
                 let window = Arc::new(window);
 
+                // Initialize the job thread pool for parallel ECS work.
+                crate::jobs::init();
+
                 // Initialize Vulkan immediately after window creation.
                 match VulkanContext::new(&window) {
                     Ok(ctx) => {
@@ -1062,8 +1065,7 @@ fn render_frame<T: Application>(
 
                     // Copy 1×1 pixel.
                     let region = vk::BufferImageCopy {
-                        buffer_offset: (swapchain.current_frame()
-                            * std::mem::size_of::<i32>())
+                        buffer_offset: (swapchain.current_frame() * std::mem::size_of::<i32>())
                             as u64,
                         buffer_row_length: 0,
                         buffer_image_height: 0,

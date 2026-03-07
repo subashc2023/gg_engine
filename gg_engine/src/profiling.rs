@@ -1,4 +1,5 @@
 use std::cell::RefCell;
+use std::sync::Mutex;
 
 // ---------------------------------------------------------------------------
 // Per-frame egui profiling (thread-local drain) — always available
@@ -14,11 +15,19 @@ thread_local! {
     static PROFILE_RESULTS: RefCell<Vec<ProfileResult>> = const { RefCell::new(Vec::new()) };
 }
 
+/// Global results from worker threads (thread-local storage is per-thread,
+/// so worker threads push here instead).
+static WORKER_RESULTS: Mutex<Vec<ProfileResult>> = Mutex::new(Vec::new());
+
 /// Drain all profile results collected since the last call.
-/// Call this once per frame (e.g. at the start of `on_egui`) to retrieve
-/// the results, then display them however you like.
+/// Collects from both the main thread's thread-local storage and the
+/// global worker thread results.
 pub fn drain_profile_results() -> Vec<ProfileResult> {
-    PROFILE_RESULTS.with(|results| results.borrow_mut().drain(..).collect())
+    let mut results = PROFILE_RESULTS.with(|r| r.borrow_mut().drain(..).collect::<Vec<_>>());
+    if let Ok(mut worker) = WORKER_RESULTS.lock() {
+        results.append(&mut worker);
+    }
+    results
 }
 
 // ===========================================================================
@@ -187,12 +196,26 @@ mod inner {
                 let time_ms = elapsed.as_secs_f32() * 1000.0;
 
                 // Record for egui display.
-                PROFILE_RESULTS.with(|results| {
-                    results.borrow_mut().push(ProfileResult {
-                        name: self.name,
-                        time_ms,
+                // Worker threads (named "gg-worker-*") push to the global
+                // WORKER_RESULTS so drain_profile_results() can collect them.
+                let is_worker = std::thread::current()
+                    .name()
+                    .is_some_and(|n| n.starts_with("gg-worker"));
+                if is_worker {
+                    if let Ok(mut worker) = super::WORKER_RESULTS.lock() {
+                        worker.push(ProfileResult {
+                            name: self.name,
+                            time_ms,
+                        });
+                    }
+                } else {
+                    PROFILE_RESULTS.with(|results| {
+                        results.borrow_mut().push(ProfileResult {
+                            name: self.name,
+                            time_ms,
+                        });
                     });
-                });
+                }
 
                 // Record for Chrome Tracing JSON output.
                 write_profile(self.name, self.start, elapsed);

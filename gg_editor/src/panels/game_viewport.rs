@@ -11,10 +11,7 @@ pub(crate) fn game_viewport_ui(
     let available = ui.available_size();
     if available.x > 0.0 && available.y > 0.0 {
         let ppp = ui.ctx().pixels_per_point();
-        *viewport_size = (
-            (available.x * ppp) as u32,
-            (available.y * ppp) as u32,
-        );
+        *viewport_size = ((available.x * ppp) as u32, (available.y * ppp) as u32);
     }
     *viewport_hovered = ui.ui_contains_pointer();
 

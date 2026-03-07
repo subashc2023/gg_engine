@@ -50,6 +50,9 @@ mlua = { version = "0.10", features = ["luajit", "vendored"] }
 # Audio
 kira = "0.12"
 
+# Parallelism
+rayon = "1.10"
+
 # Misc
 rfd = "0.15"
 rand = "0.9"

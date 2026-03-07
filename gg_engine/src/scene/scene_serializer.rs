@@ -205,11 +205,7 @@ struct SpriteData {
     color: [f32; 4],
     #[serde(rename = "TilingFactor", default = "default_one_f32")]
     tiling_factor: f32,
-    #[serde(
-        rename = "TextureHandle",
-        default,
-        skip_serializing_if = "is_zero_u64"
-    )]
+    #[serde(rename = "TextureHandle", default, skip_serializing_if = "is_zero_u64")]
     texture_handle: u64,
     #[serde(rename = "SortingLayer", default)]
     sorting_layer: i32,
@@ -361,11 +357,7 @@ struct AnimationClipData {
     fps: f32,
     #[serde(rename = "Looping", default = "default_true")]
     looping: bool,
-    #[serde(
-        rename = "TextureHandle",
-        default,
-        skip_serializing_if = "is_zero_u64"
-    )]
+    #[serde(rename = "TextureHandle", default, skip_serializing_if = "is_zero_u64")]
     texture_handle: u64,
 }
 
@@ -429,11 +421,7 @@ struct AnimationTransitionData {
         skip_serializing_if = "String::is_empty"
     )]
     param_name: String,
-    #[serde(
-        rename = "BoolValue",
-        default,
-        skip_serializing_if = "is_false"
-    )]
+    #[serde(rename = "BoolValue", default, skip_serializing_if = "is_false")]
     bool_value: bool,
     #[serde(
         rename = "FloatOrdering",
@@ -454,9 +442,17 @@ struct AnimationTransitionData {
 struct AnimationControllerData {
     #[serde(rename = "Transitions", default)]
     transitions: Vec<AnimationTransitionData>,
-    #[serde(rename = "BoolParams", default, skip_serializing_if = "HashMap::is_empty")]
+    #[serde(
+        rename = "BoolParams",
+        default,
+        skip_serializing_if = "HashMap::is_empty"
+    )]
     bool_params: HashMap<String, bool>,
-    #[serde(rename = "FloatParams", default, skip_serializing_if = "HashMap::is_empty")]
+    #[serde(
+        rename = "FloatParams",
+        default,
+        skip_serializing_if = "HashMap::is_empty"
+    )]
     float_params: HashMap<String, f32>,
 }
 
@@ -496,11 +492,7 @@ struct TilemapData {
     height: u32,
     #[serde(rename = "TileSize")]
     tile_size: [f32; 2],
-    #[serde(
-        rename = "TextureHandle",
-        default,
-        skip_serializing_if = "is_zero_u64"
-    )]
+    #[serde(rename = "TextureHandle", default, skip_serializing_if = "is_zero_u64")]
     texture_handle: u64,
     #[serde(rename = "TilesetColumns", default = "default_tileset_columns")]
     tileset_columns: u32,
@@ -528,11 +520,7 @@ struct TilemapData {
 
 #[derive(Serialize, Deserialize)]
 struct AudioSourceData {
-    #[serde(
-        rename = "AudioHandle",
-        default,
-        skip_serializing_if = "is_zero_u64"
-    )]
+    #[serde(rename = "AudioHandle", default, skip_serializing_if = "is_zero_u64")]
     audio_handle: u64,
     #[serde(rename = "Volume", default = "default_one_f32")]
     volume: f32,
@@ -1058,26 +1046,27 @@ impl SceneSerializer {
                     speed_scale: sa.speed_scale,
                 });
 
-        let instanced_animator_data = scene
-            .get_component::<InstancedSpriteAnimator>(entity)
-            .map(|ia| InstancedSpriteAnimatorData {
-                cell_size: ia.cell_size.into(),
-                columns: ia.columns,
-                clips: ia
-                    .clips
-                    .iter()
-                    .map(|c| AnimationClipData {
-                        name: c.name.clone(),
-                        start_frame: c.start_frame,
-                        end_frame: c.end_frame,
-                        fps: c.fps,
-                        looping: c.looping,
-                        texture_handle: c.texture_handle.raw(),
-                    })
-                    .collect(),
-                default_clip: ia.default_clip.clone(),
-                speed_scale: ia.speed_scale,
-            });
+        let instanced_animator_data =
+            scene
+                .get_component::<InstancedSpriteAnimator>(entity)
+                .map(|ia| InstancedSpriteAnimatorData {
+                    cell_size: ia.cell_size.into(),
+                    columns: ia.columns,
+                    clips: ia
+                        .clips
+                        .iter()
+                        .map(|c| AnimationClipData {
+                            name: c.name.clone(),
+                            start_frame: c.start_frame,
+                            end_frame: c.end_frame,
+                            fps: c.fps,
+                            looping: c.looping,
+                            texture_handle: c.texture_handle.raw(),
+                        })
+                        .collect(),
+                    default_clip: ia.default_clip.clone(),
+                    speed_scale: ia.speed_scale,
+                });
 
         let animation_controller_data = scene
             .get_component::<AnimationControllerComponent>(entity)
@@ -1088,9 +1077,13 @@ impl SceneSerializer {
                     .map(|t| {
                         let (cond_type, param_name, bool_value, float_ordering, float_threshold) =
                             match &t.condition {
-                                TransitionCondition::OnFinished => {
-                                    ("OnFinished".into(), String::new(), false, String::new(), 0.0)
-                                }
+                                TransitionCondition::OnFinished => (
+                                    "OnFinished".into(),
+                                    String::new(),
+                                    false,
+                                    String::new(),
+                                    0.0,
+                                ),
                                 TransitionCondition::ParamBool(name, val) => {
                                     ("ParamBool".into(), name.clone(), *val, String::new(), 0.0)
                                 }
@@ -1101,7 +1094,13 @@ impl SceneSerializer {
                                         FloatOrdering::GreaterOrEqual => "GreaterOrEqual",
                                         FloatOrdering::LessOrEqual => "LessOrEqual",
                                     };
-                                    ("ParamFloat".into(), name.clone(), false, ord_str.into(), *thresh)
+                                    (
+                                        "ParamFloat".into(),
+                                        name.clone(),
+                                        false,
+                                        ord_str.into(),
+                                        *thresh,
+                                    )
                                 }
                             };
                         AnimationTransitionData {
@@ -1780,7 +1779,10 @@ mod tests {
         assert!((ac2.volume - 0.3).abs() < 0.001);
 
         // Verify spatial audio entity.
-        let (spatial_ent, _) = entities.iter().find(|(_, n)| n == "Spatial Source").unwrap();
+        let (spatial_ent, _) = entities
+            .iter()
+            .find(|(_, n)| n == "Spatial Source")
+            .unwrap();
         let ac3 = scene
             .get_component::<crate::scene::AudioSourceComponent>(*spatial_ent)
             .unwrap();
@@ -1792,7 +1794,10 @@ mod tests {
         assert!((ac3.pitch - 0.8).abs() < 0.001);
 
         // Verify streaming audio entity.
-        let (stream_ent, _) = entities.iter().find(|(_, n)| n == "Streaming Source").unwrap();
+        let (stream_ent, _) = entities
+            .iter()
+            .find(|(_, n)| n == "Streaming Source")
+            .unwrap();
         let ac4 = scene
             .get_component::<crate::scene::AudioSourceComponent>(*stream_ent)
             .unwrap();

@@ -93,10 +93,7 @@ pub fn camera_frustum_aabb(vp_inv: &glam::Mat4) -> Aabb2D {
         let p = if dz.abs() > 1e-6 {
             // Perspective: intersect the frustum edge ray with the z=0 world plane.
             let t = -near.z / dz;
-            glam::Vec2::new(
-                near.x + t * (far.x - near.x),
-                near.y + t * (far.y - near.y),
-            )
+            glam::Vec2::new(near.x + t * (far.x - near.x), near.y + t * (far.y - near.y))
         } else {
             // Orthographic: near and far have identical x,y — use directly.
             near.truncate()
@@ -375,7 +372,7 @@ mod tests {
         proj.y_axis.y *= -1.0; // Vulkan Y-flip
         let view = glam::Mat4::look_at_lh(
             glam::Vec3::new(0.0, 0.0, 10.0), // camera at z=10
-            glam::Vec3::ZERO,                 // looking at origin
+            glam::Vec3::ZERO,                // looking at origin
             glam::Vec3::Y,
         );
         let vp = proj * view;
@@ -451,10 +448,8 @@ mod tests {
         );
 
         // Query region around origin should find e1 and e3 but not e2.
-        let result = grid.query_region_dedup(&Aabb2D::new(
-            glam::Vec2::ZERO,
-            glam::Vec2::splat(5.0),
-        ));
+        let result =
+            grid.query_region_dedup(&Aabb2D::new(glam::Vec2::ZERO, glam::Vec2::splat(5.0)));
         assert!(result.contains(&e1));
         assert!(result.contains(&e3));
         assert!(!result.contains(&e2));
@@ -463,10 +458,7 @@ mod tests {
     #[test]
     fn spatial_grid_empty_query() {
         let grid = SpatialGrid::new(10.0);
-        let result = grid.query_region(&Aabb2D::new(
-            glam::Vec2::ZERO,
-            glam::Vec2::splat(100.0),
-        ));
+        let result = grid.query_region(&Aabb2D::new(glam::Vec2::ZERO, glam::Vec2::splat(100.0)));
         assert!(result.is_empty());
     }
 
@@ -477,10 +469,7 @@ mod tests {
         let e2 = world.spawn(());
 
         let mut grid = SpatialGrid::new(10.0);
-        grid.insert(
-            e1,
-            &Aabb2D::new(glam::Vec2::ZERO, glam::Vec2::ONE),
-        );
+        grid.insert(e1, &Aabb2D::new(glam::Vec2::ZERO, glam::Vec2::ONE));
         grid.insert(
             e2,
             &Aabb2D::new(glam::Vec2::splat(50.0), glam::Vec2::splat(51.0)),
@@ -525,12 +514,8 @@ mod tests {
     #[test]
     fn frustum2d_perspective_straight_down() {
         // Perspective camera at z=10 looking straight down at z=0.
-        let mut proj = glam::Mat4::perspective_lh(
-            std::f32::consts::FRAC_PI_4,
-            16.0 / 9.0,
-            0.01,
-            1000.0,
-        );
+        let mut proj =
+            glam::Mat4::perspective_lh(std::f32::consts::FRAC_PI_4, 16.0 / 9.0, 0.01, 1000.0);
         proj.y_axis.y *= -1.0;
         let view = glam::Mat4::look_at_lh(
             glam::Vec3::new(0.0, 0.0, 10.0),
@@ -552,12 +537,8 @@ mod tests {
     #[test]
     fn frustum2d_perspective_tilted() {
         // Perspective camera tilted 45 degrees — should NOT degenerate.
-        let mut proj = glam::Mat4::perspective_lh(
-            std::f32::consts::FRAC_PI_4,
-            16.0 / 9.0,
-            0.01,
-            1000.0,
-        );
+        let mut proj =
+            glam::Mat4::perspective_lh(std::f32::consts::FRAC_PI_4, 16.0 / 9.0, 0.01, 1000.0);
         proj.y_axis.y *= -1.0;
         // Camera at (0, 10, 10) looking at origin — 45° tilt.
         let view = glam::Mat4::look_at_lh(
@@ -580,12 +561,8 @@ mod tests {
     #[test]
     fn frustum2d_perspective_steep_tilt() {
         // Camera nearly parallel to z=0 — the old AABB approach would degenerate.
-        let mut proj = glam::Mat4::perspective_lh(
-            std::f32::consts::FRAC_PI_4,
-            16.0 / 9.0,
-            0.01,
-            1000.0,
-        );
+        let mut proj =
+            glam::Mat4::perspective_lh(std::f32::consts::FRAC_PI_4, 16.0 / 9.0, 0.01, 1000.0);
         proj.y_axis.y *= -1.0;
         // Camera at (0, 0.1, 5) looking at (0, 0, -10) — nearly parallel to z=0.
         let view = glam::Mat4::look_at_lh(

@@ -1352,8 +1352,11 @@ impl GGEditor {
         let root = egui_dock::NodeIndex::root();
         let [left, right] = surface.split_right(root, 0.77, vec![Tab::SceneHierarchy]);
         surface.split_below(right, 0.5, vec![Tab::Properties]);
-        let [top_left, _bottom_left] =
-            surface.split_below(left, 0.7, vec![Tab::ContentBrowser, Tab::Console, Tab::AnimationTimeline]);
+        let [top_left, _bottom_left] = surface.split_below(
+            left,
+            0.7,
+            vec![Tab::ContentBrowser, Tab::Console, Tab::AnimationTimeline],
+        );
         let [left_sidebar, _viewport] = surface.split_right(top_left, 0.20, vec![Tab::Viewport]);
         surface.split_below(left_sidebar, 0.5, vec![Tab::Settings]);
         dock_state
@@ -1572,7 +1575,6 @@ impl GGEditor {
         }
     }
 }
-
 
 // File commands, playback, and toolbar are in file_ops.rs, playback.rs, and toolbar.rs.
 

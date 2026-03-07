@@ -44,8 +44,7 @@ impl UniformBuffer {
         size: usize,
     ) -> Result<Self, String> {
         let mut buffers = [vk::Buffer::null(); TOTAL_SLOTS];
-        let mut allocations: [Option<GpuAllocation>; TOTAL_SLOTS] =
-            std::array::from_fn(|_| None);
+        let mut allocations: [Option<GpuAllocation>; TOTAL_SLOTS] = std::array::from_fn(|_| None);
 
         for i in 0..TOTAL_SLOTS {
             let (buffer, allocation) = create_buffer_with_allocation(

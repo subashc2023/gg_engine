@@ -526,11 +526,7 @@ impl AnimationControllerComponent {
     /// Returns the name of the target clip if a transition fires, or `None`.
     /// `current_clip` is the name of the currently playing clip (or `None` if stopped).
     /// `clip_finished` is `true` if the current non-looping clip just finished.
-    pub fn evaluate(
-        &self,
-        current_clip: Option<&str>,
-        clip_finished: bool,
-    ) -> Option<&str> {
+    pub fn evaluate(&self, current_clip: Option<&str>, clip_finished: bool) -> Option<&str> {
         for t in &self.transitions {
             // Check "from" constraint.
             if !t.from.is_empty() {
@@ -831,13 +827,11 @@ mod tests {
     #[test]
     fn controller_param_bool_transition() {
         let ctrl = AnimationControllerComponent {
-            transitions: vec![
-                AnimationTransition {
-                    from: "idle".into(),
-                    to: "walk".into(),
-                    condition: TransitionCondition::ParamBool("moving".into(), true),
-                },
-            ],
+            transitions: vec![AnimationTransition {
+                from: "idle".into(),
+                to: "walk".into(),
+                condition: TransitionCondition::ParamBool("moving".into(), true),
+            }],
             bool_params: [("moving".into(), true)].into_iter().collect(),
             float_params: HashMap::new(),
         };
@@ -847,13 +841,11 @@ mod tests {
     #[test]
     fn controller_param_bool_no_match() {
         let ctrl = AnimationControllerComponent {
-            transitions: vec![
-                AnimationTransition {
-                    from: "idle".into(),
-                    to: "walk".into(),
-                    condition: TransitionCondition::ParamBool("moving".into(), true),
-                },
-            ],
+            transitions: vec![AnimationTransition {
+                from: "idle".into(),
+                to: "walk".into(),
+                condition: TransitionCondition::ParamBool("moving".into(), true),
+            }],
             bool_params: [("moving".into(), false)].into_iter().collect(),
             float_params: HashMap::new(),
         };
@@ -863,13 +855,11 @@ mod tests {
     #[test]
     fn controller_on_finished_transition() {
         let ctrl = AnimationControllerComponent {
-            transitions: vec![
-                AnimationTransition {
-                    from: "attack".into(),
-                    to: "idle".into(),
-                    condition: TransitionCondition::OnFinished,
-                },
-            ],
+            transitions: vec![AnimationTransition {
+                from: "attack".into(),
+                to: "idle".into(),
+                condition: TransitionCondition::OnFinished,
+            }],
             bool_params: HashMap::new(),
             float_params: HashMap::new(),
         };
@@ -882,17 +872,15 @@ mod tests {
     #[test]
     fn controller_float_param_transition() {
         let ctrl = AnimationControllerComponent {
-            transitions: vec![
-                AnimationTransition {
-                    from: String::new(), // any state
-                    to: "run".into(),
-                    condition: TransitionCondition::ParamFloat(
-                        "speed".into(),
-                        FloatOrdering::Greater,
-                        5.0,
-                    ),
-                },
-            ],
+            transitions: vec![AnimationTransition {
+                from: String::new(), // any state
+                to: "run".into(),
+                condition: TransitionCondition::ParamFloat(
+                    "speed".into(),
+                    FloatOrdering::Greater,
+                    5.0,
+                ),
+            }],
             bool_params: HashMap::new(),
             float_params: [("speed".into(), 6.0)].into_iter().collect(),
         };
@@ -902,13 +890,11 @@ mod tests {
     #[test]
     fn controller_any_state_transition() {
         let ctrl = AnimationControllerComponent {
-            transitions: vec![
-                AnimationTransition {
-                    from: String::new(), // any state
-                    to: "death".into(),
-                    condition: TransitionCondition::ParamBool("dead".into(), true),
-                },
-            ],
+            transitions: vec![AnimationTransition {
+                from: String::new(), // any state
+                to: "death".into(),
+                condition: TransitionCondition::ParamBool("dead".into(), true),
+            }],
             bool_params: [("dead".into(), true)].into_iter().collect(),
             float_params: HashMap::new(),
         };
@@ -941,13 +927,11 @@ mod tests {
     #[test]
     fn controller_wrong_from_state() {
         let ctrl = AnimationControllerComponent {
-            transitions: vec![
-                AnimationTransition {
-                    from: "idle".into(),
-                    to: "walk".into(),
-                    condition: TransitionCondition::ParamBool("moving".into(), true),
-                },
-            ],
+            transitions: vec![AnimationTransition {
+                from: "idle".into(),
+                to: "walk".into(),
+                condition: TransitionCondition::ParamBool("moving".into(), true),
+            }],
             bool_params: [("moving".into(), true)].into_iter().collect(),
             float_params: HashMap::new(),
         };

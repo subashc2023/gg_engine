@@ -713,21 +713,24 @@ impl Renderer {
                 if data.has_pending_quads() {
                     data.flush_quads(
                         ctx.cmd_buf,
-                        self.camera_ubo_ds[UniformBuffer::slot(ctx.current_frame, ctx.viewport_index)],
+                        self.camera_ubo_ds
+                            [UniformBuffer::slot(ctx.current_frame, ctx.viewport_index)],
                         ctx.current_frame,
                     );
                 }
                 if data.has_pending_circles() {
                     data.flush_circles(
                         ctx.cmd_buf,
-                        self.camera_ubo_ds[UniformBuffer::slot(ctx.current_frame, ctx.viewport_index)],
+                        self.camera_ubo_ds
+                            [UniformBuffer::slot(ctx.current_frame, ctx.viewport_index)],
                         ctx.current_frame,
                     );
                 }
                 if data.has_pending_lines() {
                     data.flush_lines(
                         ctx.cmd_buf,
-                        self.camera_ubo_ds[UniformBuffer::slot(ctx.current_frame, ctx.viewport_index)],
+                        self.camera_ubo_ds
+                            [UniformBuffer::slot(ctx.current_frame, ctx.viewport_index)],
                         ctx.current_frame,
                         self.line_width,
                     );
@@ -735,14 +738,16 @@ impl Renderer {
                 if data.has_pending_text() {
                     data.flush_text(
                         ctx.cmd_buf,
-                        self.camera_ubo_ds[UniformBuffer::slot(ctx.current_frame, ctx.viewport_index)],
+                        self.camera_ubo_ds
+                            [UniformBuffer::slot(ctx.current_frame, ctx.viewport_index)],
                         ctx.current_frame,
                     );
                 }
                 if data.has_pending_instances() {
                     data.flush_instances(
                         ctx.cmd_buf,
-                        self.camera_ubo_ds[UniformBuffer::slot(ctx.current_frame, ctx.viewport_index)],
+                        self.camera_ubo_ds
+                            [UniformBuffer::slot(ctx.current_frame, ctx.viewport_index)],
                         ctx.current_frame,
                     );
                 }
@@ -1415,7 +1420,8 @@ impl Renderer {
                 if data.has_pending_quads() {
                     data.flush_quads(
                         ctx.cmd_buf,
-                        self.camera_ubo_ds[UniformBuffer::slot(ctx.current_frame, ctx.viewport_index)],
+                        self.camera_ubo_ds
+                            [UniformBuffer::slot(ctx.current_frame, ctx.viewport_index)],
                         ctx.current_frame,
                     );
                 }
@@ -1423,7 +1429,8 @@ impl Renderer {
                 if data.has_pending_circles() {
                     data.flush_circles(
                         ctx.cmd_buf,
-                        self.camera_ubo_ds[UniformBuffer::slot(ctx.current_frame, ctx.viewport_index)],
+                        self.camera_ubo_ds
+                            [UniformBuffer::slot(ctx.current_frame, ctx.viewport_index)],
                         ctx.current_frame,
                     );
                 }
@@ -1431,7 +1438,8 @@ impl Renderer {
                 if data.has_pending_lines() {
                     data.flush_lines(
                         ctx.cmd_buf,
-                        self.camera_ubo_ds[UniformBuffer::slot(ctx.current_frame, ctx.viewport_index)],
+                        self.camera_ubo_ds
+                            [UniformBuffer::slot(ctx.current_frame, ctx.viewport_index)],
                         ctx.current_frame,
                         self.line_width,
                     );
@@ -1440,7 +1448,8 @@ impl Renderer {
                 if data.has_pending_text() {
                     data.flush_text(
                         ctx.cmd_buf,
-                        self.camera_ubo_ds[UniformBuffer::slot(ctx.current_frame, ctx.viewport_index)],
+                        self.camera_ubo_ds
+                            [UniformBuffer::slot(ctx.current_frame, ctx.viewport_index)],
                         ctx.current_frame,
                     );
                 }
@@ -1448,7 +1457,8 @@ impl Renderer {
                 if data.has_pending_instances() {
                     data.flush_instances(
                         ctx.cmd_buf,
-                        self.camera_ubo_ds[UniformBuffer::slot(ctx.current_frame, ctx.viewport_index)],
+                        self.camera_ubo_ds
+                            [UniformBuffer::slot(ctx.current_frame, ctx.viewport_index)],
                         ctx.current_frame,
                     );
                 }

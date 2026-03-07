@@ -1,4 +1,7 @@
-use super::{Entity, IdComponent, RelationshipComponent, RigidBody2DComponent, Scene, TagComponent, TransformComponent};
+use super::{
+    Entity, IdComponent, RelationshipComponent, RigidBody2DComponent, Scene, TagComponent,
+    TransformComponent,
+};
 use std::collections::HashMap;
 
 impl Scene {
@@ -188,7 +191,105 @@ impl Scene {
     ///
     /// Call once per frame before rendering to avoid redundant parent-chain
     /// walks (O(n) total instead of O(n·d) where d is hierarchy depth).
+    ///
+    /// For scenes above [`PAR_THRESHOLD`](crate::jobs::parallel::PAR_THRESHOLD),
+    /// root subtrees are processed in parallel via rayon. Each subtree is
+    /// independent (a child has exactly one parent), so no data races occur.
     pub(super) fn build_world_transform_cache(&self) -> HashMap<hecs::Entity, glam::Mat4> {
+        let entity_count = self.world.len() as usize;
+        if entity_count < crate::jobs::parallel::PAR_THRESHOLD {
+            return self.build_world_transform_cache_sequential();
+        }
+
+        // -- Extract phase (sequential): copy component data into owned Vecs --
+        struct EntityData {
+            handle: hecs::Entity,
+            local_transform: glam::Mat4,
+            parent_uuid: Option<u64>,
+            children: Vec<u64>,
+        }
+
+        let mut data: Vec<EntityData> = Vec::with_capacity(entity_count);
+        let mut uuid_to_idx: HashMap<u64, usize> = HashMap::with_capacity(entity_count);
+
+        for (handle, id, tc, rel) in self
+            .world
+            .query::<(
+                hecs::Entity,
+                &IdComponent,
+                &TransformComponent,
+                &RelationshipComponent,
+            )>()
+            .iter()
+        {
+            let idx = data.len();
+            uuid_to_idx.insert(id.id.raw(), idx);
+            data.push(EntityData {
+                handle,
+                local_transform: tc.get_transform(),
+                parent_uuid: rel.parent,
+                children: rel.children.clone(),
+            });
+        }
+
+        // Identify root entities (no parent).
+        let roots: Vec<usize> = data
+            .iter()
+            .enumerate()
+            .filter(|(_, e)| e.parent_uuid.is_none())
+            .map(|(i, _)| i)
+            .collect();
+
+        // -- Process phase (parallel): each root subtree computed independently --
+        fn compute_subtree(
+            idx: usize,
+            parent_world: glam::Mat4,
+            data: &[EntityData],
+            uuid_to_idx: &HashMap<u64, usize>,
+            results: &mut Vec<(hecs::Entity, glam::Mat4)>,
+        ) {
+            let entity = &data[idx];
+            let world = parent_world * entity.local_transform;
+            results.push((entity.handle, world));
+            for &child_uuid in &entity.children {
+                if let Some(&child_idx) = uuid_to_idx.get(&child_uuid) {
+                    compute_subtree(child_idx, world, data, uuid_to_idx, results);
+                }
+            }
+        }
+
+        use rayon::prelude::*;
+        let data_ref = &data;
+        let uuid_to_idx_ref = &uuid_to_idx;
+        let sub_results: Vec<Vec<(hecs::Entity, glam::Mat4)>> = crate::jobs::pool().install(|| {
+            roots
+                .par_iter()
+                .map(|&root_idx| {
+                    let mut results = Vec::new();
+                    compute_subtree(
+                        root_idx,
+                        glam::Mat4::IDENTITY,
+                        data_ref,
+                        uuid_to_idx_ref,
+                        &mut results,
+                    );
+                    results
+                })
+                .collect()
+        });
+
+        // -- Merge phase (sequential) --
+        let mut cache = HashMap::with_capacity(entity_count);
+        for sub in sub_results {
+            for (handle, transform) in sub {
+                cache.insert(handle, transform);
+            }
+        }
+        cache
+    }
+
+    /// Sequential fallback for small scenes (below parallel threshold).
+    fn build_world_transform_cache_sequential(&self) -> HashMap<hecs::Entity, glam::Mat4> {
         let mut cache = HashMap::with_capacity(self.world.len() as usize);
         let entities: Vec<hecs::Entity> = self.world.query::<hecs::Entity>().iter().collect();
         for handle in entities {

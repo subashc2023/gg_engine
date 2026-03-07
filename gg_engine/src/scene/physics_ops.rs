@@ -1,8 +1,8 @@
-use super::{
-    BoxCollider2DComponent, CircleCollider2DComponent, Entity, IdComponent, RigidBody2DComponent,
-    RelationshipComponent, Scene, TransformComponent,
-};
 use super::physics_2d::PhysicsWorld2D;
+use super::{
+    BoxCollider2DComponent, CircleCollider2DComponent, Entity, IdComponent, RelationshipComponent,
+    RigidBody2DComponent, Scene, TransformComponent,
+};
 use rapier2d::na;
 
 /// Clamp a physics property to a minimum, logging a warning if it was invalid.

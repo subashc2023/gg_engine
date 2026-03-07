@@ -25,7 +25,8 @@ const COLOR_PLAYHEAD: egui::Color32 = egui::Color32::from_rgb(0xFF, 0x44, 0x44);
 const COLOR_CLIP: egui::Color32 = egui::Color32::from_rgb(0x3A, 0x6E, 0x9E);
 const COLOR_CLIP_SELECTED: egui::Color32 = egui::Color32::from_rgb(0x00, 0x7A, 0xCC);
 
-const COLOR_FRAME_IN_CLIP: egui::Color32 = egui::Color32::from_rgba_premultiplied(0x00, 0x7A, 0xCC, 0x40);
+const COLOR_FRAME_IN_CLIP: egui::Color32 =
+    egui::Color32::from_rgba_premultiplied(0x00, 0x7A, 0xCC, 0x40);
 const COLOR_GRID_HIGHLIGHT: egui::Color32 = egui::Color32::from_rgb(0xFF, 0xCC, 0x00);
 const COLOR_RULER_BG: egui::Color32 = egui::Color32::from_rgb(0x2A, 0x2A, 0x2A);
 const COLOR_TIMELINE_BG: egui::Color32 = egui::Color32::from_rgb(0x1A, 0x1A, 0x1A);
@@ -39,9 +40,16 @@ const COLOR_TICK_MAJOR: egui::Color32 = egui::Color32::from_rgb(0x88, 0x88, 0x88
 #[derive(Clone, Copy, PartialEq)]
 enum TimelineDrag {
     Playhead,
-    ClipStart { clip_index: usize },
-    ClipEnd { clip_index: usize },
-    ClipBody { clip_index: usize, grab_frame_offset: i32 },
+    ClipStart {
+        clip_index: usize,
+    },
+    ClipEnd {
+        clip_index: usize,
+    },
+    ClipBody {
+        clip_index: usize,
+        grab_frame_offset: i32,
+    },
 }
 
 thread_local! {
@@ -116,7 +124,9 @@ pub(crate) fn animation_timeline_ui(
 
     // Split: sprite sheet grid (left) | timeline (right).
     let avail = ui.available_rect_before_wrap();
-    let grid_width = GRID_MIN_WIDTH.max(avail.width() * 0.25).min(avail.width() * 0.4);
+    let grid_width = GRID_MIN_WIDTH
+        .max(avail.width() * 0.25)
+        .min(avail.width() * 0.4);
 
     ui.horizontal(|ui| {
         ui.allocate_ui_with_layout(
@@ -143,17 +153,28 @@ pub(crate) fn animation_timeline_ui(
 // Toolbar
 // ---------------------------------------------------------------------------
 
-fn draw_toolbar(
-    ui: &mut egui::Ui,
-    scene: &mut Scene,
-    entity: Entity,
-    scene_dirty: &mut bool,
-) {
-    let (clip_count, clip_names, is_playing, is_previewing, current_frame, selected_fps, selected_looping) = {
-        let sa = scene.get_component::<SpriteAnimatorComponent>(entity).unwrap();
+fn draw_toolbar(ui: &mut egui::Ui, scene: &mut Scene, entity: Entity, scene_dirty: &mut bool) {
+    let (
+        clip_count,
+        clip_names,
+        is_playing,
+        is_previewing,
+        current_frame,
+        selected_fps,
+        selected_looping,
+    ) = {
+        let sa = scene
+            .get_component::<SpriteAnimatorComponent>(entity)
+            .unwrap();
         let sel = SELECTED_CLIP.get();
-        let fps = sel.and_then(|i| sa.clips.get(i)).map(|c| c.fps).unwrap_or(12.0);
-        let looping = sel.and_then(|i| sa.clips.get(i)).map(|c| c.looping).unwrap_or(true);
+        let fps = sel
+            .and_then(|i| sa.clips.get(i))
+            .map(|c| c.fps)
+            .unwrap_or(12.0);
+        let looping = sel
+            .and_then(|i| sa.clips.get(i))
+            .map(|c| c.looping)
+            .unwrap_or(true);
         (
             sa.clips.len(),
             sa.clips.iter().map(|c| c.name.clone()).collect::<Vec<_>>(),
@@ -232,7 +253,12 @@ fn draw_toolbar(
         let prev = sel_idx;
         egui::ComboBox::from_id_salt(("anim_tl_clip_sel", entity.id()))
             .width(100.0)
-            .selected_text(clip_names.get(sel_idx).cloned().unwrap_or_else(|| String::from("(none)")))
+            .selected_text(
+                clip_names
+                    .get(sel_idx)
+                    .cloned()
+                    .unwrap_or_else(|| String::from("(none)")),
+            )
             .show_ui(ui, |ui| {
                 for (i, name) in clip_names.iter().enumerate() {
                     ui.selectable_value(&mut sel_idx, i, name);
@@ -254,10 +280,15 @@ fn draw_toolbar(
                 *scene_dirty = true;
             }
         }
-        if ui.button("-").on_hover_text("Remove selected clip").clicked() {
+        if ui
+            .button("-")
+            .on_hover_text("Remove selected clip")
+            .clicked()
+        {
             if let Some(sel) = SELECTED_CLIP.get() {
                 if sel < clip_count {
-                    if let Some(mut sa) = scene.get_component_mut::<SpriteAnimatorComponent>(entity) {
+                    if let Some(mut sa) = scene.get_component_mut::<SpriteAnimatorComponent>(entity)
+                    {
                         sa.clips.remove(sel);
                         *scene_dirty = true;
                     }
@@ -328,9 +359,13 @@ fn draw_sprite_sheet_grid(
     scene_dirty: &mut bool,
 ) {
     let (columns, cell_size, tex_info, clip_range) = {
-        let sa = scene.get_component::<SpriteAnimatorComponent>(entity).unwrap();
+        let sa = scene
+            .get_component::<SpriteAnimatorComponent>(entity)
+            .unwrap();
         let sel = SELECTED_CLIP.get();
-        let range = sel.and_then(|i| sa.clips.get(i)).map(|c| (c.start_frame, c.end_frame));
+        let range = sel
+            .and_then(|i| sa.clips.get(i))
+            .map(|c| (c.start_frame, c.end_frame));
 
         // Try per-clip texture first, then sprite texture.
         let clip_tex = sel
@@ -404,7 +439,8 @@ fn draw_sprite_sheet_grid(
                         }
 
                         let cell_btn_size = egui::vec2(cell_display, cell_display);
-                        let (rect, resp) = ui.allocate_exact_size(cell_btn_size, egui::Sense::click());
+                        let (rect, resp) =
+                            ui.allocate_exact_size(cell_btn_size, egui::Sense::click());
 
                         // Draw cell contents.
                         if let Some((tw, th, Some(egui_tex))) = &tex_info {
@@ -430,7 +466,8 @@ fn draw_sprite_sheet_grid(
                             let hue = (frame as f32 * 0.618034) % 1.0;
                             let bg: egui::Color32 =
                                 egui::ecolor::Hsva::new(hue, 0.3, 0.4, 1.0).into();
-                            ui.painter().rect_filled(rect, egui::CornerRadius::same(1), bg);
+                            ui.painter()
+                                .rect_filled(rect, egui::CornerRadius::same(1), bg);
                             ui.painter().text(
                                 rect.center(),
                                 egui::Align2::CENTER_CENTER,
@@ -480,7 +517,9 @@ fn draw_sprite_sheet_grid(
                         if resp.clicked() {
                             if let Some(target) = PICK_MODE.get() {
                                 if let Some(sel) = SELECTED_CLIP.get() {
-                                    if let Some(mut sa) = scene.get_component_mut::<SpriteAnimatorComponent>(entity) {
+                                    if let Some(mut sa) =
+                                        scene.get_component_mut::<SpriteAnimatorComponent>(entity)
+                                    {
                                         if let Some(c) = sa.clips.get_mut(sel) {
                                             match target {
                                                 PickTarget::Start => {
@@ -503,11 +542,15 @@ fn draw_sprite_sheet_grid(
                                 PICK_MODE.set(None);
                             } else {
                                 // Set playhead to this frame.
-                                if let Some(mut sa) = scene.get_component_mut::<SpriteAnimatorComponent>(entity) {
+                                if let Some(mut sa) =
+                                    scene.get_component_mut::<SpriteAnimatorComponent>(entity)
+                                {
                                     sa.set_current_frame(frame);
                                     // If no clip selected, try to find one containing this frame.
                                     if SELECTED_CLIP.get().is_none() {
-                                        if let Some(idx) = sa.clips.iter().position(|c| frame >= c.start_frame && frame <= c.end_frame) {
+                                        if let Some(idx) = sa.clips.iter().position(|c| {
+                                            frame >= c.start_frame && frame <= c.end_frame
+                                        }) {
                                             SELECTED_CLIP.set(Some(idx));
                                             sa.set_current_clip_index(Some(idx));
                                         }
@@ -527,17 +570,19 @@ fn draw_sprite_sheet_grid(
 // Timeline / Dopesheet
 // ---------------------------------------------------------------------------
 
-fn draw_timeline(
-    ui: &mut egui::Ui,
-    scene: &mut Scene,
-    entity: Entity,
-    scene_dirty: &mut bool,
-) {
+fn draw_timeline(ui: &mut egui::Ui, scene: &mut Scene, entity: Entity, scene_dirty: &mut bool) {
     let zoom = ZOOM.get();
     let scroll_x = SCROLL_X.get();
 
-    let (clip_count, clips_data, current_frame, max_frame): (usize, Vec<(String, u32, u32)>, u32, u32) = {
-        let sa = scene.get_component::<SpriteAnimatorComponent>(entity).unwrap();
+    let (clip_count, clips_data, current_frame, max_frame): (
+        usize,
+        Vec<(String, u32, u32)>,
+        u32,
+        u32,
+    ) = {
+        let sa = scene
+            .get_component::<SpriteAnimatorComponent>(entity)
+            .unwrap();
         let clips: Vec<(String, u32, u32)> = sa
             .clips
             .iter()
@@ -565,7 +610,8 @@ fn draw_timeline(
     }
 
     // Allocate the full timeline rect.
-    let total_height = RULER_HEIGHT + (clip_count as f32) * (CLIP_BAR_HEIGHT + CLIP_BAR_SPACING) + 40.0;
+    let total_height =
+        RULER_HEIGHT + (clip_count as f32) * (CLIP_BAR_HEIGHT + CLIP_BAR_SPACING) + 40.0;
     let timeline_rect = egui::Rect::from_min_size(
         avail.min,
         egui::vec2(timeline_width, total_height.max(avail.height())),
@@ -585,10 +631,8 @@ fn draw_timeline(
     painter.rect_filled(label_col_rect, egui::CornerRadius::ZERO, COLOR_RULER_BG);
 
     // Frame ruler.
-    let ruler_rect = egui::Rect::from_min_size(
-        timeline_rect.min,
-        egui::vec2(timeline_width, RULER_HEIGHT),
-    );
+    let ruler_rect =
+        egui::Rect::from_min_size(timeline_rect.min, egui::vec2(timeline_width, RULER_HEIGHT));
     painter.rect_filled(ruler_rect, egui::CornerRadius::ZERO, COLOR_RULER_BG);
 
     // Determine tick interval based on zoom.
@@ -620,7 +664,10 @@ fn draw_timeline(
 
         if is_major {
             painter.line_segment(
-                [egui::pos2(x, ruler_rect.top() + 2.0), egui::pos2(x, ruler_rect.bottom())],
+                [
+                    egui::pos2(x, ruler_rect.top() + 2.0),
+                    egui::pos2(x, ruler_rect.bottom()),
+                ],
                 egui::Stroke::new(1.0, COLOR_TICK_MAJOR),
             );
             painter.text(
@@ -632,7 +679,10 @@ fn draw_timeline(
             );
         } else if is_tick {
             painter.line_segment(
-                [egui::pos2(x, ruler_rect.bottom() - 6.0), egui::pos2(x, ruler_rect.bottom())],
+                [
+                    egui::pos2(x, ruler_rect.bottom() - 6.0),
+                    egui::pos2(x, ruler_rect.bottom()),
+                ],
                 egui::Stroke::new(1.0, COLOR_TICK),
             );
         }
@@ -685,8 +735,14 @@ fn draw_timeline(
                     let fx = origin_x + f as f32 * zoom + zoom * 0.5;
                     if fx > bar_rect.left() && fx < bar_rect.right() {
                         painter.line_segment(
-                            [egui::pos2(fx, y + CLIP_BAR_HEIGHT - 4.0), egui::pos2(fx, y + CLIP_BAR_HEIGHT)],
-                            egui::Stroke::new(1.0, egui::Color32::from_rgba_premultiplied(255, 255, 255, 60)),
+                            [
+                                egui::pos2(fx, y + CLIP_BAR_HEIGHT - 4.0),
+                                egui::pos2(fx, y + CLIP_BAR_HEIGHT),
+                            ],
+                            egui::Stroke::new(
+                                1.0,
+                                egui::Color32::from_rgba_premultiplied(255, 255, 255, 60),
+                            ),
                         );
                     }
                 }
@@ -753,14 +809,21 @@ fn draw_timeline(
                     egui::pos2(hx, ruler_rect.bottom()),
                     egui::pos2(hx, timeline_rect.bottom()),
                 ],
-                egui::Stroke::new(1.0, egui::Color32::from_rgba_premultiplied(255, 204, 0, 100)),
+                egui::Stroke::new(
+                    1.0,
+                    egui::Color32::from_rgba_premultiplied(255, 204, 0, 100),
+                ),
             );
         }
     }
 
     // Interactive overlay for the entire timeline.
     let interact_rect = timeline_rect;
-    let resp = ui.interact(interact_rect, ui.id().with("timeline_interact"), egui::Sense::click_and_drag());
+    let resp = ui.interact(
+        interact_rect,
+        ui.id().with("timeline_interact"),
+        egui::Sense::click_and_drag(),
+    );
 
     // Click to select clip / set playhead.
     if resp.clicked() {
@@ -854,13 +917,15 @@ fn draw_timeline(
             match drag {
                 Some(TimelineDrag::Playhead) => {
                     let frame = ((pos.x - origin_x) / zoom).round().max(0.0) as u32;
-                    if let Some(mut sa) = scene.get_component_mut::<SpriteAnimatorComponent>(entity) {
+                    if let Some(mut sa) = scene.get_component_mut::<SpriteAnimatorComponent>(entity)
+                    {
                         sa.set_current_frame(frame);
                     }
                 }
                 Some(TimelineDrag::ClipStart { clip_index }) => {
                     let frame = ((pos.x - origin_x) / zoom).round().max(0.0) as u32;
-                    if let Some(mut sa) = scene.get_component_mut::<SpriteAnimatorComponent>(entity) {
+                    if let Some(mut sa) = scene.get_component_mut::<SpriteAnimatorComponent>(entity)
+                    {
                         if let Some(c) = sa.clips.get_mut(clip_index) {
                             c.start_frame = frame.min(c.end_frame);
                             *scene_dirty = true;
@@ -869,17 +934,22 @@ fn draw_timeline(
                 }
                 Some(TimelineDrag::ClipEnd { clip_index }) => {
                     let frame = ((pos.x - origin_x) / zoom).round().max(0.0) as u32;
-                    if let Some(mut sa) = scene.get_component_mut::<SpriteAnimatorComponent>(entity) {
+                    if let Some(mut sa) = scene.get_component_mut::<SpriteAnimatorComponent>(entity)
+                    {
                         if let Some(c) = sa.clips.get_mut(clip_index) {
                             c.end_frame = frame.max(c.start_frame);
                             *scene_dirty = true;
                         }
                     }
                 }
-                Some(TimelineDrag::ClipBody { clip_index, grab_frame_offset }) => {
+                Some(TimelineDrag::ClipBody {
+                    clip_index,
+                    grab_frame_offset,
+                }) => {
                     let mouse_frame = ((pos.x - origin_x) / zoom).round().max(0.0) as i32;
                     let new_start = (mouse_frame - grab_frame_offset).max(0) as u32;
-                    if let Some(mut sa) = scene.get_component_mut::<SpriteAnimatorComponent>(entity) {
+                    if let Some(mut sa) = scene.get_component_mut::<SpriteAnimatorComponent>(entity)
+                    {
                         if let Some(c) = sa.clips.get_mut(clip_index) {
                             let len = c.end_frame - c.start_frame;
                             c.start_frame = new_start;
@@ -906,7 +976,9 @@ fn draw_timeline(
                 ui.horizontal(|ui| {
                     ui.label("Name:");
                     if ui.text_edit_singleline(&mut name).changed() {
-                        if let Some(mut sa) = scene.get_component_mut::<SpriteAnimatorComponent>(entity) {
+                        if let Some(mut sa) =
+                            scene.get_component_mut::<SpriteAnimatorComponent>(entity)
+                        {
                             if let Some(c) = sa.clips.get_mut(sel) {
                                 c.name = name;
                                 *scene_dirty = true;
@@ -928,7 +1000,8 @@ fn draw_timeline(
 
                 if ui.button("Set as Default Clip").clicked() {
                     let clip_name = clips_data[sel].0.clone();
-                    if let Some(mut sa) = scene.get_component_mut::<SpriteAnimatorComponent>(entity) {
+                    if let Some(mut sa) = scene.get_component_mut::<SpriteAnimatorComponent>(entity)
+                    {
                         sa.default_clip = clip_name;
                         *scene_dirty = true;
                     }
@@ -936,7 +1009,8 @@ fn draw_timeline(
                 }
 
                 if ui.button("Duplicate Clip").clicked() {
-                    if let Some(mut sa) = scene.get_component_mut::<SpriteAnimatorComponent>(entity) {
+                    if let Some(mut sa) = scene.get_component_mut::<SpriteAnimatorComponent>(entity)
+                    {
                         if let Some(clip) = sa.clips.get(sel).cloned() {
                             let mut new_clip = clip;
                             new_clip.name = format!("{}_copy", new_clip.name);
@@ -951,7 +1025,8 @@ fn draw_timeline(
 
                 ui.separator();
                 if ui.button("Delete Clip").clicked() {
-                    if let Some(mut sa) = scene.get_component_mut::<SpriteAnimatorComponent>(entity) {
+                    if let Some(mut sa) = scene.get_component_mut::<SpriteAnimatorComponent>(entity)
+                    {
                         sa.clips.remove(sel);
                         *scene_dirty = true;
                     }

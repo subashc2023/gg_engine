@@ -3,7 +3,6 @@ use std::path::{Path, PathBuf};
 use gg_engine::egui;
 use gg_engine::prelude::*;
 
-
 use super::panels::Tab;
 use super::{panels, EditorMode, GGEditor, SceneState};
 
@@ -555,7 +554,7 @@ impl GGEditor {
             if w > 0 && h > 0 {
                 self.scene.on_viewport_resize(w, h);
             }
-                        self.scene_ctx.dirty = true;
+            self.scene_ctx.dirty = true;
         }
     }
 
@@ -574,7 +573,7 @@ impl GGEditor {
             if w > 0 && h > 0 {
                 self.scene.on_viewport_resize(w, h);
             }
-                        self.scene_ctx.dirty = true;
+            self.scene_ctx.dirty = true;
         }
     }
 
@@ -648,7 +647,7 @@ impl GGEditor {
                     }
                     self.selection_context = Some(root);
                     self.scene_ctx.dirty = true;
-                                    }
+                }
             }
         }
     }
@@ -727,7 +726,7 @@ impl GGEditor {
                 self.scene_ctx.pending_drop_scenes.push(old);
                 self.scene_ctx.editor_scene_path = Some(path_str);
                 self.scene_ctx.dirty = recovered;
-                            }
+            }
         } else {
             let old = std::mem::replace(&mut self.scene, Scene::new());
             self.scene_ctx.pending_drop_scenes.push(old);

@@ -1,8 +1,8 @@
 use super::{
     AnimationControllerComponent, CircleRendererComponent, Entity, IdComponent,
     InstancedSpriteAnimator, ParticleEmitterComponent, Scene, SpriteAnimatorComponent,
-    SpriteRendererComponent, TextComponent, TilemapComponent, TransformComponent,
-    TILE_FLIP_H, TILE_FLIP_V, TILE_ID_MASK,
+    SpriteRendererComponent, TextComponent, TilemapComponent, TransformComponent, TILE_FLIP_H,
+    TILE_FLIP_V, TILE_ID_MASK,
 };
 use crate::renderer::{Font, Renderer, SubTexture2D};
 
@@ -20,19 +20,95 @@ impl Scene {
     /// After updating, dispatches `on_animation_finished(clip_name)` Lua
     /// callbacks for any non-looping clips that just ended, then transitions
     /// to the default clip if one is configured.
+    ///
+    /// For scenes above [`PAR_THRESHOLD`](crate::jobs::parallel::PAR_THRESHOLD),
+    /// the per-entity animation tick is parallelized via extract-process-writeback.
     pub fn on_update_animations(&mut self, dt: f32) {
         // Advance scene global time.
         self.global_time += dt as f64;
 
-        // Phase 1: tick all SpriteAnimatorComponent timers, collect finished events.
-        let mut finished_events: Vec<(u64, String, String)> = Vec::new();
-        for (id_comp, animator) in self
+        // Phase 1: extract + parallel tick SpriteAnimatorComponent timers.
+        struct AnimWork {
+            entity: hecs::Entity,
+            uuid: u64,
+            frame_timer: f32,
+            current_frame: u32,
+            playing: bool,
+            speed_scale: f32,
+            clip_start_frame: u32,
+            clip_end_frame: u32,
+            clip_fps: f32,
+            clip_looping: bool,
+            clip_name: String,
+            default_clip: String,
+            finished: bool,
+        }
+
+        let mut work: Vec<AnimWork> = self
             .world
-            .query_mut::<(&IdComponent, &mut SpriteAnimatorComponent)>()
-        {
-            animator.update(dt);
-            if let Some(clip_name) = animator.finished_clip_name.take() {
-                finished_events.push((id_comp.id.raw(), clip_name, animator.default_clip.clone()));
+            .query::<(hecs::Entity, &IdComponent, &SpriteAnimatorComponent)>()
+            .iter()
+            .filter(|(_, _, anim)| anim.playing)
+            .map(|(entity, id, anim)| {
+                let clip = anim.current_clip_index().and_then(|i| anim.clips.get(i));
+                AnimWork {
+                    entity,
+                    uuid: id.id.raw(),
+                    frame_timer: anim.frame_timer,
+                    current_frame: anim.current_frame,
+                    playing: true,
+                    speed_scale: anim.speed_scale,
+                    clip_start_frame: clip.map(|c| c.start_frame).unwrap_or(0),
+                    clip_end_frame: clip.map(|c| c.end_frame).unwrap_or(0),
+                    clip_fps: clip.map(|c| c.fps).unwrap_or(0.0),
+                    clip_looping: clip.map(|c| c.looping).unwrap_or(true),
+                    clip_name: clip.map(|c| c.name.clone()).unwrap_or_default(),
+                    default_clip: anim.default_clip.clone(),
+                    finished: false,
+                }
+            })
+            .collect();
+
+        // Parallel tick (pure per-entity computation, no cross-entity deps).
+        crate::jobs::parallel::par_for_each_mut(&mut work, |item| {
+            if item.clip_fps <= 0.0 || item.speed_scale <= 0.0 {
+                return;
+            }
+            item.frame_timer += dt * item.speed_scale;
+            let frame_duration = 1.0 / item.clip_fps;
+            while item.frame_timer >= frame_duration {
+                item.frame_timer -= frame_duration;
+                item.current_frame += 1;
+                if item.current_frame > item.clip_end_frame {
+                    if item.clip_looping {
+                        item.current_frame = item.clip_start_frame;
+                    } else {
+                        item.current_frame = item.clip_end_frame;
+                        item.playing = false;
+                        item.finished = true;
+                        break;
+                    }
+                }
+            }
+        });
+
+        // Writeback + collect finished events.
+        let mut finished_events: Vec<(u64, String, String)> = Vec::new();
+        for item in &work {
+            if let Ok(mut anim) = self.world.get::<&mut SpriteAnimatorComponent>(item.entity) {
+                anim.frame_timer = item.frame_timer;
+                anim.current_frame = item.current_frame;
+                if !item.playing {
+                    anim.playing = false;
+                }
+                if item.finished {
+                    anim.finished_clip_name = None;
+                    finished_events.push((
+                        item.uuid,
+                        item.clip_name.clone(),
+                        item.default_clip.clone(),
+                    ));
+                }
             }
         }
 
@@ -43,10 +119,7 @@ impl Scene {
             .query_mut::<(&IdComponent, &mut InstancedSpriteAnimator)>()
         {
             if anim.is_finished(gt) {
-                let clip_name = anim
-                    .current_clip_name()
-                    .unwrap_or("")
-                    .to_owned();
+                let clip_name = anim.current_clip_name().unwrap_or("").to_owned();
                 let default = anim.default_clip.clone();
                 anim.playing = false;
                 finished_events.push((id_comp.id.raw(), clip_name, default));
@@ -372,10 +445,7 @@ impl Scene {
     ///
     /// On subsequent frames, `poll_loaded` will upload completed fonts,
     /// and this method will find them in the cache and assign them.
-    pub fn load_fonts_async(
-        &mut self,
-        asset_manager: &mut crate::asset::EditorAssetManager,
-    ) {
+    pub fn load_fonts_async(&mut self, asset_manager: &mut crate::asset::EditorAssetManager) {
         let needs: Vec<(hecs::Entity, std::path::PathBuf)> = self
             .world
             .query::<(hecs::Entity, &TextComponent)>()
@@ -476,27 +546,53 @@ impl Scene {
         // Text is not culled (bounds depend on string content).
         // Tilemaps are not culled here (tile-level culling happens during rendering).
         // 0 = Sprite, 1 = Circle, 2 = Text, 3 = Tilemap
-        let mut renderables: Vec<(i32, i32, f32, u8, hecs::Entity)> = Vec::new();
         let mut total_cullable: u32 = 0;
         let mut culled: u32 = 0;
 
-        for (handle, sprite) in self
+        // --- Parallel frustum culling for sprites ---
+        let sprites: Vec<(hecs::Entity, i32, i32)> = self
             .world
             .query::<(hecs::Entity, &SpriteRendererComponent)>()
             .iter()
-        {
-            let Some(wt) = wt_cache.get(&handle) else {
-                continue;
-            };
-            total_cullable += 1;
-            let aabb = super::spatial::Aabb2D::from_unit_quad_transform(wt);
-            if !frustum.contains_aabb(&aabb) {
-                culled += 1;
-                continue;
-            }
-            renderables.push((sprite.sorting_layer, sprite.order_in_layer, wt.w_axis.z, 0, handle));
-        }
+            .map(|(h, s)| (h, s.sorting_layer, s.order_in_layer))
+            .collect();
+        total_cullable += sprites.len() as u32;
 
+        let sprite_renderables: Vec<(i32, i32, f32, u8, hecs::Entity)> = {
+            use crate::jobs::parallel::PAR_THRESHOLD;
+            if sprites.len() >= PAR_THRESHOLD {
+                use rayon::prelude::*;
+                crate::jobs::pool().install(|| {
+                    sprites
+                        .par_iter()
+                        .filter_map(|&(handle, sorting_layer, order_in_layer)| {
+                            let wt = wt_cache.get(&handle)?;
+                            let aabb = super::spatial::Aabb2D::from_unit_quad_transform(wt);
+                            if !frustum.contains_aabb(&aabb) {
+                                return None;
+                            }
+                            Some((sorting_layer, order_in_layer, wt.w_axis.z, 0u8, handle))
+                        })
+                        .collect()
+                })
+            } else {
+                sprites
+                    .iter()
+                    .filter_map(|&(handle, sorting_layer, order_in_layer)| {
+                        let wt = wt_cache.get(&handle)?;
+                        let aabb = super::spatial::Aabb2D::from_unit_quad_transform(wt);
+                        if !frustum.contains_aabb(&aabb) {
+                            return None;
+                        }
+                        Some((sorting_layer, order_in_layer, wt.w_axis.z, 0u8, handle))
+                    })
+                    .collect()
+            }
+        };
+        culled += sprites.len() as u32 - sprite_renderables.len() as u32;
+
+        // --- Circles (usually few, keep sequential) ---
+        let mut circle_renderables: Vec<(i32, i32, f32, u8, hecs::Entity)> = Vec::new();
         for (handle, circle) in self
             .world
             .query::<(hecs::Entity, &CircleRendererComponent)>()
@@ -511,7 +607,13 @@ impl Scene {
                 culled += 1;
                 continue;
             }
-            renderables.push((circle.sorting_layer, circle.order_in_layer, wt.w_axis.z, 1, handle));
+            circle_renderables.push((
+                circle.sorting_layer,
+                circle.order_in_layer,
+                wt.w_axis.z,
+                1,
+                handle,
+            ));
         }
 
         self.culling_stats.set(super::CullingStats {
@@ -519,6 +621,10 @@ impl Scene {
             rendered: total_cullable - culled,
             culled,
         });
+
+        // --- Text & tilemaps (sequential, usually few) ---
+        let mut renderables = sprite_renderables;
+        renderables.extend(circle_renderables);
 
         for (handle, text) in self.world.query::<(hecs::Entity, &TextComponent)>().iter() {
             let z = wt_cache.get(&handle).map(|m| m.w_axis.z).unwrap_or(0.0);
@@ -534,12 +640,19 @@ impl Scene {
             renderables.push((tilemap.sorting_layer, tilemap.order_in_layer, z, 3, handle));
         }
 
-        // Sort by (sorting_layer, order_in_layer, z).
-        renderables.sort_by(|a, b| {
+        // --- Parallel sort ---
+        let sort_cmp = |a: &(i32, i32, f32, u8, hecs::Entity),
+                        b: &(i32, i32, f32, u8, hecs::Entity)| {
             a.0.cmp(&b.0)
                 .then(a.1.cmp(&b.1))
                 .then(a.2.partial_cmp(&b.2).unwrap_or(std::cmp::Ordering::Equal))
-        });
+        };
+        if renderables.len() >= crate::jobs::parallel::PAR_THRESHOLD {
+            use rayon::prelude::*;
+            crate::jobs::pool().install(|| renderables.par_sort_by(sort_cmp));
+        } else {
+            renderables.sort_by(sort_cmp);
+        }
 
         // Render in sorted order.
         // Flush all pending batches when the renderable type changes so that
@@ -669,18 +782,10 @@ impl Scene {
                                     handle.id() as i32,
                                 );
                             } else {
-                                renderer.draw_sprite(
-                                    &world_transform,
-                                    &sprite,
-                                    handle.id() as i32,
-                                );
+                                renderer.draw_sprite(&world_transform, &sprite, handle.id() as i32);
                             }
                         } else {
-                            renderer.draw_sprite(
-                                &world_transform,
-                                &sprite,
-                                handle.id() as i32,
-                            );
+                            renderer.draw_sprite(&world_transform, &sprite, handle.id() as i32);
                         }
                     }
                 }

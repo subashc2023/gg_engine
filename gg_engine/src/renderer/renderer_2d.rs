@@ -277,9 +277,7 @@ impl PipelineSet {
     /// Return the active pipeline (offscreen if enabled and available, else swapchain).
     fn active(&self, use_offscreen: bool) -> &Arc<Pipeline> {
         if use_offscreen {
-            self.offscreen_pipeline
-                .as_ref()
-                .unwrap_or(&self.pipeline)
+            self.offscreen_pipeline.as_ref().unwrap_or(&self.pipeline)
         } else {
             &self.pipeline
         }

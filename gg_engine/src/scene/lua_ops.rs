@@ -1,6 +1,6 @@
-use super::{IdComponent, Scene};
 use super::script_glue::SceneScriptContext;
 use super::ScriptEngine;
+use super::{IdComponent, Scene};
 use crate::input::Input;
 use crate::timestep::Timestep;
 

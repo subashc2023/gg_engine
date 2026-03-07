@@ -359,14 +359,8 @@ fn draw_components(
         *scene_dirty = true;
     }
 
-    if sprite::draw_animation_controller(
-        ui,
-        scene,
-        entity,
-        &bold_family,
-        scene_dirty,
-        undo_system,
-    ) {
+    if sprite::draw_animation_controller(ui, scene, entity, &bold_family, scene_dirty, undo_system)
+    {
         undo_system.record(scene);
         scene.remove_component::<AnimationControllerComponent>(entity);
         *scene_dirty = true;
