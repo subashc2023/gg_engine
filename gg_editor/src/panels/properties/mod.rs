@@ -268,6 +268,112 @@ fn sorting_layer_controls(
 }
 
 // ---------------------------------------------------------------------------
+// Asset handle picker (shared by sprite texture + audio file pickers)
+// ---------------------------------------------------------------------------
+
+/// Result of an asset handle picker interaction.
+pub(crate) enum AssetPickerAction {
+    /// No change.
+    None,
+    /// User selected or dropped a new asset.
+    Selected(Uuid),
+    /// User clicked the clear (X) button.
+    Cleared,
+}
+
+/// Reusable asset handle picker: shows asset filename, click to browse,
+/// drag-drop from content browser, hover highlight, X clear button.
+pub(crate) fn asset_handle_picker(
+    ui: &mut egui::Ui,
+    current_handle_raw: u64,
+    asset_manager: &mut Option<EditorAssetManager>,
+    assets_root: &std::path::Path,
+    subdirectory: &str,
+    dialog_title: &str,
+    extensions: &[&str],
+) -> AssetPickerAction {
+    // Resolve label from asset metadata.
+    let label = if current_handle_raw != 0 {
+        if let Some(am) = asset_manager.as_ref() {
+            let handle = Uuid::from_raw(current_handle_raw);
+            am.get_metadata(&handle)
+                .map(|m| {
+                    std::path::Path::new(&m.file_path)
+                        .file_name()
+                        .map(|n| n.to_string_lossy().to_string())
+                        .unwrap_or_else(|| m.file_path.clone())
+                })
+                .unwrap_or_else(|| "Invalid".to_string())
+        } else {
+            "No Asset Manager".to_string()
+        }
+    } else {
+        "None".to_string()
+    };
+
+    let btn_width = ((label.len() as f32) * 7.0 + 20.0).max(100.0);
+    let btn_resp = ui.add_sized([btn_width, 0.0], egui::Button::new(&label));
+
+    // Click to open file dialog.
+    if btn_resp.clicked() {
+        if let Some(am) = asset_manager.as_mut() {
+            let start_dir = assets_root.join(subdirectory);
+            let start_dir_str = start_dir.to_string_lossy();
+            if let Some(path_str) =
+                FileDialogs::open_file_in(dialog_title, extensions, &start_dir_str)
+            {
+                let abs_path = std::path::PathBuf::from(&path_str);
+                let rel_path = super::relative_asset_path(&abs_path, am.asset_directory());
+                let handle = am.import_asset(&rel_path);
+                return AssetPickerAction::Selected(handle);
+            }
+        }
+    }
+
+    // Drag-and-drop from content browser.
+    if let Some(payload) =
+        btn_resp.dnd_release_payload::<super::content_browser::ContentBrowserPayload>()
+    {
+        if !payload.is_directory {
+            let ext = payload
+                .path
+                .extension()
+                .and_then(|e| e.to_str())
+                .unwrap_or("")
+                .to_lowercase();
+            if extensions.contains(&ext.as_str()) {
+                if let Some(am) = asset_manager.as_mut() {
+                    let rel_path =
+                        super::relative_asset_path(&payload.path, am.asset_directory());
+                    let handle = am.import_asset(&rel_path);
+                    return AssetPickerAction::Selected(handle);
+                }
+            }
+        }
+    }
+
+    // Drop target highlight.
+    if btn_resp
+        .dnd_hover_payload::<super::content_browser::ContentBrowserPayload>()
+        .is_some()
+    {
+        ui.painter().rect_stroke(
+            btn_resp.rect,
+            egui::CornerRadius::same(2),
+            egui::Stroke::new(2.0, egui::Color32::from_rgb(0x56, 0x9C, 0xD6)),
+            egui::StrokeKind::Inside,
+        );
+    }
+
+    // Clear button.
+    if current_handle_raw != 0 && ui.small_button("X").clicked() {
+        return AssetPickerAction::Cleared;
+    }
+
+    AssetPickerAction::None
+}
+
+// ---------------------------------------------------------------------------
 // Component inspector — dispatches to per-component modules
 // ---------------------------------------------------------------------------
 

@@ -21,6 +21,45 @@ fn validate_physics_value(value: f32, min: f32, name: &str, entity_uuid: u64) ->
     }
 }
 
+/// Apply shared physics material and collision properties to a collider builder.
+#[allow(clippy::too_many_arguments)]
+fn configure_collider(
+    builder: rapier2d::geometry::ColliderBuilder,
+    density: f32,
+    friction: f32,
+    restitution: f32,
+    offset: glam::Vec2,
+    scale: glam::Vec3,
+    collision_layer: u32,
+    collision_mask: u32,
+    entity_uuid: u64,
+) -> rapier2d::geometry::Collider {
+    let density = validate_physics_value(density, 0.0, "density", entity_uuid);
+    let friction = validate_physics_value(friction, 0.0, "friction", entity_uuid);
+    let restitution = validate_physics_value(restitution, 0.0, "restitution", entity_uuid);
+
+    let mut builder = builder
+        .density(density)
+        .friction(friction)
+        .restitution(restitution)
+        .translation(na::Vector2::new(
+            offset.x * scale.x.abs(),
+            offset.y * scale.y.abs(),
+        ))
+        .collision_groups(rapier2d::geometry::InteractionGroups::new(
+            collision_layer.into(),
+            collision_mask.into(),
+        ))
+        .active_events(rapier2d::prelude::ActiveEvents::COLLISION_EVENTS);
+
+    if friction == 0.0 {
+        builder =
+            builder.friction_combine_rule(rapier2d::prelude::CoefficientCombineRule::Min);
+    }
+
+    builder.build()
+}
+
 impl Scene {
     // -----------------------------------------------------------------
     // Physics (shared helpers)
@@ -100,37 +139,13 @@ impl Scene {
                         half_y * 2.0
                     );
                 } else {
-                    let density = validate_physics_value(bc.density, 0.0, "density", entity_uuid);
-                    let friction =
-                        validate_physics_value(bc.friction, 0.0, "friction", entity_uuid);
-                    let restitution =
-                        validate_physics_value(bc.restitution, 0.0, "restitution", entity_uuid);
-
-                    let mut builder = rapier2d::geometry::ColliderBuilder::cuboid(half_x, half_y)
-                        .density(density)
-                        .friction(friction)
-                        .restitution(restitution)
-                        .translation(na::Vector2::new(
-                            bc.offset.x * scale.x.abs(),
-                            bc.offset.y * scale.y.abs(),
-                        ))
-                        .collision_groups(rapier2d::geometry::InteractionGroups::new(
-                            bc.collision_layer.into(),
-                            bc.collision_mask.into(),
-                        ))
-                        .active_events(rapier2d::prelude::ActiveEvents::COLLISION_EVENTS);
-                    // When friction is 0, use Min combine rule so the zero
-                    // wins against any surface (prevents wall sticking).
-                    if friction == 0.0 {
-                        builder = builder
-                            .friction_combine_rule(rapier2d::prelude::CoefficientCombineRule::Min);
-                    }
-                    let collider = builder.build();
-
+                    let collider = configure_collider(
+                        rapier2d::geometry::ColliderBuilder::cuboid(half_x, half_y),
+                        bc.density, bc.friction, bc.restitution,
+                        bc.offset, scale, bc.collision_layer, bc.collision_mask, entity_uuid,
+                    );
                     let collider_handle = physics.colliders.insert_with_parent(
-                        collider,
-                        body_handle,
-                        &mut physics.bodies,
+                        collider, body_handle, &mut physics.bodies,
                     );
                     bc.runtime_fixture = Some(collider_handle);
                     physics.register_collider(collider_handle, entity_uuid);
@@ -147,35 +162,13 @@ impl Scene {
                         entity_uuid
                     );
                 } else {
-                    let density = validate_physics_value(cc.density, 0.0, "density", entity_uuid);
-                    let friction =
-                        validate_physics_value(cc.friction, 0.0, "friction", entity_uuid);
-                    let restitution =
-                        validate_physics_value(cc.restitution, 0.0, "restitution", entity_uuid);
-
-                    let mut builder = rapier2d::geometry::ColliderBuilder::ball(scaled_radius)
-                        .density(density)
-                        .friction(friction)
-                        .restitution(restitution)
-                        .translation(na::Vector2::new(
-                            cc.offset.x * scale.x.abs(),
-                            cc.offset.y * scale.y.abs(),
-                        ))
-                        .collision_groups(rapier2d::geometry::InteractionGroups::new(
-                            cc.collision_layer.into(),
-                            cc.collision_mask.into(),
-                        ))
-                        .active_events(rapier2d::prelude::ActiveEvents::COLLISION_EVENTS);
-                    if friction == 0.0 {
-                        builder = builder
-                            .friction_combine_rule(rapier2d::prelude::CoefficientCombineRule::Min);
-                    }
-                    let collider = builder.build();
-
+                    let collider = configure_collider(
+                        rapier2d::geometry::ColliderBuilder::ball(scaled_radius),
+                        cc.density, cc.friction, cc.restitution,
+                        cc.offset, scale, cc.collision_layer, cc.collision_mask, entity_uuid,
+                    );
                     let collider_handle = physics.colliders.insert_with_parent(
-                        collider,
-                        body_handle,
-                        &mut physics.bodies,
+                        collider, body_handle, &mut physics.bodies,
                     );
                     cc.runtime_fixture = Some(collider_handle);
                     physics.register_collider(collider_handle, entity_uuid);

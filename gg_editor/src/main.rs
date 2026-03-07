@@ -3,6 +3,7 @@ mod editor_settings;
 mod file_ops;
 mod gizmo;
 mod hub;
+mod icons;
 mod panels;
 mod physics_player;
 mod playback;

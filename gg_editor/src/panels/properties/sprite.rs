@@ -55,98 +55,35 @@ pub(crate) fn draw_sprite_renderer_component(
                 }
             }
 
-            // Texture button label: show filename from asset metadata or "None".
-            let texture_label = if texture_handle_raw != 0 {
-                if let Some(am) = asset_manager.as_ref() {
-                    let handle = Uuid::from_raw(texture_handle_raw);
-                    am.get_metadata(&handle)
-                        .map(|m| {
-                            std::path::Path::new(&m.file_path)
-                                .file_name()
-                                .map(|n| n.to_string_lossy().to_string())
-                                .unwrap_or_else(|| m.file_path.clone())
-                        })
-                        .unwrap_or_else(|| "Invalid".to_string())
-                } else {
-                    "No Asset Manager".to_string()
-                }
-            } else {
-                "None".to_string()
-            };
-
-            let btn_width = ((texture_label.len() as f32) * 7.0 + 20.0).max(100.0);
-
             ui.horizontal(|ui| {
-                let btn_resp = ui.add_sized([btn_width, 0.0], egui::Button::new(&texture_label));
-
-                if btn_resp.clicked() {
-                    if let Some(am) = asset_manager.as_mut() {
-                        let textures_dir = assets_root.join("textures");
-                        let textures_dir_str = textures_dir.to_string_lossy();
-                        if let Some(path_str) = FileDialogs::open_file_in(
-                            "Image files",
-                            &["png", "jpg", "jpeg"],
-                            &textures_dir_str,
-                        ) {
-                            let abs_path = std::path::PathBuf::from(&path_str);
-                            let rel_path = relative_asset_path(&abs_path, am.asset_directory());
-                            let handle = am.import_asset(&rel_path);
-                            if let Some(mut sprite) =
-                                scene.get_component_mut::<SpriteRendererComponent>(entity)
-                            {
-                                sprite.texture_handle = handle;
-                                sprite.texture = None;
-                            }
-                            *scene_dirty = true;
+                match super::asset_handle_picker(
+                    ui,
+                    texture_handle_raw,
+                    asset_manager,
+                    assets_root,
+                    "textures",
+                    "Image files",
+                    &["png", "jpg", "jpeg"],
+                ) {
+                    super::AssetPickerAction::Selected(handle) => {
+                        if let Some(mut sprite) =
+                            scene.get_component_mut::<SpriteRendererComponent>(entity)
+                        {
+                            sprite.texture_handle = handle;
+                            sprite.texture = None;
                         }
+                        *scene_dirty = true;
                     }
-                }
-
-                if let Some(payload) = btn_resp.dnd_release_payload::<ContentBrowserPayload>() {
-                    if !payload.is_directory {
-                        let ext = payload
-                            .path
-                            .extension()
-                            .and_then(|e| e.to_str())
-                            .unwrap_or("")
-                            .to_lowercase();
-                        if matches!(ext.as_str(), "png" | "jpg" | "jpeg") {
-                            if let Some(am) = asset_manager.as_mut() {
-                                let rel_path =
-                                    relative_asset_path(&payload.path, am.asset_directory());
-                                let handle = am.import_asset(&rel_path);
-                                if let Some(mut sprite) =
-                                    scene.get_component_mut::<SpriteRendererComponent>(entity)
-                                {
-                                    sprite.texture_handle = handle;
-                                    sprite.texture = None;
-                                }
-                                *scene_dirty = true;
-                            }
+                    super::AssetPickerAction::Cleared => {
+                        if let Some(mut sprite) =
+                            scene.get_component_mut::<SpriteRendererComponent>(entity)
+                        {
+                            sprite.texture_handle = Uuid::from_raw(0);
+                            sprite.texture = None;
                         }
+                        *scene_dirty = true;
                     }
-                }
-
-                if btn_resp
-                    .dnd_hover_payload::<ContentBrowserPayload>()
-                    .is_some()
-                {
-                    ui.painter().rect_stroke(
-                        btn_resp.rect,
-                        egui::CornerRadius::same(2),
-                        egui::Stroke::new(2.0, egui::Color32::from_rgb(0x56, 0x9C, 0xD6)),
-                        egui::StrokeKind::Inside,
-                    );
-                }
-
-                if texture_handle_raw != 0 && ui.small_button("X").clicked() {
-                    if let Some(mut sprite) =
-                        scene.get_component_mut::<SpriteRendererComponent>(entity)
-                    {
-                        sprite.texture_handle = Uuid::from_raw(0);
-                        sprite.texture = None;
-                    }
-                    *scene_dirty = true;
+                    super::AssetPickerAction::None => {}
                 }
             });
 

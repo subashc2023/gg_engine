@@ -1,8 +1,6 @@
 use gg_engine::egui;
 use gg_engine::prelude::*;
 
-use crate::panels::content_browser::ContentBrowserPayload;
-
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn draw_audio_source_component(
     ui: &mut egui::Ui,
@@ -25,96 +23,34 @@ pub(crate) fn draw_audio_source_component(
              ac.streaming, ac.spatial, ac.min_distance, ac.max_distance)
         };
 
-        // Audio file label.
-        let audio_label = if audio_handle_raw != 0 {
-            if let Some(am) = asset_manager.as_ref() {
-                let handle = Uuid::from_raw(audio_handle_raw);
-                am.get_metadata(&handle)
-                    .map(|m| {
-                        std::path::Path::new(&m.file_path)
-                            .file_name()
-                            .map(|n| n.to_string_lossy().to_string())
-                            .unwrap_or_else(|| m.file_path.clone())
-                    })
-                    .unwrap_or_else(|| "Invalid".to_string())
-            } else {
-                "No Asset Manager".to_string()
-            }
-        } else {
-            "None".to_string()
-        };
-
-        let btn_width = ((audio_label.len() as f32) * 7.0 + 20.0).max(100.0);
         ui.horizontal(|ui| {
             ui.label("Audio File");
-            let btn_resp = ui.add_sized(
-                [btn_width, 0.0],
-                egui::Button::new(&audio_label),
-            );
-
-            if btn_resp.clicked() {
-                if let Some(am) = asset_manager.as_mut() {
-                    let audio_dir = assets_root.join("audio");
-                    let audio_dir_str = audio_dir.to_string_lossy();
-                    if let Some(path_str) =
-                        FileDialogs::open_file_in("Audio files", &["wav", "ogg", "mp3", "flac"], &audio_dir_str)
+            match super::asset_handle_picker(
+                ui,
+                audio_handle_raw,
+                asset_manager,
+                assets_root,
+                "audio",
+                "Audio files",
+                &["wav", "ogg", "mp3", "flac"],
+            ) {
+                super::AssetPickerAction::Selected(handle) => {
+                    if let Some(mut ac) =
+                        scene.get_component_mut::<AudioSourceComponent>(entity)
                     {
-                        let abs_path = std::path::PathBuf::from(&path_str);
-                        let rel_path = crate::panels::relative_asset_path(&abs_path, am.asset_directory());
-                        let handle = am.import_asset(&rel_path);
-                        if let Some(mut ac) =
-                            scene.get_component_mut::<AudioSourceComponent>(entity)
-                        {
-                            ac.audio_handle = handle;
-                        }
-                        *scene_dirty = true;
+                        ac.audio_handle = handle;
                     }
+                    *scene_dirty = true;
                 }
-            }
-
-            if let Some(payload) =
-                btn_resp.dnd_release_payload::<ContentBrowserPayload>()
-            {
-                if !payload.is_directory {
-                    let ext = payload
-                        .path
-                        .extension()
-                        .and_then(|e| e.to_str())
-                        .unwrap_or("")
-                        .to_lowercase();
-                    if matches!(ext.as_str(), "wav" | "ogg" | "mp3" | "flac") {
-                        if let Some(am) = asset_manager.as_mut() {
-                            let rel_path = crate::panels::relative_asset_path(&payload.path, am.asset_directory());
-                            let handle = am.import_asset(&rel_path);
-                            if let Some(mut ac) =
-                                scene.get_component_mut::<AudioSourceComponent>(entity)
-                            {
-                                ac.audio_handle = handle;
-                            }
-                            *scene_dirty = true;
-                        }
+                super::AssetPickerAction::Cleared => {
+                    if let Some(mut ac) =
+                        scene.get_component_mut::<AudioSourceComponent>(entity)
+                    {
+                        ac.audio_handle = Uuid::from_raw(0);
                     }
+                    *scene_dirty = true;
                 }
-            }
-
-            if btn_resp.dnd_hover_payload::<ContentBrowserPayload>().is_some() {
-                ui.painter().rect_stroke(
-                    btn_resp.rect,
-                    egui::CornerRadius::same(2),
-                    egui::Stroke::new(2.0, egui::Color32::from_rgb(0x56, 0x9C, 0xD6)),
-                    egui::StrokeKind::Inside,
-                );
-            }
-
-            if audio_handle_raw != 0
-                && ui.small_button("X").clicked()
-            {
-                if let Some(mut ac) =
-                    scene.get_component_mut::<AudioSourceComponent>(entity)
-                {
-                    ac.audio_handle = Uuid::from_raw(0);
-                }
-                *scene_dirty = true;
+                super::AssetPickerAction::None => {}
             }
         });
 

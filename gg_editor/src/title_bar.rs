@@ -238,7 +238,7 @@ pub fn title_bar_ui(
                 if resp.hovered() {
                     painter.rect_filled(rect, egui::CornerRadius::same(3), BUTTON_HOVER_BG);
                 }
-                paint_play_triangle(painter, rect.center());
+                super::icons::paint_play_triangle(painter, rect.center(), 6.0);
             }
 
             // Simulate button (gear icon).
@@ -246,7 +246,7 @@ pub fn title_bar_ui(
                 if resp.hovered() {
                     painter.rect_filled(rect, egui::CornerRadius::same(3), BUTTON_HOVER_BG);
                 }
-                paint_gear_icon(painter, rect.center(), 7.0);
+                super::icons::paint_gear_icon(painter, rect.center(), 7.0, BAR_BG);
             }
 
             // Stop button (blue square).
@@ -254,7 +254,7 @@ pub fn title_bar_ui(
                 if resp.hovered() {
                     painter.rect_filled(rect, egui::CornerRadius::same(3), BUTTON_HOVER_BG);
                 }
-                paint_stop_square(painter, rect.center());
+                super::icons::paint_stop_square(painter, rect.center(), 5.0);
             }
 
             // Pause button (two vertical bars, highlighted when paused).
@@ -270,7 +270,7 @@ pub fn title_bar_ui(
                 if resp.hovered() {
                     painter.rect_filled(rect, egui::CornerRadius::same(3), BUTTON_HOVER_BG);
                 }
-                paint_pause_icon(painter, rect.center());
+                super::icons::paint_pause_icon(painter, rect.center(), 10.0);
             }
 
             // Step button (play triangle + vertical bar).
@@ -278,7 +278,7 @@ pub fn title_bar_ui(
                 if resp.hovered() {
                     painter.rect_filled(rect, egui::CornerRadius::same(3), BUTTON_HOVER_BG);
                 }
-                paint_step_icon(painter, rect.center());
+                super::icons::paint_step_icon(painter, rect.center(), 4.5);
             }
 
             // Handle clicks.
@@ -527,128 +527,6 @@ fn paint_restore_icon(painter: &egui::Painter, resp: &egui::Response, rect: egui
         0.0,
         egui::Stroke::new(1.0, color),
         egui::StrokeKind::Inside,
-    );
-}
-
-fn paint_gear_icon(painter: &egui::Painter, center: egui::Pos2, radius: f32) {
-    let color = egui::Color32::from_rgb(0xCC, 0xCC, 0xCC);
-    let teeth = 6;
-    let inner_r = radius * 0.55;
-    let outer_r = radius;
-    let tooth_width = std::f32::consts::PI / (teeth as f32 * 2.0);
-
-    // Build gear outline as a polygon.
-    let mut points = Vec::new();
-    for i in 0..teeth {
-        let angle = (i as f32 / teeth as f32) * std::f32::consts::TAU;
-
-        // Inner edge leading.
-        let a1 = angle - tooth_width * 1.5;
-        points.push(egui::pos2(
-            center.x + inner_r * a1.cos(),
-            center.y + inner_r * a1.sin(),
-        ));
-        // Outer edge leading.
-        let a2 = angle - tooth_width * 0.7;
-        points.push(egui::pos2(
-            center.x + outer_r * a2.cos(),
-            center.y + outer_r * a2.sin(),
-        ));
-        // Outer edge trailing.
-        let a3 = angle + tooth_width * 0.7;
-        points.push(egui::pos2(
-            center.x + outer_r * a3.cos(),
-            center.y + outer_r * a3.sin(),
-        ));
-        // Inner edge trailing.
-        let a4 = angle + tooth_width * 1.5;
-        points.push(egui::pos2(
-            center.x + inner_r * a4.cos(),
-            center.y + inner_r * a4.sin(),
-        ));
-    }
-
-    painter.add(egui::Shape::convex_polygon(
-        points,
-        color,
-        egui::Stroke::NONE,
-    ));
-
-    // Center hole.
-    let hole_r = radius * 0.25;
-    painter.circle_filled(center, hole_r, BAR_BG);
-}
-
-fn paint_play_triangle(painter: &egui::Painter, center: egui::Pos2) {
-    let half = 6.0;
-    let points = vec![
-        egui::pos2(center.x - half * 0.7, center.y - half),
-        egui::pos2(center.x + half, center.y),
-        egui::pos2(center.x - half * 0.7, center.y + half),
-    ];
-    painter.add(egui::Shape::convex_polygon(
-        points,
-        egui::Color32::from_rgb(0x4E, 0xC9, 0x4E),
-        egui::Stroke::NONE,
-    ));
-}
-
-fn paint_stop_square(painter: &egui::Painter, center: egui::Pos2) {
-    let half = 5.0;
-    let stop_rect = egui::Rect::from_center_size(center, egui::vec2(half * 2.0, half * 2.0));
-    painter.rect_filled(
-        stop_rect,
-        egui::CornerRadius::same(2),
-        egui::Color32::from_rgb(0x3B, 0x9C, 0xE9),
-    );
-}
-
-fn paint_pause_icon(painter: &egui::Painter, center: egui::Pos2) {
-    let bar_w = 3.0;
-    let bar_h = 10.0;
-    let gap = 2.5;
-    let color = BUTTON_ICON_COLOR;
-    // Left bar.
-    painter.rect_filled(
-        egui::Rect::from_center_size(
-            egui::pos2(center.x - gap, center.y),
-            egui::vec2(bar_w, bar_h),
-        ),
-        0.0,
-        color,
-    );
-    // Right bar.
-    painter.rect_filled(
-        egui::Rect::from_center_size(
-            egui::pos2(center.x + gap, center.y),
-            egui::vec2(bar_w, bar_h),
-        ),
-        0.0,
-        color,
-    );
-}
-
-fn paint_step_icon(painter: &egui::Painter, center: egui::Pos2) {
-    let color = BUTTON_ICON_COLOR;
-    // Small play triangle (left half).
-    let half = 4.5;
-    let offset_x = -2.0;
-    let points = vec![
-        egui::pos2(center.x + offset_x - half * 0.6, center.y - half),
-        egui::pos2(center.x + offset_x + half * 0.7, center.y),
-        egui::pos2(center.x + offset_x - half * 0.6, center.y + half),
-    ];
-    painter.add(egui::Shape::convex_polygon(
-        points,
-        color,
-        egui::Stroke::NONE,
-    ));
-    // Vertical bar (right half).
-    let bar_x = center.x + half * 0.7;
-    painter.rect_filled(
-        egui::Rect::from_center_size(egui::pos2(bar_x, center.y), egui::vec2(2.5, half * 2.0)),
-        0.0,
-        color,
     );
 }
 
