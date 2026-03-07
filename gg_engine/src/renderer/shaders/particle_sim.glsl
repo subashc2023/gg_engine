@@ -26,15 +26,18 @@ struct GpuParticle {
 // ---------------------------------------------------------------------------
 // Instance output — must match SpriteInstanceData in Rust (#[repr(C)])
 // ---------------------------------------------------------------------------
+// All fields are float/int (alignment 4) to avoid std430 padding mismatches
+// with the Rust #[repr(C)] layout. Using vec2/vec4 would introduce alignment
+// gaps (vec2 align 8, vec4 align 16) that don't exist in the Rust struct.
 
 struct InstanceData {
-    vec4 transform_col0;
-    vec4 transform_col1;
-    vec4 transform_col2;
-    vec4 transform_col3;
-    vec4 color;
-    vec2 uv_min;
-    vec2 uv_max;
+    float tc0_x, tc0_y, tc0_z, tc0_w;   // transform col 0
+    float tc1_x, tc1_y, tc1_z, tc1_w;   // transform col 1
+    float tc2_x, tc2_y, tc2_z, tc2_w;   // transform col 2
+    float tc3_x, tc3_y, tc3_z, tc3_w;   // transform col 3
+    float cr, cg, cb, ca;                // color
+    float uv_min_x, uv_min_y;           // uv_min
+    float uv_max_x, uv_max_y;           // uv_max
     float tex_index;
     float tiling_factor;
     int entity_id;
@@ -45,10 +48,10 @@ struct InstanceData {
     float anim_frame_count;
     float anim_columns;
     float anim_looping;
-    vec2 anim_cell_size;
-    vec2 anim_tex_size;
+    float anim_cell_w, anim_cell_h;     // anim_cell_size
+    float anim_tex_w, anim_tex_h;       // anim_tex_size
 };
-// total: 144 bytes, struct alignment 16
+// total: 148 bytes (37 floats/ints × 4), struct alignment 4
 
 // ---------------------------------------------------------------------------
 // Descriptor bindings
@@ -119,22 +122,24 @@ void main() {
 
     uint slot = atomicAdd(instanceCount, 1u);
 
-    instances[slot].transform_col0 = vec4( c * size, s * size, 0.0, 0.0);
-    instances[slot].transform_col1 = vec4(-s * size, c * size, 0.0, 0.0);
-    instances[slot].transform_col2 = vec4(0.0, 0.0, 1.0, 0.0);
-    instances[slot].transform_col3 = vec4(p.position.x, p.position.y, z, 1.0);
-    instances[slot].color = color;
-    instances[slot].uv_min = vec2(0.0);
-    instances[slot].uv_max = vec2(1.0);
-    instances[slot].tex_index = 0.0;
-    instances[slot].tiling_factor = 1.0;
-    instances[slot].entity_id = -1;
-    instances[slot].anim_start_time = 0.0;
-    instances[slot].anim_fps = 0.0;
-    instances[slot].anim_start_frame = 0.0;
-    instances[slot].anim_frame_count = 0.0;
-    instances[slot].anim_columns = 0.0;
-    instances[slot].anim_looping = 0.0;
-    instances[slot].anim_cell_size = vec2(0.0);
-    instances[slot].anim_tex_size = vec2(0.0);
+    InstanceData inst;
+    inst.tc0_x =  c * size; inst.tc0_y = s * size; inst.tc0_z = 0.0; inst.tc0_w = 0.0;
+    inst.tc1_x = -s * size; inst.tc1_y = c * size; inst.tc1_z = 0.0; inst.tc1_w = 0.0;
+    inst.tc2_x = 0.0; inst.tc2_y = 0.0; inst.tc2_z = 1.0; inst.tc2_w = 0.0;
+    inst.tc3_x = p.position.x; inst.tc3_y = p.position.y; inst.tc3_z = z; inst.tc3_w = 1.0;
+    inst.cr = color.r; inst.cg = color.g; inst.cb = color.b; inst.ca = color.a;
+    inst.uv_min_x = 0.0; inst.uv_min_y = 0.0;
+    inst.uv_max_x = 1.0; inst.uv_max_y = 1.0;
+    inst.tex_index = 0.0;
+    inst.tiling_factor = 1.0;
+    inst.entity_id = -1;
+    inst.anim_start_time = 0.0;
+    inst.anim_fps = 0.0;
+    inst.anim_start_frame = 0.0;
+    inst.anim_frame_count = 0.0;
+    inst.anim_columns = 0.0;
+    inst.anim_looping = 0.0;
+    inst.anim_cell_w = 0.0; inst.anim_cell_h = 0.0;
+    inst.anim_tex_w = 0.0; inst.anim_tex_h = 0.0;
+    instances[slot] = inst;
 }

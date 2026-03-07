@@ -168,7 +168,7 @@ pub(super) struct SpriteInstanceData {
     pub anim_cell_size: [f32; 2],
     pub anim_tex_size: [f32; 2],
 }
-// Size: 4×16 + 16 + 8 + 8 + 4 + 4 + 4 + 4×6 + 8 + 8 = 144 bytes
+// Size: 4×16 + 16 + 8 + 8 + 4 + 4 + 4 + 4×6 + 8 + 8 = 148 bytes
 
 /// Buffer layout for per-instance data (binding 1, per-instance).
 fn sprite_instance_layout() -> BufferLayout {

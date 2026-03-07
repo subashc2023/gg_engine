@@ -239,6 +239,45 @@ Search field below the mode toggle filters entries by name (case-insensitive sub
 - Lists all `.ggscene` files in the project assets directory
 - Click a scene to load it
 
+### Game Viewport
+
+**File:** `gg_editor/src/panels/game_viewport.rs`
+
+- Simplified viewport showing the game camera's framebuffer (no editor tools)
+- DPI-aware sizing
+- Shows "No camera available" if no primary camera or framebuffer is None
+- Hover state tracking for input routing
+- Enabled/disabled via View menu → Game Viewport toggle
+- Framebuffer created lazily on first enable (`create_game_fb` flag)
+
+### Console
+
+**File:** `gg_editor/src/panels/console.rs`
+
+- Runtime log viewer displaying engine and application log messages
+- **Level filtering**: buttons for Error, Warn, Info, Debug, Trace (toggle independently)
+- **Auto-scroll** toggle (scrolls to bottom on new messages)
+- **Clear** button to flush the log buffer
+- Color-coded entries: red (error), yellow (warn), green (info), blue (debug), gray (trace)
+- Efficient virtual scrolling via `show_rows()` for large log buffers
+
+### Animation Timeline
+
+**File:** `gg_editor/src/panels/animation_timeline.rs`
+
+Full animation clip editor for `SpriteAnimatorComponent` entities:
+
+- **Split layout**: left = sprite sheet grid preview, right = timeline
+- **Sprite sheet grid**: visual grid of frames from the sprite sheet texture; click to select frame for pick mode
+- **Timeline**: frame ruler with grid lines, zoom (8x–64x pixels per frame), horizontal scroll
+- **Playhead**: red vertical line, draggable for scrubbing
+- **Clip bars**: blue rectangles on the timeline, draggable (body, start edge, end edge)
+- **Toolbar**: Play/Pause/Stop buttons, FPS control, looping toggle
+- **Pick mode**: click "Set Start" or "Set End", then click a frame in the sprite sheet grid to set clip boundaries
+- **State tracking**: per-entity state (selected clip, zoom, scroll, playhead position) reset when switching entities
+
+Thread-local state: `SELECTED_CLIP`, `ZOOM`, `SCROLL_X`, `TRACKED_ENTITY`, `ACTIVE_DRAG`, `HOVERED_FRAME`, `PICK_MODE`
+
 ## File Operations
 
 ### Menu Bar
@@ -268,6 +307,7 @@ Built with `egui::TopBottomPanel::top` + `egui::MenuBar::new().ui()`.
 #### View Menu
 
 - **Show Physics Colliders** -- toggle collider visualization overlay
+- **Game Viewport** -- toggle the game camera preview panel
 - **Reset Layout** -- restore the default dock panel layout
 
 #### Script Menu

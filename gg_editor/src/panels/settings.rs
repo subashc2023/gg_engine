@@ -11,8 +11,7 @@ pub(crate) fn settings_ui(
     frame_time_ms: f32,
     render_stats: Renderer2DStats,
     vsync: &mut bool,
-    show_physics_colliders: &mut bool,
-    hovered_entity: i32,
+    _hovered_entity: i32,
     show_grid: &mut bool,
     snap_to_grid: &mut bool,
     grid_size: &mut f32,
@@ -43,6 +42,9 @@ pub(crate) fn settings_ui(
         ));
     }
 
+    let entity_count = scene.each_entity_with_tag().len();
+    ui.label(format!("Scene Entities: {}", entity_count));
+
     ui.add_space(8.0);
     ui.checkbox(vsync, "VSync");
 
@@ -69,12 +71,6 @@ pub(crate) fn settings_ui(
         });
 
     ui.add_space(8.0);
-    ui.heading("Debug");
-    ui.separator();
-
-    ui.checkbox(show_physics_colliders, "Show Physics Colliders");
-
-    ui.add_space(8.0);
     ui.heading("Grid");
     ui.separator();
 
@@ -89,29 +85,23 @@ pub(crate) fn settings_ui(
             }
         });
 
-    ui.add_space(8.0);
-    ui.heading("Scene");
-    ui.separator();
-
-    let entity_count = scene.each_entity_with_tag().len();
-    ui.label(format!("Entities: {}", entity_count));
-
-    ui.add_space(8.0);
-    ui.heading("Mouse Picking");
-    ui.separator();
-    let hovered_name = if hovered_entity >= 0 {
-        scene
-            .find_entity_by_id(hovered_entity as u32)
-            .and_then(|e| {
-                scene
-                    .get_component::<TagComponent>(e)
-                    .map(|tag| tag.tag.clone())
-            })
-            .unwrap_or_else(|| format!("Entity({})", hovered_entity))
-    } else {
-        "None".to_string()
-    };
-    ui.label(format!("Hovered Entity: {}", hovered_name));
+    // Mouse picking debug (kept for future use)
+    // ui.add_space(8.0);
+    // ui.heading("Mouse Picking");
+    // ui.separator();
+    // let hovered_name = if _hovered_entity >= 0 {
+    //     scene
+    //         .find_entity_by_id(_hovered_entity as u32)
+    //         .and_then(|e| {
+    //             scene
+    //                 .get_component::<TagComponent>(e)
+    //                 .map(|tag| tag.tag.clone())
+    //         })
+    //         .unwrap_or_else(|| format!("Entity({})", _hovered_entity))
+    // } else {
+    //     "None".to_string()
+    // };
+    // ui.label(format!("Hovered Entity: {}", hovered_name));
 
     ui.add_space(8.0);
     ui.heading("Profiling");

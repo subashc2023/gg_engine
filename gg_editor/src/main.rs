@@ -1136,7 +1136,6 @@ impl Application for GGEditor {
                 vsync: &mut self.editor_settings.vsync,
                 frame_time_ms: self.frame_time_ms,
                 render_stats: self.render_stats,
-                show_physics_colliders: &mut self.editor_settings.show_physics_colliders,
                 show_grid: &mut self.editor_settings.show_grid,
                 snap_to_grid: &mut self.editor_settings.snap_to_grid,
                 grid_size: &mut self.editor_settings.grid_size,

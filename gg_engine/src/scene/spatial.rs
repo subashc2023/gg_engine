@@ -166,6 +166,51 @@ impl Frustum2D {
         }
         true
     }
+
+    /// Compute the AABB of the visible region defined by the 4 half-planes.
+    ///
+    /// Finds the vertices of the convex quadrilateral formed by intersecting
+    /// adjacent frustum plane boundaries (left∩bottom, right∩bottom, right∩top,
+    /// left∩top) using 2×2 linear solves. Returns `None` if the planes are
+    /// degenerate (e.g. parallel).
+    ///
+    /// This is robust for any camera orientation — no perspective division,
+    /// no ray-plane intersection that can degenerate for tilted cameras.
+    pub fn visible_aabb(&self) -> Option<Aabb2D> {
+        let [left, right, bottom, top] = self.planes;
+        // Intersect adjacent plane boundaries to find frustum quad vertices.
+        let pairs = [
+            (left, bottom),
+            (right, bottom),
+            (right, top),
+            (left, top),
+        ];
+
+        let mut min = glam::Vec2::splat(f32::INFINITY);
+        let mut max = glam::Vec2::splat(f32::NEG_INFINITY);
+        let mut valid_count = 0u32;
+
+        for &((a1, b1, d1), (a2, b2, d2)) in &pairs {
+            let det = a1 * b2 - a2 * b1;
+            if det.abs() < 1e-10 {
+                continue;
+            }
+            let x = (b1 * d2 - b2 * d1) / det;
+            let y = (a2 * d1 - a1 * d2) / det;
+            let p = glam::Vec2::new(x, y);
+            if p.is_finite() {
+                min = min.min(p);
+                max = max.max(p);
+                valid_count += 1;
+            }
+        }
+
+        if valid_count >= 2 {
+            Some(Aabb2D::new(min, max))
+        } else {
+            None
+        }
+    }
 }
 
 /// Uniform spatial grid for efficient 2D region queries.
@@ -581,5 +626,39 @@ mod tests {
         // Entity far to the side should be culled.
         let far_side = Aabb2D::new(glam::Vec2::new(100.0, 0.0), glam::Vec2::new(101.0, 1.0));
         assert!(!frustum.contains_aabb(&far_side));
+    }
+
+    // --- Frustum2D::visible_aabb tests ---
+
+    #[test]
+    fn frustum2d_visible_aabb_orthographic() {
+        // Orthographic VP: world [-10,10] x [-5,5] with Vulkan Y-flip.
+        let mut proj = glam::Mat4::orthographic_lh(-10.0, 10.0, -5.0, 5.0, -1.0, 1.0);
+        proj.y_axis.y *= -1.0;
+        let frustum = Frustum2D::from_view_projection(&proj);
+        let aabb = frustum.visible_aabb().expect("should produce valid AABB");
+        assert!((aabb.min.x - (-10.0)).abs() < 0.1, "min.x={}", aabb.min.x);
+        assert!((aabb.max.x - 10.0).abs() < 0.1, "max.x={}", aabb.max.x);
+        assert!((aabb.min.y - (-5.0)).abs() < 0.1, "min.y={}", aabb.min.y);
+        assert!((aabb.max.y - 5.0).abs() < 0.1, "max.y={}", aabb.max.y);
+    }
+
+    #[test]
+    fn frustum2d_visible_aabb_perspective_tilted() {
+        // Tilted perspective camera — should NOT degenerate.
+        let mut proj =
+            glam::Mat4::perspective_lh(std::f32::consts::FRAC_PI_4, 16.0 / 9.0, 0.01, 1000.0);
+        proj.y_axis.y *= -1.0;
+        let view = glam::Mat4::look_at_lh(
+            glam::Vec3::new(0.0, 10.0, 10.0),
+            glam::Vec3::ZERO,
+            glam::Vec3::Y,
+        );
+        let vp = proj * view;
+        let frustum = Frustum2D::from_view_projection(&vp);
+        let aabb = frustum.visible_aabb().expect("should produce valid AABB");
+        // The origin (camera target) should be inside the visible AABB.
+        assert!(aabb.contains_point(glam::Vec2::ZERO), "origin should be visible, aabb={:?}", aabb);
+        assert!(aabb.is_valid());
     }
 }

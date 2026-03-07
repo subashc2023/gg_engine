@@ -131,15 +131,6 @@ impl GGEditor {
             {
                 ui.close();
             }
-            if ui
-                .checkbox(
-                    &mut self.editor_settings.show_physics_colliders,
-                    "Show Physics Colliders",
-                )
-                .clicked()
-            {
-                ui.close();
-            }
             ui.separator();
             let mut game_vp = self.viewport.game_viewport_enabled;
             if ui.checkbox(&mut game_vp, "Game Viewport").clicked() {

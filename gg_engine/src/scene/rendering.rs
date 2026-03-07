@@ -539,7 +539,6 @@ impl Scene {
         // Extract frustum half-planes for entity-level frustum culling.
         let vp = renderer.view_projection();
         let frustum = super::spatial::Frustum2D::from_view_projection(&vp);
-        let vp_inv = vp.inverse();
 
         // Collect all renderable entities with sort keys.
         // Sprites and circles are frustum-culled via AABB overlap test.
@@ -830,28 +829,21 @@ impl Scene {
                     let step_y = cell_h + tilemap.spacing.y;
 
                     // --- Frustum culling: visible tile range ---
-                    let ndc_to_local = world_transform.inverse() * vp_inv;
-                    let mut local_min = glam::Vec2::splat(f32::INFINITY);
-                    let mut local_max = glam::Vec2::splat(f32::NEG_INFINITY);
-                    for ndc in [
-                        glam::Vec3::new(-1.0, -1.0, 0.0),
-                        glam::Vec3::new(1.0, -1.0, 0.0),
-                        glam::Vec3::new(1.0, 1.0, 0.0),
-                        glam::Vec3::new(-1.0, 1.0, 0.0),
-                    ] {
-                        let p = ndc_to_local.project_point3(ndc);
-                        local_min = local_min.min(p.truncate());
-                        local_max = local_max.max(p.truncate());
-                    }
+                    // Use Frustum2D in tilemap local space to find visible tile
+                    // range. This avoids the degenerate NDC unprojection that
+                    // breaks for tilted/perspective cameras.
+                    let local_vp = vp * world_transform;
+                    let local_frustum =
+                        super::spatial::Frustum2D::from_view_projection(&local_vp);
                     let w = tilemap.width as f32;
                     let h = tilemap.height as f32;
                     let (min_col, max_col, min_row, max_row) =
-                        if local_min.is_finite() && local_max.is_finite() {
+                        if let Some(aabb) = local_frustum.visible_aabb() {
                             (
-                                ((local_min.x / tile_size.x).floor() - 1.0).clamp(0.0, w) as u32,
-                                ((local_max.x / tile_size.x).ceil() + 1.0).clamp(0.0, w) as u32,
-                                ((local_min.y / tile_size.y).floor() - 1.0).clamp(0.0, h) as u32,
-                                ((local_max.y / tile_size.y).ceil() + 1.0).clamp(0.0, h) as u32,
+                                ((aabb.min.x / tile_size.x).floor() - 1.0).clamp(0.0, w) as u32,
+                                ((aabb.max.x / tile_size.x).ceil() + 1.0).clamp(0.0, w) as u32,
+                                ((aabb.min.y / tile_size.y).floor() - 1.0).clamp(0.0, h) as u32,
+                                ((aabb.max.y / tile_size.y).ceil() + 1.0).clamp(0.0, h) as u32,
                             )
                         } else {
                             // Degenerate transform — render all tiles.

@@ -33,6 +33,9 @@ Wraps rapier2d pipeline components:
 struct RigidBody2DComponent {
     pub body_type: RigidBody2DType,
     pub fixed_rotation: bool,
+    pub linear_damping: f32,       // default 0.0
+    pub angular_damping: f32,      // default 0.0
+    pub gravity_scale: f32,        // default 1.0
     pub runtime_body: Option<RigidBodyHandle>,
 }
 ```
@@ -273,6 +276,19 @@ Both modes share `on_physics_2d_start()` / `on_physics_2d_stop()` for the physic
 - **Reset** to `None` during `on_physics_2d_stop()` or when cloned (manual `Clone` impl)
 
 This separation ensures physics state is purely runtime and doesn't leak into serialized scene data or scene copies.
+
+## Collision Layers and Masks
+
+Both `BoxCollider2DComponent` and `CircleCollider2DComponent` support collision filtering via bitmasks:
+
+| Field | Default | Description |
+|-------|---------|-------------|
+| `collision_layer` | `0x0001` | Which group(s) this collider belongs to |
+| `collision_mask` | `0xFFFF` | Which group(s) this collider can collide with |
+
+These are mapped to rapier `InteractionGroups(layer, mask)`. Two colliders collide only when `(a.layer & b.mask) != 0 && (b.layer & a.mask) != 0`.
+
+When `friction == 0.0` on either collider, the Min combine rule is used (zero wins against any surface).
 
 ## Active Events
 

@@ -2,7 +2,7 @@
 
 **File:** `scene/scene_serializer.rs`
 
-YAML-based scene persistence using `serde` + `serde_yml`. File extension: `.ggscene`.
+YAML-based scene persistence using `serde` + `serde_yaml_ng`. File extension: `.ggscene`.
 
 ## Design
 
@@ -214,7 +214,7 @@ YAML file
     |  fs::read_to_string()
     v
 YAML string
-    |  serde_yml::from_str()
+    |  serde_yaml_ng::from_str()
     v
 SceneData (intermediate structs)
     |  data_to_scene()

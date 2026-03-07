@@ -24,6 +24,7 @@ pub type AssetHandle = Uuid;  // 0 = null/no asset
 | `Scene` | `.ggscene` | Scene file |
 | `Texture2D` | `.png`, `.jpg`, `.jpeg` | Image texture |
 | `Audio` | `.wav`, `.ogg`, `.mp3`, `.flac` | Audio file |
+| `Prefab` | `.ggprefab` | Entity template (prefab) |
 
 Type detection is case-insensitive (`asset_type_from_extension`). Round-trip conversion via `as_str()` / `parse_str()`.
 

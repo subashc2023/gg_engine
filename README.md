@@ -1,47 +1,76 @@
 # GGEngine
 
-A 2D game engine written in Rust, built on Vulkan. Create scenes in the editor, script gameplay in Lua, and ship standalone builds with the player runtime.
+A 2D game engine written in Rust with a Vulkan rendering backend. Build scenes in a visual editor, script gameplay in Lua, and ship standalone builds.
 
-~22,600 lines of Rust across 5 crates. Early stage (v0.1.0).
+![GGEngine Editor](gg_docs/public/editor.png)
 
-## What You Get
+---
 
-- **Visual Scene Editor** — Dockable panels (viewport, hierarchy, properties, content browser), transform gizmos, mouse picking, undo/redo, auto-save & recovery
-- **Entity Component System** — Built on hecs with parent-child hierarchies, sprites, circles (SDF), text (MSDF), tilemaps, cameras, audio sources
-- **2D Physics** — rapier2d integration with rigid bodies, box/circle colliders, collision events, fixed-timestep simulation with interpolation
-- **Lua Scripting** — LuaJIT via mlua with per-entity isolated environments, hot reload, configurable script fields exposed in the editor, collision callbacks
-- **Batch Renderer** — Vulkan backend with bindless textures (4096 max), batched quads/circles/lines/text, dual-pass rendering (offscreen scene + egui overlay)
-- **MSDF Text** — Pure-Rust multi-channel signed distance field text rendering, no C dependencies
-- **Sprite Animation** — Sprite sheet animator with named clips, configurable FPS, looping
-- **Tilemap System** — Grid-based tile maps with visual palette painting in the editor, flip flags, Lua API
-- **Audio** — kira-based playback (WAV, OGG, MP3, FLAC) with per-entity sources, play-on-start, volume/pitch/looping control from Lua
-- **Asset System** — UUID-based handles, persistent YAML registry, async background loading, LRU texture cache
-- **Project System** — `.ggproject` files organize assets/scenes/scripts; project hub with recent projects and creation wizard
-- **Standalone Player** — Minimal runtime that loads a project and runs the game without editor overhead
-- **Profiling** — Chrome Tracing JSON output, analyzable with the included CLI tool or `chrome://tracing`
+## Features
+
+**Visual Scene Editor** with dockable panels, transform gizmos, tilemap painting, mouse picking, undo/redo, and auto-save recovery.
+
+**Entity Component System** built on [hecs](https://crates.io/crates/hecs) with parent-child hierarchies, sprites, circles (SDF), MSDF text, tilemaps, cameras, and audio sources.
+
+**Lua Scripting** via LuaJIT with per-entity isolated environments, hot reload on save, configurable fields exposed in the editor, collision callbacks, and timers.
+
+**2D Physics** powered by [rapier2d](https://rapier.rs/) with rigid bodies, box/circle colliders, collision layers, fixed-timestep simulation, and interpolation.
+
+**Vulkan Renderer** with bindless textures (4096 slots), batched quads/circles/lines/text, GPU particle system (compute shader), instanced sprite rendering with GPU-driven animation, and runtime shader hot-reload.
+
+**Sprite Animation** with named clips, sprite sheet editor timeline, per-entity CPU animation, GPU-driven instanced animation, and data-driven animation state machines.
+
+**Audio** via [kira](https://docs.rs/kira) supporting WAV/OGG/MP3/FLAC with volume, pitch, looping, streaming playback, and spatial audio with camera-relative panning.
+
+**Asset System** with UUID-based handles, a persistent YAML registry, async background loading, and LRU texture caching.
+
+**Multi-threaded Jobs** using rayon with an Extract-Process-Writeback pattern for parallel transform computation, animation ticking, and frustum culling.
+
+---
 
 ## Prerequisites
 
-- **Rust** — Install via [rustup](https://www.rust-lang.org/tools/install)
-- **Vulkan SDK** — Install from [LunarG](https://vulkan.lunarg.com/). `glslc` must be on your `PATH` (shaders compile at build time)
+- **Rust** -- Install via [rustup](https://www.rust-lang.org/tools/install)
+- **Vulkan SDK** -- Install from [LunarG](https://vulkan.lunarg.com/). Ensure `glslc` is on your `PATH` (shaders compile at build time)
 
 ## Quick Start
 
 ```sh
-# Clone and build
 git clone <repo-url> && cd GGEngine
 cargo build
-
-# Run the editor
 cargo run -p gg_editor
+```
 
-# Open an existing project
+On first launch, the editor opens a **Project Hub** where you can create a new project or open an existing one.
+
+```sh
+# Open an existing project directly
 cargo run -p gg_editor -- path/to/MyGame.ggproject
 ```
 
-On first launch, the editor opens a **Project Hub** where you can create a new project or open an existing one. Projects organize your assets, scenes, and scripts into a self-contained directory.
+## Building
 
-## Editor at a Glance
+```sh
+cargo build                    # Development (debug + Vulkan validation layers)
+cargo build --release          # Release (optimized, profiling enabled)
+
+# Distribution (optimized, profiling stripped, Lua scripting kept)
+cargo build --profile dist --no-default-features --features lua-scripting
+```
+
+## Testing
+
+```sh
+cargo test                          # All tests
+cargo test -p gg_engine             # Engine crate only
+cargo test -p gg_engine -- test_fn  # Single test
+cargo fmt                           # Format
+cargo clippy --all-targets          # Lint
+```
+
+---
+
+## The Editor
 
 ```
 +----------+--------------+------------------+
@@ -53,18 +82,43 @@ On first launch, the editor opens a **Project Hub** where you can create a new p
 +-------------------------+------------------+
 ```
 
-- **Viewport** — Scene view with transform gizmos (Q/W/E/R), grid, mouse picking
-- **Scene Hierarchy** — Entity tree with drag-and-drop reparenting, search
-- **Properties** — Component inspector with add/remove, color pickers, asset drag-and-drop
-- **Content Browser** — File and asset browser with import, rename, delete, drag-and-drop
-- **Settings** — Renderer stats, VSync, physics collider viz, grid settings
-- **Project** — Scene list, project info
+| Panel | What it does |
+|-------|-------------|
+| **Viewport** | Scene view with transform gizmos, grid, mouse picking, tilemap painting |
+| **Scene Hierarchy** | Entity tree with drag-and-drop reparenting and search |
+| **Properties** | Component inspector -- sprites, physics, audio, scripting, animation, tilemaps |
+| **Content Browser** | File/asset browser with import, drag-and-drop, and right-click menus |
+| **Settings** | Renderer stats, VSync, physics collider viz, grid, shader reload, theme |
+| **Animation Timeline** | Sprite sheet clip editor with frame ruler, playhead, and pick mode |
+| **Game Viewport** | Game camera preview (no gizmos or picking) |
+| **Console** | Color-coded log viewer with level filtering |
+| **Project** | Scene list browser |
 
-**Key shortcuts:** Ctrl+N (new scene), Ctrl+O (open), Ctrl+S (save), Ctrl+Z/Y (undo/redo), Ctrl+D (duplicate), Del (delete), Play/Stop/Simulate via toolbar
+### Keyboard Shortcuts
+
+| Action | Shortcut |
+|--------|----------|
+| New Scene | Ctrl+N |
+| Open Scene | Ctrl+O |
+| Save | Ctrl+S |
+| Save As | Ctrl+Shift+S |
+| Undo / Redo | Ctrl+Z / Ctrl+Y |
+| Duplicate | Ctrl+D |
+| Delete | Del |
+| Gizmo: None / Translate / Rotate / Scale | Q / W / E / R |
+| Snap (while using gizmo) | Hold Ctrl |
+| Reload Lua Scripts | Ctrl+R |
+| Toggle Eraser (tilemap) | X |
+
+### Play Mode
+
+Press the **Play** button to test your game. The editor snapshots the scene, initializes physics and Lua scripts, and runs the game loop. Press **Stop** to revert to your saved state. **Simulate** runs physics only (no scripts) with the editor camera still active.
+
+---
 
 ## Lua Scripting
 
-Attach `.lua` scripts to entities. Scripts run in isolated per-entity environments with access to the `Engine` API:
+Attach `.lua` scripts to entities. Each script runs in an isolated environment with access to the `Engine` API.
 
 ```lua
 fields = {
@@ -95,38 +149,31 @@ function on_collision_enter(other_uuid)
 end
 ```
 
-The `fields` table is editable per-entity in the Properties panel — override values without changing code. Scripts hot-reload on save during play mode.
+The `fields` table is editable per-entity in the Properties panel -- override values without changing code. Scripts hot-reload on save during play mode.
 
-**Engine API covers:** transforms, input (keyboard + mouse), physics (impulse/force/velocity), entity queries, hierarchy, audio, animation, tilemaps, math utilities, cross-entity field access.
+### Engine API Overview
 
-## Building & Running
+| Category | Functions |
+|----------|-----------|
+| **Transform** | `get_translation`, `set_translation`, `get_rotation`, `set_rotation`, `get_scale`, `set_scale` |
+| **Input** | `is_key_down`, `is_key_pressed`, `is_mouse_button_down`, `is_mouse_button_pressed`, `get_mouse_position` |
+| **Physics** | `apply_impulse`, `apply_force`, `get_linear_velocity`, `set_linear_velocity`, `get_angular_velocity`, `set_angular_velocity` |
+| **Entity** | `create_entity`, `destroy_entity`, `find_entity_by_name`, `get_entity_name`, `has_component` |
+| **Hierarchy** | `set_parent`, `detach_from_parent`, `get_parent`, `get_children` |
+| **Animation** | `play_animation`, `stop_animation`, `is_animation_playing`, `set_animation_speed` |
+| **Audio** | `play_sound`, `stop_sound`, `set_volume`, `set_panning` |
+| **Tilemap** | `set_tile`, `get_tile`, `TILE_FLIP_H`, `TILE_FLIP_V` |
+| **Timers** | `set_timeout`, `set_interval`, `clear_timer` |
+| **Math** | `vector_dot`, `vector_cross`, `vector_normalize` |
+| **Cross-Entity** | `get_script_field`, `set_script_field` |
 
-```sh
-# Development (debug + Vulkan validation layers)
-cargo build
-cargo run -p gg_editor
+See [`gg_docs/07-scripting.md`](gg_docs/07-scripting.md) for the complete API reference with signatures and key name tables.
 
-# Release (optimized, profiling still on)
-cargo build --release
-
-# Distribution (optimized, profiling stripped)
-cargo build --profile dist --no-default-features --features lua-scripting
-
-# Run the standalone player
-cargo run -p gg_player -- MyGame.ggproject
-
-# Run tests
-cargo test                          # all
-cargo test -p gg_engine             # engine only
-cargo test -p gg_engine -- test_fn  # single test
-
-# Analyze a runtime profile
-cargo run -p gg_tools               # auto-detects profile JSON
-```
+---
 
 ## Shipping a Game
 
-Build the player with the `dist` profile and bundle it alongside your project:
+Build the standalone player and bundle it alongside your project:
 
 ```sh
 cargo build --profile dist -p gg_player --no-default-features --features lua-scripting
@@ -146,15 +193,83 @@ dist/
 
 The player auto-detects `.ggproject` files next to the executable, or accepts a path as a CLI argument. Press `V` at runtime to toggle VSync.
 
+```sh
+# Run with options
+gg_player.exe MyGame.ggproject --width 1920 --height 1080 --vsync
+```
+
+---
+
 ## Workspace
 
-| Crate | Type | Description |
-|-------|------|-------------|
-| `gg_engine` | lib | Core engine — Vulkan renderer, ECS, physics, scripting, audio, assets, text, UI |
-| `gg_editor` | bin | Scene editor with dockable panels, gizmos, content browser |
-| `gg_player` | bin | Standalone game runtime (loads `.ggproject`, runs start scene) |
-| `gg_sandbox` | bin | Sandbox for testing engine features directly |
-| `gg_tools` | bin | CLI for analyzing Chrome Tracing JSON profiles |
+| Crate | Type | Lines | Description |
+|-------|------|-------|-------------|
+| `gg_engine` | lib | ~28,300 | Core engine -- Vulkan renderer, ECS, physics, scripting, audio, assets, jobs |
+| `gg_editor` | bin | ~12,100 | Scene editor -- dockable panels, gizmos, content browser, animation timeline |
+| `gg_player` | bin | ~350 | Standalone game runtime -- loads `.ggproject`, runs start scene |
+| `gg_sandbox` | bin | ~630 | Testing sandbox for engine features and jobs stress tests |
+| `gg_tools` | bin | ~460 | CLI for analyzing Chrome Tracing JSON profiles (+ flame graph SVG) |
+
+### Project Structure
+
+```
+GGEngine/
+├── gg_engine/src/
+│   ├── renderer/          # Vulkan rendering (context, swapchain, batching, textures, cameras, text, particles)
+│   │   └── shaders/       # GLSL sources (auto-compiled to SPIR-V)
+│   ├── scene/             # ECS, components, physics, audio, Lua scripting, animation, hierarchy
+│   ├── asset/             # UUID-based asset system (registry, manager, async loader)
+│   └── jobs/              # Multi-threaded job system (thread pool, parallel helpers, command buffer)
+├── gg_editor/src/
+│   ├── panels/            # Editor UI panels (viewport, hierarchy, properties, content browser, etc.)
+│   │   └── properties/    # Component inspectors (sprite, physics, audio, scripting, tilemap, etc.)
+│   └── ...                # Hub, file ops, undo, gizmos, playback, camera, settings
+├── gg_player/src/         # Standalone game runtime
+├── gg_sandbox/src/        # Testing sandbox
+├── gg_tools/src/          # Profile analyzer
+└── gg_docs/               # Full documentation (12 topic files)
+```
+
+---
+
+## Documentation
+
+The [`gg_docs/`](gg_docs/) directory contains detailed documentation for every subsystem:
+
+| Document | Covers |
+|----------|--------|
+| [`01-build-and-tools.md`](gg_docs/01-build-and-tools.md) | Build profiles, dependencies, profiling, shader compilation |
+| [`02-ecs.md`](gg_docs/02-ecs.md) | Scene, entities, components, hierarchy, queries |
+| [`03-editor.md`](gg_docs/03-editor.md) | Editor panels, undo, auto-save, play/stop, gizmos, tilemap painting |
+| [`04-engine-core.md`](gg_docs/04-engine-core.md) | Application trait, lifecycle, layers, input, events, egui integration |
+| [`05-physics.md`](gg_docs/05-physics.md) | rapier2d integration, fixed timestep, collisions, collision layers |
+| [`06-rendering.md`](gg_docs/06-rendering.md) | Vulkan renderer, batching, bindless textures, MSDF text, GPU particles |
+| [`07-scripting.md`](gg_docs/07-scripting.md) | Lua API reference, script lifecycle, field overrides, error handling |
+| [`08-serialization.md`](gg_docs/08-serialization.md) | YAML scene format, intermediate structs, UUID system |
+| [`09-assets.md`](gg_docs/09-assets.md) | Asset handles, registry, async loading, LRU cache |
+| [`10-audio.md`](gg_docs/10-audio.md) | kira integration, spatial audio, streaming, Lua audio API |
+| [`11-player-and-project.md`](gg_docs/11-player-and-project.md) | Project system, .ggproject format, standalone player |
+| [`12-jobs-system.md`](gg_docs/12-jobs-system.md) | Multi-threaded ECS, EPW pattern, parallelized systems |
+
+---
+
+## Profiling
+
+The engine includes a built-in Chrome Tracing profiler (feature-gated, on by default).
+
+1. Open the editor and go to **Settings > Capture Trace**
+2. Interact with your scene for a few seconds
+3. Click **Stop Capture**
+4. Analyze with the included CLI tool:
+
+```sh
+cargo run -p gg_tools -- target/debug/gg_profile_runtime.json
+cargo run -p gg_tools -- --flamegraph target/debug/gg_profile_runtime.json  # SVG flame graph
+```
+
+Or open the JSON directly in `chrome://tracing` or `edge://tracing`.
+
+---
 
 ## Debugging (VS Code)
 
@@ -164,7 +279,7 @@ The player auto-detects `.ggproject` files next to the executable, or accepts a 
 
 ## Platform
 
-Primary target is **Windows 11** with an RTX GPU / Vulkan 1.3+. macOS is conditionally supported.
+Primary target is **Windows 11** with a Vulkan 1.3+ GPU. macOS is conditionally supported.
 
 ## License
 

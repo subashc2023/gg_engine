@@ -210,6 +210,22 @@ These functions access entity environments directly from the Lua-side registry t
 | `play_animation` | `(entity_id, clip_name)` | `bool` | Requires `SpriteAnimatorComponent`. Returns `true` if clip found |
 | `stop_animation` | `(entity_id)` | — | Stops the currently playing animation |
 | `is_animation_playing` | `(entity_id)` | `bool` | Returns `true` if an animation is currently playing |
+| `get_current_animation` | `(entity_id)` | `string` or `nil` | Current clip name |
+| `get_animation_frame` | `(entity_id)` | `u32` | Current frame index |
+| `set_animation_speed` | `(entity_id, speed)` | — | Set `speed_scale` (1.0 = normal) |
+| `play_instanced_animation` | `(entity_id, clip_name)` | `bool` | GPU-driven animation via `InstancedSpriteAnimator` |
+| `stop_instanced_animation` | `(entity_id)` | — | Stop instanced animation |
+| `get_instanced_animation` | `(entity_id)` | `string` or `nil` | Current instanced clip name |
+| `set_anim_param` | `(entity_id, name, value)` | — | Set animation controller parameter (auto-detects bool/float) |
+| `get_anim_param` | `(entity_id, name)` | value or `nil` | Get animation controller parameter |
+
+### Timers
+
+| Function | Signature | Returns | Notes |
+|----------|-----------|---------|-------|
+| `set_timeout` | `(ms, callback)` | `timer_id` (integer) | One-shot timer, fires `callback()` after `ms` milliseconds |
+| `set_interval` | `(ms, callback)` | `timer_id` (integer) | Repeating timer, fires `callback()` every `ms` milliseconds |
+| `clear_timer` | `(timer_id)` | — | Cancel a timer by ID |
 
 ### Audio
 

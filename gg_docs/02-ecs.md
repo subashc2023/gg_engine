@@ -235,12 +235,17 @@ struct SpriteRendererComponent {
     pub texture_handle: Uuid,              // Asset handle (0 = none)
     pub texture: Option<Ref<Texture2D>>,   // Runtime GPU texture (not serialized)
     pub tiling_factor: f32,
+    pub sorting_layer: i32,                // Render ordering: higher layers draw on top
+    pub order_in_layer: i32,               // Ordering within a sorting layer
+    pub atlas_min: Option<Vec2>,           // Optional atlas sub-region UV min
+    pub atlas_max: Option<Vec2>,           // Optional atlas sub-region UV max
 }
 ```
 
-- `new(color)`, `from_rgb(r, g, b)`, `Default` (white, tiling_factor 1.0)
+- `new(color)`, `from_rgb(r, g, b)`, `Default` (white, tiling_factor 1.0, sorting_layer 0, order_in_layer 0)
 - Clone via `Arc` sharing for textures
 - `texture_handle` links to the asset registry; resolved to `texture` at runtime via `Scene::resolve_texture_handles()`
+- `sorting_layer` and `order_in_layer` control render order (sorted before draw calls)
 
 ### CircleRendererComponent
 
@@ -355,6 +360,10 @@ struct SpriteAnimatorComponent {
     pub columns: u32,
     /// Animation clips defined for this sprite sheet.
     pub clips: Vec<AnimationClip>,
+    /// Default clip index to play when a non-looping clip finishes.
+    pub default_clip: Option<usize>,
+    /// Playback speed multiplier (1.0 = normal, 0.5 = half, 2.0 = double).
+    pub speed_scale: f32,
 
     // Runtime state (managed internally):
     // current_clip_index: Option<usize>
@@ -410,6 +419,9 @@ Default: `fps` 12.0, `looping` true.
 struct RigidBody2DComponent {
     pub body_type: RigidBody2DType,  // Static, Dynamic, Kinematic
     pub fixed_rotation: bool,
+    pub linear_damping: f32,         // Velocity damping (default: 0.0)
+    pub angular_damping: f32,        // Rotation damping (default: 0.0)
+    pub gravity_scale: f32,          // Gravity multiplier (default: 1.0)
     // (runtime-only) runtime_body: Option<RigidBodyHandle> — not serialized
 }
 ```
@@ -429,11 +441,13 @@ struct BoxCollider2DComponent {
     pub density: f32,         // Default: 1.0
     pub friction: f32,        // Default: 0.5
     pub restitution: f32,     // Default: 0.0
+    pub collision_layer: u32, // Collision group membership (bitmask, default: 0x0001)
+    pub collision_mask: u32,  // Which groups to collide with (bitmask, default: 0xFFFF)
     // (runtime-only) runtime_fixture: Option<ColliderHandle> — not serialized
 }
 ```
 
-2D box collider. Requires a `RigidBody2DComponent` on the same entity. Half-extents are scaled by the entity's transform scale.
+2D box collider. Requires a `RigidBody2DComponent` on the same entity. Half-extents are scaled by the entity's transform scale. `collision_layer` and `collision_mask` map to rapier `InteractionGroups` for filtering.
 
 Manual `Clone` resets `runtime_fixture` to `None`.
 
@@ -446,6 +460,8 @@ struct CircleCollider2DComponent {
     pub density: f32,         // Default: 1.0
     pub friction: f32,        // Default: 0.5
     pub restitution: f32,     // Default: 0.0
+    pub collision_layer: u32, // Collision group membership (bitmask, default: 0x0001)
+    pub collision_mask: u32,  // Which groups to collide with (bitmask, default: 0xFFFF)
     // (runtime-only) runtime_fixture: Option<ColliderHandle> — not serialized
 }
 ```
@@ -453,6 +469,48 @@ struct CircleCollider2DComponent {
 2D circle collider. Requires a `RigidBody2DComponent` on the same entity. Radius scaled by `max(scale.x, scale.y)`.
 
 Manual `Clone` resets `runtime_fixture` to `None`.
+
+### AudioListenerComponent
+
+Empty marker component designating which entity acts as the spatial audio listener. The primary camera entity typically has this component.
+
+### ParticleEmitterComponent
+
+```rust
+struct ParticleEmitterComponent {
+    pub emission_rate: f32,
+    pub lifetime_range: (f32, f32),
+    pub particle_props: ParticleProps,   // Template for emitted particles
+}
+```
+
+CPU particle emitter attached to an entity. Spawns particles at the entity's position using the configured `ParticleProps` template.
+
+### InstancedSpriteAnimator
+
+```rust
+struct InstancedSpriteAnimator {
+    pub clips: Vec<AnimationClip>,
+    pub cell_size: Vec2,
+    pub columns: u32,
+    pub default_clip: Option<usize>,
+    // Runtime state: current_clip, start_time, playing
+}
+```
+
+GPU-driven stateless animation. Frame computation happens entirely in the vertex shader: `frame = start_frame + floor((global_time - start_time) * fps * speed_scale) % frame_count`. Zero per-frame CPU cost while playing. Non-looping clips transition to `default_clip` on completion.
+
+### AnimationControllerComponent
+
+```rust
+struct AnimationControllerComponent {
+    pub clips: Vec<String>,                           // Clip names
+    pub parameters: HashMap<String, AnimParamValue>,  // Bool or Float parameters
+    pub transitions: Vec<AnimationTransition>,         // State machine transitions
+}
+```
+
+Data-driven animation state machine. Evaluates transitions each frame after animation updates. Conditions: `OnFinished` (current clip ended), `ParamBool(name, value)`, `ParamFloat(name, ordering, threshold)`. First matching transition wins, calling `play()` on the entity's `SpriteAnimatorComponent`.
 
 ### NativeScriptComponent
 

@@ -86,7 +86,7 @@ Shader sources live in `gg_engine/src/renderer/shaders/`.
 
 ```rust
 // Example: accessing compiled shaders
-use gg_engine::shaders::{FLAT_COLOR_VERT_SPV, FLAT_COLOR_FRAG_SPV};
+use gg_engine::shaders::{BATCH_VERT_SPV, BATCH_FRAG_SPV};
 ```
 
 ### Runtime Hot-Reload
@@ -128,9 +128,11 @@ renderer.reload_shaders(shader_dir: &Path) -> Result<u32, String>
 | `line_swapchain.glsl` | Line rendering (swapchain, 1 output) |
 | `text.glsl` | MSDF text rendering (offscreen, 2 outputs) |
 | `text_swapchain.glsl` | MSDF text rendering (swapchain, 1 output) |
-| `flat_color.glsl` | Flat color rendering |
-| `texture.glsl` | Textured rendering |
-| `triangle.glsl` | Basic triangle (legacy) |
+| `instance.glsl` | Instanced sprite rendering with GPU animation (offscreen, 2 outputs) |
+| `instance_swapchain.glsl` | Instanced sprite rendering with GPU animation (swapchain, 1 output) |
+| `particle_sim.glsl` | GPU particle simulation (compute shader) |
+
+Legacy shaders exist in `shaders/legacy/` but are unused: `flat_color.glsl`, `texture.glsl`, `triangle.glsl`.
 
 ### Shader / ShaderLibrary
 
@@ -211,13 +213,15 @@ Wraps `vk::Pipeline` + `vk::PipelineLayout`, destroyed on drop.
 `UniformBuffer` — per-frame-in-flight double-buffered UBO with persistent mapping (`HOST_VISIBLE | HOST_COHERENT`).
 
 ```rust
-// CameraData: #[repr(C)], 64 bytes (Mat4), std140 compatible
+// CameraData: #[repr(C)], 80 bytes, std140 compatible
 struct CameraData {
-    view_projection: Mat4,
+    view_projection: Mat4,  // 64 bytes
+    time: f32,              // 4 bytes — monotonic scene time for GPU animation (u_time in shaders)
+    _padding: [f32; 3],     // 12 bytes — std140 alignment
 }
 ```
 
-Written to the UBO once per frame in `begin_scene` and whenever `set_view_projection` is called.
+Written to the UBO once per frame in `begin_scene`. The `time` field is used by instance shaders for GPU-computed animation. Multi-viewport: `MAX_FRAMES_IN_FLIGHT × MAX_VIEWPORTS` UBO slots, indexed by `DrawContext.viewport_index`.
 
 ## Textures
 
@@ -465,6 +469,65 @@ Animation timing is advanced separately by `Scene::on_update_animations(dt)`, wh
 | `spacing` | `Vec2` | Pixel spacing between tileset cells |
 | `margin` | `Vec2` | Pixel margin from tileset edge |
 | `tiles` | `Vec<i32>` | Row-major tile IDs (-1 = empty, high bits = flip flags) |
+
+## Instanced Sprite Rendering
+
+**Files:** `renderer/renderer_2d.rs`, `instance.glsl`, `instance_swapchain.glsl`
+
+For rendering many sprites with the same texture efficiently, the renderer provides instanced rendering via a static unit quad plus per-instance data buffers.
+
+### SpriteInstanceData (144 bytes, repr(C))
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `transform` | `[f32; 16]` | 4x4 model matrix (column-major) |
+| `color` | `[f32; 4]` | RGBA tint color |
+| `uv_min` / `uv_max` | `[f32; 2]` each | Texture UV bounds |
+| `tex_index` | `f32` | Bindless texture array index |
+| `tiling_factor` | `f32` | Texture tiling |
+| `entity_id` | `i32` | For mouse picking |
+| `anim_start_time` | `f32` | GPU animation: clip start timestamp |
+| `anim_fps` | `f32` | GPU animation: frames per second |
+| `anim_start_frame` | `f32` | GPU animation: first frame index |
+| `anim_frame_count` | `f32` | GPU animation: total frames (0 = not GPU-animated) |
+| `anim_columns` | `f32` | GPU animation: sprite sheet columns |
+| `anim_looping` | `f32` | GPU animation: 1.0 = looping, 0.0 = one-shot |
+| `anim_cell_size` | `[f32; 2]` | GPU animation: pixel size per cell |
+| `anim_tex_size` | `[f32; 2]` | GPU animation: texture dimensions |
+
+### GPU Animation
+
+When `anim_frame_count > 0`, the instance vertex shader computes UV coordinates from `u_time` (global monotonic time from camera UBO) plus the per-instance animation parameters. This means **zero CPU animation cost** for playing instanced sprites — the GPU computes the correct frame each render.
+
+When `anim_frame_count == 0`, the shader uses the CPU-provided `uv_min`/`uv_max` values (backward compatible with non-animated sprites).
+
+### Limits
+
+- `MAX_INSTANCES = 10,000` per instanced draw call
+- Instance buffers are per-frame (one per frame-in-flight)
+
+## GPU Particle System
+
+**Files:** `renderer/gpu_particle_system.rs`, `particle_sim.glsl`
+
+Compute shader-driven particle simulation with indirect rendering.
+
+### Architecture
+
+1. **Compute shader** (`particle_sim.glsl`) advances particle positions, velocities, colors, lifetimes
+2. **Indirect draw**: compute shader updates a `VkDrawIndexedIndirectCommand` buffer (instance_count = active particles)
+3. **Instanced rendering**: particles rendered as unit quads with per-particle instance data
+4. **No CPU readback**: the GPU manages particle counts entirely
+
+### GpuParticle (80 bytes, std430)
+
+Position, velocity, rotation, rotation_speed, size_begin/end, color_begin/end (RGBA), lifetime, life_remaining, is_active flag.
+
+### Features
+
+- Gravity, velocity damping, size/color interpolation over lifetime
+- Non-blocking lifecycle: only active particles are processed
+- Push constants: `dt` and `max_particles`
 
 ## Circle Rendering
 

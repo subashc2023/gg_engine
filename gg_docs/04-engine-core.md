@@ -36,6 +36,14 @@ Client apps implement the `Application` trait and launch via `run::<T>()`. The `
 | `desired_viewport_size() -> Option<(u32, u32)>` | Signal a framebuffer resize |
 | `block_events() -> bool` | When `true` (default), input events blocked from reaching the app |
 | `should_exit() -> bool` | When `true`, exits the event loop |
+| `on_device_lost()` | Called on GPU device loss; opportunity for emergency save |
+| `viewport_count() -> usize` | Number of offscreen viewports (default 0) |
+| `viewport_framebuffer(index)` | Return `Option<&Framebuffer>` for viewport at index |
+| `viewport_framebuffer_mut(index)` | Mutable access to viewport framebuffer |
+| `viewport_desired_size(index)` | Signal a viewport framebuffer resize |
+| `on_render_viewport(renderer, index)` | Per-viewport render callback |
+| `egui_user_textures() -> Vec<u64>` | Register framebuffer textures for egui display |
+| `receive_egui_user_textures(map)` | Receive egui TextureId mappings for registered textures |
 
 ### Lifecycle
 

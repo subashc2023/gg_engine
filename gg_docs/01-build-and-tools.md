@@ -238,6 +238,9 @@ The hot-reload system (`renderer/shader_compiler.rs`) replicates the `build.rs` 
 | `line_swapchain.glsl` | `LINE_SWAPCHAIN_VERT_SPV`, `LINE_SWAPCHAIN_FRAG_SPV` | Line rendering (swapchain) |
 | `text.glsl` | `TEXT_VERT_SPV`, `TEXT_FRAG_SPV` | MSDF text rendering (offscreen) |
 | `text_swapchain.glsl` | `TEXT_SWAPCHAIN_VERT_SPV`, `TEXT_SWAPCHAIN_FRAG_SPV` | MSDF text rendering (swapchain) |
+| `instance.glsl` | `INSTANCE_VERT_SPV`, `INSTANCE_FRAG_SPV` | Instanced sprite rendering with GPU animation (offscreen) |
+| `instance_swapchain.glsl` | `INSTANCE_SWAPCHAIN_VERT_SPV`, `INSTANCE_SWAPCHAIN_FRAG_SPV` | Instanced sprite rendering with GPU animation (swapchain) |
+| `particle_sim.glsl` | `PARTICLE_SIM_COMP_SPV` | GPU particle simulation (compute shader) |
 
 ```rust
 use gg_engine::shaders::*;

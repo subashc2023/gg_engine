@@ -119,7 +119,7 @@ When a project is loaded, the engine sets the current working directory (`CWD`) 
 
 ### Purpose
 
-`gg_player` is a minimal `Application` implementation that loads a `.ggproject` file and runs the game loop. It is the shipping runtime -- no editor UI, no entity picking, no gizmos. The entire crate is roughly 186 lines of Rust plus a 7-line `main.rs`.
+`gg_player` is a minimal `Application` implementation that loads a `.ggproject` file and runs the game loop. It is the shipping runtime -- no editor UI, no entity picking, no gizmos. The entire crate is roughly 350 lines of Rust.
 
 ### Architecture
 
