@@ -19,6 +19,7 @@ pub enum AssetType {
     Texture2D,
     Audio,
     Prefab,
+    Material,
 }
 
 impl AssetType {
@@ -29,6 +30,7 @@ impl AssetType {
             AssetType::Texture2D => "Texture2D",
             AssetType::Audio => "Audio",
             AssetType::Prefab => "Prefab",
+            AssetType::Material => "Material",
         }
     }
 
@@ -38,6 +40,7 @@ impl AssetType {
             "Texture2D" => AssetType::Texture2D,
             "Audio" => AssetType::Audio,
             "Prefab" => AssetType::Prefab,
+            "Material" => AssetType::Material,
             _ => AssetType::None,
         }
     }
@@ -92,6 +95,7 @@ pub fn asset_type_from_extension(ext: &str) -> AssetType {
         "ggscene" => AssetType::Scene,
         "wav" | "ogg" | "mp3" | "flac" => AssetType::Audio,
         "ggprefab" => AssetType::Prefab,
+        "ggmaterial" => AssetType::Material,
         _ => AssetType::None,
     }
 }
@@ -108,6 +112,7 @@ mod tests {
             AssetType::Texture2D,
             AssetType::Audio,
             AssetType::Prefab,
+            AssetType::Material,
         ] {
             assert_eq!(AssetType::parse_str(ty.as_str()), ty);
         }
@@ -117,6 +122,7 @@ mod tests {
     fn asset_type_from_str_unknown_returns_none() {
         assert_eq!(AssetType::parse_str("Mesh"), AssetType::None);
         assert_eq!(AssetType::parse_str(""), AssetType::None);
+        assert_eq!(AssetType::parse_str("Material"), AssetType::Material);
     }
 
     #[test]
@@ -125,6 +131,7 @@ mod tests {
         assert_eq!(format!("{}", AssetType::Scene), "Scene");
         assert_eq!(format!("{}", AssetType::Audio), "Audio");
         assert_eq!(format!("{}", AssetType::Prefab), "Prefab");
+        assert_eq!(format!("{}", AssetType::Material), "Material");
         assert_eq!(format!("{}", AssetType::None), "None");
     }
 
@@ -153,6 +160,11 @@ mod tests {
     #[test]
     fn extension_to_type_prefab() {
         assert_eq!(asset_type_from_extension("ggprefab"), AssetType::Prefab);
+    }
+
+    #[test]
+    fn extension_to_type_material() {
+        assert_eq!(asset_type_from_extension("ggmaterial"), AssetType::Material);
     }
 
     #[test]

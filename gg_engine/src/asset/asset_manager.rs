@@ -238,6 +238,10 @@ impl EditorAssetManager {
                 // Prefabs are instantiated on demand, not cached.
                 true
             }
+            AssetType::Material => {
+                // Materials are managed by MaterialLibrary, not the asset manager cache.
+                true
+            }
             AssetType::None => false,
         }
     }

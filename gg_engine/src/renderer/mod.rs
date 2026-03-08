@@ -7,6 +7,7 @@ mod font;
 mod framebuffer;
 pub(crate) mod gpu_allocation;
 mod gpu_particle_system;
+mod material;
 mod msdf;
 mod orthographic_camera;
 mod pipeline;
@@ -39,6 +40,7 @@ pub use framebuffer::{
     Framebuffer, FramebufferSpec, FramebufferTextureFormat, FramebufferTextureSpec, MsaaSamples,
 };
 pub(crate) use gpu_allocation::GpuAllocator;
+pub use material::{BlendMode, Material, MaterialGpuData, MaterialHandle, MaterialLibrary};
 pub use orthographic_camera::OrthographicCamera;
 pub use pipeline::Pipeline;
 pub use renderer::Renderer;

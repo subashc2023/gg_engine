@@ -11,6 +11,7 @@ use super::font::{Font, FontCpuData};
 use super::framebuffer::{Framebuffer, FramebufferSpec};
 use super::gpu_allocation::GpuAllocator;
 use super::gpu_particle_system::GpuParticleSystem;
+use super::material::{MaterialHandle, MaterialLibrary};
 use super::texture::TextureSpecification;
 use super::pipeline::{self, Pipeline};
 use super::render_command::RenderCommand;
@@ -71,6 +72,9 @@ pub struct Renderer {
     // Per-frame per-viewport camera UBO (VP matrix + time).
     camera: CameraSystem,
 
+    // Per-frame per-viewport material UBO (PBR surface properties).
+    material_library: MaterialLibrary,
+
     // Format info for framebuffer creation.
     color_format: vk::Format,
     depth_format: vk::Format,
@@ -109,9 +113,10 @@ impl Renderer {
         let device = vk_ctx.device();
         let api = RendererAPI::Vulkan(VulkanRendererAPI::new(device));
 
-        // Create descriptor pool for texture samplers + camera UBO sets.
-        // Camera UBO needs one descriptor set per (frame, viewport) slot.
+        // Create descriptor pool for texture samplers + camera/material UBO sets.
+        // Camera + material UBOs each need one descriptor set per (frame, viewport) slot.
         let ubo_slot_count = (super::MAX_FRAMES_IN_FLIGHT * super::MAX_VIEWPORTS) as u32;
+        let total_ubo_sets = ubo_slot_count * 2; // camera + material
         let pool_sizes = [
             vk::DescriptorPoolSize {
                 ty: vk::DescriptorType::COMBINED_IMAGE_SAMPLER,
@@ -119,12 +124,12 @@ impl Renderer {
             },
             vk::DescriptorPoolSize {
                 ty: vk::DescriptorType::UNIFORM_BUFFER,
-                descriptor_count: ubo_slot_count,
+                descriptor_count: total_ubo_sets,
             },
         ];
         let pool_info = vk::DescriptorPoolCreateInfo::default()
             .pool_sizes(&pool_sizes)
-            .max_sets(100 + ubo_slot_count)
+            .max_sets(100 + total_ubo_sets)
             .flags(vk::DescriptorPoolCreateFlags::FREE_DESCRIPTOR_SET);
         let descriptor_pool = unsafe { device.create_descriptor_pool(&pool_info, None) }
             .map_err(|e| format!("Failed to create descriptor pool: {e}"))?;
@@ -143,6 +148,9 @@ impl Renderer {
 
         // Camera UBO: descriptor set layout, per-slot buffers, descriptor sets.
         let camera = CameraSystem::new(allocator, device, descriptor_pool)?;
+
+        // Material UBO: descriptor set layout, per-slot buffers, descriptor sets.
+        let material_library = MaterialLibrary::new(allocator, device, descriptor_pool)?;
 
         // -- Pipeline cache (load from disk if available) --
         let cache_data = Self::load_pipeline_cache_data();
@@ -167,6 +175,7 @@ impl Renderer {
             descriptor_pool,
             texture_descriptor_set_layout,
             camera,
+            material_library,
             color_format,
             depth_format,
             pipeline_cache,
@@ -483,6 +492,21 @@ impl Renderer {
     /// Return the maximum MSAA sample count supported by the GPU.
     pub fn max_msaa_samples(&self) -> vk::SampleCountFlags {
         self.max_msaa_samples
+    }
+
+    /// Access the material library (immutable).
+    pub fn material_library(&self) -> &MaterialLibrary {
+        &self.material_library
+    }
+
+    /// Access the material library (mutable).
+    pub fn material_library_mut(&mut self) -> &mut MaterialLibrary {
+        &mut self.material_library
+    }
+
+    /// Write a material's GPU data to the UBO for the current frame/viewport.
+    pub fn write_material(&self, handle: &MaterialHandle, current_frame: usize, viewport_index: usize) {
+        self.material_library.write_material_ubo(handle, current_frame, viewport_index);
     }
 
     /// Tell the batch renderer to use the offscreen pipeline (or switch back).

@@ -796,6 +796,7 @@ fn paint_asset_type_icon(painter: &egui::Painter, rect: egui::Rect, asset_type: 
         AssetType::Scene => paint_scene_icon(painter, rect),
         AssetType::Audio => paint_audio_icon(painter, rect),
         AssetType::Prefab => paint_prefab_icon(painter, rect),
+        AssetType::Material => paint_file_icon(painter, rect),
         AssetType::None => paint_file_icon(painter, rect),
     }
 }
