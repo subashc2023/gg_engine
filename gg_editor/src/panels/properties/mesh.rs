@@ -19,11 +19,18 @@ pub(crate) fn draw_mesh_renderer_component(
         bold_family,
         entity,
         |ui| {
-            let (mut primitive, mut color_arr) = {
+            let (mut primitive, mut color_arr, mut metallic, mut roughness, mut emissive_arr, mut emissive_strength) = {
                 let mc = scene
                     .get_component::<MeshRendererComponent>(entity)
                     .unwrap();
-                (mc.primitive, <[f32; 4]>::from(mc.color))
+                (
+                    mc.primitive,
+                    <[f32; 4]>::from(mc.color),
+                    mc.metallic,
+                    mc.roughness,
+                    <[f32; 3]>::from(mc.emissive_color),
+                    mc.emissive_strength,
+                )
             };
 
             let mut changed = false;
@@ -63,6 +70,36 @@ pub(crate) fn draw_mesh_renderer_component(
                 changed = true;
             }
 
+            ui.separator();
+
+            // Material properties.
+            if ui
+                .add(egui::Slider::new(&mut metallic, 0.0..=1.0).text("Metallic"))
+                .changed()
+            {
+                changed = true;
+            }
+            if ui
+                .add(egui::Slider::new(&mut roughness, 0.0..=1.0).text("Roughness"))
+                .changed()
+            {
+                changed = true;
+            }
+
+            // Emissive.
+            ui.horizontal(|ui| {
+                ui.label("Emissive Color");
+                if ui.color_edit_button_rgb(&mut emissive_arr).changed() {
+                    changed = true;
+                }
+            });
+            if ui
+                .add(egui::Slider::new(&mut emissive_strength, 0.0..=10.0).text("Emissive Strength"))
+                .changed()
+            {
+                changed = true;
+            }
+
             if changed {
                 let needs_reupload = {
                     let mc = scene
@@ -73,6 +110,10 @@ pub(crate) fn draw_mesh_renderer_component(
                 if let Some(mut mc) = scene.get_component_mut::<MeshRendererComponent>(entity) {
                     mc.primitive = primitive;
                     mc.color = Vec4::from(color_arr);
+                    mc.metallic = metallic;
+                    mc.roughness = roughness;
+                    mc.emissive_color = Vec3::from(emissive_arr);
+                    mc.emissive_strength = emissive_strength;
                 }
                 if needs_reupload {
                     scene.invalidate_mesh(entity);

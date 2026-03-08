@@ -676,6 +676,22 @@ struct MeshRendererData {
     primitive: String,
     #[serde(rename = "Color")]
     color: [f32; 4],
+    #[serde(rename = "Metallic", default)]
+    metallic: f32,
+    #[serde(rename = "Roughness", default = "default_roughness")]
+    roughness: f32,
+    #[serde(rename = "EmissiveColor", default)]
+    emissive_color: [f32; 3],
+    #[serde(rename = "EmissiveStrength", default = "default_emissive_strength")]
+    emissive_strength: f32,
+}
+
+fn default_roughness() -> f32 {
+    0.5
+}
+
+fn default_emissive_strength() -> f32 {
+    1.0
 }
 
 fn default_mesh_primitive() -> String {
@@ -1272,6 +1288,10 @@ impl SceneSerializer {
                     MeshRendererData {
                         primitive: prim_str.to_string(),
                         color: mc.color.into(),
+                        metallic: mc.metallic,
+                        roughness: mc.roughness,
+                        emissive_color: mc.emissive_color.into(),
+                        emissive_strength: mc.emissive_strength,
                     }
                 }),
             directional_light: scene
@@ -1664,6 +1684,10 @@ impl SceneSerializer {
                 MeshRendererComponent {
                     primitive,
                     color: Vec4::from(mrd.color),
+                    metallic: mrd.metallic,
+                    roughness: mrd.roughness,
+                    emissive_color: Vec3::from(mrd.emissive_color),
+                    emissive_strength: mrd.emissive_strength,
                     vertex_array: None,
                 },
             );

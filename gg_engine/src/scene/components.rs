@@ -836,8 +836,16 @@ impl MeshPrimitive {
 pub struct MeshRendererComponent {
     /// Which built-in primitive to render.
     pub primitive: MeshPrimitive,
-    /// Vertex color / tint.
+    /// Vertex color / tint (multiplied with albedo in shader).
     pub color: Vec4,
+    /// 0.0 = dielectric (plastic, wood), 1.0 = metal (gold, steel).
+    pub metallic: f32,
+    /// 0.0 = mirror-smooth, 1.0 = fully rough/matte.
+    pub roughness: f32,
+    /// Emissive color (HDR). Black = no emission.
+    pub emissive_color: Vec3,
+    /// Multiplier on emissive color for HDR bloom intensity.
+    pub emissive_strength: f32,
     /// Runtime-only uploaded vertex array. Not serialized.
     pub(crate) vertex_array: Option<crate::renderer::VertexArray>,
 }
@@ -847,6 +855,10 @@ impl Clone for MeshRendererComponent {
         Self {
             primitive: self.primitive,
             color: self.color,
+            metallic: self.metallic,
+            roughness: self.roughness,
+            emissive_color: self.emissive_color,
+            emissive_strength: self.emissive_strength,
             vertex_array: None, // Runtime-only, not copied.
         }
     }
@@ -857,6 +869,10 @@ impl MeshRendererComponent {
         Self {
             primitive,
             color,
+            metallic: 0.0,
+            roughness: 0.5,
+            emissive_color: Vec3::ZERO,
+            emissive_strength: 1.0,
             vertex_array: None,
         }
     }
@@ -867,6 +883,10 @@ impl Default for MeshRendererComponent {
         Self {
             primitive: MeshPrimitive::Cube,
             color: Vec4::ONE,
+            metallic: 0.0,
+            roughness: 0.5,
+            emissive_color: Vec3::ZERO,
+            emissive_strength: 1.0,
             vertex_array: None,
         }
     }

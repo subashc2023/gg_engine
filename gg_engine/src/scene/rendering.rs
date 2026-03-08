@@ -562,13 +562,33 @@ impl Scene {
 
     /// Re-upload the vertex array for a mesh component when its primitive or
     /// color changes. Clears the existing VA so the next `resolve_meshes`
-    /// call picks it up.
+    /// call picks it up. The old VA is moved to a deferred-destroy queue
+    /// to avoid destroying GPU buffers still referenced by in-flight command
+    /// buffers.
     pub fn invalidate_mesh(&mut self, entity: super::Entity) {
         if let Ok(mut comp) = self
             .world
             .get::<&mut MeshRendererComponent>(entity.handle())
         {
-            comp.vertex_array = None;
+            if let Some(old_va) = comp.vertex_array.take() {
+                // Defer destruction: the old buffers may still be in use by
+                // a previously submitted command buffer.
+                if self.va_graveyard.is_empty() {
+                    self.va_graveyard.push_back(Vec::new());
+                }
+                self.va_graveyard.back_mut().unwrap().push(old_va);
+            }
+        }
+    }
+
+    /// Rotate the deferred-destroy queue: push a new frame entry and drop
+    /// entries older than `MAX_FRAMES_IN_FLIGHT`. Called once per frame
+    /// after the GPU fence wait guarantees old command buffers have completed.
+    pub fn rotate_va_graveyard(&mut self) {
+        use crate::renderer::MAX_FRAMES_IN_FLIGHT;
+        self.va_graveyard.push_back(Vec::new());
+        while self.va_graveyard.len() > MAX_FRAMES_IN_FLIGHT {
+            self.va_graveyard.pop_front(); // Drop old VAs — GPU is done with them.
         }
     }
 
@@ -1171,10 +1191,24 @@ impl Scene {
             }
         };
 
+        let default_handle = renderer.material_library().default_handle();
+
         for (handle, world_transform) in &meshes {
             let mesh_comp = self.world.get::<&MeshRendererComponent>(*handle).unwrap();
             if let Some(ref va) = mesh_comp.vertex_array {
-                renderer.submit_3d(&pipeline, va, world_transform, None, handle.id() as i32);
+                // Update the default material with per-entity properties.
+                {
+                    let mat = renderer
+                        .material_library_mut()
+                        .get_mut(&default_handle)
+                        .unwrap();
+                    mat.albedo_color = mesh_comp.color;
+                    mat.metallic = mesh_comp.metallic;
+                    mat.roughness = mesh_comp.roughness;
+                    mat.emissive_color = mesh_comp.emissive_color;
+                    mat.emissive_strength = mesh_comp.emissive_strength;
+                }
+                renderer.submit_3d(&pipeline, va, world_transform, Some(&default_handle), handle.id() as i32);
             }
         }
     }

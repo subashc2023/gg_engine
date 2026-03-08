@@ -520,6 +520,14 @@ impl Application for GGEditor {
         cmd_buf: gg_engine::ash::vk::CommandBuffer,
         current_frame: usize,
     ) {
+        // Flush deferred-destroy vertex arrays that are now safe to drop
+        // (the fence for this frame slot has been waited on by the caller).
+        self.scene.rotate_va_graveyard();
+
+        // Ensure meshes invalidated during on_egui are re-uploaded before
+        // the shadow pass, preventing one-frame shadow gaps.
+        self.scene.resolve_meshes(renderer);
+
         // Run the shadow depth pass (shared shadow map for all viewports).
         self.scene
             .render_shadow_pass(renderer, cmd_buf, current_frame, 0);

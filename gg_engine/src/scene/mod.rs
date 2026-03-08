@@ -39,10 +39,11 @@ pub use scene_serializer::SceneSerializer;
 pub use script_engine::{ScriptEngine, ScriptFieldValue};
 pub use spatial::{Aabb2D, Frustum2D, SpatialGrid};
 
+use crate::renderer::VertexArray;
 use crate::uuid::Uuid;
 
 use std::cell::Cell;
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 
 use physics_2d::PhysicsWorld2D;
 
@@ -87,6 +88,11 @@ pub struct Scene {
     spatial_grid: Option<SpatialGrid>,
     /// Per-frame frustum culling statistics (interior-mutable, written by render_scene).
     culling_stats: Cell<CullingStats>,
+    /// Deferred-destroy queue for vertex arrays. Prevents destroying GPU buffers
+    /// that may still be in use by in-flight command buffers. Rotated each frame
+    /// in [`rotate_va_graveyard`](Self::rotate_va_graveyard); entries survive at
+    /// least `MAX_FRAMES_IN_FLIGHT` frames before being dropped.
+    va_graveyard: VecDeque<Vec<VertexArray>>,
 }
 
 /// Invokes `$callback!` with every cloneable component type.
@@ -183,6 +189,7 @@ impl Scene {
             last_dt: 0.0,
             spatial_grid: None,
             culling_stats: Cell::new(CullingStats::default()),
+            va_graveyard: VecDeque::new(),
         }
     }
 
