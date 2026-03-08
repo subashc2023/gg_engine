@@ -269,8 +269,8 @@ impl EditorCamera {
 
     /// WASD + QE movement in fly mode.
     fn fly_move(&mut self, dt: f32, input: &Input) {
-        let shift = input.is_key_pressed(KeyCode::LeftShift)
-            || input.is_key_pressed(KeyCode::RightShift);
+        let shift =
+            input.is_key_pressed(KeyCode::LeftShift) || input.is_key_pressed(KeyCode::RightShift);
         let speed = FLY_SPEED * if shift { FLY_FAST_MULTIPLIER } else { 1.0 } * dt;
 
         let forward = self.forward();

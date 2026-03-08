@@ -466,7 +466,6 @@ pub(crate) fn viewport_ui(
                     let (world_scale, world_quat, world_translation) =
                         world_transform.to_scale_rotation_translation();
 
-
                     // Get parent's world transform for local→world conversion.
                     let parent_world = scene.get_parent(entity).and_then(|puuid| {
                         scene
@@ -479,12 +478,30 @@ pub(crate) fn viewport_ui(
                         let snapping = snap_to_grid || ui.input(|i| i.modifiers.ctrl);
                         let snap_dist = if snap_to_grid { grid_size } else { 0.5_f32 };
 
+                        // Directional lights: allow translate + rotate (rotation
+                        // controls direction), suppress scale.
+                        // Ambient lights: translate only (no direction/scale).
+                        let is_dir_light =
+                            scene.has_component::<DirectionalLightComponent>(entity);
+                        let is_ambient_light =
+                            scene.has_component::<AmbientLightComponent>(entity);
+                        let modes = if is_ambient_light {
+                            gizmo_modes_for(GizmoOperation::Translate)
+                        } else if is_dir_light
+                            && *gizmo_operation == GizmoOperation::Scale
+                        {
+                            // Redirect scale → translate for directional lights.
+                            gizmo_modes_for(GizmoOperation::Translate)
+                        } else {
+                            gizmo_modes_for(*gizmo_operation)
+                        };
+
                         // Configure the gizmo.
                         gizmo.update_config(GizmoConfig {
                             view_matrix: mat4_to_f64(&camera_view).into(),
                             projection_matrix: mat4_to_f64(&camera_projection).into(),
                             viewport: viewport_rect,
-                            modes: gizmo_modes_for(*gizmo_operation),
+                            modes,
                             orientation: if *gizmo_local {
                                 GizmoOrientation::Local
                             } else {

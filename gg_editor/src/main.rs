@@ -1006,10 +1006,12 @@ impl Application for GGEditor {
 
         match self.playback.scene_state {
             SceneState::Edit => {
+                renderer.set_camera_position(self.editor_camera.position());
                 self.scene
                     .on_update_editor(&self.editor_camera.view_projection(), renderer);
             }
             SceneState::Simulate => {
+                renderer.set_camera_position(self.editor_camera.position());
                 self.scene
                     .on_update_simulation(&self.editor_camera.view_projection(), renderer);
             }
@@ -1522,24 +1524,14 @@ impl GGEditor {
         for i in x_min..=x_max {
             let x = i as f32 * grid_size;
             let color = if i == 0 { axis_color_z } else { grid_color };
-            renderer.draw_line(
-                Vec3::new(x, 0.0, lo_z),
-                Vec3::new(x, 0.0, hi_z),
-                color,
-                -1,
-            );
+            renderer.draw_line(Vec3::new(x, 0.0, lo_z), Vec3::new(x, 0.0, hi_z), color, -1);
         }
 
         // Lines along X (constant Z).
         for j in z_min..=z_max {
             let z = j as f32 * grid_size;
             let color = if j == 0 { axis_color_x } else { grid_color };
-            renderer.draw_line(
-                Vec3::new(lo_x, 0.0, z),
-                Vec3::new(hi_x, 0.0, z),
-                color,
-                -1,
-            );
+            renderer.draw_line(Vec3::new(lo_x, 0.0, z), Vec3::new(hi_x, 0.0, z), color, -1);
         }
     }
 
@@ -1760,13 +1752,144 @@ impl GGEditor {
             }
         }
 
+        // Light gizmos (directional rays + point light radius).
+        if self.playback.scene_state != SceneState::Play {
+            let prev_lw = renderer.line_width();
+
+            // -- Directional lights: sun circle + direction rays (selected only) --
+            let dir_lights: Vec<_> = self
+                .scene
+                .each_entity_with_tag()
+                .iter()
+                .filter_map(|(entity, _)| {
+                    if !self.selection.contains(*entity) {
+                        return None;
+                    }
+                    let dl = self.scene.get_component::<DirectionalLightComponent>(*entity)?;
+                    let world = self.scene.get_world_transform(*entity);
+                    let (_, world_rot, pos) = world.to_scale_rotation_translation();
+                    let direction = DirectionalLightComponent::direction(world_rot);
+                    Some((pos, direction, dl.color))
+                })
+                .collect();
+
+            for (pos, direction, color) in &dir_lights {
+                let dir = direction.normalize();
+                // Build perpendicular frame for the sun circle.
+                let up_ref = if dir.y.abs() > 0.9 { Vec3::X } else { Vec3::Y };
+                let right = dir.cross(up_ref).normalize();
+                let up = right.cross(dir).normalize();
+
+                let gizmo_color = Vec4::new(
+                    color.x.clamp(0.3, 1.0),
+                    color.y.clamp(0.3, 1.0),
+                    color.z.clamp(0.1, 0.8),
+                    1.0,
+                );
+
+                let radius = 0.4;
+                let ray_len = 1.5;
+                let segments = 8;
+
+                renderer.set_line_width(2.0);
+
+                // Circle in the plane perpendicular to the light direction.
+                for i in 0..segments {
+                    let a0 = (i as f32 / segments as f32) * std::f32::consts::TAU;
+                    let a1 = ((i + 1) as f32 / segments as f32) * std::f32::consts::TAU;
+                    let p0 = *pos + right * a0.cos() * radius + up * a0.sin() * radius;
+                    let p1 = *pos + right * a1.cos() * radius + up * a1.sin() * radius;
+                    renderer.draw_line(p0, p1, gizmo_color, -1);
+                }
+
+                // Rays from each circle vertex in the light direction.
+                for i in 0..segments {
+                    let angle = (i as f32 / segments as f32) * std::f32::consts::TAU;
+                    let edge = *pos + right * angle.cos() * radius + up * angle.sin() * radius;
+                    let tip = edge + dir * ray_len;
+                    renderer.draw_line(edge, tip, gizmo_color, -1);
+                }
+
+                // Central ray (slightly longer).
+                renderer.draw_line(*pos, *pos + dir * (ray_len + radius), gizmo_color, -1);
+            }
+
+            // -- Point lights: 3-axis wireframe sphere showing radius (selected only) --
+            let point_lights: Vec<_> = self
+                .scene
+                .each_entity_with_tag()
+                .iter()
+                .filter_map(|(entity, _)| {
+                    if !self.selection.contains(*entity) {
+                        return None;
+                    }
+                    let pl = self.scene.get_component::<PointLightComponent>(*entity)?;
+                    let world = self.scene.get_world_transform(*entity);
+                    let (_, _, pos) = world.to_scale_rotation_translation();
+                    Some((pos, pl.color, pl.radius))
+                })
+                .collect();
+
+            for (pos, color, radius) in &point_lights {
+                let gizmo_color = Vec4::new(
+                    color.x.clamp(0.2, 1.0),
+                    color.y.clamp(0.2, 1.0),
+                    color.z.clamp(0.2, 1.0),
+                    1.0,
+                );
+
+                renderer.set_line_width(2.0);
+
+                let segs = 32;
+                // XY plane circle.
+                for i in 0..segs {
+                    let a0 = (i as f32 / segs as f32) * std::f32::consts::TAU;
+                    let a1 = ((i + 1) as f32 / segs as f32) * std::f32::consts::TAU;
+                    let p0 = *pos + Vec3::new(a0.cos() * radius, a0.sin() * radius, 0.0);
+                    let p1 = *pos + Vec3::new(a1.cos() * radius, a1.sin() * radius, 0.0);
+                    renderer.draw_line(p0, p1, gizmo_color, -1);
+                }
+                // XZ plane circle.
+                for i in 0..segs {
+                    let a0 = (i as f32 / segs as f32) * std::f32::consts::TAU;
+                    let a1 = ((i + 1) as f32 / segs as f32) * std::f32::consts::TAU;
+                    let p0 = *pos + Vec3::new(a0.cos() * radius, 0.0, a0.sin() * radius);
+                    let p1 = *pos + Vec3::new(a1.cos() * radius, 0.0, a1.sin() * radius);
+                    renderer.draw_line(p0, p1, gizmo_color, -1);
+                }
+                // YZ plane circle.
+                for i in 0..segs {
+                    let a0 = (i as f32 / segs as f32) * std::f32::consts::TAU;
+                    let a1 = ((i + 1) as f32 / segs as f32) * std::f32::consts::TAU;
+                    let p0 = *pos + Vec3::new(0.0, a0.cos() * radius, a0.sin() * radius);
+                    let p1 = *pos + Vec3::new(0.0, a1.cos() * radius, a1.sin() * radius);
+                    renderer.draw_line(p0, p1, gizmo_color, -1);
+                }
+
+                // Small cross at center.
+                let cs = 0.15;
+                renderer.draw_line(*pos - Vec3::X * cs, *pos + Vec3::X * cs, gizmo_color, -1);
+                renderer.draw_line(*pos - Vec3::Y * cs, *pos + Vec3::Y * cs, gizmo_color, -1);
+                renderer.draw_line(*pos - Vec3::Z * cs, *pos + Vec3::Z * cs, gizmo_color, -1);
+            }
+
+            renderer.set_line_width(prev_lw);
+        }
+
         // Selected entity outlines.
         for selected in self.selection.iter() {
+            // Light entities have their own gizmo visuals — skip the generic outline.
+            let is_light = self
+                .scene
+                .has_component::<DirectionalLightComponent>(selected)
+                || self.scene.has_component::<PointLightComponent>(selected)
+                || self.scene.has_component::<AmbientLightComponent>(selected);
+            if is_light {
+                continue;
+            }
             if let Some(transform) = self.scene.get_component::<TransformComponent>(selected) {
                 let outline_color = Vec4::new(1.0, 0.5, 0.0, 1.0);
-                if let Some(mesh) =
-                    self.scene.get_component::<MeshRendererComponent>(selected)
-                {
+                if let Some(mesh) = self.scene.get_component::<MeshRendererComponent>(selected) {
                     // 3D mesh: wireframe box outline matching primitive bounds.
                     let (bmin, bmax) = mesh.primitive.local_bounds();
                     let world = self.scene.get_world_transform(selected);

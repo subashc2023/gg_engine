@@ -3,14 +3,17 @@ use std::sync::Arc;
 use gg_engine::prelude::*;
 use gg_engine::renderer::Pipeline;
 
-/// 3D test scene: cube, sphere, and ground plane with backface culling,
-/// depth testing, and basic hemisphere lighting.
+/// 3D test scene: cube, sphere, and ground plane with directional + point lighting,
+/// backface culling, depth testing, and material support.
 /// Middle-click drag to orbit, scroll to zoom.
 pub struct Sandbox3D {
     pipeline: Option<Arc<Pipeline>>,
     cube_va: Option<VertexArray>,
     sphere_va: Option<VertexArray>,
     plane_va: Option<VertexArray>,
+
+    // Material handle for the default material used in lighting.
+    material_handle: Option<MaterialHandle>,
 
     // Smoothed camera values (used for rendering).
     orbit_yaw: f32,
@@ -24,16 +27,18 @@ pub struct Sandbox3D {
     window_width: u32,
     window_height: u32,
     last_dt: f32,
+    elapsed: f32,
 }
 
 impl Sandbox3D {
     pub fn new() -> Self {
-        info!("Sandbox3D — mesh primitives + backface culling + depth buffer");
+        info!("Sandbox3D — mesh primitives + directional/point lighting");
         Self {
             pipeline: None,
             cube_va: None,
             sphere_va: None,
             plane_va: None,
+            material_handle: None,
             orbit_yaw: std::f32::consts::PI,
             orbit_pitch: 0.4,
             orbit_dist: 5.0,
@@ -43,6 +48,7 @@ impl Sandbox3D {
             window_width: 1280,
             window_height: 720,
             last_dt: 0.0,
+            elapsed: 0.0,
         }
     }
 
@@ -70,15 +76,19 @@ impl Sandbox3D {
             .expect("Failed to create 3D pipeline");
         self.pipeline = Some(pipeline);
 
-        // Upload built-in primitives.
-        let cube = Mesh::cube([0.8, 0.4, 0.2, 1.0]);
+        // Upload built-in primitives with neutral vertex colors (lighting provides color).
+        let cube = Mesh::cube([1.0, 1.0, 1.0, 1.0]);
         self.cube_va = Some(cube.upload(renderer).expect("cube upload"));
 
-        let sphere = Mesh::sphere(32, 16, [0.2, 0.5, 0.9, 1.0]);
+        let sphere = Mesh::sphere(32, 16, [1.0, 1.0, 1.0, 1.0]);
         self.sphere_va = Some(sphere.upload(renderer).expect("sphere upload"));
 
-        let plane = Mesh::plane([0.3, 0.3, 0.3, 1.0]);
+        let plane = Mesh::plane([1.0, 1.0, 1.0, 1.0]);
         self.plane_va = Some(plane.upload(renderer).expect("plane upload"));
+
+        // Create a default material for lit rendering.
+        let handle = renderer.material_library().default_handle();
+        self.material_handle = Some(handle);
     }
 
     pub fn clear_color(&self) -> [f32; 4] {
@@ -99,6 +109,7 @@ impl Sandbox3D {
 
     pub fn on_update(&mut self, dt: Timestep, input: &Input) {
         self.last_dt = dt.seconds();
+        self.elapsed += dt.seconds();
 
         if input.is_mouse_button_pressed(MouseButton::Middle) {
             let (dx, dy) = input.mouse_delta();
@@ -131,6 +142,30 @@ impl Sandbox3D {
         );
         let view = Mat4::look_at_lh(eye, Vec3::ZERO, Vec3::Y);
         renderer.set_view_projection(proj * view);
+        renderer.set_camera_position(eye);
+
+        // Set up lighting: directional sun + orbiting point light.
+        let point_light_pos = Vec3::new(3.0 * self.elapsed.sin(), 1.5, 3.0 * self.elapsed.cos());
+
+        let light_env = LightEnvironment {
+            directional: Some((
+                Vec3::new(-0.3, -1.0, -0.5), // direction
+                Vec3::ONE,                   // white color
+                0.8,                         // intensity
+            )),
+            point_lights: vec![(
+                point_light_pos,          // position
+                Vec3::new(1.0, 0.4, 0.1), // warm orange
+                3.0,                      // intensity
+                8.0,                      // radius
+            )],
+            ambient_color: Vec3::new(0.05, 0.05, 0.08),
+            ambient_intensity: 1.0,
+            camera_position: eye,
+        };
+        renderer.upload_lights(&light_env);
+
+        let mat_handle = self.material_handle.as_ref();
 
         // Ground plane (scaled up).
         if let Some(va) = &self.plane_va {
@@ -139,13 +174,13 @@ impl Sandbox3D {
                 Quat::IDENTITY,
                 Vec3::new(0.0, -0.5, 0.0),
             );
-            renderer.submit_3d(pipeline, va, &model, None, -1);
+            renderer.submit_3d(pipeline, va, &model, mat_handle, -1);
         }
 
         // Cube.
         if let Some(va) = &self.cube_va {
             let model = Mat4::from_translation(Vec3::new(0.0, 0.0, 0.0));
-            renderer.submit_3d(pipeline, va, &model, None, -1);
+            renderer.submit_3d(pipeline, va, &model, mat_handle, -1);
         }
 
         // Sphere.
@@ -155,7 +190,7 @@ impl Sandbox3D {
                 Quat::IDENTITY,
                 Vec3::new(2.0, 0.25, 0.0),
             );
-            renderer.submit_3d(pipeline, va, &model, None, -1);
+            renderer.submit_3d(pipeline, va, &model, mat_handle, -1);
         }
     }
 
@@ -180,8 +215,8 @@ impl Sandbox3D {
             ui.separator();
             ui.label("Middle-click drag: orbit  |  Scroll: zoom");
             ui.separator();
-            ui.label("Cube (orange) + Sphere (blue) + Ground plane");
-            ui.label("Backface culling + depth test + hemisphere lighting");
+            ui.label("Directional light (sun) + orbiting point light (warm)");
+            ui.label("Blinn-Phong shading with material UBO");
             ui.separator();
             ui.label(format!(
                 "Yaw {:.1}\u{00b0}  Pitch {:.1}\u{00b0}  Dist {:.1}",

@@ -7,6 +7,7 @@ mod font;
 mod framebuffer;
 pub(crate) mod gpu_allocation;
 mod gpu_particle_system;
+mod lighting;
 mod material;
 mod mesh;
 mod msdf;
@@ -41,6 +42,7 @@ pub use framebuffer::{
     Framebuffer, FramebufferSpec, FramebufferTextureFormat, FramebufferTextureSpec, MsaaSamples,
 };
 pub(crate) use gpu_allocation::GpuAllocator;
+pub use lighting::{LightEnvironment, LightGpuData, MAX_POINT_LIGHTS};
 pub use material::{BlendMode, Material, MaterialGpuData, MaterialHandle, MaterialLibrary};
 pub use mesh::{load_gltf, Mesh, MeshVertex};
 pub use orthographic_camera::OrthographicCamera;

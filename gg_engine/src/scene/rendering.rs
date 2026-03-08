@@ -1,10 +1,11 @@
 use super::{
-    AnimationControllerComponent, CircleRendererComponent, Entity, IdComponent,
-    InstancedSpriteAnimator, MeshPrimitive, MeshRendererComponent, ParticleEmitterComponent, Scene,
+    AmbientLightComponent, AnimationControllerComponent, CircleRendererComponent,
+    DirectionalLightComponent, Entity, IdComponent, InstancedSpriteAnimator, MeshPrimitive,
+    MeshRendererComponent, ParticleEmitterComponent, PointLightComponent, Scene,
     SpriteAnimatorComponent, SpriteRendererComponent, TextComponent, TilemapComponent,
     TransformComponent, TILE_FLIP_H, TILE_FLIP_V, TILE_ID_MASK,
 };
-use crate::renderer::{Font, Mesh, Renderer, SubTexture2D};
+use crate::renderer::{Font, LightEnvironment, Mesh, Renderer, SubTexture2D};
 
 impl Scene {
     // -----------------------------------------------------------------
@@ -963,6 +964,46 @@ impl Scene {
         self.render_meshes(renderer);
     }
 
+    /// Collect all light components from the scene into a [`LightEnvironment`].
+    ///
+    /// Gathers directional lights, point lights, and ambient light settings.
+    /// The `camera_position` should be set by the caller before uploading.
+    pub fn collect_lights(&self) -> LightEnvironment {
+        let mut env = LightEnvironment::default();
+
+        // Directional light (use the first one found).
+        // Direction is derived from the entity's world rotation.
+        if let Some((handle, dl)) = self
+            .world
+            .query::<(hecs::Entity, &DirectionalLightComponent)>()
+            .iter()
+            .next()
+        {
+            let world = self.get_world_transform(super::Entity::new(handle));
+            let (_, world_rot, _) = world.to_scale_rotation_translation();
+            let direction = DirectionalLightComponent::direction(world_rot);
+            env.directional = Some((direction, dl.color, dl.intensity));
+        }
+
+        // Point lights (from entity transforms).
+        for (pl, tf) in self
+            .world
+            .query::<(&PointLightComponent, &TransformComponent)>()
+            .iter()
+        {
+            env.point_lights
+                .push((tf.translation, pl.color, pl.intensity, pl.radius));
+        }
+
+        // Ambient light (use the first one found, otherwise keep default).
+        if let Some(al) = self.world.query::<&AmbientLightComponent>().iter().next() {
+            env.ambient_color = al.color;
+            env.ambient_intensity = al.intensity;
+        }
+
+        env
+    }
+
     /// Render all [`MeshRendererComponent`] entities using the default
     /// mesh3d pipeline. Called after 2D rendering is complete.
     fn render_meshes(&self, renderer: &mut Renderer) {
@@ -984,6 +1025,11 @@ impl Scene {
         if meshes.is_empty() {
             return;
         }
+
+        // Collect scene lights and upload to GPU before drawing 3D meshes.
+        let mut light_env = self.collect_lights();
+        light_env.camera_position = renderer.camera_position();
+        renderer.upload_lights(&light_env);
 
         let pipeline = match renderer.mesh3d_pipeline() {
             Ok(p) => p,
@@ -1057,6 +1103,7 @@ impl Scene {
         let _timer = crate::profiling::ProfileTimer::new("Scene::on_update_runtime");
         // Find the primary camera entity.
         let mut main_camera_vp: Option<glam::Mat4> = None;
+        let mut cam_position = glam::Vec3::ZERO;
         for (handle, camera) in self
             .world
             .query::<(hecs::Entity, &super::CameraComponent)>()
@@ -1065,6 +1112,7 @@ impl Scene {
             if camera.primary {
                 // VP = projection * inverse(camera_world_transform)
                 let world = self.get_world_transform(Entity::new(handle));
+                cam_position = world.col(3).truncate();
                 main_camera_vp = Some(*camera.camera.projection() * world.inverse());
                 break;
             }
@@ -1072,6 +1120,7 @@ impl Scene {
 
         if let Some(vp) = main_camera_vp {
             renderer.set_view_projection(vp);
+            renderer.set_camera_position(cam_position);
             self.render_scene(renderer);
         }
     }

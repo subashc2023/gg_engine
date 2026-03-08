@@ -151,11 +151,7 @@ impl GGEditor {
             ui.separator();
             ui.menu_button("Wireframe", |ui| {
                 if ui
-                    .radio_value(
-                        &mut self.ui.wireframe_mode,
-                        WireframeMode::Off,
-                        "Off",
-                    )
+                    .radio_value(&mut self.ui.wireframe_mode, WireframeMode::Off, "Off")
                     .clicked()
                 {
                     ui.close();

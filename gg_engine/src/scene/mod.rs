@@ -25,11 +25,12 @@ pub use animation::{
 #[cfg(feature = "lua-scripting")]
 pub use components::LuaScriptComponent;
 pub use components::{
-    AudioListenerComponent, AudioSourceComponent, BoxCollider2DComponent, CameraComponent,
-    CircleCollider2DComponent, CircleRendererComponent, IdComponent, MeshPrimitive,
-    MeshRendererComponent, NativeScriptComponent, ParticleEmitterComponent, RelationshipComponent,
-    RigidBody2DComponent, RigidBody2DType, SpriteRendererComponent, TagComponent, TextComponent,
-    TilemapComponent, TransformComponent, TILE_FLIP_H, TILE_FLIP_V, TILE_ID_MASK,
+    AmbientLightComponent, AudioListenerComponent, AudioSourceComponent, BoxCollider2DComponent,
+    CameraComponent, CircleCollider2DComponent, CircleRendererComponent, DirectionalLightComponent,
+    IdComponent, MeshPrimitive, MeshRendererComponent, NativeScriptComponent,
+    ParticleEmitterComponent, PointLightComponent, RelationshipComponent, RigidBody2DComponent,
+    RigidBody2DType, SpriteRendererComponent, TagComponent, TextComponent, TilemapComponent,
+    TransformComponent, TILE_FLIP_H, TILE_FLIP_V, TILE_ID_MASK,
 };
 pub use entity::Entity;
 pub use native_script::NativeScript;
@@ -113,6 +114,9 @@ macro_rules! for_each_cloneable_component {
             AudioListenerComponent,
             ParticleEmitterComponent,
             MeshRendererComponent,
+            DirectionalLightComponent,
+            PointLightComponent,
+            AmbientLightComponent,
         );
     };
 }
@@ -151,6 +155,12 @@ macro_rules! for_each_addable_component {
             ($crate::scene::AudioListenerComponent, "Audio Listener"),
             ($crate::scene::ParticleEmitterComponent, "Particle Emitter"),
             ($crate::scene::MeshRendererComponent, "Mesh Renderer"),
+            (
+                $crate::scene::DirectionalLightComponent,
+                "Directional Light"
+            ),
+            ($crate::scene::PointLightComponent, "Point Light"),
+            ($crate::scene::AmbientLightComponent, "Ambient Light"),
         );
     };
 }
@@ -1080,7 +1090,7 @@ mod tests {
         }
         for_each_cloneable_component!(count_types);
         // Update this constant when adding or removing cloneable components.
-        const EXPECTED_COUNT: usize = 17;
+        const EXPECTED_COUNT: usize = 20;
         assert_eq!(
             MACRO_COUNT, EXPECTED_COUNT,
             "for_each_cloneable_component! has {} types but expected {}. \

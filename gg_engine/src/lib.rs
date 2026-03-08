@@ -52,12 +52,13 @@ pub use renderer::{
 };
 pub use scene::{Aabb2D, CullingStats, SpatialGrid};
 pub use scene::{
-    AnimationClip, AnimationControllerComponent, AnimationTransition, AudioListenerComponent,
-    AudioSourceComponent, BoxCollider2DComponent, CameraComponent, CircleCollider2DComponent,
-    CircleRendererComponent, Entity, FloatOrdering, IdComponent, InstancedSpriteAnimator,
-    MeshPrimitive, MeshRendererComponent, NativeScript, NativeScriptComponent,
-    ParticleEmitterComponent, RelationshipComponent, RigidBody2DComponent, RigidBody2DType, Scene,
-    SceneSerializer, SpriteAnimatorComponent, SpriteRendererComponent, TagComponent, TextComponent,
+    AmbientLightComponent, AnimationClip, AnimationControllerComponent, AnimationTransition,
+    AudioListenerComponent, AudioSourceComponent, BoxCollider2DComponent, CameraComponent,
+    CircleCollider2DComponent, CircleRendererComponent, DirectionalLightComponent, Entity,
+    FloatOrdering, IdComponent, InstancedSpriteAnimator, MeshPrimitive, MeshRendererComponent,
+    NativeScript, NativeScriptComponent, ParticleEmitterComponent, PointLightComponent,
+    RelationshipComponent, RigidBody2DComponent, RigidBody2DType, Scene, SceneSerializer,
+    SpriteAnimatorComponent, SpriteRendererComponent, TagComponent, TextComponent,
     TilemapComponent, TransformComponent, TransitionCondition, TILE_FLIP_H, TILE_FLIP_V,
     TILE_ID_MASK,
 };
@@ -89,22 +90,24 @@ pub mod prelude {
     pub use crate::renderer::{
         as_bytes, load_gltf, BlendMode, BufferElement, BufferLayout, CullMode, DepthConfig,
         EditorCamera, Font, Framebuffer, FramebufferSpec, FramebufferTextureFormat,
-        FramebufferTextureSpec, IndexBuffer, Material, MaterialGpuData, MaterialHandle,
-        MaterialLibrary, Mesh, MeshVertex, MsaaSamples, OrthographicCamera, Pipeline, PresentMode,
-        ProjectionType, Renderer, Renderer2DStats, RendererBackend, SceneCamera, Shader,
-        ShaderDataType, ShaderLibrary, SubTexture2D, Texture2D, TextureSpecification, VertexArray,
-        VertexBuffer, WireframeMode,
+        FramebufferTextureSpec, IndexBuffer, LightEnvironment, LightGpuData, Material,
+        MaterialGpuData, MaterialHandle, MaterialLibrary, Mesh, MeshVertex, MsaaSamples,
+        OrthographicCamera, Pipeline, PresentMode, ProjectionType, Renderer, Renderer2DStats,
+        RendererBackend, SceneCamera, Shader, ShaderDataType, ShaderLibrary, SubTexture2D,
+        Texture2D, TextureSpecification, VertexArray, VertexBuffer, WireframeMode,
+        MAX_POINT_LIGHTS,
     };
     pub use crate::scene::{Aabb2D, SpatialGrid};
     pub use crate::scene::{
-        AnimationClip, AnimationControllerComponent, AnimationTransition, AudioListenerComponent,
-        AudioSourceComponent, BoxCollider2DComponent, CameraComponent, CircleCollider2DComponent,
-        CircleRendererComponent, Entity, FloatOrdering, IdComponent, InstancedSpriteAnimator,
-        MeshPrimitive, MeshRendererComponent, NativeScript, NativeScriptComponent,
-        ParticleEmitterComponent, RelationshipComponent, RigidBody2DComponent, RigidBody2DType,
-        Scene, SceneSerializer, SpriteAnimatorComponent, SpriteRendererComponent, TagComponent,
-        TextComponent, TilemapComponent, TransformComponent, TransitionCondition, TILE_FLIP_H,
-        TILE_FLIP_V, TILE_ID_MASK,
+        AmbientLightComponent, AnimationClip, AnimationControllerComponent, AnimationTransition,
+        AudioListenerComponent, AudioSourceComponent, BoxCollider2DComponent, CameraComponent,
+        CircleCollider2DComponent, CircleRendererComponent, DirectionalLightComponent, Entity,
+        FloatOrdering, IdComponent, InstancedSpriteAnimator, MeshPrimitive, MeshRendererComponent,
+        NativeScript, NativeScriptComponent, ParticleEmitterComponent, PointLightComponent,
+        RelationshipComponent, RigidBody2DComponent, RigidBody2DType, Scene, SceneSerializer,
+        SpriteAnimatorComponent, SpriteRendererComponent, TagComponent, TextComponent,
+        TilemapComponent, TransformComponent, TransitionCondition, TILE_FLIP_H, TILE_FLIP_V,
+        TILE_ID_MASK,
     };
     #[cfg(feature = "lua-scripting")]
     pub use crate::scene::{LuaScriptComponent, ScriptEngine, ScriptFieldValue};

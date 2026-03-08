@@ -11,6 +11,7 @@ use super::font::{Font, FontCpuData};
 use super::framebuffer::{Framebuffer, FramebufferSpec};
 use super::gpu_allocation::GpuAllocator;
 use super::gpu_particle_system::GpuParticleSystem;
+use super::lighting::{LightEnvironment, LightingSystem};
 use super::material::{MaterialHandle, MaterialLibrary};
 use super::pipeline::{self, Pipeline};
 use super::render_command::RenderCommand;
@@ -91,6 +92,12 @@ pub struct Renderer {
     // Per-frame per-viewport material UBO (PBR surface properties).
     material_library: MaterialLibrary,
 
+    // Per-frame per-viewport lighting UBO (directional + point lights).
+    lighting: LightingSystem,
+
+    // Camera eye position for specular lighting (set each frame by the caller).
+    camera_position: Vec3,
+
     // Format info for framebuffer creation.
     color_format: vk::Format,
     depth_format: vk::Format,
@@ -149,10 +156,10 @@ impl Renderer {
         let device = vk_ctx.device();
         let api = RendererAPI::Vulkan(VulkanRendererAPI::new(device));
 
-        // Create descriptor pool for texture samplers + camera/material UBO sets.
-        // Camera + material UBOs each need one descriptor set per (frame, viewport) slot.
+        // Create descriptor pool for texture samplers + camera/material/lighting UBO sets.
+        // Camera + material + lighting UBOs each need one descriptor set per (frame, viewport) slot.
         let ubo_slot_count = (super::MAX_FRAMES_IN_FLIGHT * super::MAX_VIEWPORTS) as u32;
-        let total_ubo_sets = ubo_slot_count * 2; // camera + material
+        let total_ubo_sets = ubo_slot_count * 3; // camera + material + lighting
         let pool_sizes = [
             vk::DescriptorPoolSize {
                 ty: vk::DescriptorType::COMBINED_IMAGE_SAMPLER,
@@ -188,6 +195,9 @@ impl Renderer {
         // Material UBO: descriptor set layout, per-slot buffers, descriptor sets.
         let material_library = MaterialLibrary::new(allocator, device, descriptor_pool)?;
 
+        // Lighting UBO: descriptor set layout, per-slot buffers, descriptor sets.
+        let lighting = LightingSystem::new(allocator, device, descriptor_pool)?;
+
         // -- Pipeline cache (load from disk if available) --
         let cache_data = Self::load_pipeline_cache_data();
         let cache_create_info = if cache_data.is_empty() {
@@ -212,6 +222,8 @@ impl Renderer {
             texture_descriptor_set_layout,
             camera,
             material_library,
+            lighting,
+            camera_position: Vec3::ZERO,
             color_format,
             depth_format,
             pipeline_cache,
@@ -378,6 +390,7 @@ impl Renderer {
             &[
                 self.texture_descriptor_set_layout,
                 self.material_library.ds_layout(),
+                self.lighting.ds_layout(),
             ],
             cull_mode,
             depth_config,
@@ -607,6 +620,18 @@ impl Renderer {
     ) {
         self.material_library
             .write_material_ubo(handle, current_frame, viewport_index);
+    }
+
+    /// Upload lighting environment data to the GPU for the current frame/viewport.
+    ///
+    /// Call this once before rendering 3D meshes each frame. If not called,
+    /// the previous frame's light data remains in the UBO.
+    pub fn upload_lights(&self, env: &LightEnvironment) {
+        if let Some(ctx) = self.draw_context {
+            let gpu_data = env.to_gpu_data();
+            self.lighting
+                .write_ubo(&gpu_data, ctx.current_frame, ctx.viewport_index);
+        }
     }
 
     /// Tell the batch renderer to use the offscreen pipeline (or switch back).
@@ -1532,6 +1557,19 @@ impl Renderer {
         }
     }
 
+    /// Set the camera eye position (used for specular lighting calculations).
+    ///
+    /// Call this after [`set_view_projection`] each frame. The position is
+    /// automatically included in the lighting UBO when [`upload_lights`] is called.
+    pub fn set_camera_position(&mut self, pos: Vec3) {
+        self.camera_position = pos;
+    }
+
+    /// Get the current camera eye position.
+    pub fn camera_position(&self) -> Vec3 {
+        self.camera_position
+    }
+
     /// Set the scene time used for GPU-computed animation.
     ///
     /// Call this before [`set_view_projection`] so the UBO includes the
@@ -1695,25 +1733,39 @@ impl Renderer {
                 &push_data,
             );
 
-            // Set 2: material UBO (if provided).
-            if let Some(handle) = material_handle {
-                self.material_library.write_material_ubo(
-                    handle,
-                    ctx.current_frame,
-                    ctx.viewport_index,
-                );
-                let material_ds = self
-                    .material_library
-                    .descriptor_set(ctx.current_frame, ctx.viewport_index);
-                device.cmd_bind_descriptor_sets(
-                    cmd,
-                    vk::PipelineBindPoint::GRAPHICS,
-                    pipeline.layout(),
-                    2,
-                    &[material_ds],
-                    &[],
-                );
-            }
+            // Set 2: material UBO (always bound — shader reads material properties for lighting).
+            let mat_handle = material_handle
+                .cloned()
+                .unwrap_or_else(|| self.material_library.default_handle());
+            self.material_library.write_material_ubo(
+                &mat_handle,
+                ctx.current_frame,
+                ctx.viewport_index,
+            );
+            let material_ds = self
+                .material_library
+                .descriptor_set(ctx.current_frame, ctx.viewport_index);
+            device.cmd_bind_descriptor_sets(
+                cmd,
+                vk::PipelineBindPoint::GRAPHICS,
+                pipeline.layout(),
+                2,
+                &[material_ds],
+                &[],
+            );
+
+            // Set 3: lighting UBO.
+            let lighting_ds = self
+                .lighting
+                .descriptor_set(ctx.current_frame, ctx.viewport_index);
+            device.cmd_bind_descriptor_sets(
+                cmd,
+                vk::PipelineBindPoint::GRAPHICS,
+                pipeline.layout(),
+                3,
+                &[lighting_ds],
+                &[],
+            );
         }
 
         // Bind vertex/index buffers and draw.
@@ -1772,6 +1824,7 @@ impl Renderer {
                 &[
                     self.texture_descriptor_set_layout,
                     self.material_library.ds_layout(),
+                    self.lighting.ds_layout(),
                 ],
                 super::CullMode::Back,
                 super::DepthConfig::STANDARD_3D,
@@ -1811,6 +1864,7 @@ impl Renderer {
                 &[
                     self.texture_descriptor_set_layout,
                     self.material_library.ds_layout(),
+                    self.lighting.ds_layout(),
                 ],
                 super::CullMode::Back,
                 super::DepthConfig::STANDARD_3D,

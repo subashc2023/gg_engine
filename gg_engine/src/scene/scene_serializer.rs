@@ -11,10 +11,11 @@ use crate::scene::entity::Entity;
 #[cfg(feature = "lua-scripting")]
 use crate::scene::LuaScriptComponent;
 use crate::scene::{
-    AnimationClip, AnimationControllerComponent, AnimationTransition, AudioListenerComponent,
-    AudioSourceComponent, BoxCollider2DComponent, CameraComponent, CircleCollider2DComponent,
-    CircleRendererComponent, FloatOrdering, IdComponent, InstancedSpriteAnimator, MeshPrimitive,
-    MeshRendererComponent, ParticleEmitterComponent, RelationshipComponent, RigidBody2DComponent,
+    AmbientLightComponent, AnimationClip, AnimationControllerComponent, AnimationTransition,
+    AudioListenerComponent, AudioSourceComponent, BoxCollider2DComponent, CameraComponent,
+    CircleCollider2DComponent, CircleRendererComponent, DirectionalLightComponent, FloatOrdering,
+    IdComponent, InstancedSpriteAnimator, MeshPrimitive, MeshRendererComponent,
+    ParticleEmitterComponent, PointLightComponent, RelationshipComponent, RigidBody2DComponent,
     RigidBody2DType, Scene, SpriteAnimatorComponent, SpriteRendererComponent, TagComponent,
     TextComponent, TilemapComponent, TransformComponent, TransitionCondition,
 };
@@ -160,6 +161,24 @@ struct EntityData {
         default
     )]
     mesh_renderer: Option<MeshRendererData>,
+    #[serde(
+        rename = "DirectionalLightComponent",
+        skip_serializing_if = "Option::is_none",
+        default
+    )]
+    directional_light: Option<DirectionalLightData>,
+    #[serde(
+        rename = "PointLightComponent",
+        skip_serializing_if = "Option::is_none",
+        default
+    )]
+    point_light: Option<PointLightData>,
+    #[serde(
+        rename = "AmbientLightComponent",
+        skip_serializing_if = "Option::is_none",
+        default
+    )]
+    ambient_light: Option<AmbientLightData>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -181,7 +200,9 @@ struct TransformData {
 
 /// Deserialize rotation from either [x,y,z,w] quaternion (4 elements)
 /// or [rx,ry,rz] Euler radians (3 elements, legacy format).
-fn deserialize_rotation<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<[f32; 4], D::Error> {
+fn deserialize_rotation<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<[f32; 4], D::Error> {
     let value: Vec<f32> = Vec::deserialize(deserializer)?;
     match value.len() {
         4 => Ok([value[0], value[1], value[2], value[3]]),
@@ -189,7 +210,9 @@ fn deserialize_rotation<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Re
             let q = glam::Quat::from_euler(glam::EulerRot::XYZ, value[0], value[1], value[2]);
             Ok([q.x, q.y, q.z, q.w])
         }
-        _ => Err(serde::de::Error::custom("expected 3 or 4 floats for Rotation")),
+        _ => Err(serde::de::Error::custom(
+            "expected 3 or 4 floats for Rotation",
+        )),
     }
 }
 
@@ -657,6 +680,43 @@ struct MeshRendererData {
 
 fn default_mesh_primitive() -> String {
     "Cube".into()
+}
+
+#[derive(Serialize, Deserialize)]
+struct DirectionalLightData {
+    /// Legacy field — direction is now derived from entity rotation.
+    /// Kept for backward compatibility when loading old scenes.
+    #[serde(rename = "Direction", default)]
+    _direction: Option<[f32; 3]>,
+    #[serde(rename = "Color")]
+    color: [f32; 3],
+    #[serde(rename = "Intensity", default = "default_light_intensity")]
+    intensity: f32,
+}
+
+#[derive(Serialize, Deserialize)]
+struct PointLightData {
+    #[serde(rename = "Color")]
+    color: [f32; 3],
+    #[serde(rename = "Intensity", default = "default_light_intensity")]
+    intensity: f32,
+    #[serde(rename = "Radius", default = "default_point_light_radius")]
+    radius: f32,
+}
+
+#[derive(Serialize, Deserialize)]
+struct AmbientLightData {
+    #[serde(rename = "Color")]
+    color: [f32; 3],
+    #[serde(rename = "Intensity", default = "default_light_intensity")]
+    intensity: f32,
+}
+
+fn default_light_intensity() -> f32 {
+    1.0
+}
+fn default_point_light_radius() -> f32 {
+    10.0
 }
 
 fn has_no_relationships(r: &Option<RelationshipData>) -> bool {
@@ -1212,6 +1272,26 @@ impl SceneSerializer {
                         color: mc.color.into(),
                     }
                 }),
+            directional_light: scene
+                .get_component::<DirectionalLightComponent>(entity)
+                .map(|dl| DirectionalLightData {
+                    _direction: None,
+                    color: dl.color.into(),
+                    intensity: dl.intensity,
+                }),
+            point_light: scene
+                .get_component::<PointLightComponent>(entity)
+                .map(|pl| PointLightData {
+                    color: pl.color.into(),
+                    intensity: pl.intensity,
+                    radius: pl.radius,
+                }),
+            ambient_light: scene
+                .get_component::<AmbientLightComponent>(entity)
+                .map(|al| AmbientLightData {
+                    color: al.color.into(),
+                    intensity: al.intensity,
+                }),
         }
     }
 
@@ -1252,7 +1332,12 @@ impl SceneSerializer {
         if let Some(ref td) = entity_data.transform {
             if let Some(mut tc) = scene.get_component_mut::<TransformComponent>(entity) {
                 tc.translation = Vec3::from(td.translation);
-                tc.rotation = glam::Quat::from_xyzw(td.rotation[0], td.rotation[1], td.rotation[2], td.rotation[3]);
+                tc.rotation = glam::Quat::from_xyzw(
+                    td.rotation[0],
+                    td.rotation[1],
+                    td.rotation[2],
+                    td.rotation[3],
+                );
                 tc.scale = Vec3::from(td.scale);
             }
         }
@@ -1580,6 +1665,40 @@ impl SceneSerializer {
                 },
             );
         }
+
+        // DirectionalLightComponent
+        if let Some(ref dl) = entity_data.directional_light {
+            scene.add_component(
+                entity,
+                DirectionalLightComponent {
+                    color: Vec3::from(dl.color),
+                    intensity: dl.intensity,
+                },
+            );
+        }
+
+        // PointLightComponent
+        if let Some(ref pl) = entity_data.point_light {
+            scene.add_component(
+                entity,
+                PointLightComponent {
+                    color: Vec3::from(pl.color),
+                    intensity: pl.intensity,
+                    radius: pl.radius,
+                },
+            );
+        }
+
+        // AmbientLightComponent
+        if let Some(ref al) = entity_data.ambient_light {
+            scene.add_component(
+                entity,
+                AmbientLightComponent {
+                    color: Vec3::from(al.color),
+                    intensity: al.intensity,
+                },
+            );
+        }
     }
 }
 
@@ -1631,7 +1750,12 @@ mod tests {
             .unwrap();
         assert_eq!(tc.translation, Vec3::new(1.0, 2.0, 3.0));
         let expected_quat = glam::Quat::from_euler(glam::EulerRot::XYZ, 0.1, 0.2, 0.3);
-        assert!(tc.rotation.abs_diff_eq(expected_quat, 1e-6), "rotation mismatch: {:?} vs {:?}", tc.rotation, expected_quat);
+        assert!(
+            tc.rotation.abs_diff_eq(expected_quat, 1e-6),
+            "rotation mismatch: {:?} vs {:?}",
+            tc.rotation,
+            expected_quat
+        );
         assert_eq!(tc.scale, Vec3::new(2.0, 2.0, 2.0));
 
         // Verify sprite (color + texture_handle round-trip).

@@ -1,4 +1,4 @@
-use glam::{Mat4, Vec2, Vec3, Vec4};
+use glam::{Mat4, Quat, Vec2, Vec3, Vec4};
 
 use crate::renderer::Font;
 use crate::renderer::SceneCamera;
@@ -101,8 +101,7 @@ impl TransformComponent {
 
     /// Sets rotation from Euler angles (XYZ order, radians).
     pub fn set_euler_angles(&mut self, euler: Vec3) {
-        self.rotation =
-            glam::Quat::from_euler(glam::EulerRot::XYZ, euler.x, euler.y, euler.z);
+        self.rotation = glam::Quat::from_euler(glam::EulerRot::XYZ, euler.x, euler.y, euler.z);
     }
 
     /// Returns the Z-axis rotation in radians (useful for 2D).
@@ -820,9 +819,7 @@ impl MeshPrimitive {
     /// Local-space axis-aligned bounding box as `(min, max)` corners.
     pub fn local_bounds(self) -> (Vec3, Vec3) {
         match self {
-            Self::Cube | Self::Sphere => {
-                (Vec3::splat(-0.5), Vec3::splat(0.5))
-            }
+            Self::Cube | Self::Sphere => (Vec3::splat(-0.5), Vec3::splat(0.5)),
             Self::Plane => {
                 // Flat on XZ, Y = 0.
                 (Vec3::new(-0.5, 0.0, -0.5), Vec3::new(0.5, 0.0, 0.5))
@@ -871,6 +868,89 @@ impl Default for MeshRendererComponent {
             primitive: MeshPrimitive::Cube,
             color: Vec4::ONE,
             vertex_array: None,
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Light Components
+// ---------------------------------------------------------------------------
+
+/// Directional light — infinite distance, uniform direction (like the sun).
+///
+/// Direction is derived from the entity's rotation: `rotation * CANONICAL_FORWARD`.
+/// With identity rotation the light points straight down (`-Y`), like a noon sun.
+/// Rotate the entity to aim the light.
+#[derive(Clone)]
+pub struct DirectionalLightComponent {
+    /// Light color (linear RGB).
+    pub color: Vec3,
+    /// Brightness multiplier.
+    pub intensity: f32,
+}
+
+impl DirectionalLightComponent {
+    /// The local-space direction vector before rotation is applied.
+    /// With identity rotation the light points straight down.
+    pub const CANONICAL_FORWARD: Vec3 = Vec3::NEG_Y;
+
+    /// Compute the world-space light direction from the entity's rotation.
+    #[inline]
+    pub fn direction(rotation: Quat) -> Vec3 {
+        rotation * Self::CANONICAL_FORWARD
+    }
+}
+
+impl Default for DirectionalLightComponent {
+    fn default() -> Self {
+        Self {
+            color: Vec3::ONE,
+            intensity: 1.0,
+        }
+    }
+}
+
+/// Point light — emits light in all directions from the entity's position.
+///
+/// Position is taken from the entity's [`TransformComponent`].
+/// Uses smooth quadratic attenuation: `max(0, 1 - (d/radius)^2)^2`.
+#[derive(Clone)]
+pub struct PointLightComponent {
+    /// Light color (linear RGB).
+    pub color: Vec3,
+    /// Brightness multiplier.
+    pub intensity: f32,
+    /// Maximum influence radius. Light is zero beyond this distance.
+    pub radius: f32,
+}
+
+impl Default for PointLightComponent {
+    fn default() -> Self {
+        Self {
+            color: Vec3::ONE,
+            intensity: 1.0,
+            radius: 10.0,
+        }
+    }
+}
+
+/// Ambient light override for a scene. If no entity has this component,
+/// a default ambient of (0.03, 0.03, 0.03) is used.
+///
+/// Only the first entity with this component is used (scene-wide setting).
+#[derive(Clone)]
+pub struct AmbientLightComponent {
+    /// Ambient light color (linear RGB).
+    pub color: Vec3,
+    /// Intensity multiplier.
+    pub intensity: f32,
+}
+
+impl Default for AmbientLightComponent {
+    fn default() -> Self {
+        Self {
+            color: Vec3::new(0.03, 0.03, 0.03),
+            intensity: 1.0,
         }
     }
 }

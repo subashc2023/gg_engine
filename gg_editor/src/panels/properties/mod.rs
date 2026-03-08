@@ -1,5 +1,6 @@
 mod audio;
 mod camera;
+mod lighting;
 mod mesh;
 mod particles;
 mod physics;
@@ -697,6 +698,45 @@ fn draw_components(
     {
         undo_system.record(scene, "Remove Mesh Renderer");
         scene.remove_component::<MeshRendererComponent>(entity);
+        *scene_dirty = true;
+    }
+
+    if lighting::draw_directional_light_component(
+        ui,
+        scene,
+        entity,
+        &bold_family,
+        scene_dirty,
+        undo_system,
+    ) {
+        undo_system.record(scene, "Remove Directional Light");
+        scene.remove_component::<DirectionalLightComponent>(entity);
+        *scene_dirty = true;
+    }
+
+    if lighting::draw_point_light_component(
+        ui,
+        scene,
+        entity,
+        &bold_family,
+        scene_dirty,
+        undo_system,
+    ) {
+        undo_system.record(scene, "Remove Point Light");
+        scene.remove_component::<PointLightComponent>(entity);
+        *scene_dirty = true;
+    }
+
+    if lighting::draw_ambient_light_component(
+        ui,
+        scene,
+        entity,
+        &bold_family,
+        scene_dirty,
+        undo_system,
+    ) {
+        undo_system.record(scene, "Remove Ambient Light");
+        scene.remove_component::<AmbientLightComponent>(entity);
         *scene_dirty = true;
     }
 
