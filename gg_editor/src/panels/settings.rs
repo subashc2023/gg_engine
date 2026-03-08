@@ -57,7 +57,10 @@ pub(crate) fn settings_ui(
         .selected_text(format!("{}", msaa_samples))
         .show_ui(ui, |ui| {
             for &s in &available {
-                if ui.selectable_value(msaa_samples, s, format!("{s}")).changed() {
+                if ui
+                    .selectable_value(msaa_samples, s, format!("{s}"))
+                    .changed()
+                {
                     *msaa_changed = true;
                 }
             }

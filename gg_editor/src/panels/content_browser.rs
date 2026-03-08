@@ -540,7 +540,8 @@ fn asset_browser_ui(
         .iter()
         .filter(|(_, _, t)| *t == AssetType::Texture2D)
         .filter_map(|(handle, _, _)| {
-            am.get_texture(handle).map(|tex| (*handle, tex.egui_handle()))
+            am.get_texture(handle)
+                .map(|tex| (*handle, tex.egui_handle()))
         })
         .collect();
 
@@ -833,11 +834,7 @@ fn paint_scene_icon(painter: &egui::Painter, rect: egui::Rect) {
         egui::pos2(cx - s - 3.0, cy - s - 3.0),
         egui::pos2(cx + s - 3.0, cy + s - 3.0),
     );
-    painter.rect_filled(
-        back,
-        egui::CornerRadius::same(2),
-        color.gamma_multiply(0.5),
-    );
+    painter.rect_filled(back, egui::CornerRadius::same(2), color.gamma_multiply(0.5));
 
     // Front square.
     let front = egui::Rect::from_min_max(
@@ -868,11 +865,7 @@ fn paint_audio_icon(painter: &egui::Painter, rect: egui::Rect) {
         egui::pos2(cx + s * 0.5, cy + s * 1.5),
         egui::pos2(cx - s * 0.3, cy + s * 0.6),
     ];
-    painter.add(egui::Shape::convex_polygon(
-        cone,
-        color,
-        egui::Stroke::NONE,
-    ));
+    painter.add(egui::Shape::convex_polygon(cone, color, egui::Stroke::NONE));
 
     // Sound waves (two arcs).
     for i in 1..=2 {
@@ -905,22 +898,14 @@ fn paint_prefab_icon(painter: &egui::Painter, rect: egui::Rect) {
         egui::pos2(cx - s * 2.0, cy + s * 0.2),
         egui::pos2(cx - s * 0.2, cy + s * 2.2),
     );
-    painter.rect_filled(
-        bl,
-        egui::CornerRadius::same(2),
-        color.gamma_multiply(0.7),
-    );
+    painter.rect_filled(bl, egui::CornerRadius::same(2), color.gamma_multiply(0.7));
 
     // Bottom-right block.
     let br = egui::Rect::from_min_max(
         egui::pos2(cx + s * 0.2, cy + s * 0.2),
         egui::pos2(cx + s * 2.0, cy + s * 2.2),
     );
-    painter.rect_filled(
-        br,
-        egui::CornerRadius::same(2),
-        color.gamma_multiply(0.7),
-    );
+    painter.rect_filled(br, egui::CornerRadius::same(2), color.gamma_multiply(0.7));
 }
 
 /// Paint a file/document icon inside `rect`.

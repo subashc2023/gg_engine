@@ -74,7 +74,10 @@ impl Application for JobsStress {
 
         // Start trace capture after a few warm-up frames.
         if self.frame_count == 30 && !self.trace_started {
-            info!("JobsStress: starting trace capture for {} frames...", TRACE_CAPTURE_FRAMES);
+            info!(
+                "JobsStress: starting trace capture for {} frames...",
+                TRACE_CAPTURE_FRAMES
+            );
             begin_session("jobs_stress", "gg_jobs_stress.json");
             self.trace_started = true;
         }
@@ -111,10 +114,7 @@ impl Application for JobsStress {
         gg_engine::egui::Window::new("Jobs Stress Test").show(ctx, |ui| {
             ui.label(format!("{:.2} ms ({:.0} FPS)", dt_ms, fps));
             ui.label(format!("Frame: {}", self.frame_count));
-            ui.label(format!(
-                "Workers: {}",
-                gg_engine::jobs::worker_count()
-            ));
+            ui.label(format!("Workers: {}", gg_engine::jobs::worker_count()));
             ui.separator();
 
             ui.label(format!("Entities: {}", ENTITY_COUNT));

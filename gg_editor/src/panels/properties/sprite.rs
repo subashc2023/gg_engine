@@ -18,7 +18,13 @@ pub(crate) fn draw_sprite_renderer_component(
     if !scene.has_component::<SpriteRendererComponent>(entity) {
         return false;
     }
-    super::component_header(ui, "Sprite Renderer", "sprite_renderer", bold_family, entity, |ui| {
+    super::component_header(
+        ui,
+        "Sprite Renderer",
+        "sprite_renderer",
+        bold_family,
+        entity,
+        |ui| {
             let (
                 mut color_arr,
                 texture_handle_raw,
@@ -48,8 +54,7 @@ pub(crate) fn draw_sprite_renderer_component(
             };
 
             if super::color_picker_rgba(ui, "Color", &mut color_arr) {
-                if let Some(mut sprite) =
-                    scene.get_component_mut::<SpriteRendererComponent>(entity)
+                if let Some(mut sprite) = scene.get_component_mut::<SpriteRendererComponent>(entity)
                 {
                     sprite.color = Vec4::from(color_arr);
                 }
@@ -168,7 +173,8 @@ pub(crate) fn draw_sprite_renderer_component(
                     *scene_dirty = true;
                 }
             }
-    })
+        },
+    )
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -185,7 +191,13 @@ pub(crate) fn draw_sprite_animator_component(
     if !scene.has_component::<SpriteAnimatorComponent>(entity) {
         return false;
     }
-    super::component_header(ui, "Sprite Animator", "sprite_animator", bold_family, entity, |ui| {
+    super::component_header(
+        ui,
+        "Sprite Animator",
+        "sprite_animator",
+        bold_family,
+        entity,
+        |ui| {
             let (
                 mut cell_w,
                 mut cell_h,
@@ -585,7 +597,8 @@ pub(crate) fn draw_sprite_animator_component(
                     *scene_dirty = true;
                 }
             }
-    })
+        },
+    )
 }
 
 pub(crate) fn draw_circle_renderer_component(
@@ -599,7 +612,13 @@ pub(crate) fn draw_circle_renderer_component(
     if !scene.has_component::<CircleRendererComponent>(entity) {
         return false;
     }
-    super::component_header(ui, "Circle Renderer", "circle_renderer", bold_family, entity, |ui| {
+    super::component_header(
+        ui,
+        "Circle Renderer",
+        "circle_renderer",
+        bold_family,
+        entity,
+        |ui| {
             let (mut color_arr, mut thickness, mut fade, mut sorting_layer, mut order_in_layer) = {
                 let circle = scene
                     .get_component::<CircleRendererComponent>(entity)
@@ -619,8 +638,7 @@ pub(crate) fn draw_circle_renderer_component(
             };
 
             if super::color_picker_rgba(ui, "Color", &mut color_arr) {
-                if let Some(mut circle) =
-                    scene.get_component_mut::<CircleRendererComponent>(entity)
+                if let Some(mut circle) = scene.get_component_mut::<CircleRendererComponent>(entity)
                 {
                     circle.color = Vec4::from(color_arr);
                 }
@@ -674,7 +692,8 @@ pub(crate) fn draw_circle_renderer_component(
                 }
                 *scene_dirty = true;
             }
-    })
+        },
+    )
 }
 
 // ---------------------------------------------------------------------------
@@ -695,7 +714,13 @@ pub(crate) fn draw_instanced_sprite_animator(
     if !scene.has_component::<InstancedSpriteAnimator>(entity) {
         return false;
     }
-    super::component_header(ui, "Instanced Sprite Animator", "instanced_sprite_animator", bold_family, entity, |ui| {
+    super::component_header(
+        ui,
+        "Instanced Sprite Animator",
+        "instanced_sprite_animator",
+        bold_family,
+        entity,
+        |ui| {
             let (
                 mut cell_w,
                 mut cell_h,
@@ -858,7 +883,8 @@ pub(crate) fn draw_instanced_sprite_animator(
             }
 
             let _ = (asset_manager, assets_root);
-    })
+        },
+    )
 }
 
 // ---------------------------------------------------------------------------
@@ -876,7 +902,13 @@ pub(crate) fn draw_animation_controller(
     if !scene.has_component::<AnimationControllerComponent>(entity) {
         return false;
     }
-    super::component_header(ui, "Animation Controller", "animation_controller", bold_family, entity, |ui| {
+    super::component_header(
+        ui,
+        "Animation Controller",
+        "animation_controller",
+        bold_family,
+        entity,
+        |ui| {
             let transition_count = {
                 let ctrl = scene
                     .get_component::<AnimationControllerComponent>(entity)
@@ -1113,5 +1145,6 @@ pub(crate) fn draw_animation_controller(
                 }
                 *scene_dirty = true;
             }
-    })
+        },
+    )
 }

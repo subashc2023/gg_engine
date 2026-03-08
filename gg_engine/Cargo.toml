@@ -28,6 +28,7 @@ rand.workspace = true
 rapier2d.workspace = true
 mlua = { workspace = true, optional = true }
 ttf-parser.workspace = true
+gltf.workspace = true
 gpu-allocator.workspace = true
 kira.workspace = true
 rayon.workspace = true

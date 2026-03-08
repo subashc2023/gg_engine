@@ -433,7 +433,10 @@ impl Application for GGEditor {
 
     fn on_attach(&mut self, renderer: &mut Renderer) {
         self.max_msaa_samples = MsaaSamples::from_vk(renderer.max_msaa_samples());
-        let msaa_samples = self.editor_settings.msaa_samples.clamp_to_device(self.max_msaa_samples.to_vk());
+        let msaa_samples = self
+            .editor_settings
+            .msaa_samples
+            .clamp_to_device(self.max_msaa_samples.to_vk());
         match renderer.create_framebuffer(FramebufferSpec {
             width: 800,
             height: 600,
@@ -668,11 +671,12 @@ impl Application for GGEditor {
                     }
                 }
 
-                // Gizmo shortcuts (Q/W/E/R) — edit mode only, not while typing.
+                // Gizmo shortcuts (Q/W/E/R) — edit mode only, not while typing or flying.
                 KeyCode::Q
                     if !ctrl
                         && !shift
                         && !self.ui.egui_wants_keyboard
+                        && !self.editor_camera.is_flying()
                         && self.playback.scene_state == SceneState::Edit =>
                 {
                     self.gizmo_state.operation = GizmoOperation::None;
@@ -681,6 +685,7 @@ impl Application for GGEditor {
                     if !ctrl
                         && !shift
                         && !self.ui.egui_wants_keyboard
+                        && !self.editor_camera.is_flying()
                         && self.playback.scene_state == SceneState::Edit =>
                 {
                     self.gizmo_state.operation = GizmoOperation::Translate;
@@ -689,6 +694,7 @@ impl Application for GGEditor {
                     if !ctrl
                         && !shift
                         && !self.ui.egui_wants_keyboard
+                        && !self.editor_camera.is_flying()
                         && self.playback.scene_state == SceneState::Edit =>
                 {
                     self.gizmo_state.operation = GizmoOperation::Rotate;
@@ -697,9 +703,27 @@ impl Application for GGEditor {
                     if !ctrl
                         && !shift
                         && !self.ui.egui_wants_keyboard
+                        && !self.editor_camera.is_flying()
                         && self.playback.scene_state == SceneState::Edit =>
                 {
                     self.gizmo_state.operation = GizmoOperation::Scale;
+                }
+
+                // Focus on selected entity (F).
+                KeyCode::F
+                    if !ctrl
+                        && !shift
+                        && !self.ui.egui_wants_keyboard
+                        && self.playback.scene_state != SceneState::Play =>
+                {
+                    if let Some(entity) = self.selection.single() {
+                        let world = self.scene.get_world_transform(entity);
+                        let pos = world.col(3).truncate();
+                        self.editor_camera.focus_on(pos);
+                    } else {
+                        // No selection — focus on origin.
+                        self.editor_camera.focus_on(Vec3::ZERO);
+                    }
                 }
 
                 // Play/Stop toggle (F5) — mirrors toolbar play button.
@@ -854,7 +878,10 @@ impl Application for GGEditor {
         // Handle MSAA sample count change — recreate framebuffers + pipelines.
         if self.ui.msaa_changed {
             self.ui.msaa_changed = false;
-            let msaa = self.editor_settings.msaa_samples.clamp_to_device(self.max_msaa_samples.to_vk());
+            let msaa = self
+                .editor_settings
+                .msaa_samples
+                .clamp_to_device(self.max_msaa_samples.to_vk());
             let samples = msaa.to_vk();
             let attachments = vec![
                 FramebufferTextureFormat::RGBA8.into(),
@@ -896,7 +923,10 @@ impl Application for GGEditor {
         // Deferred game viewport framebuffer creation (toggled from View menu).
         if self.ui.create_game_fb && self.viewport.game_fb.is_none() {
             self.ui.create_game_fb = false;
-            let msaa_samples = self.editor_settings.msaa_samples.clamp_to_device(self.max_msaa_samples.to_vk());
+            let msaa_samples = self
+                .editor_settings
+                .msaa_samples
+                .clamp_to_device(self.max_msaa_samples.to_vk());
             match renderer.create_framebuffer(FramebufferSpec {
                 width: 800,
                 height: 600,
@@ -959,12 +989,13 @@ impl Application for GGEditor {
         // Submit any batched texture/font uploads before rendering.
         renderer.flush_transfers();
 
-        // Step 2: Resolve texture, audio, and font handles (async — non-blocking).
+        // Step 2: Resolve texture, audio, font, and mesh handles (async — non-blocking).
         if let Some(ref mut am) = self.project_state.asset_manager {
             self.scene.resolve_texture_handles_async(am);
             self.scene.resolve_audio_handles(am);
             self.scene.load_fonts_async(am);
         }
+        self.scene.resolve_meshes(renderer);
 
         match self.playback.scene_state {
             SceneState::Edit => {

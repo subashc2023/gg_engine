@@ -18,6 +18,8 @@ pub struct Input {
     mouse_buttons_prev: HashSet<MouseButton>,
     mouse_x: f64,
     mouse_y: f64,
+    mouse_delta_x: f64,
+    mouse_delta_y: f64,
 }
 
 impl Input {
@@ -29,6 +31,8 @@ impl Input {
             mouse_buttons_prev: HashSet::new(),
             mouse_x: 0.0,
             mouse_y: 0.0,
+            mouse_delta_x: 0.0,
+            mouse_delta_y: 0.0,
         }
     }
 
@@ -71,6 +75,12 @@ impl Input {
         self.mouse_y
     }
 
+    /// Raw mouse motion delta accumulated this frame (sub-pixel precision).
+    /// Reset to (0, 0) each frame.
+    pub fn mouse_delta(&self) -> (f64, f64) {
+        (self.mouse_delta_x, self.mouse_delta_y)
+    }
+
     // -- Mutation (engine-internal) -------------------------------------------
 
     pub(crate) fn press_key(&mut self, key: KeyCode) {
@@ -94,6 +104,11 @@ impl Input {
         self.mouse_y = y;
     }
 
+    pub(crate) fn accumulate_mouse_delta(&mut self, dx: f64, dy: f64) {
+        self.mouse_delta_x += dx;
+        self.mouse_delta_y += dy;
+    }
+
     /// Clear all pressed state (call on window focus loss to avoid stuck keys).
     pub(crate) fn clear_all(&mut self) {
         self.keys_pressed.clear();
@@ -106,6 +121,8 @@ impl Input {
         self.keys_prev.clone_from(&self.keys_pressed);
         self.mouse_buttons_prev
             .clone_from(&self.mouse_buttons_pressed);
+        self.mouse_delta_x = 0.0;
+        self.mouse_delta_y = 0.0;
     }
 }
 

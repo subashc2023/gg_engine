@@ -1,10 +1,10 @@
 use super::{
     AnimationControllerComponent, CircleRendererComponent, Entity, IdComponent,
-    InstancedSpriteAnimator, ParticleEmitterComponent, Scene, SpriteAnimatorComponent,
-    SpriteRendererComponent, TextComponent, TilemapComponent, TransformComponent, TILE_FLIP_H,
-    TILE_FLIP_V, TILE_ID_MASK,
+    InstancedSpriteAnimator, MeshPrimitive, MeshRendererComponent, ParticleEmitterComponent, Scene,
+    SpriteAnimatorComponent, SpriteRendererComponent, TextComponent, TilemapComponent,
+    TransformComponent, TILE_FLIP_H, TILE_FLIP_V, TILE_ID_MASK,
 };
-use crate::renderer::{Font, Renderer, SubTexture2D};
+use crate::renderer::{Font, Mesh, Renderer, SubTexture2D};
 
 impl Scene {
     // -----------------------------------------------------------------
@@ -520,6 +520,57 @@ impl Scene {
     }
 
     // -----------------------------------------------------------------
+    // Mesh uploading
+    // -----------------------------------------------------------------
+
+    /// Upload vertex arrays for any [`MeshRendererComponent`] that doesn't
+    /// have one yet. Call before rendering (similar to `resolve_texture_handles`).
+    pub fn resolve_meshes(&mut self, renderer: &mut Renderer) {
+        let needs: Vec<(hecs::Entity, MeshPrimitive, [f32; 4])> = self
+            .world
+            .query::<(hecs::Entity, &MeshRendererComponent)>()
+            .iter()
+            .filter_map(|(handle, mesh_comp)| {
+                if mesh_comp.vertex_array.is_none() {
+                    Some((handle, mesh_comp.primitive, mesh_comp.color.into()))
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        for (handle, primitive, color) in needs {
+            let mesh = match primitive {
+                MeshPrimitive::Cube => Mesh::cube(color),
+                MeshPrimitive::Sphere => Mesh::sphere(32, 16, color),
+                MeshPrimitive::Plane => Mesh::plane(color),
+            };
+            match mesh.upload(renderer) {
+                Ok(va) => {
+                    if let Ok(mut comp) = self.world.get::<&mut MeshRendererComponent>(handle) {
+                        comp.vertex_array = Some(va);
+                    }
+                }
+                Err(e) => {
+                    log::error!("Failed to upload mesh: {e}");
+                }
+            }
+        }
+    }
+
+    /// Re-upload the vertex array for a mesh component when its primitive or
+    /// color changes. Clears the existing VA so the next `resolve_meshes`
+    /// call picks it up.
+    pub fn invalidate_mesh(&mut self, entity: super::Entity) {
+        if let Ok(mut comp) = self
+            .world
+            .get::<&mut MeshRendererComponent>(entity.handle())
+        {
+            comp.vertex_array = None;
+        }
+    }
+
+    // -----------------------------------------------------------------
     // Rendering
     // -----------------------------------------------------------------
 
@@ -837,8 +888,7 @@ impl Scene {
                     // range. This avoids the degenerate NDC unprojection that
                     // breaks for tilted/perspective cameras.
                     let local_vp = vp * world_transform;
-                    let local_frustum =
-                        super::spatial::Frustum2D::from_view_projection(&local_vp);
+                    let local_frustum = super::spatial::Frustum2D::from_view_projection(&local_vp);
                     let w = tilemap.width as f32;
                     let h = tilemap.height as f32;
                     let (min_col, max_col, min_row, max_row) =
@@ -908,6 +958,47 @@ impl Scene {
 
         // Emit and render GPU particles from all active ParticleEmitterComponents.
         self.emit_and_render_particles(renderer);
+
+        // Render 3D meshes (after flushing all 2D batches).
+        self.render_meshes(renderer);
+    }
+
+    /// Render all [`MeshRendererComponent`] entities using the default
+    /// mesh3d pipeline. Called after 2D rendering is complete.
+    fn render_meshes(&self, renderer: &mut Renderer) {
+        // Check if there are any mesh entities before creating the pipeline.
+        let meshes: Vec<(hecs::Entity, glam::Mat4)> = self
+            .world
+            .query::<(hecs::Entity, &MeshRendererComponent)>()
+            .iter()
+            .filter_map(|(handle, mesh_comp)| {
+                if mesh_comp.vertex_array.is_some() {
+                    let world = self.get_world_transform(super::Entity::new(handle));
+                    Some((handle, world))
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        if meshes.is_empty() {
+            return;
+        }
+
+        let pipeline = match renderer.mesh3d_pipeline() {
+            Ok(p) => p,
+            Err(e) => {
+                log::error!("Failed to get mesh3d pipeline: {e}");
+                return;
+            }
+        };
+
+        for (handle, world_transform) in &meshes {
+            let mesh_comp = self.world.get::<&MeshRendererComponent>(*handle).unwrap();
+            if let Some(ref va) = mesh_comp.vertex_array {
+                renderer.submit_3d(&pipeline, va, world_transform, None);
+            }
+        }
     }
 
     /// Emit particles from all active [`ParticleEmitterComponent`]s and

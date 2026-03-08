@@ -13,10 +13,10 @@ use crate::scene::LuaScriptComponent;
 use crate::scene::{
     AnimationClip, AnimationControllerComponent, AnimationTransition, AudioListenerComponent,
     AudioSourceComponent, BoxCollider2DComponent, CameraComponent, CircleCollider2DComponent,
-    CircleRendererComponent, FloatOrdering, IdComponent, InstancedSpriteAnimator,
-    ParticleEmitterComponent, RelationshipComponent, RigidBody2DComponent, RigidBody2DType, Scene,
-    SpriteAnimatorComponent, SpriteRendererComponent, TagComponent, TextComponent,
-    TilemapComponent, TransformComponent, TransitionCondition,
+    CircleRendererComponent, FloatOrdering, IdComponent, InstancedSpriteAnimator, MeshPrimitive,
+    MeshRendererComponent, ParticleEmitterComponent, RelationshipComponent, RigidBody2DComponent,
+    RigidBody2DType, Scene, SpriteAnimatorComponent, SpriteRendererComponent, TagComponent,
+    TextComponent, TilemapComponent, TransformComponent, TransitionCondition,
 };
 
 /// Default value for collision layer/mask fields — all bits set (collides with everything).
@@ -154,6 +154,12 @@ struct EntityData {
         default
     )]
     particle_emitter: Option<ParticleEmitterData>,
+    #[serde(
+        rename = "MeshRendererComponent",
+        skip_serializing_if = "Option::is_none",
+        default
+    )]
+    mesh_renderer: Option<MeshRendererData>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -626,6 +632,18 @@ fn default_tileset_columns() -> u32 {
     1
 }
 
+#[derive(Serialize, Deserialize)]
+struct MeshRendererData {
+    #[serde(rename = "Primitive", default = "default_mesh_primitive")]
+    primitive: String,
+    #[serde(rename = "Color")]
+    color: [f32; 4],
+}
+
+fn default_mesh_primitive() -> String {
+    "Cube".into()
+}
+
 fn has_no_relationships(r: &Option<RelationshipData>) -> bool {
     match r {
         None => true,
@@ -772,8 +790,9 @@ impl SceneSerializer {
             return Err(EngineError::Asset("Prefab contains no entities".into()));
         }
 
-        Self::instantiate_prefab_entities(scene, &prefab_data.entities)
-            .ok_or_else(|| EngineError::Asset("Prefab instantiation produced no root entity".into()))
+        Self::instantiate_prefab_entities(scene, &prefab_data.entities).ok_or_else(|| {
+            EngineError::Asset("Prefab instantiation produced no root entity".into())
+        })
     }
 
     /// Core prefab instantiation: creates entities from `EntityData` with fresh
@@ -1165,6 +1184,19 @@ impl SceneSerializer {
                     size_variation: pe.size_variation,
                     lifetime: pe.lifetime,
                 }),
+            mesh_renderer: scene
+                .get_component::<MeshRendererComponent>(entity)
+                .map(|mc| {
+                    let prim_str = match mc.primitive {
+                        MeshPrimitive::Cube => "Cube",
+                        MeshPrimitive::Sphere => "Sphere",
+                        MeshPrimitive::Plane => "Plane",
+                    };
+                    MeshRendererData {
+                        primitive: prim_str.to_string(),
+                        color: mc.color.into(),
+                    }
+                }),
         }
     }
 
@@ -1516,6 +1548,23 @@ impl SceneSerializer {
                 },
             );
         }
+
+        // MeshRendererComponent
+        if let Some(ref mrd) = entity_data.mesh_renderer {
+            let primitive = match mrd.primitive.as_str() {
+                "Sphere" => MeshPrimitive::Sphere,
+                "Plane" => MeshPrimitive::Plane,
+                _ => MeshPrimitive::Cube,
+            };
+            scene.add_component(
+                entity,
+                MeshRendererComponent {
+                    primitive,
+                    color: Vec4::from(mrd.color),
+                    vertex_array: None,
+                },
+            );
+        }
     }
 }
 
@@ -1547,11 +1596,7 @@ mod tests {
             .join("gg_test_scene.ggscene")
             .to_string_lossy()
             .to_string();
-        SceneSerializer::serialize(
-            &scene,
-            &path,
-            Some("gg_test_scene")
-        ).unwrap();
+        SceneSerializer::serialize(&scene, &path, Some("gg_test_scene")).unwrap();
 
         // Deserialize into a fresh scene.
         let mut loaded = Scene::new();

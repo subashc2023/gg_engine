@@ -96,7 +96,12 @@ impl GGEditor {
                                     hover_bg,
                                 );
                             }
-                            super::icons::paint_gear_icon(ui.painter(), rect.center(), 8.0, egui::Color32::from_rgb(0x25, 0x25, 0x26));
+                            super::icons::paint_gear_icon(
+                                ui.painter(),
+                                rect.center(),
+                                8.0,
+                                egui::Color32::from_rgb(0x25, 0x25, 0x26),
+                            );
                         }
                         if let Some((rect, ref resp)) = stop_alloc {
                             if resp.hovered() {
@@ -167,4 +172,3 @@ impl GGEditor {
             });
     }
 }
-

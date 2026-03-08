@@ -1,8 +1,8 @@
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
-use gg_engine::MsaaSamples;
 use gg_engine::ui_theme::EditorTheme;
+use gg_engine::MsaaSamples;
 
 use crate::gizmo::GizmoOperation;
 use crate::panels::Tab;

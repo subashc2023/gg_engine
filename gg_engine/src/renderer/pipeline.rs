@@ -1,10 +1,85 @@
 use ash::vk;
 
 use super::buffer::BufferLayout;
+use super::material::BlendMode;
 use super::shader::Shader;
 use super::vertex_array::VertexArray;
 
 use crate::profiling::ProfileTimer;
+
+// ---------------------------------------------------------------------------
+// CullMode — backface culling configuration
+// ---------------------------------------------------------------------------
+
+/// Which faces to cull during rasterization.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub enum CullMode {
+    /// No culling — both faces are rendered (2D default).
+    #[default]
+    None,
+    /// Cull back faces (standard for closed 3D meshes).
+    Back,
+    /// Cull front faces.
+    Front,
+}
+
+impl CullMode {
+    fn to_vk(self) -> vk::CullModeFlags {
+        match self {
+            Self::None => vk::CullModeFlags::NONE,
+            Self::Back => vk::CullModeFlags::BACK,
+            Self::Front => vk::CullModeFlags::FRONT,
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// DepthConfig — depth test/write configuration
+// ---------------------------------------------------------------------------
+
+/// Depth buffer test and write configuration for pipeline creation.
+#[derive(Debug, Clone, Copy)]
+pub struct DepthConfig {
+    /// Whether to test fragments against the depth buffer.
+    pub test: bool,
+    /// Whether to write fragment depth to the depth buffer.
+    pub write: bool,
+    /// Comparison operator for depth test (default: LESS_OR_EQUAL).
+    pub compare_op: vk::CompareOp,
+}
+
+impl Default for DepthConfig {
+    fn default() -> Self {
+        Self {
+            test: true,
+            write: true,
+            compare_op: vk::CompareOp::LESS_OR_EQUAL,
+        }
+    }
+}
+
+impl DepthConfig {
+    /// Depth testing disabled (2D painter's algorithm).
+    pub const DISABLED: Self = Self {
+        test: false,
+        write: false,
+        compare_op: vk::CompareOp::LESS_OR_EQUAL,
+    };
+
+    /// Standard 3D depth: test + write with LESS_OR_EQUAL.
+    pub const STANDARD_3D: Self = Self {
+        test: true,
+        write: true,
+        compare_op: vk::CompareOp::LESS_OR_EQUAL,
+    };
+
+    /// Read-only depth: test but no write (e.g. transparent 3D objects).
+    pub const READ_ONLY: Self = Self {
+        test: true,
+        write: false,
+        compare_op: vk::CompareOp::LESS_OR_EQUAL,
+    };
+}
 
 // ---------------------------------------------------------------------------
 // Pipeline
@@ -45,9 +120,14 @@ impl Drop for Pipeline {
 
 /// Standard rasterizer state: fill mode, no culling, CCW front face.
 fn default_rasterizer() -> vk::PipelineRasterizationStateCreateInfo<'static> {
+    rasterizer(CullMode::None)
+}
+
+/// Rasterizer state with configurable face culling.
+fn rasterizer(cull_mode: CullMode) -> vk::PipelineRasterizationStateCreateInfo<'static> {
     vk::PipelineRasterizationStateCreateInfo::default()
         .polygon_mode(vk::PolygonMode::FILL)
-        .cull_mode(vk::CullModeFlags::NONE)
+        .cull_mode(cull_mode.to_vk())
         .front_face(vk::FrontFace::COUNTER_CLOCKWISE)
         .line_width(1.0)
 }
@@ -533,6 +613,150 @@ pub(crate) fn create_line_batch_pipeline(
         .input_assembly_state(&input_assembly)
         .viewport_state(&viewport_state)
         .rasterization_state(&rasterizer)
+        .multisample_state(&multisampling)
+        .depth_stencil_state(&depth_stencil)
+        .color_blend_state(&color_blending)
+        .dynamic_state(&dynamic_state)
+        .layout(pipeline_layout)
+        .render_pass(render_pass)
+        .subpass(0);
+
+    create_and_wrap_pipeline(device, &pipeline_info, pipeline_cache, pipeline_layout)
+}
+
+// ---------------------------------------------------------------------------
+// 3D pipeline creation
+// ---------------------------------------------------------------------------
+
+/// Convert a [`BlendMode`] to a Vulkan color blend attachment state.
+fn blend_mode_attachment(blend_mode: BlendMode) -> vk::PipelineColorBlendAttachmentState {
+    match blend_mode {
+        BlendMode::Opaque => vk::PipelineColorBlendAttachmentState::default()
+            .color_write_mask(vk::ColorComponentFlags::RGBA)
+            .blend_enable(false),
+        BlendMode::AlphaBlend => vk::PipelineColorBlendAttachmentState::default()
+            .color_write_mask(vk::ColorComponentFlags::RGBA)
+            .blend_enable(true)
+            .src_color_blend_factor(vk::BlendFactor::SRC_ALPHA)
+            .dst_color_blend_factor(vk::BlendFactor::ONE_MINUS_SRC_ALPHA)
+            .color_blend_op(vk::BlendOp::ADD)
+            .src_alpha_blend_factor(vk::BlendFactor::ONE)
+            .dst_alpha_blend_factor(vk::BlendFactor::ZERO)
+            .alpha_blend_op(vk::BlendOp::ADD),
+        BlendMode::Additive => vk::PipelineColorBlendAttachmentState::default()
+            .color_write_mask(vk::ColorComponentFlags::RGBA)
+            .blend_enable(true)
+            .src_color_blend_factor(vk::BlendFactor::SRC_ALPHA)
+            .dst_color_blend_factor(vk::BlendFactor::ONE)
+            .color_blend_op(vk::BlendOp::ADD)
+            .src_alpha_blend_factor(vk::BlendFactor::ONE)
+            .dst_alpha_blend_factor(vk::BlendFactor::ZERO)
+            .alpha_blend_op(vk::BlendOp::ADD),
+    }
+}
+
+/// Create a Vulkan graphics pipeline for **3D mesh** rendering.
+///
+/// Supports configurable face culling, depth testing, and blend modes.
+/// Pipeline layout: set 0 = camera UBO, then `extra_descriptor_set_layouts`
+/// in order (typically set 1 = bindless textures, set 2 = material UBO).
+/// Push constant: model matrix (64 bytes, vertex stage, offset 0).
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn create_3d_pipeline(
+    device: &ash::Device,
+    shader: &Shader,
+    vertex_layout: &BufferLayout,
+    render_pass: vk::RenderPass,
+    camera_ubo_ds_layout: vk::DescriptorSetLayout,
+    extra_descriptor_set_layouts: &[vk::DescriptorSetLayout],
+    cull_mode: CullMode,
+    depth_config: DepthConfig,
+    blend_mode: BlendMode,
+    color_attachment_count: u32,
+    pipeline_cache: vk::PipelineCache,
+    samples: vk::SampleCountFlags,
+) -> Result<Pipeline, String> {
+    let _timer = ProfileTimer::new("Pipeline::create_3d");
+    let entry_point = c"main";
+
+    let vert_stage = vk::PipelineShaderStageCreateInfo::default()
+        .stage(vk::ShaderStageFlags::VERTEX)
+        .module(shader.vert_module())
+        .name(entry_point);
+
+    let frag_stage = vk::PipelineShaderStageCreateInfo::default()
+        .stage(vk::ShaderStageFlags::FRAGMENT)
+        .module(shader.frag_module())
+        .name(entry_point);
+
+    let shader_stages = [vert_stage, frag_stage];
+
+    let binding = vertex_layout.vk_binding_description(0);
+    let attributes = vertex_layout.vk_attribute_descriptions(0);
+    let bindings = [binding];
+
+    let vertex_input = vk::PipelineVertexInputStateCreateInfo::default()
+        .vertex_binding_descriptions(&bindings)
+        .vertex_attribute_descriptions(&attributes);
+
+    let input_assembly = vk::PipelineInputAssemblyStateCreateInfo::default()
+        .topology(vk::PrimitiveTopology::TRIANGLE_LIST)
+        .primitive_restart_enable(false);
+
+    let dynamic_states = [vk::DynamicState::VIEWPORT, vk::DynamicState::SCISSOR];
+    let dynamic_state =
+        vk::PipelineDynamicStateCreateInfo::default().dynamic_states(&dynamic_states);
+
+    let viewport_state = vk::PipelineViewportStateCreateInfo::default()
+        .viewport_count(1)
+        .scissor_count(1);
+
+    let rast = rasterizer(cull_mode);
+    let multisampling = default_multisampling(samples);
+
+    let depth_stencil = vk::PipelineDepthStencilStateCreateInfo::default()
+        .depth_test_enable(depth_config.test)
+        .depth_write_enable(depth_config.write)
+        .depth_compare_op(depth_config.compare_op)
+        .depth_bounds_test_enable(false)
+        .stencil_test_enable(false);
+
+    // Build blend attachments: first uses the material's blend mode,
+    // additional attachments (e.g. entity ID in editor) use no blending.
+    let mut blend_attachments = Vec::with_capacity(color_attachment_count as usize);
+    blend_attachments.push(blend_mode_attachment(blend_mode));
+    for _ in 1..color_attachment_count {
+        blend_attachments.push(
+            vk::PipelineColorBlendAttachmentState::default()
+                .color_write_mask(vk::ColorComponentFlags::R)
+                .blend_enable(false),
+        );
+    }
+    let color_blending =
+        vk::PipelineColorBlendStateCreateInfo::default().attachments(&blend_attachments);
+
+    let all_layouts =
+        prepare_descriptor_layouts(camera_ubo_ds_layout, extra_descriptor_set_layouts);
+
+    // Push constant: model matrix (1 × mat4 = 64 bytes, vertex stage).
+    let push_constant_range = vk::PushConstantRange {
+        stage_flags: vk::ShaderStageFlags::VERTEX,
+        offset: 0,
+        size: std::mem::size_of::<[f32; 16]>() as u32,
+    };
+
+    let layout_info = vk::PipelineLayoutCreateInfo::default()
+        .set_layouts(&all_layouts)
+        .push_constant_ranges(std::slice::from_ref(&push_constant_range));
+    let pipeline_layout = unsafe { device.create_pipeline_layout(&layout_info, None) }
+        .map_err(|e| format!("Failed to create 3D pipeline layout: {e}"))?;
+
+    let pipeline_info = vk::GraphicsPipelineCreateInfo::default()
+        .stages(&shader_stages)
+        .vertex_input_state(&vertex_input)
+        .input_assembly_state(&input_assembly)
+        .viewport_state(&viewport_state)
+        .rasterization_state(&rast)
         .multisample_state(&multisampling)
         .depth_stencil_state(&depth_stencil)
         .color_blend_state(&color_blending)

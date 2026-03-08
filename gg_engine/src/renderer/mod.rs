@@ -8,6 +8,7 @@ mod framebuffer;
 pub(crate) mod gpu_allocation;
 mod gpu_particle_system;
 mod material;
+mod mesh;
 mod msdf;
 mod orthographic_camera;
 mod pipeline;
@@ -41,8 +42,9 @@ pub use framebuffer::{
 };
 pub(crate) use gpu_allocation::GpuAllocator;
 pub use material::{BlendMode, Material, MaterialGpuData, MaterialHandle, MaterialLibrary};
+pub use mesh::{load_gltf, Mesh, MeshVertex};
 pub use orthographic_camera::OrthographicCamera;
-pub use pipeline::Pipeline;
+pub use pipeline::{CullMode, DepthConfig, Pipeline};
 pub use renderer::Renderer;
 pub use renderer_2d::Renderer2DStats;
 pub use scene_camera::{ProjectionType, SceneCamera};

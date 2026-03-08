@@ -297,11 +297,12 @@ impl Application for GGPlayer {
         renderer.flush_transfers();
         renderer.poll_transfers();
 
-        // Assign newly loaded textures and fonts to entities.
+        // Assign newly loaded textures, fonts, and meshes to entities.
         if let Some(ref mut am) = self.asset_manager {
             self.scene.resolve_texture_handles_async(am);
             self.scene.load_fonts_async(am);
         }
+        self.scene.resolve_meshes(renderer);
 
         // Start runtime once all pending loads are complete.
         if !self.runtime_started {

@@ -758,7 +758,8 @@ impl ScriptEngine {
 
     /// Remove all timers owned by a specific entity.
     pub fn remove_entity_timers(&mut self, entity_uuid: u64) {
-        self.timers.retain(|_, timer| timer.entity_uuid != entity_uuid);
+        self.timers
+            .retain(|_, timer| timer.entity_uuid != entity_uuid);
     }
 
     /// Initialize pending timer ops in Lua app_data before script execution.

@@ -367,8 +367,17 @@ impl GGEditor {
                         ui.label("Alt + Left Mouse");
                         ui.label("Orbit");
                         ui.end_row();
+                        ui.label("Alt + Right Mouse");
+                        ui.label("Zoom");
+                        ui.end_row();
                         ui.label("Scroll");
                         ui.label("Zoom");
+                        ui.end_row();
+                        ui.label("Right Mouse Hold");
+                        ui.label("Fly Mode (WASD + QE)");
+                        ui.end_row();
+                        ui.label("Shift (in Fly)");
+                        ui.label("Fast Movement");
                         ui.end_row();
                         ui.label("F");
                         ui.label("Focus Selected");
@@ -440,7 +449,8 @@ impl GGEditor {
 
     pub(super) fn save_scene_as(&mut self) {
         if let Some(path) = FileDialogs::save_file("GGScene files", &["ggscene"]) {
-            match SceneSerializer::serialize(&self.scene, &path, Self::scene_name_from_path(&path)) {
+            match SceneSerializer::serialize(&self.scene, &path, Self::scene_name_from_path(&path))
+            {
                 Ok(()) => {
                     self.scene_ctx.editor_scene_path = Some(path);
                     self.scene_ctx.dirty = false;

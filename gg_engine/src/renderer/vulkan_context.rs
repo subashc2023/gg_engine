@@ -290,8 +290,8 @@ impl VulkanContext {
     /// framebuffer attachments on this device.
     pub fn max_msaa_samples(&self) -> vk::SampleCountFlags {
         let limits = &self.physical_device_properties.limits;
-        let counts = limits.framebuffer_color_sample_counts
-            & limits.framebuffer_depth_sample_counts;
+        let counts =
+            limits.framebuffer_color_sample_counts & limits.framebuffer_depth_sample_counts;
 
         // Return the highest supported sample count.
         for &flag in &[

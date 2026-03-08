@@ -133,7 +133,14 @@ pub(crate) fn animation_timeline_ui(
             egui::vec2(grid_width, avail.height()),
             egui::Layout::top_down(egui::Align::LEFT),
             |ui| {
-                draw_sprite_sheet_grid(ui, scene, entity, egui_texture_map, scene_dirty, undo_system);
+                draw_sprite_sheet_grid(
+                    ui,
+                    scene,
+                    entity,
+                    egui_texture_map,
+                    scene_dirty,
+                    undo_system,
+                );
             },
         );
 
@@ -153,7 +160,13 @@ pub(crate) fn animation_timeline_ui(
 // Toolbar
 // ---------------------------------------------------------------------------
 
-fn draw_toolbar(ui: &mut egui::Ui, scene: &mut Scene, entity: Entity, scene_dirty: &mut bool, undo_system: &mut crate::undo::UndoSystem) {
+fn draw_toolbar(
+    ui: &mut egui::Ui,
+    scene: &mut Scene,
+    entity: Entity,
+    scene_dirty: &mut bool,
+    undo_system: &mut crate::undo::UndoSystem,
+) {
     let (
         clip_count,
         clip_names,
@@ -579,7 +592,13 @@ fn draw_sprite_sheet_grid(
 // Timeline / Dopesheet
 // ---------------------------------------------------------------------------
 
-fn draw_timeline(ui: &mut egui::Ui, scene: &mut Scene, entity: Entity, scene_dirty: &mut bool, undo_system: &mut crate::undo::UndoSystem) {
+fn draw_timeline(
+    ui: &mut egui::Ui,
+    scene: &mut Scene,
+    entity: Entity,
+    scene_dirty: &mut bool,
+    undo_system: &mut crate::undo::UndoSystem,
+) {
     let zoom = ZOOM.get();
     let scroll_x = SCROLL_X.get();
 
@@ -919,9 +938,11 @@ fn draw_timeline(ui: &mut egui::Ui, scene: &mut Scene, entity: Entity, scene_dir
             // Record undo for clip-modifying drags.
             if matches!(
                 drag,
-                Some(TimelineDrag::ClipStart { .. }
-                    | TimelineDrag::ClipEnd { .. }
-                    | TimelineDrag::ClipBody { .. })
+                Some(
+                    TimelineDrag::ClipStart { .. }
+                        | TimelineDrag::ClipEnd { .. }
+                        | TimelineDrag::ClipBody { .. }
+                )
             ) {
                 undo_system.begin_edit(scene, "Drag clip boundary");
             }
@@ -986,9 +1007,11 @@ fn draw_timeline(ui: &mut egui::Ui, scene: &mut Scene, entity: Entity, scene_dir
         let was_clip_drag = ACTIVE_DRAG.with(|d| {
             matches!(
                 *d.borrow(),
-                Some(TimelineDrag::ClipStart { .. }
-                    | TimelineDrag::ClipEnd { .. }
-                    | TimelineDrag::ClipBody { .. })
+                Some(
+                    TimelineDrag::ClipStart { .. }
+                        | TimelineDrag::ClipEnd { .. }
+                        | TimelineDrag::ClipBody { .. }
+                )
             )
         });
         if was_clip_drag {

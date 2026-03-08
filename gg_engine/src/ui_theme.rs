@@ -360,15 +360,19 @@ fn apply_theme_colors(ctx: &egui::Context, colors: &ThemeColors) {
 
     // Selection.
     visuals.selection.bg_fill = hex_color(colors.selection_bg);
-    visuals.selection.stroke =
-        Stroke::new(colors.selection_stroke_width, hex_color(colors.selection_stroke_color));
+    visuals.selection.stroke = Stroke::new(
+        colors.selection_stroke_width,
+        hex_color(colors.selection_stroke_color),
+    );
 
     // Hyperlinks.
     visuals.hyperlink_color = hex_color(colors.hyperlink);
 
     // Window chrome.
-    visuals.window_stroke =
-        Stroke::new(colors.window_stroke_width, hex_color(colors.window_stroke_color));
+    visuals.window_stroke = Stroke::new(
+        colors.window_stroke_width,
+        hex_color(colors.window_stroke_color),
+    );
     visuals.window_shadow = Shadow::NONE;
     visuals.popup_shadow = match colors.popup_shadow {
         Some((blur, alpha)) => Shadow {

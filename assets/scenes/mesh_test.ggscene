@@ -1,0 +1,106 @@
+Version: 1
+Scene: Mesh Test
+Entities:
+# ── Camera ──────────────────────────────────────────────────
+- Entity: 100
+  TagComponent:
+    Tag: Camera
+  TransformComponent:
+    Translation:
+    - 3.0
+    - 2.0
+    - 5.0
+    Rotation:
+    - -0.3
+    - 0.5
+    - 0.0
+    Scale:
+    - 1.0
+    - 1.0
+    - 1.0
+  CameraComponent:
+    Camera:
+      ProjectionType: 0
+      PerspectiveFOV: 0.7853982
+      PerspectiveNear: 0.1
+      PerspectiveFar: 100.0
+      OrthographicSize: 10.0
+      OrthographicNear: -1.0
+      OrthographicFar: 1.0
+    Primary: true
+    FixedAspectRatio: false
+
+# ── Cube ────────────────────────────────────────────────────
+- Entity: 200
+  TagComponent:
+    Tag: Cube
+  TransformComponent:
+    Translation:
+    - 0.0
+    - 0.0
+    - 0.0
+    Rotation:
+    - 0.0
+    - 0.0
+    - 0.0
+    Scale:
+    - 1.0
+    - 1.0
+    - 1.0
+  MeshRendererComponent:
+    Primitive: Cube
+    Color:
+    - 0.8
+    - 0.4
+    - 0.2
+    - 1.0
+
+# ── Sphere ──────────────────────────────────────────────────
+- Entity: 300
+  TagComponent:
+    Tag: Sphere
+  TransformComponent:
+    Translation:
+    - 2.5
+    - 0.25
+    - 0.0
+    Rotation:
+    - 0.0
+    - 0.0
+    - 0.0
+    Scale:
+    - 1.5
+    - 1.5
+    - 1.5
+  MeshRendererComponent:
+    Primitive: Sphere
+    Color:
+    - 0.2
+    - 0.5
+    - 0.9
+    - 1.0
+
+# ── Ground Plane ────────────────────────────────────────────
+- Entity: 400
+  TagComponent:
+    Tag: Ground
+  TransformComponent:
+    Translation:
+    - 0.0
+    - -0.5
+    - 0.0
+    Rotation:
+    - 0.0
+    - 0.0
+    - 0.0
+    Scale:
+    - 6.0
+    - 1.0
+    - 6.0
+  MeshRendererComponent:
+    Primitive: Plane
+    Color:
+    - 0.3
+    - 0.3
+    - 0.3
+    - 1.0

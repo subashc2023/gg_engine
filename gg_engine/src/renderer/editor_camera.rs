@@ -3,12 +3,15 @@ use glam::{Mat4, Quat, Vec2, Vec3};
 use crate::events::{Event, KeyCode, MouseButton, MouseEvent};
 use crate::input::Input;
 
-/// Maya-style 3D editor camera, independent of the ECS.
+/// Editor camera with orbit, pan, zoom, and fly modes.
 ///
 /// Controls:
 /// - **Alt + LMB** — orbit around the focal point
-/// - **Alt + MMB** — pan (translate focal point)
-/// - **Alt + RMB** / **scroll wheel** — zoom (change distance to focal point)
+/// - **MMB** — pan (translate focal point)
+/// - **Alt + RMB** — zoom (change distance to focal point)
+/// - **Scroll wheel** — zoom
+/// - **RMB hold** — fly mode (WASD movement, mouse look, Shift = fast)
+/// - **F** — focus on selected (handled by editor, calls `focus_on`)
 ///
 /// The camera maintains a focal point, distance, yaw, and pitch. Position is
 /// derived as `focal_point - forward * distance`.
@@ -30,7 +33,15 @@ pub struct EditorCamera {
     initial_mouse_position: Vec2,
     viewport_width: f32,
     viewport_height: f32,
+
+    /// True while RMB is held (fly mode active).
+    flying: bool,
 }
+
+/// Base fly speed in units/second.
+const FLY_SPEED: f32 = 5.0;
+/// Shift multiplier for fast fly.
+const FLY_FAST_MULTIPLIER: f32 = 3.0;
 
 impl EditorCamera {
     /// Create a new editor camera.
@@ -57,6 +68,8 @@ impl EditorCamera {
             initial_mouse_position: Vec2::ZERO,
             viewport_width: 1280.0,
             viewport_height: 720.0,
+
+            flying: false,
         };
         cam.update_projection();
         cam.update_view();
@@ -65,20 +78,35 @@ impl EditorCamera {
 
     // -- Public API -----------------------------------------------------------
 
-    /// Call each frame. Tracks mouse delta for orbit/pan/zoom.
-    pub fn on_update(&mut self, _dt: crate::timestep::Timestep, input: &Input) {
+    /// Call each frame. Tracks mouse delta for orbit/pan/zoom/fly.
+    pub fn on_update(&mut self, dt: crate::timestep::Timestep, input: &Input) {
         let mouse = Vec2::new(input.mouse_x() as f32, input.mouse_y() as f32);
         let delta = (mouse - self.initial_mouse_position) * 0.003;
 
         let alt = input.is_key_pressed(KeyCode::LeftAlt) || input.is_key_pressed(KeyCode::RightAlt);
+        let rmb = input.is_mouse_button_pressed(MouseButton::Right);
 
-        if alt {
-            if input.is_mouse_button_pressed(MouseButton::Left) {
-                self.mouse_orbit(delta);
-            } else if input.is_mouse_button_pressed(MouseButton::Middle) {
+        // Fly mode: RMB without Alt.
+        if rmb && !alt {
+            self.flying = true;
+            self.fly_look(delta);
+            self.fly_move(dt.seconds(), input);
+        } else {
+            if self.flying {
+                // Exiting fly mode — place focal point in front of camera.
+                self.focal_point = self.position() + self.forward() * self.distance;
+                self.flying = false;
+            }
+
+            // Middle mouse pan works with or without Alt.
+            if input.is_mouse_button_pressed(MouseButton::Middle) {
                 self.mouse_pan(delta);
-            } else if input.is_mouse_button_pressed(MouseButton::Right) {
-                self.mouse_zoom(delta.x + delta.y);
+            } else if alt {
+                if input.is_mouse_button_pressed(MouseButton::Left) {
+                    self.mouse_orbit(delta);
+                } else if rmb {
+                    self.mouse_zoom(delta.x + delta.y);
+                }
             }
         }
 
@@ -89,7 +117,12 @@ impl EditorCamera {
     /// Handle scroll and other events. Returns `true` if consumed.
     pub fn on_event(&mut self, event: &Event) -> bool {
         if let Event::Mouse(MouseEvent::Scrolled { y_offset, .. }) = event {
-            self.mouse_zoom(*y_offset as f32 * 0.1);
+            if self.flying {
+                // Scroll while flying adjusts fly speed via distance.
+                self.distance = (self.distance - *y_offset as f32).max(0.5);
+            } else {
+                self.mouse_zoom(*y_offset as f32 * 0.1);
+            }
             self.update_view();
             return true;
         }
@@ -167,6 +200,17 @@ impl EditorCamera {
         self.pitch
     }
 
+    /// Whether the camera is currently in fly mode.
+    pub fn is_flying(&self) -> bool {
+        self.flying
+    }
+
+    /// Move the focal point to the given world position, keeping distance and orientation.
+    pub fn focus_on(&mut self, target: Vec3) {
+        self.focal_point = target;
+        self.update_view();
+    }
+
     /// Restore camera state from persisted values.
     pub fn restore_state(&mut self, focal_point: Vec3, distance: f32, yaw: f32, pitch: f32) {
         self.focal_point = focal_point;
@@ -210,6 +254,48 @@ impl EditorCamera {
         self.distance -= delta * self.zoom_speed();
         // Clamp to a small positive value to prevent camera inversion.
         self.distance = self.distance.max(0.1);
+    }
+
+    /// Mouse look in fly mode — rotate in place by pinning the camera position
+    /// and moving the focal point to stay in front.
+    fn fly_look(&mut self, delta: Vec2) {
+        let pos = self.position();
+        self.yaw -= delta.x;
+        self.pitch -= delta.y;
+        self.pitch = self.pitch.clamp(-1.5, 1.5);
+        // Recompute focal point so camera stays at `pos` after rotation.
+        self.focal_point = pos + self.forward() * self.distance;
+    }
+
+    /// WASD + QE movement in fly mode.
+    fn fly_move(&mut self, dt: f32, input: &Input) {
+        let shift = input.is_key_pressed(KeyCode::LeftShift)
+            || input.is_key_pressed(KeyCode::RightShift);
+        let speed = FLY_SPEED * if shift { FLY_FAST_MULTIPLIER } else { 1.0 } * dt;
+
+        let forward = self.forward();
+        let right = self.right();
+        let up = Vec3::Y; // World up for consistent vertical movement.
+
+        // In fly mode, move the camera position directly by shifting the focal point.
+        if input.is_key_pressed(KeyCode::W) {
+            self.focal_point += forward * speed;
+        }
+        if input.is_key_pressed(KeyCode::S) {
+            self.focal_point -= forward * speed;
+        }
+        if input.is_key_pressed(KeyCode::D) {
+            self.focal_point += right * speed;
+        }
+        if input.is_key_pressed(KeyCode::A) {
+            self.focal_point -= right * speed;
+        }
+        if input.is_key_pressed(KeyCode::E) {
+            self.focal_point += up * speed;
+        }
+        if input.is_key_pressed(KeyCode::Q) {
+            self.focal_point -= up * speed;
+        }
     }
 
     fn pan_speed(&self) -> (f32, f32) {

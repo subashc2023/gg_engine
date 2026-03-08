@@ -12,7 +12,6 @@ use super::framebuffer::{Framebuffer, FramebufferSpec};
 use super::gpu_allocation::GpuAllocator;
 use super::gpu_particle_system::GpuParticleSystem;
 use super::material::{MaterialHandle, MaterialLibrary};
-use super::texture::TextureSpecification;
 use super::pipeline::{self, Pipeline};
 use super::render_command::RenderCommand;
 use super::renderer_2d::{
@@ -23,6 +22,7 @@ use super::renderer_api::{RendererAPI, VulkanRendererAPI};
 use super::shader::Shader;
 use super::sub_texture::SubTexture2D;
 use super::texture::TextureCpuData;
+use super::texture::TextureSpecification;
 use super::texture::{Texture2D, TransferBatch};
 use super::vertex_array::VertexArray;
 use super::VulkanContext;
@@ -99,6 +99,16 @@ pub struct Renderer {
 
     // Maximum MSAA sample count supported by the GPU.
     max_msaa_samples: vk::SampleCountFlags,
+
+    // Lazily initialized default 3D mesh pipelines (used by Scene::render_scene).
+    mesh3d_pipeline: Option<Arc<Pipeline>>,
+    mesh3d_offscreen_pipeline: Option<Arc<Pipeline>>,
+    mesh3d_use_offscreen: bool,
+
+    // Offscreen render pass info (stored when offscreen pipelines are created).
+    offscreen_render_pass: Option<vk::RenderPass>,
+    offscreen_color_attachment_count: u32,
+    offscreen_sample_count: vk::SampleCountFlags,
 }
 
 impl Renderer {
@@ -185,6 +195,12 @@ impl Renderer {
             transfer_batch,
             gpu_particles: None,
             max_msaa_samples: vk_ctx.max_msaa_samples(),
+            mesh3d_pipeline: None,
+            mesh3d_offscreen_pipeline: None,
+            mesh3d_use_offscreen: false,
+            offscreen_render_pass: None,
+            offscreen_color_attachment_count: 0,
+            offscreen_sample_count: vk::SampleCountFlags::TYPE_1,
         })
     }
 
@@ -300,6 +316,43 @@ impl Renderer {
             true,
             self.pipeline_cache,
             vk::SampleCountFlags::TYPE_1,
+        )?))
+    }
+
+    /// Create a graphics pipeline for 3D mesh rendering.
+    ///
+    /// Configurable face culling, depth testing, and blend mode. Pipeline
+    /// layout includes camera UBO (set 0), bindless textures (set 1), and
+    /// material UBO (set 2). Uses single-color-attachment by default;
+    /// pass `color_attachment_count > 1` for offscreen framebuffers with
+    /// entity ID attachments.
+    #[allow(clippy::too_many_arguments)]
+    pub fn create_3d_pipeline(
+        &self,
+        shader: &Shader,
+        vertex_layout: &super::BufferLayout,
+        cull_mode: super::CullMode,
+        depth_config: super::DepthConfig,
+        blend_mode: super::BlendMode,
+        color_attachment_count: u32,
+        msaa: super::MsaaSamples,
+    ) -> Result<Arc<Pipeline>, String> {
+        Ok(Arc::new(pipeline::create_3d_pipeline(
+            &self.device,
+            shader,
+            vertex_layout,
+            self.render_pass,
+            self.camera.ds_layout(),
+            &[
+                self.texture_descriptor_set_layout,
+                self.material_library.ds_layout(),
+            ],
+            cull_mode,
+            depth_config,
+            blend_mode,
+            color_attachment_count,
+            self.pipeline_cache,
+            msaa.to_vk(),
         )?))
     }
 
@@ -476,6 +529,13 @@ impl Renderer {
         color_attachment_count: u32,
         samples: vk::SampleCountFlags,
     ) -> Result<(), String> {
+        // Store offscreen render pass info for lazy 3D pipeline creation.
+        self.offscreen_render_pass = Some(render_pass);
+        self.offscreen_color_attachment_count = color_attachment_count;
+        self.offscreen_sample_count = samples;
+        // Invalidate cached offscreen mesh3d pipeline (render pass may have changed).
+        self.mesh3d_offscreen_pipeline = None;
+
         if let Some(data) = &mut self.renderer_2d {
             data.create_offscreen_pipeline(
                 &self.device,
@@ -505,8 +565,14 @@ impl Renderer {
     }
 
     /// Write a material's GPU data to the UBO for the current frame/viewport.
-    pub fn write_material(&self, handle: &MaterialHandle, current_frame: usize, viewport_index: usize) {
-        self.material_library.write_material_ubo(handle, current_frame, viewport_index);
+    pub fn write_material(
+        &self,
+        handle: &MaterialHandle,
+        current_frame: usize,
+        viewport_index: usize,
+    ) {
+        self.material_library
+            .write_material_ubo(handle, current_frame, viewport_index);
     }
 
     /// Tell the batch renderer to use the offscreen pipeline (or switch back).
@@ -514,6 +580,7 @@ impl Renderer {
         if let Some(data) = &mut self.renderer_2d {
             data.set_use_offscreen(use_offscreen);
         }
+        self.mesh3d_use_offscreen = use_offscreen;
     }
 
     /// Hot-reload all shaders from the given source directory.
@@ -692,7 +759,8 @@ impl Renderer {
 
         data.flush_quads(
             ctx.cmd_buf,
-            self.camera.descriptor_set(ctx.current_frame, ctx.viewport_index),
+            self.camera
+                .descriptor_set(ctx.current_frame, ctx.viewport_index),
             ctx.current_frame,
         );
     }
@@ -709,7 +777,8 @@ impl Renderer {
 
         data.flush_circles(
             ctx.cmd_buf,
-            self.camera.descriptor_set(ctx.current_frame, ctx.viewport_index),
+            self.camera
+                .descriptor_set(ctx.current_frame, ctx.viewport_index),
             ctx.current_frame,
         );
     }
@@ -858,7 +927,8 @@ impl Renderer {
 
         data.flush_instances(
             ctx.cmd_buf,
-            self.camera.descriptor_set(ctx.current_frame, ctx.viewport_index),
+            self.camera
+                .descriptor_set(ctx.current_frame, ctx.viewport_index),
             ctx.current_frame,
         );
     }
@@ -1082,7 +1152,8 @@ impl Renderer {
 
         data.flush_lines(
             ctx.cmd_buf,
-            self.camera.descriptor_set(ctx.current_frame, ctx.viewport_index),
+            self.camera
+                .descriptor_set(ctx.current_frame, ctx.viewport_index),
             ctx.current_frame,
             self.line_width,
         );
@@ -1198,7 +1269,8 @@ impl Renderer {
 
         data.flush_text(
             ctx.cmd_buf,
-            self.camera.descriptor_set(ctx.current_frame, ctx.viewport_index),
+            self.camera
+                .descriptor_set(ctx.current_frame, ctx.viewport_index),
             ctx.current_frame,
         );
     }
@@ -1471,6 +1543,150 @@ impl Renderer {
             None,
             Some(texture.descriptor_set()),
         );
+    }
+
+    /// Submit a 3D draw call: binds camera UBO (set 0), pushes model
+    /// transform, optionally binds material UBO (set 2), draws indexed.
+    pub fn submit_3d(
+        &self,
+        pipeline: &Pipeline,
+        vertex_array: &VertexArray,
+        transform: &Mat4,
+        material_handle: Option<&super::MaterialHandle>,
+    ) {
+        let ctx = self
+            .draw_context
+            .expect("Renderer::submit_3d called outside begin_scene/end_scene");
+
+        let cmd = ctx.cmd_buf;
+        let device = &self.device;
+
+        unsafe {
+            // Bind the pipeline.
+            device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::GRAPHICS, pipeline.pipeline());
+
+            // Set 0: camera UBO.
+            let camera_ds = self
+                .camera
+                .descriptor_set(ctx.current_frame, ctx.viewport_index);
+            device.cmd_bind_descriptor_sets(
+                cmd,
+                vk::PipelineBindPoint::GRAPHICS,
+                pipeline.layout(),
+                0,
+                &[camera_ds],
+                &[],
+            );
+
+            // Push model transform (offset 0, 64 bytes, vertex stage).
+            let transform_bytes = std::slice::from_raw_parts(
+                transform as *const Mat4 as *const u8,
+                std::mem::size_of::<Mat4>(),
+            );
+            device.cmd_push_constants(
+                cmd,
+                pipeline.layout(),
+                vk::ShaderStageFlags::VERTEX,
+                0,
+                transform_bytes,
+            );
+
+            // Set 2: material UBO (if provided).
+            if let Some(handle) = material_handle {
+                self.material_library.write_material_ubo(
+                    handle,
+                    ctx.current_frame,
+                    ctx.viewport_index,
+                );
+                let material_ds = self
+                    .material_library
+                    .descriptor_set(ctx.current_frame, ctx.viewport_index);
+                device.cmd_bind_descriptor_sets(
+                    cmd,
+                    vk::PipelineBindPoint::GRAPHICS,
+                    pipeline.layout(),
+                    2,
+                    &[material_ds],
+                    &[],
+                );
+            }
+        }
+
+        // Bind vertex/index buffers and draw.
+        vertex_array.bind(cmd);
+        let index_count = vertex_array
+            .index_buffer()
+            .expect("VertexArray has no index buffer")
+            .count();
+        unsafe {
+            device.cmd_draw_indexed(cmd, index_count, 1, 0, 0, 0);
+        }
+    }
+
+    // -- Default 3D Mesh Pipeline -------------------------------------------
+
+    /// Get or lazily create the default mesh3d pipeline for scene rendering.
+    ///
+    /// Uses the built-in `mesh3d` shader with backface culling, standard
+    /// depth testing, and opaque blending. Automatically selects the
+    /// offscreen or swapchain variant based on `use_offscreen_pipeline()`.
+    pub fn mesh3d_pipeline(&mut self) -> Result<Arc<Pipeline>, String> {
+        if self.mesh3d_use_offscreen {
+            // Offscreen variant (editor viewport with entity ID attachment).
+            if let Some(ref pipeline) = self.mesh3d_offscreen_pipeline {
+                return Ok(Arc::clone(pipeline));
+            }
+            let offscreen_rp = self
+                .offscreen_render_pass
+                .ok_or("No offscreen render pass set for mesh3d pipeline")?;
+            let shader = self.create_shader(
+                "mesh3d",
+                super::shaders::MESH3D_VERT_SPV,
+                super::shaders::MESH3D_FRAG_SPV,
+            )?;
+            let vertex_layout = super::mesh::Mesh::vertex_layout();
+            let pipeline = Arc::new(pipeline::create_3d_pipeline(
+                &self.device,
+                &shader,
+                &vertex_layout,
+                offscreen_rp,
+                self.camera.ds_layout(),
+                &[
+                    self.texture_descriptor_set_layout,
+                    self.material_library.ds_layout(),
+                ],
+                super::CullMode::Back,
+                super::DepthConfig::STANDARD_3D,
+                super::BlendMode::Opaque,
+                self.offscreen_color_attachment_count,
+                self.pipeline_cache,
+                self.offscreen_sample_count,
+            )?);
+            self.mesh3d_offscreen_pipeline = Some(Arc::clone(&pipeline));
+            Ok(pipeline)
+        } else {
+            // Swapchain variant (single color attachment).
+            if let Some(ref pipeline) = self.mesh3d_pipeline {
+                return Ok(Arc::clone(pipeline));
+            }
+            let shader = self.create_shader(
+                "mesh3d",
+                super::shaders::MESH3D_VERT_SPV,
+                super::shaders::MESH3D_FRAG_SPV,
+            )?;
+            let vertex_layout = super::mesh::Mesh::vertex_layout();
+            let pipeline = self.create_3d_pipeline(
+                &shader,
+                &vertex_layout,
+                super::CullMode::Back,
+                super::DepthConfig::STANDARD_3D,
+                super::BlendMode::Opaque,
+                1,
+                super::MsaaSamples::S1,
+            )?;
+            self.mesh3d_pipeline = Some(Arc::clone(&pipeline));
+            Ok(pipeline)
+        }
     }
 
     // -- GPU Particle System ------------------------------------------------

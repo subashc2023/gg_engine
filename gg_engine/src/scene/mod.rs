@@ -26,10 +26,10 @@ pub use animation::{
 pub use components::LuaScriptComponent;
 pub use components::{
     AudioListenerComponent, AudioSourceComponent, BoxCollider2DComponent, CameraComponent,
-    CircleCollider2DComponent, CircleRendererComponent, IdComponent, NativeScriptComponent,
-    ParticleEmitterComponent, RelationshipComponent, RigidBody2DComponent, RigidBody2DType,
-    SpriteRendererComponent, TagComponent, TextComponent, TilemapComponent, TransformComponent,
-    TILE_FLIP_H, TILE_FLIP_V, TILE_ID_MASK,
+    CircleCollider2DComponent, CircleRendererComponent, IdComponent, MeshPrimitive,
+    MeshRendererComponent, NativeScriptComponent, ParticleEmitterComponent, RelationshipComponent,
+    RigidBody2DComponent, RigidBody2DType, SpriteRendererComponent, TagComponent, TextComponent,
+    TilemapComponent, TransformComponent, TILE_FLIP_H, TILE_FLIP_V, TILE_ID_MASK,
 };
 pub use entity::Entity;
 pub use native_script::NativeScript;
@@ -112,6 +112,7 @@ macro_rules! for_each_cloneable_component {
             AudioSourceComponent,
             AudioListenerComponent,
             ParticleEmitterComponent,
+            MeshRendererComponent,
         );
     };
 }
@@ -149,6 +150,7 @@ macro_rules! for_each_addable_component {
             ($crate::scene::AudioSourceComponent, "Audio Source"),
             ($crate::scene::AudioListenerComponent, "Audio Listener"),
             ($crate::scene::ParticleEmitterComponent, "Particle Emitter"),
+            ($crate::scene::MeshRendererComponent, "Mesh Renderer"),
         );
     };
 }
@@ -1078,7 +1080,7 @@ mod tests {
         }
         for_each_cloneable_component!(count_types);
         // Update this constant when adding or removing cloneable components.
-        const EXPECTED_COUNT: usize = 16;
+        const EXPECTED_COUNT: usize = 17;
         assert_eq!(
             MACRO_COUNT, EXPECTED_COUNT,
             "for_each_cloneable_component! has {} types but expected {}. \

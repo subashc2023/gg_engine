@@ -179,12 +179,7 @@ impl Frustum2D {
     pub fn visible_aabb(&self) -> Option<Aabb2D> {
         let [left, right, bottom, top] = self.planes;
         // Intersect adjacent plane boundaries to find frustum quad vertices.
-        let pairs = [
-            (left, bottom),
-            (right, bottom),
-            (right, top),
-            (left, top),
-        ];
+        let pairs = [(left, bottom), (right, bottom), (right, top), (left, top)];
 
         let mut min = glam::Vec2::splat(f32::INFINITY);
         let mut max = glam::Vec2::splat(f32::NEG_INFINITY);
@@ -658,7 +653,11 @@ mod tests {
         let frustum = Frustum2D::from_view_projection(&vp);
         let aabb = frustum.visible_aabb().expect("should produce valid AABB");
         // The origin (camera target) should be inside the visible AABB.
-        assert!(aabb.contains_point(glam::Vec2::ZERO), "origin should be visible, aabb={:?}", aabb);
+        assert!(
+            aabb.contains_point(glam::Vec2::ZERO),
+            "origin should be visible, aabb={:?}",
+            aabb
+        );
         assert!(aabb.is_valid());
     }
 }

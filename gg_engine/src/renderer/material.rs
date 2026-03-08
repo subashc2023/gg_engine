@@ -142,15 +142,15 @@ impl Default for Material {
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub struct MaterialGpuData {
-    pub albedo_color: [f32; 4],     // 16 bytes (offset  0)
-    pub emissive_color: [f32; 3],   // 12 bytes (offset 16)
-    pub metallic: f32,              //  4 bytes (offset 28)
-    pub roughness: f32,             //  4 bytes (offset 32)
-    pub emissive_strength: f32,     //  4 bytes (offset 36)
-    pub alpha_cutoff: f32,          //  4 bytes (offset 40)
-    pub albedo_tex_index: i32,      //  4 bytes (offset 44) — bindless slot, -1 = none
-    pub normal_tex_index: i32,      //  4 bytes (offset 48) — bindless slot, -1 = none
-    pub _pad: [f32; 3],             // 12 bytes (offset 52) — pad to 64 bytes
+    pub albedo_color: [f32; 4],   // 16 bytes (offset  0)
+    pub emissive_color: [f32; 3], // 12 bytes (offset 16)
+    pub metallic: f32,            //  4 bytes (offset 28)
+    pub roughness: f32,           //  4 bytes (offset 32)
+    pub emissive_strength: f32,   //  4 bytes (offset 36)
+    pub alpha_cutoff: f32,        //  4 bytes (offset 40)
+    pub albedo_tex_index: i32,    //  4 bytes (offset 44) — bindless slot, -1 = none
+    pub normal_tex_index: i32,    //  4 bytes (offset 48) — bindless slot, -1 = none
+    pub _pad: [f32; 3],           // 12 bytes (offset 52) — pad to 64 bytes
 }
 
 impl MaterialGpuData {
@@ -185,9 +185,7 @@ impl MaterialGpuData {
 
     /// Convert to raw bytes for UBO upload.
     pub fn as_bytes(&self) -> &[u8] {
-        unsafe {
-            std::slice::from_raw_parts(self as *const Self as *const u8, Self::SIZE)
-        }
+        unsafe { std::slice::from_raw_parts(self as *const Self as *const u8, Self::SIZE) }
     }
 }
 
@@ -349,9 +347,10 @@ impl MaterialLibrary {
         current_frame: usize,
         viewport_index: usize,
     ) {
-        let mat = self.materials.get(handle).unwrap_or_else(|| {
-            self.materials.get(&self.default_handle).unwrap()
-        });
+        let mat = self
+            .materials
+            .get(handle)
+            .unwrap_or_else(|| self.materials.get(&self.default_handle).unwrap());
         let gpu_data = MaterialGpuData::from_material(mat);
         let slot = UniformBuffer::slot(current_frame, viewport_index);
         self.material_ubo.update(slot, gpu_data.as_bytes());
@@ -422,7 +421,11 @@ mod tests {
 
     #[test]
     fn blend_mode_round_trip() {
-        for mode in [BlendMode::Opaque, BlendMode::AlphaBlend, BlendMode::Additive] {
+        for mode in [
+            BlendMode::Opaque,
+            BlendMode::AlphaBlend,
+            BlendMode::Additive,
+        ] {
             assert_eq!(BlendMode::parse_str(mode.as_str()), mode);
         }
     }

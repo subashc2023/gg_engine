@@ -13,7 +13,13 @@ pub(crate) fn draw_particle_emitter_component(
         return false;
     }
 
-    super::component_header(ui, "Particle Emitter", "particle_emitter", bold_family, entity, |ui| {
+    super::component_header(
+        ui,
+        "Particle Emitter",
+        "particle_emitter",
+        bold_family,
+        entity,
+        |ui| {
             let (
                 mut playing,
                 mut emit_rate,
@@ -221,5 +227,6 @@ pub(crate) fn draw_particle_emitter_component(
                     *scene_dirty = true;
                 }
             });
-    })
+        },
+    )
 }

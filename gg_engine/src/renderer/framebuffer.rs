@@ -338,7 +338,12 @@ impl Framebuffer {
                 .map(|cs| {
                     let vk_fmt = resolve_vk_format(cs.format, color_format, depth_format);
                     create_color_attachment(
-                        allocator, device, &spec, vk_fmt, cs.format, sample_count,
+                        allocator,
+                        device,
+                        &spec,
+                        vk_fmt,
+                        cs.format,
+                        sample_count,
                     )
                 })
                 .collect::<Result<Vec<_>, _>>()?;
@@ -524,8 +529,7 @@ impl Framebuffer {
                 .color_attachment_specs
                 .iter()
                 .map(|cs| {
-                    let vk_fmt =
-                        resolve_vk_format(cs.format, self.color_format, self.depth_format);
+                    let vk_fmt = resolve_vk_format(cs.format, self.color_format, self.depth_format);
                     create_color_attachment(
                         &self.allocator,
                         &self.device,
@@ -540,8 +544,7 @@ impl Framebuffer {
             self.msaa_depth_attachment = self
                 .depth_attachment_spec
                 .map(|ds| {
-                    let vk_fmt =
-                        resolve_vk_format(ds.format, self.color_format, self.depth_format);
+                    let vk_fmt = resolve_vk_format(ds.format, self.color_format, self.depth_format);
                     create_depth_attachment(
                         &self.allocator,
                         &self.device,
@@ -558,8 +561,7 @@ impl Framebuffer {
             self.depth_attachment = self
                 .depth_attachment_spec
                 .map(|ds| {
-                    let vk_fmt =
-                        resolve_vk_format(ds.format, self.color_format, self.depth_format);
+                    let vk_fmt = resolve_vk_format(ds.format, self.color_format, self.depth_format);
                     create_depth_attachment(
                         &self.allocator,
                         &self.device,
@@ -658,27 +660,26 @@ impl Framebuffer {
         let mut values = ClearValues::new();
         let msaa = self.sample_count != vk::SampleCountFlags::TYPE_1;
 
-        let push_color_clears =
-            |values: &mut ClearValues, specs: &[FramebufferTextureSpec]| {
-                for cs in specs {
-                    match cs.format {
-                        FramebufferTextureFormat::RedInteger => {
-                            values.push(vk::ClearValue {
-                                color: vk::ClearColorValue {
-                                    int32: [-1, 0, 0, 0],
-                                },
-                            });
-                        }
-                        _ => {
-                            values.push(vk::ClearValue {
-                                color: vk::ClearColorValue {
-                                    float32: clear_color,
-                                },
-                            });
-                        }
+        let push_color_clears = |values: &mut ClearValues, specs: &[FramebufferTextureSpec]| {
+            for cs in specs {
+                match cs.format {
+                    FramebufferTextureFormat::RedInteger => {
+                        values.push(vk::ClearValue {
+                            color: vk::ClearColorValue {
+                                int32: [-1, 0, 0, 0],
+                            },
+                        });
+                    }
+                    _ => {
+                        values.push(vk::ClearValue {
+                            color: vk::ClearColorValue {
+                                float32: clear_color,
+                            },
+                        });
                     }
                 }
-            };
+            }
+        };
 
         if msaa {
             // MSAA color attachments (rendered to, then auto-resolved).
@@ -1027,13 +1028,8 @@ fn create_color_attachment(
     let image = unsafe { device.create_image(&image_info, None) }
         .map_err(|e| format!("Failed to create FB color image: {e}"))?;
 
-    let allocation = GpuAllocator::allocate_for_image(
-        allocator,
-        device,
-        image,
-        label,
-        MemoryLocation::GpuOnly,
-    )?;
+    let allocation =
+        GpuAllocator::allocate_for_image(allocator, device, image, label, MemoryLocation::GpuOnly)?;
 
     let view_info = vk::ImageViewCreateInfo::default()
         .image(image)
@@ -1069,8 +1065,7 @@ fn create_depth_attachment(
     let label = if is_msaa { "FB_MSAA_Depth" } else { "FB_Depth" };
 
     let usage = if is_msaa {
-        vk::ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT
-            | vk::ImageUsageFlags::TRANSIENT_ATTACHMENT
+        vk::ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT | vk::ImageUsageFlags::TRANSIENT_ATTACHMENT
     } else {
         vk::ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT
     };
@@ -1094,13 +1089,8 @@ fn create_depth_attachment(
     let image = unsafe { device.create_image(&image_info, None) }
         .map_err(|e| format!("Failed to create FB depth image: {e}"))?;
 
-    let allocation = GpuAllocator::allocate_for_image(
-        allocator,
-        device,
-        image,
-        label,
-        MemoryLocation::GpuOnly,
-    )?;
+    let allocation =
+        GpuAllocator::allocate_for_image(allocator, device, image, label, MemoryLocation::GpuOnly)?;
 
     let view_info = vk::ImageViewCreateInfo::default()
         .image(image)

@@ -1371,7 +1371,10 @@ fn lua_log(lua: &Lua, args: mlua::Variadic<LuaValue>) -> LuaResult<()> {
             LuaValue::Boolean(b) => b.to_string(),
             LuaValue::Integer(i) => i.to_string(),
             LuaValue::Number(n) => n.to_string(),
-            LuaValue::String(s) => s.to_str().map(|s| s.to_string()).unwrap_or_else(|_| "<invalid utf8>".to_string()),
+            LuaValue::String(s) => s
+                .to_str()
+                .map(|s| s.to_string())
+                .unwrap_or_else(|_| "<invalid utf8>".to_string()),
             _ => format!("{:?}", v),
         })
         .collect();

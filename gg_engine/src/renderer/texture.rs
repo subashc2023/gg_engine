@@ -607,7 +607,11 @@ impl Texture2D {
             .mipmap_mode(mipmap_mode)
             .mip_lod_bias(0.0)
             .min_lod(0.0)
-            .max_lod(if mip_levels > 1 { mip_levels as f32 } else { 0.0 });
+            .max_lod(if mip_levels > 1 {
+                mip_levels as f32
+            } else {
+                0.0
+            });
 
         let sampler = unsafe { device.create_sampler(&sampler_info, None) }
             .map_err(|e| format!("Failed to create texture sampler: {e}"))?;
@@ -780,7 +784,14 @@ impl Texture2D {
         )?;
 
         // 4. Record the staging copy + layout transitions into the batch.
-        batch.record_image_upload(image, staging_buffer, staging_alloc, width, height, mip_levels)?;
+        batch.record_image_upload(
+            image,
+            staging_buffer,
+            staging_alloc,
+            width,
+            height,
+            mip_levels,
+        )?;
 
         // 5. Create image view.
         let view_info = vk::ImageViewCreateInfo::default()
@@ -824,7 +835,11 @@ impl Texture2D {
             .mipmap_mode(mipmap_mode)
             .mip_lod_bias(0.0)
             .min_lod(0.0)
-            .max_lod(if mip_levels > 1 { mip_levels as f32 } else { 0.0 });
+            .max_lod(if mip_levels > 1 {
+                mip_levels as f32
+            } else {
+                0.0
+            });
 
         let sampler = unsafe { device.create_sampler(&sampler_info, None) }
             .map_err(|e| format!("Failed to create texture sampler: {e}"))?;

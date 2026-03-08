@@ -55,8 +55,7 @@ fn configure_collider(
         .sensor(is_sensor);
 
     if friction == 0.0 {
-        builder =
-            builder.friction_combine_rule(rapier2d::prelude::CoefficientCombineRule::Min);
+        builder = builder.friction_combine_rule(rapier2d::prelude::CoefficientCombineRule::Min);
     }
 
     builder.build()
@@ -128,12 +127,13 @@ impl Scene {
 
         for bs in body_entities {
             // Create rapier rigid body.
-            let mut body_builder = rapier2d::dynamics::RigidBodyBuilder::new(bs.body_type.to_rapier())
-                .translation(na::Vector2::new(bs.translation.x, bs.translation.y))
-                .rotation(bs.rotation.z)
-                .gravity_scale(bs.gravity_scale)
-                .linear_damping(bs.linear_damping)
-                .angular_damping(bs.angular_damping);
+            let mut body_builder =
+                rapier2d::dynamics::RigidBodyBuilder::new(bs.body_type.to_rapier())
+                    .translation(na::Vector2::new(bs.translation.x, bs.translation.y))
+                    .rotation(bs.rotation.z)
+                    .gravity_scale(bs.gravity_scale)
+                    .linear_damping(bs.linear_damping)
+                    .angular_damping(bs.angular_damping);
 
             if bs.fixed_rotation {
                 body_builder = body_builder.lock_rotations();
@@ -161,11 +161,20 @@ impl Scene {
                 } else {
                     let collider = configure_collider(
                         rapier2d::geometry::ColliderBuilder::cuboid(half_x, half_y),
-                        bc.density, bc.friction, bc.restitution,
-                        bc.offset, bs.scale, bc.collision_layer, bc.collision_mask, bc.is_sensor, bs.uuid,
+                        bc.density,
+                        bc.friction,
+                        bc.restitution,
+                        bc.offset,
+                        bs.scale,
+                        bc.collision_layer,
+                        bc.collision_mask,
+                        bc.is_sensor,
+                        bs.uuid,
                     );
                     let collider_handle = physics.colliders.insert_with_parent(
-                        collider, body_handle, &mut physics.bodies,
+                        collider,
+                        body_handle,
+                        &mut physics.bodies,
                     );
                     bc.runtime_fixture = Some(collider_handle);
                     physics.register_collider(collider_handle, bs.uuid);
@@ -184,11 +193,20 @@ impl Scene {
                 } else {
                     let collider = configure_collider(
                         rapier2d::geometry::ColliderBuilder::ball(scaled_radius),
-                        cc.density, cc.friction, cc.restitution,
-                        cc.offset, bs.scale, cc.collision_layer, cc.collision_mask, cc.is_sensor, bs.uuid,
+                        cc.density,
+                        cc.friction,
+                        cc.restitution,
+                        cc.offset,
+                        bs.scale,
+                        cc.collision_layer,
+                        cc.collision_mask,
+                        cc.is_sensor,
+                        bs.uuid,
                     );
                     let collider_handle = physics.colliders.insert_with_parent(
-                        collider, body_handle, &mut physics.bodies,
+                        collider,
+                        body_handle,
+                        &mut physics.bodies,
                     );
                     cc.runtime_fixture = Some(collider_handle);
                     physics.register_collider(collider_handle, bs.uuid);

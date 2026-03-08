@@ -50,16 +50,23 @@ pub(crate) fn draw_native_script_component(
     if !scene.has_component::<NativeScriptComponent>(entity) {
         return false;
     }
-    super::component_header(ui, "Native Script", "native_script", bold_family, entity, |ui| {
-        ui.horizontal(|ui| {
-            ui.label("Script");
-            ui.label(
-                egui::RichText::new("(bound in code)")
-                    .color(egui::Color32::from_rgb(0x96, 0x96, 0x96))
-                    .italics(),
-            );
-        });
-    })
+    super::component_header(
+        ui,
+        "Native Script",
+        "native_script",
+        bold_family,
+        entity,
+        |ui| {
+            ui.horizontal(|ui| {
+                ui.label("Script");
+                ui.label(
+                    egui::RichText::new("(bound in code)")
+                        .color(egui::Color32::from_rgb(0x96, 0x96, 0x96))
+                        .italics(),
+                );
+            });
+        },
+    )
 }
 
 #[cfg(feature = "lua-scripting")]
@@ -79,160 +86,159 @@ pub(crate) fn draw_lua_script_component(
     }
     super::component_header(ui, "Lua Script", "lua_script", bold_family, entity, |ui| {
         let (script_path, field_overrides) = scene
-                .get_component::<LuaScriptComponent>(entity)
-                .map(|lsc| (lsc.script_path.clone(), lsc.field_overrides.clone()))
-                .unwrap_or_default();
+            .get_component::<LuaScriptComponent>(entity)
+            .map(|lsc| (lsc.script_path.clone(), lsc.field_overrides.clone()))
+            .unwrap_or_default();
 
-            let mut new_script_path = None;
+        let mut new_script_path = None;
 
-            ui.horizontal(|ui| {
-                ui.label("Script");
+        ui.horizontal(|ui| {
+            ui.label("Script");
 
-                let display = if script_path.is_empty() {
-                    "None".to_string()
-                } else {
-                    std::path::Path::new(&script_path)
-                        .file_name()
-                        .map(|n| n.to_string_lossy().to_string())
-                        .unwrap_or_else(|| script_path.clone())
-                };
-                let btn_resp =
-                    ui.add_sized([ui.available_width(), 0.0], egui::Button::new(display));
+            let display = if script_path.is_empty() {
+                "None".to_string()
+            } else {
+                std::path::Path::new(&script_path)
+                    .file_name()
+                    .map(|n| n.to_string_lossy().to_string())
+                    .unwrap_or_else(|| script_path.clone())
+            };
+            let btn_resp = ui.add_sized([ui.available_width(), 0.0], egui::Button::new(display));
 
-                if btn_resp.clicked() {
-                    let scripts_dir = assets_root.join("scripts");
-                    let scripts_dir_str = scripts_dir.to_string_lossy();
-                    if let Some(path) =
-                        FileDialogs::open_file_in("Lua scripts", &["lua"], &scripts_dir_str)
-                    {
-                        new_script_path = Some(path);
-                    }
-                }
-
-                if let Some(payload) = btn_resp.dnd_release_payload::<ContentBrowserPayload>() {
-                    if !payload.is_directory {
-                        let ext = payload
-                            .path
-                            .extension()
-                            .and_then(|e| e.to_str())
-                            .unwrap_or("")
-                            .to_lowercase();
-                        if ext == "lua" {
-                            new_script_path = Some(payload.path.to_string_lossy().to_string());
-                        }
-                    }
-                }
-
-                if btn_resp
-                    .dnd_hover_payload::<ContentBrowserPayload>()
-                    .is_some()
+            if btn_resp.clicked() {
+                let scripts_dir = assets_root.join("scripts");
+                let scripts_dir_str = scripts_dir.to_string_lossy();
+                if let Some(path) =
+                    FileDialogs::open_file_in("Lua scripts", &["lua"], &scripts_dir_str)
                 {
-                    ui.painter().rect_stroke(
-                        btn_resp.rect,
-                        egui::CornerRadius::same(2),
-                        egui::Stroke::new(2.0, egui::Color32::from_rgb(0x56, 0x9C, 0xD6)),
-                        egui::StrokeKind::Inside,
-                    );
+                    new_script_path = Some(path);
                 }
-            });
-
-            // Apply script path change.
-            if let Some(path) = new_script_path {
-                FIELD_CACHE.with(|c| c.borrow_mut().remove(&path));
-                if let Some(mut lsc) = scene.get_component_mut::<LuaScriptComponent>(entity) {
-                    if lsc.script_path != path {
-                        lsc.field_overrides.clear();
-                    }
-                    lsc.script_path = path;
-                }
-                *scene_dirty = true;
             }
 
-            // ----- Script Fields -----
-            if !script_path.is_empty() {
-                let entity_uuid = scene
-                    .get_component::<IdComponent>(entity)
-                    .map(|id| id.id.raw())
-                    .unwrap_or(0);
+            if let Some(payload) = btn_resp.dnd_release_payload::<ContentBrowserPayload>() {
+                if !payload.is_directory {
+                    let ext = payload
+                        .path
+                        .extension()
+                        .and_then(|e| e.to_str())
+                        .unwrap_or("")
+                        .to_lowercase();
+                    if ext == "lua" {
+                        new_script_path = Some(payload.path.to_string_lossy().to_string());
+                    }
+                }
+            }
 
-                let fields: Vec<(String, ScriptFieldValue)> = if is_playing {
-                    scene
-                        .script_engine()
-                        .and_then(|eng| eng.get_entity_fields(entity_uuid))
-                        .unwrap_or_else(|| get_cached_fields(&script_path))
+            if btn_resp
+                .dnd_hover_payload::<ContentBrowserPayload>()
+                .is_some()
+            {
+                ui.painter().rect_stroke(
+                    btn_resp.rect,
+                    egui::CornerRadius::same(2),
+                    egui::Stroke::new(2.0, egui::Color32::from_rgb(0x56, 0x9C, 0xD6)),
+                    egui::StrokeKind::Inside,
+                );
+            }
+        });
+
+        // Apply script path change.
+        if let Some(path) = new_script_path {
+            FIELD_CACHE.with(|c| c.borrow_mut().remove(&path));
+            if let Some(mut lsc) = scene.get_component_mut::<LuaScriptComponent>(entity) {
+                if lsc.script_path != path {
+                    lsc.field_overrides.clear();
+                }
+                lsc.script_path = path;
+            }
+            *scene_dirty = true;
+        }
+
+        // ----- Script Fields -----
+        if !script_path.is_empty() {
+            let entity_uuid = scene
+                .get_component::<IdComponent>(entity)
+                .map(|id| id.id.raw())
+                .unwrap_or(0);
+
+            let fields: Vec<(String, ScriptFieldValue)> = if is_playing {
+                scene
+                    .script_engine()
+                    .and_then(|eng| eng.get_entity_fields(entity_uuid))
+                    .unwrap_or_else(|| get_cached_fields(&script_path))
+            } else {
+                get_cached_fields(&script_path)
+            };
+
+            if !fields.is_empty() {
+                ui.separator();
+            }
+
+            for (name, default_value) in &fields {
+                let current = if is_playing {
+                    default_value.clone()
                 } else {
-                    get_cached_fields(&script_path)
+                    field_overrides
+                        .get(name)
+                        .cloned()
+                        .unwrap_or_else(|| default_value.clone())
                 };
 
-                if !fields.is_empty() {
-                    ui.separator();
-                }
+                ui.horizontal(|ui| {
+                    ui.label(name);
 
-                for (name, default_value) in &fields {
-                    let current = if is_playing {
-                        default_value.clone()
-                    } else {
-                        field_overrides
-                            .get(name)
-                            .cloned()
-                            .unwrap_or_else(|| default_value.clone())
-                    };
-
-                    ui.horizontal(|ui| {
-                        ui.label(name);
-
-                        match current {
-                            ScriptFieldValue::Float(mut v) => {
-                                if ui.add(egui::DragValue::new(&mut v).speed(0.1)).changed() {
-                                    let new_val = ScriptFieldValue::Float(v);
-                                    if is_playing {
-                                        if let Some(eng) = scene.script_engine() {
-                                            eng.set_entity_field(entity_uuid, name, &new_val);
-                                        }
+                    match current {
+                        ScriptFieldValue::Float(mut v) => {
+                            if ui.add(egui::DragValue::new(&mut v).speed(0.1)).changed() {
+                                let new_val = ScriptFieldValue::Float(v);
+                                if is_playing {
+                                    if let Some(eng) = scene.script_engine() {
+                                        eng.set_entity_field(entity_uuid, name, &new_val);
                                     }
-                                    if let Some(mut lsc) =
-                                        scene.get_component_mut::<LuaScriptComponent>(entity)
-                                    {
-                                        lsc.field_overrides.insert(name.clone(), new_val);
-                                    }
-                                    *scene_dirty = true;
                                 }
-                            }
-                            ScriptFieldValue::Bool(mut v) => {
-                                if ui.checkbox(&mut v, "").changed() {
-                                    let new_val = ScriptFieldValue::Bool(v);
-                                    if is_playing {
-                                        if let Some(eng) = scene.script_engine() {
-                                            eng.set_entity_field(entity_uuid, name, &new_val);
-                                        }
-                                    }
-                                    if let Some(mut lsc) =
-                                        scene.get_component_mut::<LuaScriptComponent>(entity)
-                                    {
-                                        lsc.field_overrides.insert(name.clone(), new_val);
-                                    }
-                                    *scene_dirty = true;
+                                if let Some(mut lsc) =
+                                    scene.get_component_mut::<LuaScriptComponent>(entity)
+                                {
+                                    lsc.field_overrides.insert(name.clone(), new_val);
                                 }
-                            }
-                            ScriptFieldValue::String(mut v) => {
-                                if ui.text_edit_singleline(&mut v).changed() {
-                                    let new_val = ScriptFieldValue::String(v);
-                                    if is_playing {
-                                        if let Some(eng) = scene.script_engine() {
-                                            eng.set_entity_field(entity_uuid, name, &new_val);
-                                        }
-                                    }
-                                    if let Some(mut lsc) =
-                                        scene.get_component_mut::<LuaScriptComponent>(entity)
-                                    {
-                                        lsc.field_overrides.insert(name.clone(), new_val);
-                                    }
-                                    *scene_dirty = true;
-                                }
+                                *scene_dirty = true;
                             }
                         }
-                    });
-                }
+                        ScriptFieldValue::Bool(mut v) => {
+                            if ui.checkbox(&mut v, "").changed() {
+                                let new_val = ScriptFieldValue::Bool(v);
+                                if is_playing {
+                                    if let Some(eng) = scene.script_engine() {
+                                        eng.set_entity_field(entity_uuid, name, &new_val);
+                                    }
+                                }
+                                if let Some(mut lsc) =
+                                    scene.get_component_mut::<LuaScriptComponent>(entity)
+                                {
+                                    lsc.field_overrides.insert(name.clone(), new_val);
+                                }
+                                *scene_dirty = true;
+                            }
+                        }
+                        ScriptFieldValue::String(mut v) => {
+                            if ui.text_edit_singleline(&mut v).changed() {
+                                let new_val = ScriptFieldValue::String(v);
+                                if is_playing {
+                                    if let Some(eng) = scene.script_engine() {
+                                        eng.set_entity_field(entity_uuid, name, &new_val);
+                                    }
+                                }
+                                if let Some(mut lsc) =
+                                    scene.get_component_mut::<LuaScriptComponent>(entity)
+                                {
+                                    lsc.field_overrides.insert(name.clone(), new_val);
+                                }
+                                *scene_dirty = true;
+                            }
+                        }
+                    }
+                });
             }
+        }
     })
 }

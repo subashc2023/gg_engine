@@ -1,5 +1,6 @@
 mod audio;
 mod camera;
+mod mesh;
 mod particles;
 mod physics;
 mod scripting;
@@ -353,8 +354,7 @@ pub(crate) fn asset_handle_picker(
                 .to_lowercase();
             if extensions.contains(&ext.as_str()) {
                 if let Some(am) = asset_manager.as_mut() {
-                    let rel_path =
-                        super::relative_asset_path(&payload.path, am.asset_directory());
+                    let rel_path = super::relative_asset_path(&payload.path, am.asset_directory());
                     let handle = am.import_asset(&rel_path);
                     return AssetPickerAction::Selected(handle);
                 }
@@ -689,6 +689,13 @@ fn draw_components(
     ) {
         undo_system.record(scene, "Remove Particle Emitter");
         scene.remove_component::<ParticleEmitterComponent>(entity);
+        *scene_dirty = true;
+    }
+
+    if mesh::draw_mesh_renderer_component(ui, scene, entity, &bold_family, scene_dirty, undo_system)
+    {
+        undo_system.record(scene, "Remove Mesh Renderer");
+        scene.remove_component::<MeshRendererComponent>(entity);
         *scene_dirty = true;
     }
 

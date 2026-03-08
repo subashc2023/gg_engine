@@ -37,9 +37,8 @@ impl CameraSystem {
             .stage_flags(vk::ShaderStageFlags::VERTEX);
         let ubo_layout_info = vk::DescriptorSetLayoutCreateInfo::default()
             .bindings(std::slice::from_ref(&ubo_binding));
-        let ds_layout =
-            unsafe { device.create_descriptor_set_layout(&ubo_layout_info, None) }
-                .map_err(|e| format!("Failed to create camera UBO descriptor set layout: {e}"))?;
+        let ds_layout = unsafe { device.create_descriptor_set_layout(&ubo_layout_info, None) }
+            .map_err(|e| format!("Failed to create camera UBO descriptor set layout: {e}"))?;
 
         // UBO buffers (one per frame × viewport slot).
         let camera_ubo = UniformBuffer::new(allocator, device, CameraData::SIZE)?;
@@ -118,12 +117,7 @@ impl CameraSystem {
     }
 
     /// Update the stored VP matrix and write it to the UBO.
-    pub fn set_view_projection(
-        &mut self,
-        vp: Mat4,
-        current_frame: usize,
-        viewport_index: usize,
-    ) {
+    pub fn set_view_projection(&mut self, vp: Mat4, current_frame: usize, viewport_index: usize) {
         self.view_projection = vp;
         self.write_ubo(vp, current_frame, viewport_index);
     }

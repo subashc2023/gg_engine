@@ -790,6 +790,63 @@ impl Default for TilemapComponent {
 }
 
 // ---------------------------------------------------------------------------
+// Mesh Renderer Component (3D)
+// ---------------------------------------------------------------------------
+
+/// Which built-in mesh primitive to use.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum MeshPrimitive {
+    #[default]
+    Cube,
+    Sphere,
+    Plane,
+}
+
+/// 3D mesh renderer attached to an entity.
+///
+/// Uses the entity's [`TransformComponent`] as the model matrix.
+/// Currently supports built-in primitives (cube, sphere, plane).
+/// The mesh is uploaded to the GPU lazily on first render.
+pub struct MeshRendererComponent {
+    /// Which built-in primitive to render.
+    pub primitive: MeshPrimitive,
+    /// Vertex color / tint.
+    pub color: Vec4,
+    /// Runtime-only uploaded vertex array. Not serialized.
+    pub(crate) vertex_array: Option<crate::renderer::VertexArray>,
+}
+
+impl Clone for MeshRendererComponent {
+    fn clone(&self) -> Self {
+        Self {
+            primitive: self.primitive,
+            color: self.color,
+            vertex_array: None, // Runtime-only, not copied.
+        }
+    }
+}
+
+impl MeshRendererComponent {
+    pub fn new(primitive: MeshPrimitive, color: Vec4) -> Self {
+        Self {
+            primitive,
+            color,
+            vertex_array: None,
+        }
+    }
+}
+
+impl Default for MeshRendererComponent {
+    fn default() -> Self {
+        Self {
+            primitive: MeshPrimitive::Cube,
+            color: Vec4::ONE,
+            vertex_array: None,
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Lua Scripting Component
 // ---------------------------------------------------------------------------
 
