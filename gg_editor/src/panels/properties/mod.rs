@@ -481,12 +481,13 @@ fn draw_components(
         .show(ui, |ui| {
             let (mut translation, mut rotation_deg, mut scale) = {
                 let tc = scene.get_component::<TransformComponent>(entity).unwrap();
+                let euler = tc.euler_angles();
                 (
                     tc.translation,
                     Vec3::new(
-                        tc.rotation.x.to_degrees(),
-                        tc.rotation.y.to_degrees(),
-                        tc.rotation.z.to_degrees(),
+                        euler.x.to_degrees(),
+                        euler.y.to_degrees(),
+                        euler.z.to_degrees(),
                     ),
                     tc.scale,
                 )
@@ -500,11 +501,11 @@ fn draw_components(
             if changed {
                 if let Some(mut tc) = scene.get_component_mut::<TransformComponent>(entity) {
                     tc.translation = translation;
-                    tc.rotation = Vec3::new(
+                    tc.set_euler_angles(Vec3::new(
                         rotation_deg.x.to_radians(),
                         rotation_deg.y.to_radians(),
                         rotation_deg.z.to_radians(),
-                    );
+                    ));
                     tc.scale = scale;
                     *scene_dirty = true;
                 }

@@ -79,6 +79,8 @@ pub(crate) struct EditorSettings {
     pub camera_state: CameraState,
     #[serde(default = "default_true")]
     pub show_grid: bool,
+    #[serde(default)]
+    pub show_xz_grid: bool,
     #[serde(default = "default_grid_size")]
     pub grid_size: f32,
     #[serde(default)]

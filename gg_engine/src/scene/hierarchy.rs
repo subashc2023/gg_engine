@@ -377,10 +377,9 @@ impl Scene {
     /// Decompose a 4x4 matrix into translation/rotation/scale and set on the entity.
     fn decompose_and_set_local_transform(&mut self, entity: Entity, mat: glam::Mat4) {
         let (scale, rotation, translation) = mat.to_scale_rotation_translation();
-        let (rx, ry, rz) = rotation.to_euler(glam::EulerRot::XYZ);
         if let Some(mut tc) = self.get_component_mut::<TransformComponent>(entity) {
             tc.translation = translation;
-            tc.rotation = glam::Vec3::new(rx, ry, rz);
+            tc.rotation = rotation;
             tc.scale = scale;
         }
     }

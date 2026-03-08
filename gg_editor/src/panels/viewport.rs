@@ -1,5 +1,4 @@
 use gg_engine::egui;
-use gg_engine::glam::EulerRot;
 use gg_engine::prelude::*;
 use transform_gizmo_egui::math::{DQuat, DVec3, Transform as GizmoTransform};
 use transform_gizmo_egui::{Gizmo, GizmoConfig, GizmoExt, GizmoOrientation};
@@ -467,11 +466,6 @@ pub(crate) fn viewport_ui(
                     let (world_scale, world_quat, world_translation) =
                         world_transform.to_scale_rotation_translation();
 
-                    // Also read the original local rotation for delta approach.
-                    let original_rotation = scene
-                        .get_component::<TransformComponent>(entity)
-                        .map(|tc| tc.rotation)
-                        .unwrap_or(Vec3::ZERO);
 
                     // Get parent's world transform for local→world conversion.
                     let parent_world = scene.get_parent(entity).and_then(|puuid| {
@@ -571,26 +565,12 @@ pub(crate) fn viewport_ui(
                                 let (local_scale, local_quat, local_translation) =
                                     new_local_mat.to_scale_rotation_translation();
 
-                                // Rotation: delta approach to avoid gimbal lock.
-                                let (nx, ny, nz) = local_quat.to_euler(EulerRot::XYZ);
-
-                                // Compute old local rotation from old world.
-                                let old_local_mat = match parent_world {
-                                    Some(pw) => pw.inverse() * world_transform,
-                                    None => world_transform,
-                                };
-                                let (_, old_local_quat, _) =
-                                    old_local_mat.to_scale_rotation_translation();
-                                let (ox, oy, oz) = old_local_quat.to_euler(EulerRot::XYZ);
-                                let delta_rotation = Vec3::new(nx - ox, ny - oy, nz - oz);
-                                let new_rotation = original_rotation + delta_rotation;
-
-                                // Write back local transform.
+                                // Write back local transform — direct quaternion storage.
                                 if let Some(mut tc) =
                                     scene.get_component_mut::<TransformComponent>(entity)
                                 {
                                     tc.translation = local_translation;
-                                    tc.rotation = new_rotation;
+                                    tc.rotation = local_quat;
                                     tc.scale = local_scale;
                                     *scene_dirty = true;
                                 }

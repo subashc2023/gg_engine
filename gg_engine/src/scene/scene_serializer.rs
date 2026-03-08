@@ -172,10 +172,25 @@ struct TagData {
 struct TransformData {
     #[serde(rename = "Translation")]
     translation: [f32; 3],
-    #[serde(rename = "Rotation")]
-    rotation: [f32; 3],
+    /// Quaternion [x, y, z, w]. Deserializes from either 4 floats (quat) or 3 floats (legacy Euler radians).
+    #[serde(rename = "Rotation", deserialize_with = "deserialize_rotation")]
+    rotation: [f32; 4],
     #[serde(rename = "Scale")]
     scale: [f32; 3],
+}
+
+/// Deserialize rotation from either [x,y,z,w] quaternion (4 elements)
+/// or [rx,ry,rz] Euler radians (3 elements, legacy format).
+fn deserialize_rotation<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<[f32; 4], D::Error> {
+    let value: Vec<f32> = Vec::deserialize(deserializer)?;
+    match value.len() {
+        4 => Ok([value[0], value[1], value[2], value[3]]),
+        3 => {
+            let q = glam::Quat::from_euler(glam::EulerRot::XYZ, value[0], value[1], value[2]);
+            Ok([q.x, q.y, q.z, q.w])
+        }
+        _ => Err(serde::de::Error::custom("expected 3 or 4 floats for Rotation")),
+    }
 }
 
 #[derive(Serialize, Deserialize)]
@@ -892,7 +907,7 @@ impl SceneSerializer {
                 .get_component::<TransformComponent>(entity)
                 .map(|tc| TransformData {
                     translation: tc.translation.into(),
-                    rotation: tc.rotation.into(),
+                    rotation: [tc.rotation.x, tc.rotation.y, tc.rotation.z, tc.rotation.w],
                     scale: tc.scale.into(),
                 });
 
@@ -1237,7 +1252,7 @@ impl SceneSerializer {
         if let Some(ref td) = entity_data.transform {
             if let Some(mut tc) = scene.get_component_mut::<TransformComponent>(entity) {
                 tc.translation = Vec3::from(td.translation);
-                tc.rotation = Vec3::from(td.rotation);
+                tc.rotation = glam::Quat::from_xyzw(td.rotation[0], td.rotation[1], td.rotation[2], td.rotation[3]);
                 tc.scale = Vec3::from(td.scale);
             }
         }
@@ -1581,7 +1596,7 @@ mod tests {
         let e1 = scene.create_entity_with_tag("Test Entity");
         if let Some(mut tc) = scene.get_component_mut::<TransformComponent>(e1) {
             tc.translation = Vec3::new(1.0, 2.0, 3.0);
-            tc.rotation = Vec3::new(0.1, 0.2, 0.3);
+            tc.set_euler_angles(Vec3::new(0.1, 0.2, 0.3));
             tc.scale = Vec3::new(2.0, 2.0, 2.0);
         }
         let mut sprite = SpriteRendererComponent::new(Vec4::new(0.8, 0.2, 0.2, 1.0));
@@ -1615,7 +1630,8 @@ mod tests {
             .get_component::<TransformComponent>(*test_entity)
             .unwrap();
         assert_eq!(tc.translation, Vec3::new(1.0, 2.0, 3.0));
-        assert_eq!(tc.rotation, Vec3::new(0.1, 0.2, 0.3));
+        let expected_quat = glam::Quat::from_euler(glam::EulerRot::XYZ, 0.1, 0.2, 0.3);
+        assert!(tc.rotation.abs_diff_eq(expected_quat, 1e-6), "rotation mismatch: {:?} vs {:?}", tc.rotation, expected_quat);
         assert_eq!(tc.scale, Vec3::new(2.0, 2.0, 2.0));
 
         // Verify sprite (color + texture_handle round-trip).

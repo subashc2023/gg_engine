@@ -138,6 +138,8 @@ pub fn register_all(lua: &Lua) -> LuaResult<()> {
     engine.set("set_translation", lua.create_function(set_translation)?)?;
     engine.set("get_rotation", lua.create_function(get_rotation)?)?;
     engine.set("set_rotation", lua.create_function(set_rotation)?)?;
+    engine.set("get_rotation_quat", lua.create_function(get_rotation_quat)?)?;
+    engine.set("set_rotation_quat", lua.create_function(set_rotation_quat)?)?;
     engine.set("get_scale", lua.create_function(get_scale)?)?;
     engine.set("set_scale", lua.create_function(set_scale)?)?;
 
@@ -498,21 +500,46 @@ fn get_mouse_position(lua: &Lua, _: ()) -> LuaResult<(f64, f64)> {
 // Engine.get_rotation / Engine.set_rotation / Engine.get_scale / Engine.set_scale
 // ---------------------------------------------------------------------------
 
-/// `Engine.get_rotation(entity_id)` — returns `(rx, ry, rz)` in radians.
+/// `Engine.get_rotation(entity_id)` — returns `(rx, ry, rz)` Euler angles in radians.
 fn get_rotation(lua: &Lua, entity_id: u64) -> LuaResult<(f32, f32, f32)> {
     with_entity(lua, entity_id, (0.0, 0.0, 0.0), |scene, entity| {
         scene
             .get_component::<super::TransformComponent>(entity)
-            .map(|tc| (tc.rotation.x, tc.rotation.y, tc.rotation.z))
+            .map(|tc| {
+                let e = tc.euler_angles();
+                (e.x, e.y, e.z)
+            })
             .unwrap_or((0.0, 0.0, 0.0))
     })
 }
 
-/// `Engine.set_rotation(entity_id, rx, ry, rz)` — sets rotation in radians.
+/// `Engine.set_rotation(entity_id, rx, ry, rz)` — sets rotation from Euler angles in radians.
 fn set_rotation(lua: &Lua, (entity_id, rx, ry, rz): (u64, f32, f32, f32)) -> LuaResult<()> {
     with_entity_mut(lua, entity_id, (), |scene, entity| {
         if let Some(mut tc) = scene.get_component_mut::<super::TransformComponent>(entity) {
-            tc.rotation = glam::Vec3::new(rx, ry, rz);
+            tc.set_euler_angles(glam::Vec3::new(rx, ry, rz));
+        }
+    })
+}
+
+/// `Engine.get_rotation_quat(entity_id)` — returns `(x, y, z, w)` quaternion.
+fn get_rotation_quat(lua: &Lua, entity_id: u64) -> LuaResult<(f32, f32, f32, f32)> {
+    with_entity(lua, entity_id, (0.0, 0.0, 0.0, 1.0), |scene, entity| {
+        scene
+            .get_component::<super::TransformComponent>(entity)
+            .map(|tc| (tc.rotation.x, tc.rotation.y, tc.rotation.z, tc.rotation.w))
+            .unwrap_or((0.0, 0.0, 0.0, 1.0))
+    })
+}
+
+/// `Engine.set_rotation_quat(entity_id, x, y, z, w)` — sets rotation as quaternion.
+fn set_rotation_quat(
+    lua: &Lua,
+    (entity_id, x, y, z, w): (u64, f32, f32, f32, f32),
+) -> LuaResult<()> {
+    with_entity_mut(lua, entity_id, (), |scene, entity| {
+        if let Some(mut tc) = scene.get_component_mut::<super::TransformComponent>(entity) {
+            tc.rotation = glam::Quat::from_xyzw(x, y, z, w).normalize();
         }
     })
 }

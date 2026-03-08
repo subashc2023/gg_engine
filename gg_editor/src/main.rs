@@ -1249,6 +1249,7 @@ impl Application for GGEditor {
             self.editor_settings.vsync,
             self.editor_settings.show_physics_colliders,
             self.editor_settings.show_grid,
+            self.editor_settings.show_xz_grid,
             self.editor_settings.snap_to_grid,
             self.editor_settings.grid_size,
             self.editor_settings.theme,
@@ -1276,6 +1277,7 @@ impl Application for GGEditor {
                 frame_time_ms: self.frame_time_ms,
                 render_stats: self.render_stats,
                 show_grid: &mut self.editor_settings.show_grid,
+                show_xz_grid: &mut self.editor_settings.show_xz_grid,
                 snap_to_grid: &mut self.editor_settings.snap_to_grid,
                 grid_size: &mut self.editor_settings.grid_size,
                 theme: &mut self.editor_settings.theme,
@@ -1335,6 +1337,7 @@ impl Application for GGEditor {
             self.editor_settings.vsync,
             self.editor_settings.show_physics_colliders,
             self.editor_settings.show_grid,
+            self.editor_settings.show_xz_grid,
             self.editor_settings.snap_to_grid,
             self.editor_settings.grid_size,
             self.editor_settings.theme,
@@ -1473,6 +1476,58 @@ impl GGEditor {
         }
     }
 
+    fn render_xz_grid(&self, renderer: &mut Renderer) {
+        profile_scope!("GGEditor::render_xz_grid");
+        let grid_size = self.editor_settings.grid_size;
+        if grid_size <= 0.0 {
+            return;
+        }
+
+        let grid_color = Vec4::new(0.35, 0.35, 0.35, 0.5);
+        let axis_color_x = Vec4::new(0.8, 0.2, 0.2, 0.6);
+        let axis_color_z = Vec4::new(0.2, 0.4, 0.8, 0.6);
+
+        // Determine visible range from camera.
+        let focal = self.editor_camera.focal_point();
+        let dist = self.editor_camera.distance();
+        let half_extent = dist * 1.5;
+
+        // Snap grid bounds to grid lines.
+        let x_min = ((focal.x - half_extent) / grid_size).floor() as i32;
+        let x_max = ((focal.x + half_extent) / grid_size).ceil() as i32;
+        let z_min = ((focal.z - half_extent) / grid_size).floor() as i32;
+        let z_max = ((focal.z + half_extent) / grid_size).ceil() as i32;
+
+        let lo_z = z_min as f32 * grid_size;
+        let hi_z = z_max as f32 * grid_size;
+        let lo_x = x_min as f32 * grid_size;
+        let hi_x = x_max as f32 * grid_size;
+
+        // Lines along Z (constant X).
+        for i in x_min..=x_max {
+            let x = i as f32 * grid_size;
+            let color = if i == 0 { axis_color_z } else { grid_color };
+            renderer.draw_line(
+                Vec3::new(x, 0.0, lo_z),
+                Vec3::new(x, 0.0, hi_z),
+                color,
+                -1,
+            );
+        }
+
+        // Lines along X (constant Z).
+        for j in z_min..=z_max {
+            let z = j as f32 * grid_size;
+            let color = if j == 0 { axis_color_x } else { grid_color };
+            renderer.draw_line(
+                Vec3::new(lo_x, 0.0, z),
+                Vec3::new(hi_x, 0.0, z),
+                color,
+                -1,
+            );
+        }
+    }
+
     fn request_exit(&mut self) {
         // Persist camera state on exit.
         self.editor_settings.camera_state = editor_settings::CameraState {
@@ -1540,10 +1595,17 @@ impl GGEditor {
         }
 
         // Grid rendering (behind everything else in the overlay).
-        if self.editor_settings.show_grid && self.playback.scene_state != SceneState::Play {
+        if (self.editor_settings.show_grid || self.editor_settings.show_xz_grid)
+            && self.playback.scene_state != SceneState::Play
+        {
             let prev_line_width = renderer.line_width();
             renderer.set_line_width(1.0);
-            self.render_grid(renderer);
+            if self.editor_settings.show_grid {
+                self.render_grid(renderer);
+            }
+            if self.editor_settings.show_xz_grid {
+                self.render_xz_grid(renderer);
+            }
             renderer.set_line_width(prev_line_width);
         }
 

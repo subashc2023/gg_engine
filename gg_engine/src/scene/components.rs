@@ -68,14 +68,15 @@ impl Default for TagComponent {
 
 /// Transform decomposed into translation, rotation, and scale.
 ///
-/// Rotation is stored in **radians** (Euler angles, XYZ order).
+/// Rotation is stored as a **quaternion** (`Quat`) for gimbal-lock-free 3D rotation.
 /// Use [`get_transform()`](TransformComponent::get_transform) to build
-/// the combined 4×4 matrix for rendering.
-#[derive(Clone)]
+/// the combined 4×4 matrix for rendering, or [`euler_angles()`](TransformComponent::euler_angles)
+/// for a human-readable Euler decomposition.
+#[derive(Clone, Copy)]
 pub struct TransformComponent {
     pub translation: Vec3,
-    /// Euler rotation in radians (X, Y, Z).
-    pub rotation: Vec3,
+    /// Rotation quaternion (normalized).
+    pub rotation: glam::Quat,
     pub scale: Vec3,
 }
 
@@ -87,18 +88,31 @@ impl TransformComponent {
         }
     }
 
-    /// Build the combined transform matrix: Translation × Rotation(Z) × Rotation(Y) × Rotation(X) × Scale.
+    /// Build the combined transform matrix (Translation × Rotation × Scale).
     pub fn get_transform(&self) -> Mat4 {
-        Mat4::from_scale_rotation_translation(
-            self.scale,
-            glam::Quat::from_euler(
-                glam::EulerRot::XYZ,
-                self.rotation.x,
-                self.rotation.y,
-                self.rotation.z,
-            ),
-            self.translation,
-        )
+        Mat4::from_scale_rotation_translation(self.scale, self.rotation, self.translation)
+    }
+
+    /// Returns Euler angles (XYZ order, radians) for UI display.
+    pub fn euler_angles(&self) -> Vec3 {
+        let (rx, ry, rz) = self.rotation.to_euler(glam::EulerRot::XYZ);
+        Vec3::new(rx, ry, rz)
+    }
+
+    /// Sets rotation from Euler angles (XYZ order, radians).
+    pub fn set_euler_angles(&mut self, euler: Vec3) {
+        self.rotation =
+            glam::Quat::from_euler(glam::EulerRot::XYZ, euler.x, euler.y, euler.z);
+    }
+
+    /// Returns the Z-axis rotation in radians (useful for 2D).
+    pub fn rotation_z(&self) -> f32 {
+        self.euler_angles().z
+    }
+
+    /// Sets only the Z-axis rotation, zeroing X/Y (useful for 2D physics write-back).
+    pub fn set_rotation_z(&mut self, angle: f32) {
+        self.rotation = glam::Quat::from_rotation_z(angle);
     }
 }
 
@@ -106,7 +120,7 @@ impl Default for TransformComponent {
     fn default() -> Self {
         Self {
             translation: Vec3::ZERO,
-            rotation: Vec3::ZERO,
+            rotation: glam::Quat::IDENTITY,
             scale: Vec3::ONE,
         }
     }

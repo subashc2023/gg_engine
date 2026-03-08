@@ -66,7 +66,7 @@ struct BodySetup {
     handle: hecs::Entity,
     uuid: u64,
     translation: glam::Vec3,
-    rotation: glam::Vec3,
+    rotation: glam::Quat,
     scale: glam::Vec3,
     body_type: super::RigidBody2DType,
     fixed_rotation: bool,
@@ -130,7 +130,7 @@ impl Scene {
             let mut body_builder =
                 rapier2d::dynamics::RigidBodyBuilder::new(bs.body_type.to_rapier())
                     .translation(na::Vector2::new(bs.translation.x, bs.translation.y))
-                    .rotation(bs.rotation.z)
+                    .rotation(bs.rotation.to_euler(glam::EulerRot::XYZ).2)
                     .gravity_scale(bs.gravity_scale)
                     .linear_damping(bs.linear_damping)
                     .angular_damping(bs.angular_damping);

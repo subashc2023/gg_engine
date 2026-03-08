@@ -141,6 +141,12 @@ impl GGEditor {
             {
                 ui.close();
             }
+            if ui
+                .checkbox(&mut self.editor_settings.show_xz_grid, "X-Z Grid")
+                .clicked()
+            {
+                ui.close();
+            }
             ui.separator();
             let mut game_vp = self.viewport.game_viewport_enabled;
             if ui.checkbox(&mut game_vp, "Game Viewport").clicked() {

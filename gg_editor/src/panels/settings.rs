@@ -13,6 +13,7 @@ pub(crate) fn settings_ui(
     vsync: &mut bool,
     _hovered_entity: i32,
     show_grid: &mut bool,
+    show_xz_grid: &mut bool,
     snap_to_grid: &mut bool,
     grid_size: &mut f32,
     scene_warnings: &[String],
@@ -92,7 +93,8 @@ pub(crate) fn settings_ui(
     ui.heading("Grid");
     ui.separator();
 
-    ui.checkbox(show_grid, "Show Grid");
+    ui.checkbox(show_grid, "X-Y Grid");
+    ui.checkbox(show_xz_grid, "X-Z Grid");
     ui.checkbox(snap_to_grid, "Snap to Grid");
 
     egui::ComboBox::from_label("Grid Size")

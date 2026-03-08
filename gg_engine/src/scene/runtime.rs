@@ -153,12 +153,12 @@ impl Scene {
                         let mut angle_diff = cur_angle - prev_angle;
                         angle_diff = angle_diff
                             - (angle_diff / std::f32::consts::TAU).round() * std::f32::consts::TAU;
-                        transform.rotation.z = prev_angle + angle_diff * alpha;
+                        transform.set_rotation_z(prev_angle + angle_diff * alpha);
                     } else {
                         // First frame — no previous, use current directly.
                         transform.translation.x = cur_pos.x;
                         transform.translation.y = cur_pos.y;
-                        transform.rotation.z = cur_angle;
+                        transform.set_rotation_z(cur_angle);
                     }
                 }
             }
