@@ -126,7 +126,7 @@ pub(crate) fn viewport_ui(
             if left_click && !gizmo.is_focused() && !alt_held {
                 if paint_mode_active {
                     // Begin a paint stroke.
-                    undo_system.begin_edit(scene);
+                    undo_system.begin_edit(scene, "Paint tilemap");
                     tilemap_paint.painting_in_progress = true;
                     tilemap_paint.painted_this_stroke.clear();
                 } else {
@@ -527,7 +527,7 @@ pub(crate) fn viewport_ui(
                         // Track gizmo focus transitions for undo bracketing.
                         let was_editing = *gizmo_editing;
                         if gizmo.is_focused() && !was_editing {
-                            undo_system.begin_edit(scene);
+                            undo_system.begin_edit(scene, "Transform entity");
                             *gizmo_editing = true;
                         } else if !gizmo.is_focused() && was_editing {
                             undo_system.end_edit();

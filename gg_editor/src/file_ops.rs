@@ -71,10 +71,20 @@ impl GGEditor {
         });
         let in_edit_mode = self.playback.scene_state == SceneState::Edit;
         ui.menu_button("Edit", |ui| {
+            let undo_label = if let Some(desc) = self.undo_system.undo_description() {
+                format!("Undo: {}", desc)
+            } else {
+                "Undo".to_string()
+            };
+            let redo_label = if let Some(desc) = self.undo_system.redo_description() {
+                format!("Redo: {}", desc)
+            } else {
+                "Redo".to_string()
+            };
             if ui
                 .add_enabled(
                     in_edit_mode && self.undo_system.can_undo(),
-                    egui::Button::new("Undo").shortcut_text("Ctrl+Z"),
+                    egui::Button::new(undo_label).shortcut_text("Ctrl+Z"),
                 )
                 .clicked()
             {
@@ -84,7 +94,7 @@ impl GGEditor {
             if ui
                 .add_enabled(
                     in_edit_mode && self.undo_system.can_redo(),
-                    egui::Button::new("Redo").shortcut_text("Ctrl+Y"),
+                    egui::Button::new(redo_label).shortcut_text("Ctrl+Y"),
                 )
                 .clicked()
             {
@@ -618,7 +628,7 @@ impl GGEditor {
         if sources.is_empty() {
             return;
         }
-        self.undo_system.record(&self.scene);
+        self.undo_system.record(&self.scene, "Paste entity");
         self.selection.clear();
         for source in sources {
             let duplicate = self.scene.duplicate_entity(source);
@@ -636,7 +646,7 @@ impl GGEditor {
         if entities.is_empty() {
             return;
         }
-        self.undo_system.record(&self.scene);
+        self.undo_system.record(&self.scene, "Duplicate entity");
         self.selection.clear();
         for entity in entities {
             let duplicate = self.scene.duplicate_entity(entity);
@@ -675,7 +685,7 @@ impl GGEditor {
             }
             HierarchyExternalAction::InstantiatePrefab { path, parent } => {
                 let path_str = path.to_string_lossy().to_string();
-                self.undo_system.record(&self.scene);
+                self.undo_system.record(&self.scene, "Instantiate prefab");
                 match SceneSerializer::instantiate_prefab(&mut self.scene, &path_str) {
                     Ok(root) => {
                         if let Some(parent_entity) = parent {

@@ -402,13 +402,17 @@ fn draw_components(
 ) {
     let bold_family = egui::FontFamily::Name(BOLD_FONT.into());
 
-    // Coalesced undo: detect any drag interaction starting/ending this frame.
-    let any_drag_active = ui.ctx().dragged_id().is_some();
-    if any_drag_active && !undo_system.is_editing() {
-        undo_system.begin_edit(scene);
-    } else if !any_drag_active && undo_system.is_editing() {
-        undo_system.end_edit();
+    // --- Undo: capture pre-frame snapshot before any modifications ---
+    if !undo_system.is_editing() {
+        undo_system.capture_pre_frame(scene);
     }
+
+    // --- Undo: temporarily reset scene_dirty to detect changes this frame ---
+    let dirty_before_properties = *scene_dirty;
+    *scene_dirty = false;
+
+    // Track whether a text field has keyboard focus (for coalescing text edits).
+    let mut text_field_focused = false;
 
     // -- Tag Component + Add Component button (inline) --
     if scene.has_component::<TagComponent>(entity) {
@@ -418,7 +422,9 @@ fn draw_components(
             .unwrap_or_default();
 
         ui.horizontal(|ui| {
-            if ui.text_edit_singleline(&mut tag).changed() {
+            let tag_resp = ui.text_edit_singleline(&mut tag);
+            text_field_focused |= tag_resp.has_focus();
+            if tag_resp.changed() {
                 if let Some(mut tc) = scene.get_component_mut::<TagComponent>(entity) {
                     tc.tag = tag;
                     *scene_dirty = true;
@@ -442,7 +448,7 @@ fn draw_components(
                             if !scene.has_component::<$type>(entity)
                                 && ui.button($name).clicked()
                             {
-                                undo_system.record(scene);
+                                undo_system.record(scene, concat!("Add ", $name));
                                 scene.add_component(entity, <$type>::default());
                                 *scene_dirty = true;
                             }
@@ -456,7 +462,7 @@ fn draw_components(
                     if !scene.has_component::<LuaScriptComponent>(entity)
                         && ui.button("Lua Script").clicked()
                     {
-                        undo_system.record(scene);
+                        undo_system.record(scene, "Add Lua Script");
                         scene.add_component(entity, LuaScriptComponent::default());
                         *scene_dirty = true;
                     }
@@ -509,7 +515,7 @@ fn draw_components(
     // -- Removable components (delegated to sub-modules) --
 
     if camera::draw_camera_component(ui, scene, entity, &bold_family, scene_dirty, undo_system) {
-        undo_system.record(scene);
+        undo_system.record(scene, "Remove Camera");
         scene.remove_component::<CameraComponent>(entity);
         *scene_dirty = true;
     }
@@ -524,7 +530,7 @@ fn draw_components(
         scene_dirty,
         undo_system,
     ) {
-        undo_system.record(scene);
+        undo_system.record(scene, "Remove Sprite Renderer");
         scene.remove_component::<SpriteRendererComponent>(entity);
         *scene_dirty = true;
     }
@@ -539,7 +545,7 @@ fn draw_components(
         scene_dirty,
         undo_system,
     ) {
-        undo_system.record(scene);
+        undo_system.record(scene, "Remove Sprite Animator");
         scene.remove_component::<SpriteAnimatorComponent>(entity);
         *scene_dirty = true;
     }
@@ -554,14 +560,14 @@ fn draw_components(
         scene_dirty,
         undo_system,
     ) {
-        undo_system.record(scene);
+        undo_system.record(scene, "Remove Instanced Animator");
         scene.remove_component::<InstancedSpriteAnimator>(entity);
         *scene_dirty = true;
     }
 
     if sprite::draw_animation_controller(ui, scene, entity, &bold_family, scene_dirty, undo_system)
     {
-        undo_system.record(scene);
+        undo_system.record(scene, "Remove Animation Controller");
         scene.remove_component::<AnimationControllerComponent>(entity);
         *scene_dirty = true;
     }
@@ -574,7 +580,7 @@ fn draw_components(
         scene_dirty,
         undo_system,
     ) {
-        undo_system.record(scene);
+        undo_system.record(scene, "Remove Circle Renderer");
         scene.remove_component::<CircleRendererComponent>(entity);
         *scene_dirty = true;
     }
@@ -588,7 +594,7 @@ fn draw_components(
         scene_dirty,
         undo_system,
     ) {
-        undo_system.record(scene);
+        undo_system.record(scene, "Remove Text");
         scene.remove_component::<TextComponent>(entity);
         *scene_dirty = true;
     }
@@ -601,7 +607,7 @@ fn draw_components(
         scene_dirty,
         undo_system,
     ) {
-        undo_system.record(scene);
+        undo_system.record(scene, "Remove Rigidbody 2D");
         scene.remove_component::<RigidBody2DComponent>(entity);
         *scene_dirty = true;
     }
@@ -614,7 +620,7 @@ fn draw_components(
         scene_dirty,
         undo_system,
     ) {
-        undo_system.record(scene);
+        undo_system.record(scene, "Remove Box Collider 2D");
         scene.remove_component::<BoxCollider2DComponent>(entity);
         *scene_dirty = true;
     }
@@ -627,7 +633,7 @@ fn draw_components(
         scene_dirty,
         undo_system,
     ) {
-        undo_system.record(scene);
+        undo_system.record(scene, "Remove Circle Collider 2D");
         scene.remove_component::<CircleCollider2DComponent>(entity);
         *scene_dirty = true;
     }
@@ -640,7 +646,7 @@ fn draw_components(
         scene_dirty,
         undo_system,
     ) {
-        undo_system.record(scene);
+        undo_system.record(scene, "Remove Native Script");
         scene.remove_component::<NativeScriptComponent>(entity);
         *scene_dirty = true;
     }
@@ -655,7 +661,7 @@ fn draw_components(
         scene_dirty,
         undo_system,
     ) {
-        undo_system.record(scene);
+        undo_system.record(scene, "Remove Audio Source");
         scene.remove_component::<AudioSourceComponent>(entity);
         *scene_dirty = true;
     }
@@ -668,7 +674,7 @@ fn draw_components(
         scene_dirty,
         undo_system,
     ) {
-        undo_system.record(scene);
+        undo_system.record(scene, "Remove Audio Listener");
         scene.remove_component::<AudioListenerComponent>(entity);
         *scene_dirty = true;
     }
@@ -681,7 +687,7 @@ fn draw_components(
         scene_dirty,
         undo_system,
     ) {
-        undo_system.record(scene);
+        undo_system.record(scene, "Remove Particle Emitter");
         scene.remove_component::<ParticleEmitterComponent>(entity);
         *scene_dirty = true;
     }
@@ -698,7 +704,7 @@ fn draw_components(
         tilemap_paint,
         egui_texture_map,
     ) {
-        undo_system.record(scene);
+        undo_system.record(scene, "Remove Tilemap");
         scene.remove_component::<TilemapComponent>(entity);
         *scene_dirty = true;
     }
@@ -715,9 +721,27 @@ fn draw_components(
             scene_dirty,
             undo_system,
         ) {
-            undo_system.record(scene);
+            undo_system.record(scene, "Remove Lua Script");
             scene.remove_component::<LuaScriptComponent>(entity);
             *scene_dirty = true;
         }
+    }
+
+    // --- Undo: detect changes and handle undo recording ---
+    let properties_changed = *scene_dirty;
+    *scene_dirty = dirty_before_properties || properties_changed;
+
+    let any_drag = ui.ctx().dragged_id().is_some();
+    let continuous_edit = any_drag || text_field_focused;
+
+    if continuous_edit && !undo_system.is_editing() {
+        // A continuous interaction started (drag or text input).
+        undo_system.begin_edit_from_pre_frame("Modify properties");
+    } else if !continuous_edit && undo_system.is_editing() {
+        // A continuous interaction ended.
+        undo_system.end_edit();
+    } else if !continuous_edit && !undo_system.is_editing() && properties_changed {
+        // A discrete change (checkbox, combobox, asset picker, etc.).
+        undo_system.push_pre_frame("Change properties");
     }
 }

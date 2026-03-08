@@ -631,7 +631,7 @@ impl Application for GGEditor {
                     if !self.selection.is_empty() {
                         let entities: Vec<Entity> = self.selection.iter().collect();
                         self.selection.clear();
-                        self.undo_system.record(&self.scene);
+                        self.undo_system.record(&self.scene, "Delete entity");
                         for entity in entities {
                             if self.scene.destroy_entity(entity).is_ok() {
                                 self.scene_ctx.dirty = true;

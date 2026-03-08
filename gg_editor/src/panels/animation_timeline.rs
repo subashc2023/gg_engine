@@ -91,7 +91,7 @@ pub(crate) fn animation_timeline_ui(
     _asset_manager: &mut Option<EditorAssetManager>,
     egui_texture_map: &HashMap<u64, egui::TextureId>,
     scene_dirty: &mut bool,
-    _undo_system: &mut crate::undo::UndoSystem,
+    undo_system: &mut crate::undo::UndoSystem,
 ) {
     let entity = match selection.single() {
         Some(e) if scene.has_component::<SpriteAnimatorComponent>(e) => e,
@@ -118,7 +118,7 @@ pub(crate) fn animation_timeline_ui(
     }
 
     // Toolbar.
-    draw_toolbar(ui, scene, entity, scene_dirty);
+    draw_toolbar(ui, scene, entity, scene_dirty, undo_system);
 
     ui.separator();
 
@@ -133,7 +133,7 @@ pub(crate) fn animation_timeline_ui(
             egui::vec2(grid_width, avail.height()),
             egui::Layout::top_down(egui::Align::LEFT),
             |ui| {
-                draw_sprite_sheet_grid(ui, scene, entity, egui_texture_map, scene_dirty);
+                draw_sprite_sheet_grid(ui, scene, entity, egui_texture_map, scene_dirty, undo_system);
             },
         );
 
@@ -143,7 +143,7 @@ pub(crate) fn animation_timeline_ui(
             egui::vec2(ui.available_width(), avail.height()),
             egui::Layout::top_down(egui::Align::LEFT),
             |ui| {
-                draw_timeline(ui, scene, entity, scene_dirty);
+                draw_timeline(ui, scene, entity, scene_dirty, undo_system);
             },
         );
     });
@@ -153,7 +153,7 @@ pub(crate) fn animation_timeline_ui(
 // Toolbar
 // ---------------------------------------------------------------------------
 
-fn draw_toolbar(ui: &mut egui::Ui, scene: &mut Scene, entity: Entity, scene_dirty: &mut bool) {
+fn draw_toolbar(ui: &mut egui::Ui, scene: &mut Scene, entity: Entity, scene_dirty: &mut bool, undo_system: &mut crate::undo::UndoSystem) {
     let (
         clip_count,
         clip_names,
@@ -270,6 +270,7 @@ fn draw_toolbar(ui: &mut egui::Ui, scene: &mut Scene, entity: Entity, scene_dirt
 
         // Add / remove clip.
         if ui.button("+").on_hover_text("Add clip").clicked() {
+            undo_system.record(scene, "Add animation clip");
             if let Some(mut sa) = scene.get_component_mut::<SpriteAnimatorComponent>(entity) {
                 let idx = sa.clips.len();
                 sa.clips.push(AnimationClip {
@@ -287,6 +288,7 @@ fn draw_toolbar(ui: &mut egui::Ui, scene: &mut Scene, entity: Entity, scene_dirt
         {
             if let Some(sel) = SELECTED_CLIP.get() {
                 if sel < clip_count {
+                    undo_system.record(scene, "Remove animation clip");
                     if let Some(mut sa) = scene.get_component_mut::<SpriteAnimatorComponent>(entity)
                     {
                         sa.clips.remove(sel);
@@ -308,10 +310,11 @@ fn draw_toolbar(ui: &mut egui::Ui, scene: &mut Scene, entity: Entity, scene_dirt
             let mut fps = selected_fps;
             let mut looping = selected_looping;
             ui.label("FPS:");
-            if ui
-                .add(egui::DragValue::new(&mut fps).range(0.1..=120.0).speed(0.1))
-                .changed()
-            {
+            let fps_resp = ui.add(egui::DragValue::new(&mut fps).range(0.1..=120.0).speed(0.1));
+            if (fps_resp.drag_started() || fps_resp.gained_focus()) && !undo_system.is_editing() {
+                undo_system.begin_edit(scene, "Change clip FPS");
+            }
+            if fps_resp.changed() {
                 if let Some(mut sa) = scene.get_component_mut::<SpriteAnimatorComponent>(entity) {
                     if let Some(c) = sa.clips.get_mut(sel) {
                         c.fps = fps;
@@ -319,7 +322,11 @@ fn draw_toolbar(ui: &mut egui::Ui, scene: &mut Scene, entity: Entity, scene_dirt
                     }
                 }
             }
+            if (fps_resp.drag_stopped() || fps_resp.lost_focus()) && undo_system.is_editing() {
+                undo_system.end_edit();
+            }
             if ui.checkbox(&mut looping, "Loop").changed() {
+                undo_system.record(scene, "Toggle clip looping");
                 if let Some(mut sa) = scene.get_component_mut::<SpriteAnimatorComponent>(entity) {
                     if let Some(c) = sa.clips.get_mut(sel) {
                         c.looping = looping;
@@ -357,6 +364,7 @@ fn draw_sprite_sheet_grid(
     entity: Entity,
     egui_texture_map: &HashMap<u64, egui::TextureId>,
     scene_dirty: &mut bool,
+    undo_system: &mut crate::undo::UndoSystem,
 ) {
     let (columns, cell_size, tex_info, clip_range) = {
         let sa = scene
@@ -517,6 +525,7 @@ fn draw_sprite_sheet_grid(
                         if resp.clicked() {
                             if let Some(target) = PICK_MODE.get() {
                                 if let Some(sel) = SELECTED_CLIP.get() {
+                                    undo_system.record(scene, "Set clip frame");
                                     if let Some(mut sa) =
                                         scene.get_component_mut::<SpriteAnimatorComponent>(entity)
                                     {
@@ -570,7 +579,7 @@ fn draw_sprite_sheet_grid(
 // Timeline / Dopesheet
 // ---------------------------------------------------------------------------
 
-fn draw_timeline(ui: &mut egui::Ui, scene: &mut Scene, entity: Entity, scene_dirty: &mut bool) {
+fn draw_timeline(ui: &mut egui::Ui, scene: &mut Scene, entity: Entity, scene_dirty: &mut bool, undo_system: &mut crate::undo::UndoSystem) {
     let zoom = ZOOM.get();
     let scroll_x = SCROLL_X.get();
 
@@ -907,6 +916,16 @@ fn draw_timeline(ui: &mut egui::Ui, scene: &mut Scene, entity: Entity, scene_dir
                 drag = Some(TimelineDrag::Playhead);
             }
 
+            // Record undo for clip-modifying drags.
+            if matches!(
+                drag,
+                Some(TimelineDrag::ClipStart { .. }
+                    | TimelineDrag::ClipEnd { .. }
+                    | TimelineDrag::ClipBody { .. })
+            ) {
+                undo_system.begin_edit(scene, "Drag clip boundary");
+            }
+
             ACTIVE_DRAG.with(|d| *d.borrow_mut() = drag);
         }
     }
@@ -964,6 +983,17 @@ fn draw_timeline(ui: &mut egui::Ui, scene: &mut Scene, entity: Entity, scene_dir
     }
 
     if resp.drag_stopped() {
+        let was_clip_drag = ACTIVE_DRAG.with(|d| {
+            matches!(
+                *d.borrow(),
+                Some(TimelineDrag::ClipStart { .. }
+                    | TimelineDrag::ClipEnd { .. }
+                    | TimelineDrag::ClipBody { .. })
+            )
+        });
+        if was_clip_drag {
+            undo_system.end_edit();
+        }
         ACTIVE_DRAG.with(|d| *d.borrow_mut() = None);
     }
 
@@ -975,7 +1005,11 @@ fn draw_timeline(ui: &mut egui::Ui, scene: &mut Scene, entity: Entity, scene_dir
                 let mut name = clips_data.get(sel).map(|c| c.0.clone()).unwrap_or_default();
                 ui.horizontal(|ui| {
                     ui.label("Name:");
-                    if ui.text_edit_singleline(&mut name).changed() {
+                    let name_resp = ui.text_edit_singleline(&mut name);
+                    if name_resp.changed() {
+                        if !undo_system.is_editing() {
+                            undo_system.begin_edit(scene, "Rename clip");
+                        }
                         if let Some(mut sa) =
                             scene.get_component_mut::<SpriteAnimatorComponent>(entity)
                         {
@@ -984,6 +1018,9 @@ fn draw_timeline(ui: &mut egui::Ui, scene: &mut Scene, entity: Entity, scene_dir
                                 *scene_dirty = true;
                             }
                         }
+                    }
+                    if name_resp.lost_focus() && undo_system.is_editing() {
+                        undo_system.end_edit();
                     }
                 });
                 ui.separator();
@@ -999,6 +1036,7 @@ fn draw_timeline(ui: &mut egui::Ui, scene: &mut Scene, entity: Entity, scene_dir
                 ui.separator();
 
                 if ui.button("Set as Default Clip").clicked() {
+                    undo_system.record(scene, "Set default clip");
                     let clip_name = clips_data[sel].0.clone();
                     if let Some(mut sa) = scene.get_component_mut::<SpriteAnimatorComponent>(entity)
                     {
@@ -1009,6 +1047,7 @@ fn draw_timeline(ui: &mut egui::Ui, scene: &mut Scene, entity: Entity, scene_dir
                 }
 
                 if ui.button("Duplicate Clip").clicked() {
+                    undo_system.record(scene, "Duplicate clip");
                     if let Some(mut sa) = scene.get_component_mut::<SpriteAnimatorComponent>(entity)
                     {
                         if let Some(clip) = sa.clips.get(sel).cloned() {
@@ -1025,6 +1064,7 @@ fn draw_timeline(ui: &mut egui::Ui, scene: &mut Scene, entity: Entity, scene_dir
 
                 ui.separator();
                 if ui.button("Delete Clip").clicked() {
+                    undo_system.record(scene, "Delete clip");
                     if let Some(mut sa) = scene.get_component_mut::<SpriteAnimatorComponent>(entity)
                     {
                         sa.clips.remove(sel);
@@ -1039,6 +1079,7 @@ fn draw_timeline(ui: &mut egui::Ui, scene: &mut Scene, entity: Entity, scene_dir
                 }
             }
         } else if ui.button("Add Clip").clicked() {
+            undo_system.record(scene, "Add clip");
             if let Some(mut sa) = scene.get_component_mut::<SpriteAnimatorComponent>(entity) {
                 let idx = sa.clips.len();
                 sa.clips.push(AnimationClip {

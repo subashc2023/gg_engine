@@ -107,7 +107,7 @@ pub(crate) fn scene_hierarchy_ui(
         // Right-click on blank space → create entity.
         response.context_menu(|ui| {
             if ui.button("Create Empty Entity").clicked() {
-                undo_system.record(scene);
+                undo_system.record(scene, "Create entity");
                 let e = scene.create_entity_with_tag("Empty Entity");
                 selection.set(e);
                 *scene_dirty = true;
@@ -148,26 +148,26 @@ pub(crate) fn scene_hierarchy_ui(
     if let Some(action) = deferred_action {
         match action {
             DeferredHierarchyAction::DeleteEntity(entity) => {
-                undo_system.record(scene);
+                undo_system.record(scene, "Delete entity");
                 selection.remove(entity);
                 let _ = scene.destroy_entity(entity);
                 *scene_dirty = true;
             }
             DeferredHierarchyAction::CreateChild(parent) => {
-                undo_system.record(scene);
+                undo_system.record(scene, "Create child entity");
                 let child = scene.create_entity_with_tag("Empty Entity");
                 scene.set_parent(child, parent, false);
                 selection.set(child);
                 *scene_dirty = true;
             }
             DeferredHierarchyAction::Reparent { child, new_parent } => {
-                undo_system.record(scene);
+                undo_system.record(scene, "Reparent entity");
                 scene.set_parent(child, new_parent, true);
                 *scene_dirty = true;
             }
             DeferredHierarchyAction::DetachToRoot(entity) => {
                 if scene.get_parent(entity).is_some() {
-                    undo_system.record(scene);
+                    undo_system.record(scene, "Detach from parent");
                     scene.detach_from_parent(entity, true);
                     *scene_dirty = true;
                 }
@@ -176,7 +176,7 @@ pub(crate) fn scene_hierarchy_ui(
                 child_uuid,
                 new_index,
             } => {
-                undo_system.record(scene);
+                undo_system.record(scene, "Reorder entity");
                 scene.reorder_child(child_uuid, new_index);
                 *scene_dirty = true;
             }
