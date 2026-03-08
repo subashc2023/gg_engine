@@ -139,13 +139,13 @@ impl Sandbox3D {
                 Quat::IDENTITY,
                 Vec3::new(0.0, -0.5, 0.0),
             );
-            renderer.submit_3d(pipeline, va, &model, None);
+            renderer.submit_3d(pipeline, va, &model, None, -1);
         }
 
         // Cube.
         if let Some(va) = &self.cube_va {
             let model = Mat4::from_translation(Vec3::new(0.0, 0.0, 0.0));
-            renderer.submit_3d(pipeline, va, &model, None);
+            renderer.submit_3d(pipeline, va, &model, None, -1);
         }
 
         // Sphere.
@@ -155,7 +155,7 @@ impl Sandbox3D {
                 Quat::IDENTITY,
                 Vec3::new(2.0, 0.25, 0.0),
             );
-            renderer.submit_3d(pipeline, va, &model, None);
+            renderer.submit_3d(pipeline, va, &model, None, -1);
         }
     }
 

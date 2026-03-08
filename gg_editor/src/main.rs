@@ -1706,27 +1706,36 @@ impl GGEditor {
         for selected in self.selection.iter() {
             if let Some(transform) = self.scene.get_component::<TransformComponent>(selected) {
                 let outline_color = Vec4::new(1.0, 0.5, 0.0, 1.0);
-                let outline_transform =
-                    if let Some(tm) = self.scene.get_component::<TilemapComponent>(selected) {
-                        // Expand outline to cover the full tilemap grid.
-                        transform.get_transform()
-                            * Mat4::from_scale_rotation_translation(
-                                Vec3::new(
-                                    tm.width as f32 * tm.tile_size.x,
-                                    tm.height as f32 * tm.tile_size.y,
-                                    1.0,
-                                ),
-                                Quat::IDENTITY,
-                                Vec3::new(
-                                    (tm.width as f32 - 1.0) * tm.tile_size.x * 0.5,
-                                    (tm.height as f32 - 1.0) * tm.tile_size.y * 0.5,
-                                    0.0,
-                                ),
-                            )
-                    } else {
-                        transform.get_transform()
-                    };
-                renderer.draw_rect_transform(&outline_transform, outline_color, -1);
+                if let Some(mesh) =
+                    self.scene.get_component::<MeshRendererComponent>(selected)
+                {
+                    // 3D mesh: wireframe box outline matching primitive bounds.
+                    let (bmin, bmax) = mesh.primitive.local_bounds();
+                    let world = self.scene.get_world_transform(selected);
+                    renderer.draw_box_outline(&world, bmin, bmax, outline_color, -1);
+                } else {
+                    let outline_transform =
+                        if let Some(tm) = self.scene.get_component::<TilemapComponent>(selected) {
+                            // Expand outline to cover the full tilemap grid.
+                            transform.get_transform()
+                                * Mat4::from_scale_rotation_translation(
+                                    Vec3::new(
+                                        tm.width as f32 * tm.tile_size.x,
+                                        tm.height as f32 * tm.tile_size.y,
+                                        1.0,
+                                    ),
+                                    Quat::IDENTITY,
+                                    Vec3::new(
+                                        (tm.width as f32 - 1.0) * tm.tile_size.x * 0.5,
+                                        (tm.height as f32 - 1.0) * tm.tile_size.y * 0.5,
+                                        0.0,
+                                    ),
+                                )
+                        } else {
+                            transform.get_transform()
+                        };
+                    renderer.draw_rect_transform(&outline_transform, outline_color, -1);
+                }
             }
         }
 

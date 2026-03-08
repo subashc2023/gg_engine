@@ -996,7 +996,7 @@ impl Scene {
         for (handle, world_transform) in &meshes {
             let mesh_comp = self.world.get::<&MeshRendererComponent>(*handle).unwrap();
             if let Some(ref va) = mesh_comp.vertex_array {
-                renderer.submit_3d(&pipeline, va, world_transform, None);
+                renderer.submit_3d(&pipeline, va, world_transform, None, handle.id() as i32);
             }
         }
     }

@@ -1,7 +1,6 @@
 Version: 1
-Scene: Mesh Test
+Scene: mesh_test
 Entities:
-# ── Camera ──────────────────────────────────────────────────
 - Entity: 100
   TagComponent:
     Tag: Camera
@@ -11,9 +10,10 @@ Entities:
     - 2.0
     - 5.0
     Rotation:
-    - -0.3
-    - 0.5
-    - 0.0
+    - -0.14479247
+    - 0.24462588
+    - -0.036971588
+    - 0.9580326
     Scale:
     - 1.0
     - 1.0
@@ -29,20 +29,19 @@ Entities:
       OrthographicFar: 1.0
     Primary: true
     FixedAspectRatio: false
-
-# ── Cube ────────────────────────────────────────────────────
 - Entity: 200
   TagComponent:
     Tag: Cube
   TransformComponent:
     Translation:
     - 0.0
-    - 0.0
+    - 0.5
     - 0.0
     Rotation:
-    - 0.0
-    - 0.0
-    - 0.0
+    - -0.0
+    - -0.0
+    - -0.0
+    - 1.0
     Scale:
     - 1.0
     - 1.0
@@ -54,24 +53,23 @@ Entities:
     - 0.4
     - 0.2
     - 1.0
-
-# ── Sphere ──────────────────────────────────────────────────
 - Entity: 300
   TagComponent:
     Tag: Sphere
   TransformComponent:
     Translation:
     - 2.5
-    - 0.25
+    - 0.5
     - 0.0
     Rotation:
-    - 0.0
-    - 0.0
-    - 0.0
+    - -0.0
+    - -0.0
+    - -0.0
+    - 1.0
     Scale:
-    - 1.5
-    - 1.5
-    - 1.5
+    - 1.0
+    - 1.0
+    - 1.0
   MeshRendererComponent:
     Primitive: Sphere
     Color:
@@ -79,20 +77,19 @@ Entities:
     - 0.5
     - 0.9
     - 1.0
-
-# ── Ground Plane ────────────────────────────────────────────
 - Entity: 400
   TagComponent:
     Tag: Ground
   TransformComponent:
     Translation:
     - 0.0
-    - -0.5
+    - 0.0
     - 0.0
     Rotation:
-    - 0.0
-    - 0.0
-    - 0.0
+    - -0.0
+    - -0.0
+    - -0.0
+    - 1.0
     Scale:
     - 6.0
     - 1.0

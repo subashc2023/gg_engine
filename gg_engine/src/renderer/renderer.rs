@@ -1199,6 +1199,48 @@ impl Renderer {
         self.draw_line(corners[3], corners[0], color, entity_id);
     }
 
+    /// Draw a wireframe box (12 edges) using a transform matrix and local-space bounds.
+    /// For a unit cube use `min = (-0.5, -0.5, -0.5)`, `max = (0.5, 0.5, 0.5)`.
+    /// Degenerate axes (min == max) produce a flat outline (e.g. a plane).
+    pub fn draw_box_outline(
+        &self,
+        transform: &Mat4,
+        bounds_min: Vec3,
+        bounds_max: Vec3,
+        color: Vec4,
+        entity_id: i32,
+    ) {
+        let mn = bounds_min;
+        let mx = bounds_max;
+        let c = [
+            *transform * Vec4::new(mn.x, mn.y, mn.z, 1.0),
+            *transform * Vec4::new(mx.x, mn.y, mn.z, 1.0),
+            *transform * Vec4::new(mx.x, mx.y, mn.z, 1.0),
+            *transform * Vec4::new(mn.x, mx.y, mn.z, 1.0),
+            *transform * Vec4::new(mn.x, mn.y, mx.z, 1.0),
+            *transform * Vec4::new(mx.x, mn.y, mx.z, 1.0),
+            *transform * Vec4::new(mx.x, mx.y, mx.z, 1.0),
+            *transform * Vec4::new(mn.x, mx.y, mx.z, 1.0),
+        ];
+        let v = |i: usize| Vec3::new(c[i].x, c[i].y, c[i].z);
+
+        // 4 bottom edges.
+        self.draw_line(v(0), v(1), color, entity_id);
+        self.draw_line(v(1), v(2), color, entity_id);
+        self.draw_line(v(2), v(3), color, entity_id);
+        self.draw_line(v(3), v(0), color, entity_id);
+        // 4 top edges.
+        self.draw_line(v(4), v(5), color, entity_id);
+        self.draw_line(v(5), v(6), color, entity_id);
+        self.draw_line(v(6), v(7), color, entity_id);
+        self.draw_line(v(7), v(4), color, entity_id);
+        // 4 vertical edges.
+        self.draw_line(v(0), v(4), color, entity_id);
+        self.draw_line(v(1), v(5), color, entity_id);
+        self.draw_line(v(2), v(6), color, entity_id);
+        self.draw_line(v(3), v(7), color, entity_id);
+    }
+
     /// Get the current line width used for line rendering.
     pub fn line_width(&self) -> f32 {
         self.line_width
@@ -1553,6 +1595,7 @@ impl Renderer {
         vertex_array: &VertexArray,
         transform: &Mat4,
         material_handle: Option<&super::MaterialHandle>,
+        entity_id: i32,
     ) {
         let ctx = self
             .draw_context
@@ -1578,17 +1621,20 @@ impl Renderer {
                 &[],
             );
 
-            // Push model transform (offset 0, 64 bytes, vertex stage).
+            // Push model transform (offset 0, 64 bytes) + entity_id (offset 64, 4 bytes).
+            let mut push_data = [0u8; 68];
             let transform_bytes = std::slice::from_raw_parts(
                 transform as *const Mat4 as *const u8,
                 std::mem::size_of::<Mat4>(),
             );
+            push_data[..64].copy_from_slice(transform_bytes);
+            push_data[64..68].copy_from_slice(&entity_id.to_ne_bytes());
             device.cmd_push_constants(
                 cmd,
                 pipeline.layout(),
                 vk::ShaderStageFlags::VERTEX,
                 0,
-                transform_bytes,
+                &push_data,
             );
 
             // Set 2: material UBO (if provided).
@@ -1670,9 +1716,9 @@ impl Renderer {
                 return Ok(Arc::clone(pipeline));
             }
             let shader = self.create_shader(
-                "mesh3d",
-                super::shaders::MESH3D_VERT_SPV,
-                super::shaders::MESH3D_FRAG_SPV,
+                "mesh3d_swapchain",
+                super::shaders::MESH3D_SWAPCHAIN_VERT_SPV,
+                super::shaders::MESH3D_SWAPCHAIN_FRAG_SPV,
             )?;
             let vertex_layout = super::mesh::Mesh::vertex_layout();
             let pipeline = self.create_3d_pipeline(

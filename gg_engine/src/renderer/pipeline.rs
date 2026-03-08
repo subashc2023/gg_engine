@@ -738,11 +738,11 @@ pub(crate) fn create_3d_pipeline(
     let all_layouts =
         prepare_descriptor_layouts(camera_ubo_ds_layout, extra_descriptor_set_layouts);
 
-    // Push constant: model matrix (1 × mat4 = 64 bytes, vertex stage).
+    // Push constant: model matrix (mat4 = 64 bytes) + entity_id (i32 = 4 bytes), vertex stage.
     let push_constant_range = vk::PushConstantRange {
         stage_flags: vk::ShaderStageFlags::VERTEX,
         offset: 0,
-        size: std::mem::size_of::<[f32; 16]>() as u32,
+        size: (std::mem::size_of::<[f32; 16]>() + std::mem::size_of::<i32>()) as u32,
     };
 
     let layout_info = vk::PipelineLayoutCreateInfo::default()

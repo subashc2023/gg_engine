@@ -816,6 +816,21 @@ pub enum MeshPrimitive {
     Plane,
 }
 
+impl MeshPrimitive {
+    /// Local-space axis-aligned bounding box as `(min, max)` corners.
+    pub fn local_bounds(self) -> (Vec3, Vec3) {
+        match self {
+            Self::Cube | Self::Sphere => {
+                (Vec3::splat(-0.5), Vec3::splat(0.5))
+            }
+            Self::Plane => {
+                // Flat on XZ, Y = 0.
+                (Vec3::new(-0.5, 0.0, -0.5), Vec3::new(0.5, 0.0, 0.5))
+            }
+        }
+    }
+}
+
 /// 3D mesh renderer attached to an entity.
 ///
 /// Uses the entity's [`TransformComponent`] as the model matrix.
