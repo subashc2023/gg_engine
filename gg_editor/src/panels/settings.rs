@@ -18,6 +18,9 @@ pub(crate) fn settings_ui(
     scene_warnings: &[String],
     theme: &mut EditorTheme,
     reload_shaders_requested: &mut bool,
+    msaa_samples: &mut MsaaSamples,
+    max_msaa_samples: MsaaSamples,
+    msaa_changed: &mut bool,
 ) {
     ui.heading("Renderer");
     ui.separator();
@@ -47,6 +50,18 @@ pub(crate) fn settings_ui(
 
     ui.add_space(8.0);
     ui.checkbox(vsync, "VSync");
+
+    ui.add_space(4.0);
+    let available = MsaaSamples::available_up_to(max_msaa_samples.to_vk());
+    egui::ComboBox::from_label("MSAA")
+        .selected_text(format!("{}", msaa_samples))
+        .show_ui(ui, |ui| {
+            for &s in &available {
+                if ui.selectable_value(msaa_samples, s, format!("{s}")).changed() {
+                    *msaa_changed = true;
+                }
+            }
+        });
 
     ui.add_space(4.0);
     if ui

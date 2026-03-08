@@ -428,6 +428,7 @@ impl<T: Application> ApplicationHandler for EngineRunner<T> {
                                                             .create_offscreen_batch_pipeline(
                                                                 fb.render_pass(),
                                                                 fb.color_attachment_count() as u32,
+                                                                fb.sample_count(),
                                                             )
                                                         {
                                                             log::error!(target: "gg_engine", "Offscreen pipeline init failed: {e}");

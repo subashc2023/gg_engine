@@ -344,6 +344,7 @@ pub(super) struct Renderer2DData {
     pipeline_cache: vk::PipelineCache,
     offscreen_render_pass: Option<vk::RenderPass>,
     offscreen_color_attachment_count: u32,
+    offscreen_sample_count: vk::SampleCountFlags,
 }
 
 impl Renderer2DData {
@@ -547,6 +548,7 @@ impl Renderer2DData {
             &[bindless_ds_layout],
             1,
             pipeline_cache,
+            vk::SampleCountFlags::TYPE_1,
         )?);
 
         // -- Circle Pipeline (swapchain: 1 color attachment, no entity ID output) --
@@ -560,6 +562,7 @@ impl Renderer2DData {
             &[],
             1,
             pipeline_cache,
+            vk::SampleCountFlags::TYPE_1,
         )?);
 
         // -- Line Pipeline (swapchain: 1 color attachment, no entity ID output) --
@@ -572,6 +575,7 @@ impl Renderer2DData {
             camera_ubo_ds_layout,
             1,
             pipeline_cache,
+            vk::SampleCountFlags::TYPE_1,
         )?);
 
         // -- Text Pipeline (swapchain: 1 color attachment, uses bindless textures for font atlas) --
@@ -585,6 +589,7 @@ impl Renderer2DData {
             &[bindless_ds_layout],
             1,
             pipeline_cache,
+            vk::SampleCountFlags::TYPE_1,
         )?);
 
         // -- Instanced Sprite Pipeline (swapchain: 1 color attachment) --
@@ -598,6 +603,7 @@ impl Renderer2DData {
             &[bindless_ds_layout],
             1,
             pipeline_cache,
+            vk::SampleCountFlags::TYPE_1,
         )?);
 
         // -- Bindless descriptor pool (UPDATE_AFTER_BIND) --
@@ -694,6 +700,7 @@ impl Renderer2DData {
             pipeline_cache,
             offscreen_render_pass: None,
             offscreen_color_attachment_count: 0,
+            offscreen_sample_count: vk::SampleCountFlags::TYPE_1,
         })
     }
 
@@ -1281,9 +1288,11 @@ impl Renderer2DData {
         camera_ubo_ds_layout: vk::DescriptorSetLayout,
         color_attachment_count: u32,
         pipeline_cache: vk::PipelineCache,
+        samples: vk::SampleCountFlags,
     ) -> Result<(), String> {
         self.offscreen_render_pass = Some(render_pass);
         self.offscreen_color_attachment_count = color_attachment_count;
+        self.offscreen_sample_count = samples;
 
         self.rebuild_offscreen_pipelines(
             device,
@@ -1291,6 +1300,7 @@ impl Renderer2DData {
             camera_ubo_ds_layout,
             color_attachment_count,
             pipeline_cache,
+            samples,
         )
     }
 
@@ -1301,6 +1311,7 @@ impl Renderer2DData {
         camera_ubo_ds_layout: vk::DescriptorSetLayout,
         color_attachment_count: u32,
         pipeline_cache: vk::PipelineCache,
+        samples: vk::SampleCountFlags,
     ) -> Result<(), String> {
         // Quad offscreen pipeline (with bindless textures at set 1).
         self.quad_ps.offscreen_pipeline = Some(Arc::new(pipeline::create_batch_pipeline(
@@ -1312,6 +1323,7 @@ impl Renderer2DData {
             &[self.bindless_ds_layout],
             color_attachment_count,
             pipeline_cache,
+            samples,
         )?));
 
         // Circle offscreen pipeline (no textures).
@@ -1324,6 +1336,7 @@ impl Renderer2DData {
             &[],
             color_attachment_count,
             pipeline_cache,
+            samples,
         )?));
 
         // Line offscreen pipeline (no textures, LINE_LIST topology).
@@ -1335,6 +1348,7 @@ impl Renderer2DData {
             camera_ubo_ds_layout,
             color_attachment_count,
             pipeline_cache,
+            samples,
         )?));
 
         // Text offscreen pipeline (with bindless textures at set 1, MSDF shader).
@@ -1347,6 +1361,7 @@ impl Renderer2DData {
             &[self.bindless_ds_layout],
             color_attachment_count,
             pipeline_cache,
+            samples,
         )?));
 
         // Instanced sprite offscreen pipeline.
@@ -1361,6 +1376,7 @@ impl Renderer2DData {
                 &[self.bindless_ds_layout],
                 color_attachment_count,
                 pipeline_cache,
+                samples,
             )?));
 
         Ok(())
@@ -1423,7 +1439,7 @@ impl Renderer2DData {
             }
         }
 
-        // Rebuild swapchain pipelines.
+        // Rebuild swapchain pipelines (always TYPE_1).
         self.quad_ps.pipeline = Arc::new(pipeline::create_batch_pipeline(
             &self.device,
             &self.quad_ps.swapchain_shader,
@@ -1433,6 +1449,7 @@ impl Renderer2DData {
             &[self.bindless_ds_layout],
             1,
             self.pipeline_cache,
+            vk::SampleCountFlags::TYPE_1,
         )?);
 
         self.circle_ps.pipeline = Arc::new(pipeline::create_batch_pipeline(
@@ -1444,6 +1461,7 @@ impl Renderer2DData {
             &[],
             1,
             self.pipeline_cache,
+            vk::SampleCountFlags::TYPE_1,
         )?);
 
         self.line_ps.pipeline = Arc::new(pipeline::create_line_batch_pipeline(
@@ -1454,6 +1472,7 @@ impl Renderer2DData {
             self.camera_ubo_ds_layout,
             1,
             self.pipeline_cache,
+            vk::SampleCountFlags::TYPE_1,
         )?);
 
         self.text_ps.pipeline = Arc::new(pipeline::create_batch_pipeline(
@@ -1465,6 +1484,7 @@ impl Renderer2DData {
             &[self.bindless_ds_layout],
             1,
             self.pipeline_cache,
+            vk::SampleCountFlags::TYPE_1,
         )?);
 
         self.instance_ps.pipeline = Arc::new(pipeline::create_instanced_batch_pipeline(
@@ -1477,6 +1497,7 @@ impl Renderer2DData {
             &[self.bindless_ds_layout],
             1,
             self.pipeline_cache,
+            vk::SampleCountFlags::TYPE_1,
         )?);
 
         // Rebuild offscreen pipelines if they exist.
@@ -1487,6 +1508,7 @@ impl Renderer2DData {
                 self.camera_ubo_ds_layout,
                 self.offscreen_color_attachment_count,
                 self.pipeline_cache,
+                self.offscreen_sample_count,
             )?;
         }
 

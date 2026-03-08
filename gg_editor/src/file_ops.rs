@@ -94,7 +94,7 @@ impl GGEditor {
             ui.separator();
             if ui
                 .add_enabled(
-                    in_edit_mode && self.selection_context.is_some(),
+                    in_edit_mode && !self.selection.is_empty(),
                     egui::Button::new("Copy").shortcut_text("Ctrl+C"),
                 )
                 .clicked()
@@ -104,7 +104,7 @@ impl GGEditor {
             }
             if ui
                 .add_enabled(
-                    in_edit_mode && self.ui.clipboard_entity_uuid.is_some(),
+                    in_edit_mode && !self.ui.clipboard_entity_uuids.is_empty(),
                     egui::Button::new("Paste").shortcut_text("Ctrl+V"),
                 )
                 .clicked()
@@ -115,7 +115,7 @@ impl GGEditor {
             ui.separator();
             if ui
                 .add_enabled(
-                    in_edit_mode && self.selection_context.is_some(),
+                    in_edit_mode && !self.selection.is_empty(),
                     egui::Button::new("Duplicate").shortcut_text("Ctrl+D"),
                 )
                 .clicked()
@@ -201,7 +201,7 @@ impl GGEditor {
     fn create_empty_scene(&mut self) {
         let old = std::mem::replace(&mut self.scene, Scene::new());
         self.scene_ctx.pending_drop_scenes.push(old);
-        self.selection_context = None;
+        self.selection.clear();
         self.scene_ctx.editor_scene_path = None;
         self.scene_ctx.dirty = false;
         self.undo_system.clear();
@@ -385,7 +385,7 @@ impl GGEditor {
         // Swap in the new scene.
         let old = std::mem::replace(&mut self.scene, scene);
         self.scene_ctx.pending_drop_scenes.push(old);
-        self.selection_context = None;
+        self.selection.clear();
         self.scene_ctx.editor_scene_path = Some(path_str);
         self.scene_ctx.dirty = false;
         self.undo_system.clear();
@@ -533,19 +533,27 @@ impl GGEditor {
     }
 
     pub(super) fn perform_undo(&mut self) {
-        // Capture the selected entity's UUID before replacing the scene,
+        // Capture selected entities' UUIDs before replacing the scene,
         // since hecs entity IDs change after deserialization.
-        let selected_uuid = self.selection_context.and_then(|sel| {
-            self.scene
-                .get_component::<IdComponent>(sel)
-                .map(|id| id.id.raw())
-        });
+        let selected_uuids: Vec<u64> = self
+            .selection
+            .iter()
+            .filter_map(|sel| {
+                self.scene
+                    .get_component::<IdComponent>(sel)
+                    .map(|id| id.id.raw())
+            })
+            .collect();
         if let Some(restored) = self.undo_system.undo(&self.scene) {
             let old = std::mem::replace(&mut self.scene, restored);
             self.scene_ctx.pending_drop_scenes.push(old);
             // Restore selection by IdComponent UUID (stable across serialization).
-            self.selection_context =
-                selected_uuid.and_then(|uuid| self.scene.find_entity_by_uuid(uuid));
+            self.selection.clear();
+            for uuid in selected_uuids {
+                if let Some(entity) = self.scene.find_entity_by_uuid(uuid) {
+                    self.selection.add(entity);
+                }
+            }
             let (w, h) = self.viewport.size;
             if w > 0 && h > 0 {
                 self.scene.on_viewport_resize(w, h);
@@ -555,16 +563,24 @@ impl GGEditor {
     }
 
     pub(super) fn perform_redo(&mut self) {
-        let selected_uuid = self.selection_context.and_then(|sel| {
-            self.scene
-                .get_component::<IdComponent>(sel)
-                .map(|id| id.id.raw())
-        });
+        let selected_uuids: Vec<u64> = self
+            .selection
+            .iter()
+            .filter_map(|sel| {
+                self.scene
+                    .get_component::<IdComponent>(sel)
+                    .map(|id| id.id.raw())
+            })
+            .collect();
         if let Some(restored) = self.undo_system.redo(&self.scene) {
             let old = std::mem::replace(&mut self.scene, restored);
             self.scene_ctx.pending_drop_scenes.push(old);
-            self.selection_context =
-                selected_uuid.and_then(|uuid| self.scene.find_entity_by_uuid(uuid));
+            self.selection.clear();
+            for uuid in selected_uuids {
+                if let Some(entity) = self.scene.find_entity_by_uuid(uuid) {
+                    self.selection.add(entity);
+                }
+            }
             let (w, h) = self.viewport.size;
             if w > 0 && h > 0 {
                 self.scene.on_viewport_resize(w, h);
@@ -574,36 +590,59 @@ impl GGEditor {
     }
 
     pub(super) fn on_copy_entity(&mut self) {
-        if let Some(selected) = self.selection_context {
-            if self.scene.is_alive(selected) {
-                self.ui.clipboard_entity_uuid = self
-                    .scene
-                    .get_component::<IdComponent>(selected)
-                    .map(|id| id.id.raw());
-            }
+        let uuids: Vec<u64> = self
+            .selection
+            .iter()
+            .filter(|e| self.scene.is_alive(*e))
+            .filter_map(|e| {
+                self.scene
+                    .get_component::<IdComponent>(e)
+                    .map(|id| id.id.raw())
+            })
+            .collect();
+        if !uuids.is_empty() {
+            self.ui.clipboard_entity_uuids = uuids;
         }
     }
 
     pub(super) fn on_paste_entity(&mut self) {
-        if let Some(uuid) = self.ui.clipboard_entity_uuid {
-            if let Some(source) = self.scene.find_entity_by_uuid(uuid) {
-                self.undo_system.record(&self.scene);
-                let duplicate = self.scene.duplicate_entity(source);
-                self.selection_context = Some(duplicate);
-                self.scene_ctx.dirty = true;
-            }
+        if self.ui.clipboard_entity_uuids.is_empty() {
+            return;
         }
+        let sources: Vec<Entity> = self
+            .ui
+            .clipboard_entity_uuids
+            .iter()
+            .filter_map(|&uuid| self.scene.find_entity_by_uuid(uuid))
+            .collect();
+        if sources.is_empty() {
+            return;
+        }
+        self.undo_system.record(&self.scene);
+        self.selection.clear();
+        for source in sources {
+            let duplicate = self.scene.duplicate_entity(source);
+            self.selection.add(duplicate);
+        }
+        self.scene_ctx.dirty = true;
     }
 
     pub(super) fn on_duplicate_entity(&mut self) {
-        if let Some(selected) = self.selection_context {
-            if self.scene.is_alive(selected) {
-                self.undo_system.record(&self.scene);
-                let duplicate = self.scene.duplicate_entity(selected);
-                self.selection_context = Some(duplicate);
-                self.scene_ctx.dirty = true;
-            }
+        let entities: Vec<Entity> = self
+            .selection
+            .iter()
+            .filter(|e| self.scene.is_alive(*e))
+            .collect();
+        if entities.is_empty() {
+            return;
         }
+        self.undo_system.record(&self.scene);
+        self.selection.clear();
+        for entity in entities {
+            let duplicate = self.scene.duplicate_entity(entity);
+            self.selection.add(duplicate);
+        }
+        self.scene_ctx.dirty = true;
     }
 
     pub(super) fn handle_hierarchy_action(
@@ -644,7 +683,7 @@ impl GGEditor {
                                 self.scene.set_parent(root, parent_entity, false);
                             }
                         }
-                        self.selection_context = Some(root);
+                        self.selection.set(root);
                         self.scene_ctx.dirty = true;
                     }
                     Err(e) => warn!("Failed to instantiate prefab '{}': {}", path_str, e),
@@ -670,7 +709,7 @@ impl GGEditor {
             self.undo_system.clear();
             let old = std::mem::replace(&mut self.scene, new_scene);
             self.scene_ctx.pending_drop_scenes.push(old);
-            self.selection_context = None;
+            self.selection.clear();
             self.scene_ctx.editor_scene_path = Some(path_str);
             let (w, h) = self.viewport.size;
             if w > 0 && h > 0 {
@@ -756,7 +795,7 @@ impl GGEditor {
         self.editor_settings
             .add_recent_project(project.name(), &abs_path.to_string_lossy());
         self.project_state.project = Some(project);
-        self.selection_context = None;
+        self.selection.clear();
         // Don't overwrite dirty=true set by autosave recovery above.
         if !self.scene_ctx.dirty {
             self.scene_ctx.dirty = false;

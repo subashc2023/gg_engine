@@ -132,7 +132,7 @@ impl GGEditor {
         if let Some(editor_scene) = self.playback.editor_scene.take() {
             let old = std::mem::replace(&mut self.scene, editor_scene);
             self.scene_ctx.pending_drop_scenes.push(old);
-            self.selection_context = None;
+            self.selection.clear();
 
             let (w, h) = self.viewport.size;
             if w > 0 && h > 0 {

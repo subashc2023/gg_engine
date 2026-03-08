@@ -37,6 +37,7 @@ pub(crate) fn relative_asset_path(abs_path: &Path, asset_dir: &Path) -> String {
 use transform_gizmo_egui::Gizmo;
 
 use crate::gizmo::GizmoOperation;
+use crate::selection::Selection;
 use crate::undo::UndoSystem;
 use crate::TilemapPaintState;
 
@@ -158,7 +159,7 @@ pub(crate) struct ProjectContext<'a> {
 
 pub(crate) struct EditorTabViewer<'a> {
     pub(crate) scene: &'a mut Scene,
-    pub(crate) selection_context: &'a mut Option<Entity>,
+    pub(crate) selection: &'a mut Selection,
     pub(crate) pending_open_path: &'a mut Option<std::path::PathBuf>,
     pub(crate) is_playing: bool,
     pub(crate) scene_dirty: &'a mut bool,
@@ -174,6 +175,9 @@ pub(crate) struct EditorTabViewer<'a> {
     pub(crate) grid_size: &'a mut f32,
     pub(crate) theme: &'a mut EditorTheme,
     pub(crate) reload_shaders_requested: &'a mut bool,
+    pub(crate) msaa_samples: &'a mut gg_engine::MsaaSamples,
+    pub(crate) max_msaa_samples: MsaaSamples,
+    pub(crate) msaa_changed: &'a mut bool,
     pub(crate) viewport: ViewportState<'a>,
     pub(crate) game_viewport: GameViewportState<'a>,
     pub(crate) project: ProjectContext<'a>,
@@ -213,7 +217,7 @@ impl egui_dock::TabViewer for EditorTabViewer<'_> {
                 if let Some(action) = scene_hierarchy::scene_hierarchy_ui(
                     ui,
                     self.scene,
-                    self.selection_context,
+                    self.selection,
                     self.scene_dirty,
                     self.undo_system,
                     self.hierarchy_filter,
@@ -226,7 +230,7 @@ impl egui_dock::TabViewer for EditorTabViewer<'_> {
                 viewport::viewport_ui(
                     ui,
                     self.scene,
-                    self.selection_context,
+                    self.selection,
                     self.viewport.size,
                     self.viewport.focused,
                     self.viewport.hovered,
@@ -264,7 +268,7 @@ impl egui_dock::TabViewer for EditorTabViewer<'_> {
                 properties::properties_ui(
                     ui,
                     self.scene,
-                    self.selection_context,
+                    self.selection,
                     self.project.asset_manager,
                     self.is_playing,
                     self.project.assets_root,
@@ -302,6 +306,9 @@ impl egui_dock::TabViewer for EditorTabViewer<'_> {
                     self.scene_warnings,
                     self.theme,
                     self.reload_shaders_requested,
+                    self.msaa_samples,
+                    self.max_msaa_samples,
+                    self.msaa_changed,
                 );
             }
 
@@ -326,7 +333,7 @@ impl egui_dock::TabViewer for EditorTabViewer<'_> {
                 animation_timeline::animation_timeline_ui(
                     ui,
                     self.scene,
-                    self.selection_context,
+                    self.selection,
                     self.project.asset_manager,
                     self.project.egui_texture_map,
                     self.scene_dirty,

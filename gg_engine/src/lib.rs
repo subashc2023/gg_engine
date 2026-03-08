@@ -43,10 +43,10 @@ pub use project::Project;
 pub use renderer::shaders;
 pub use renderer::{
     as_bytes, BufferElement, BufferLayout, EditorCamera, Font, Framebuffer, FramebufferSpec,
-    FramebufferTextureFormat, FramebufferTextureSpec, IndexBuffer, OrthographicCamera, Pipeline,
-    PresentMode, ProjectionType, Renderer, Renderer2DStats, RendererBackend, SceneCamera, Shader,
-    ShaderDataType, ShaderLibrary, SubTexture2D, Texture2D, TextureSpecification, VertexArray,
-    VertexBuffer,
+    FramebufferTextureFormat, FramebufferTextureSpec, IndexBuffer, MsaaSamples,
+    OrthographicCamera, Pipeline, PresentMode, ProjectionType, Renderer, Renderer2DStats,
+    RendererBackend, SceneCamera, Shader, ShaderDataType, ShaderLibrary, SubTexture2D, Texture2D,
+    TextureSpecification, VertexArray, VertexBuffer,
 };
 pub use scene::{Aabb2D, CullingStats, SpatialGrid};
 pub use scene::{
@@ -84,10 +84,10 @@ pub mod prelude {
     pub use crate::project::Project;
     pub use crate::renderer::{
         as_bytes, BufferElement, BufferLayout, EditorCamera, Font, Framebuffer, FramebufferSpec,
-        FramebufferTextureFormat, FramebufferTextureSpec, IndexBuffer, OrthographicCamera,
-        Pipeline, PresentMode, ProjectionType, Renderer, Renderer2DStats, RendererBackend,
-        SceneCamera, Shader, ShaderDataType, ShaderLibrary, SubTexture2D, Texture2D, VertexArray,
-        VertexBuffer,
+        FramebufferTextureFormat, FramebufferTextureSpec, IndexBuffer, MsaaSamples,
+        OrthographicCamera, Pipeline, PresentMode, ProjectionType, Renderer, Renderer2DStats,
+        RendererBackend, SceneCamera, Shader, ShaderDataType, ShaderLibrary, SubTexture2D,
+        Texture2D, TextureSpecification, VertexArray, VertexBuffer,
     };
     pub use crate::scene::{Aabb2D, SpatialGrid};
     pub use crate::scene::{

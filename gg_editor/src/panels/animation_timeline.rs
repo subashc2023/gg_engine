@@ -87,13 +87,13 @@ pub(crate) fn reset_animation_timeline_state() {
 pub(crate) fn animation_timeline_ui(
     ui: &mut egui::Ui,
     scene: &mut Scene,
-    selection_context: &mut Option<Entity>,
+    selection: &mut crate::selection::Selection,
     _asset_manager: &mut Option<EditorAssetManager>,
     egui_texture_map: &HashMap<u64, egui::TextureId>,
     scene_dirty: &mut bool,
     _undo_system: &mut crate::undo::UndoSystem,
 ) {
-    let entity = match *selection_context {
+    let entity = match selection.single() {
         Some(e) if scene.has_component::<SpriteAnimatorComponent>(e) => e,
         _ => {
             ui.centered_and_justified(|ui| {

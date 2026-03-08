@@ -7,6 +7,7 @@ use transform_gizmo_egui::{Gizmo, GizmoConfig, GizmoExt, GizmoOrientation};
 use crate::gizmo::{gizmo_modes_for, mat4_to_f64, GizmoOperation};
 use crate::panels::content_browser::ContentBrowserPayload;
 use crate::panels::{tile_uv_max, tile_uv_min, TilesetPreviewInfo};
+use crate::selection::Selection;
 use crate::TilemapPaintState;
 
 /// Convert a viewport pixel position to a tilemap grid cell (col, row).
@@ -73,7 +74,7 @@ pub(crate) fn screen_to_tile_grid(
 pub(crate) fn viewport_ui(
     ui: &mut egui::Ui,
     scene: &mut Scene,
-    selection_context: &mut Option<Entity>,
+    selection: &mut Selection,
     viewport_size: &mut (u32, u32),
     viewport_focused: &mut bool,
     viewport_hovered: &mut bool,
@@ -109,7 +110,8 @@ pub(crate) fn viewport_ui(
     // entity has a TilemapComponent.
     let paint_mode_active = !is_playing
         && tilemap_paint.is_active()
-        && selection_context
+        && selection
+            .single()
             .map(|e| scene.has_component::<TilemapComponent>(e))
             .unwrap_or(false);
 
@@ -129,12 +131,20 @@ pub(crate) fn viewport_ui(
                     tilemap_paint.painted_this_stroke.clear();
                 } else {
                     // Normal entity selection.
+                    let ctrl = ui.input(|i| i.modifiers.ctrl || i.modifiers.command);
                     if hovered_entity >= 0 {
-                        *selection_context = scene
+                        if let Some(e) = scene
                             .find_entity_by_id(hovered_entity as u32)
-                            .filter(|e| scene.is_alive(*e));
-                    } else {
-                        *selection_context = None;
+                            .filter(|e| scene.is_alive(*e))
+                        {
+                            if ctrl {
+                                selection.toggle(e);
+                            } else {
+                                selection.set(e);
+                            }
+                        }
+                    } else if !ctrl {
+                        selection.clear();
                     }
                 }
             }
@@ -204,7 +214,7 @@ pub(crate) fn viewport_ui(
 
     // -- Tilemap painting (continuous while dragging) --
     if tilemap_paint.painting_in_progress && paint_mode_active {
-        if let (Some(entity), Some((px, py))) = (*selection_context, *viewport_mouse_pos) {
+        if let (Some(entity), Some((px, py))) = (selection.single(), *viewport_mouse_pos) {
             let vp = editor_camera.view_projection();
             let world_transform = scene.get_world_transform(entity);
             let tilemap_z = {
@@ -444,7 +454,7 @@ pub(crate) fn viewport_ui(
     // -- Gizmos (edit mode only) --
     if let Some(viewport_rect) = viewport_rect {
         if !is_playing {
-            if let Some(entity) = *selection_context {
+            if let Some(entity) = selection.single() {
                 if scene.is_alive(entity) && *gizmo_operation != GizmoOperation::None {
                     // Use the editor camera for gizmo view/projection.
                     let camera_view = *editor_camera.view_matrix();

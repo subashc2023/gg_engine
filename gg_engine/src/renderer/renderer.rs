@@ -11,6 +11,7 @@ use super::font::{Font, FontCpuData};
 use super::framebuffer::{Framebuffer, FramebufferSpec};
 use super::gpu_allocation::GpuAllocator;
 use super::gpu_particle_system::GpuParticleSystem;
+use super::texture::TextureSpecification;
 use super::pipeline::{self, Pipeline};
 use super::render_command::RenderCommand;
 use super::renderer_2d::{
@@ -91,6 +92,9 @@ pub struct Renderer {
 
     // GPU-driven particle system (compute shader simulation + instanced rendering).
     gpu_particles: Option<GpuParticleSystem>,
+
+    // Maximum MSAA sample count supported by the GPU.
+    max_msaa_samples: vk::SampleCountFlags,
 }
 
 impl Renderer {
@@ -171,6 +175,7 @@ impl Renderer {
             last_stats_2d: Renderer2DStats::default(),
             transfer_batch,
             gpu_particles: None,
+            max_msaa_samples: vk_ctx.max_msaa_samples(),
         })
     }
 
@@ -263,6 +268,7 @@ impl Renderer {
             &[],
             blend_enable,
             self.pipeline_cache,
+            vk::SampleCountFlags::TYPE_1,
         )?))
     }
 
@@ -284,6 +290,7 @@ impl Renderer {
             &[self.texture_descriptor_set_layout],
             true,
             self.pipeline_cache,
+            vk::SampleCountFlags::TYPE_1,
         )?))
     }
 
@@ -308,6 +315,29 @@ impl Renderer {
     ) -> Result<Texture2D, String> {
         let mut texture =
             Texture2D::from_rgba8(&self.resources(), &self.allocator, width, height, pixels)?;
+        if let Some(data) = &self.renderer_2d {
+            let index = data.register_texture(&texture);
+            texture.set_bindless_index(index);
+        }
+        Ok(texture)
+    }
+
+    /// Create a texture from raw RGBA8 pixel data with custom specification.
+    pub fn create_texture_from_rgba8_with_spec(
+        &self,
+        width: u32,
+        height: u32,
+        pixels: &[u8],
+        spec: TextureSpecification,
+    ) -> Result<Texture2D, String> {
+        let mut texture = Texture2D::from_rgba8_with_spec(
+            &self.resources(),
+            &self.allocator,
+            width,
+            height,
+            pixels,
+            &spec,
+        )?;
         if let Some(data) = &self.renderer_2d {
             let index = data.register_texture(&texture);
             texture.set_bindless_index(index);
@@ -435,6 +465,7 @@ impl Renderer {
         &mut self,
         render_pass: vk::RenderPass,
         color_attachment_count: u32,
+        samples: vk::SampleCountFlags,
     ) -> Result<(), String> {
         if let Some(data) = &mut self.renderer_2d {
             data.create_offscreen_pipeline(
@@ -443,9 +474,15 @@ impl Renderer {
                 self.camera.ds_layout(),
                 color_attachment_count,
                 self.pipeline_cache,
+                samples,
             )?;
         }
         Ok(())
+    }
+
+    /// Return the maximum MSAA sample count supported by the GPU.
+    pub fn max_msaa_samples(&self) -> vk::SampleCountFlags {
+        self.max_msaa_samples
     }
 
     /// Tell the batch renderer to use the offscreen pipeline (or switch back).

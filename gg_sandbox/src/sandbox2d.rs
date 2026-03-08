@@ -21,6 +21,23 @@ fn srgba_to_vec4(s: [u8; 4]) -> Vec4 {
     )
 }
 
+/// Generate a high-frequency checkerboard texture (RGBA8).
+/// `cell_size` is how many pixels per checker square.
+fn generate_checkerboard(width: u32, height: u32, cell_size: u32) -> Vec<u8> {
+    let mut pixels = Vec::with_capacity((width * height * 4) as usize);
+    for y in 0..height {
+        for x in 0..width {
+            let checker = ((x / cell_size) + (y / cell_size)).is_multiple_of(2);
+            if checker {
+                pixels.extend_from_slice(&[255, 255, 255, 255]); // white
+            } else {
+                pixels.extend_from_slice(&[0, 0, 0, 255]); // black
+            }
+        }
+    }
+    pixels
+}
+
 // ---------------------------------------------------------------------------
 // Tilemap data
 // ---------------------------------------------------------------------------
@@ -65,6 +82,11 @@ pub struct Sandbox2D {
     tile_colors: HashMap<char, Vec4>,
     map_width: u32,
     map_height: u32,
+
+    // Mipmap comparison textures.
+    checker_no_mip: Option<Ref<Texture2D>>,
+    checker_nearest_mip: Option<Ref<Texture2D>>,
+    checker_linear_mip: Option<Ref<Texture2D>>,
 }
 
 impl Application for Sandbox2D {
@@ -87,6 +109,10 @@ impl Application for Sandbox2D {
             tile_colors: HashMap::new(),
             map_width: MAP_WIDTH,
             map_height: 0,
+
+            checker_no_mip: None,
+            checker_nearest_mip: None,
+            checker_linear_mip: None,
         }
     }
 
@@ -108,12 +134,35 @@ impl Application for Sandbox2D {
             error!("Failed to create GPU particle system: {e}");
         }
 
+        // Create mipmap comparison textures: 256x256 checkerboard with 2px cells.
+        // High frequency pattern makes aliasing very obvious without mipmaps.
+        let checker_pixels = generate_checkerboard(256, 256, 2);
+
+        // Without mipmaps (default).
+        match renderer.create_texture_from_rgba8(256, 256, &checker_pixels) {
+            Ok(tex) => self.checker_no_mip = Some(Ref::new(tex)),
+            Err(e) => error!("Failed to create no-mip checker: {e}"),
+        }
+
+        // With mipmaps + NEAREST filter (pixel-art friendly).
+        match renderer.create_texture_from_rgba8_with_spec(256, 256, &checker_pixels, TextureSpecification::nearest_mipmapped()) {
+            Ok(tex) => self.checker_nearest_mip = Some(Ref::new(tex)),
+            Err(e) => error!("Failed to create nearest-mipmapped checker: {e}"),
+        }
+
+        // With mipmaps + LINEAR filter (trilinear).
+        match renderer.create_texture_from_rgba8_with_spec(256, 256, &checker_pixels, TextureSpecification::linear_mipmapped()) {
+            Ok(tex) => self.checker_linear_mip = Some(Ref::new(tex)),
+            Err(e) => error!("Failed to create linear-mipmapped checker: {e}"),
+        }
+
         info!(
             "Tilemap loaded: {}x{} ({} tiles)",
             self.map_width,
             self.map_height,
             MAP_TILES.len()
         );
+        info!("Mipmap comparison textures created (256x256, 2px checkerboard)");
     }
 
     fn window_config(&self) -> WindowConfig {
@@ -174,6 +223,34 @@ impl Application for Sandbox2D {
             }
         }
 
+        // Mipmap comparison: 3 columns at decreasing scales.
+        // Left = no mipmaps, Center = NEAREST + mipmaps, Right = LINEAR + mipmaps.
+        // Zoom out to see aliasing vs smooth mip blending.
+        let scales: &[f32] = &[4.0, 2.0, 1.0, 0.5, 0.25, 0.125];
+        let col_x: [f32; 3] = [-19.0, -13.0, -7.0];
+
+        for (i, &scale) in scales.iter().enumerate() {
+            let y = 10.0 - i as f32 * 5.0;
+            let size = scale * 3.0;
+
+            let textures: [&Option<Ref<Texture2D>>; 3] = [
+                &self.checker_no_mip,
+                &self.checker_nearest_mip,
+                &self.checker_linear_mip,
+            ];
+
+            for (col, tex_opt) in textures.iter().enumerate() {
+                if let Some(ref tex) = tex_opt {
+                    let transform = Mat4::from_scale_rotation_translation(
+                        Vec3::new(size, size, 1.0),
+                        Quat::IDENTITY,
+                        Vec3::new(col_x[col], y, 0.1),
+                    );
+                    renderer.draw_textured_quad_transform(&transform, tex, 1.0, Vec4::ONE);
+                }
+            }
+        }
+
         // Emit GPU particles at the origin.
         self.particle_props.position = Vec2::ZERO;
         for _ in 0..self.emit_rate {
@@ -217,6 +294,12 @@ impl Application for Sandbox2D {
             ui.label("WASD: Move camera");
             ui.label("Q/E: Rotate camera");
             ui.label("Scroll: Zoom");
+            ui.separator();
+            ui.strong("Mipmap Test (left side of scene)");
+            ui.label("Left:   NEAREST, no mipmaps");
+            ui.label("Center: NEAREST + mipmaps");
+            ui.label("Right:  LINEAR + mipmaps");
+            ui.label("Zoom out to see the difference");
         });
 
         gg_engine::egui::Window::new("GPU Particles").show(ctx, |ui| {

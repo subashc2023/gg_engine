@@ -320,6 +320,27 @@ impl TextureSpecification {
             generate_mipmaps: false,
         }
     }
+
+    /// Preset with linear filtering and mipmap generation enabled (trilinear).
+    /// Good for photographic or non-pixel-art textures viewed at varying zoom.
+    pub fn linear_mipmapped() -> Self {
+        Self {
+            filter: vk::Filter::LINEAR,
+            generate_mipmaps: true,
+            ..Self::default()
+        }
+    }
+
+    /// Preset with nearest filtering and mipmap generation enabled.
+    /// Sharp pixels when zoomed in, smooth mip-level blending when zoomed out.
+    /// Ideal for pixel art that needs to look crisp up close but avoid
+    /// moiré/aliasing artifacts at small scales.
+    pub fn nearest_mipmapped() -> Self {
+        Self {
+            generate_mipmaps: true,
+            ..Self::default() // filter defaults to NEAREST
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -561,9 +582,15 @@ impl Texture2D {
             .map_err(|e| format!("Failed to create texture image view: {e}"))?;
 
         // 7. Create sampler.
-        let mipmap_mode = match spec.filter {
-            vk::Filter::LINEAR => vk::SamplerMipmapMode::LINEAR,
-            _ => vk::SamplerMipmapMode::NEAREST,
+        // Use LINEAR mipmap interpolation when mipmaps are present to avoid
+        // visible popping between mip levels (even with NEAREST min/mag filter).
+        let mipmap_mode = if mip_levels > 1 {
+            vk::SamplerMipmapMode::LINEAR
+        } else {
+            match spec.filter {
+                vk::Filter::LINEAR => vk::SamplerMipmapMode::LINEAR,
+                _ => vk::SamplerMipmapMode::NEAREST,
+            }
         };
 
         let sampler_info = vk::SamplerCreateInfo::default()
@@ -772,9 +799,15 @@ impl Texture2D {
             .map_err(|e| format!("Failed to create texture image view: {e}"))?;
 
         // 6. Create sampler.
-        let mipmap_mode = match spec.filter {
-            vk::Filter::LINEAR => vk::SamplerMipmapMode::LINEAR,
-            _ => vk::SamplerMipmapMode::NEAREST,
+        // Use LINEAR mipmap interpolation when mipmaps are present to avoid
+        // visible popping between mip levels (even with NEAREST min/mag filter).
+        let mipmap_mode = if mip_levels > 1 {
+            vk::SamplerMipmapMode::LINEAR
+        } else {
+            match spec.filter {
+                vk::Filter::LINEAR => vk::SamplerMipmapMode::LINEAR,
+                _ => vk::SamplerMipmapMode::NEAREST,
+            }
         };
 
         let sampler_info = vk::SamplerCreateInfo::default()

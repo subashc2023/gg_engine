@@ -36,7 +36,7 @@ pub(crate) use font::generate_font_cpu_data;
 pub use font::{Font, FontCpuData, GlyphInfo};
 pub(crate) use framebuffer::ClearValues;
 pub use framebuffer::{
-    Framebuffer, FramebufferSpec, FramebufferTextureFormat, FramebufferTextureSpec,
+    Framebuffer, FramebufferSpec, FramebufferTextureFormat, FramebufferTextureSpec, MsaaSamples,
 };
 pub(crate) use gpu_allocation::GpuAllocator;
 pub use orthographic_camera::OrthographicCamera;

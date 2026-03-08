@@ -7,6 +7,7 @@ mod icons;
 mod panels;
 mod physics_player;
 mod playback;
+mod selection;
 #[cfg(not(target_os = "macos"))]
 mod title_bar;
 #[cfg(target_os = "macos")]
@@ -165,10 +166,12 @@ struct UiState {
     pending_open_path: Option<PathBuf>,
     hierarchy_filter: String,
     reload_shaders_requested: bool,
-    /// UUID of the entity last copied via Ctrl+C. Used by Ctrl+V to duplicate.
-    clipboard_entity_uuid: Option<u64>,
+    /// UUIDs of entities last copied via Ctrl+C. Used by Ctrl+V to duplicate.
+    clipboard_entity_uuids: Vec<u64>,
     /// Deferred game viewport framebuffer creation (set in on_egui, consumed in on_render).
     create_game_fb: bool,
+    /// MSAA sample count changed in settings — triggers framebuffer + pipeline recreation.
+    msaa_changed: bool,
 }
 
 // ---------------------------------------------------------------------------
@@ -187,11 +190,13 @@ struct GGEditor {
     frame_time_ms: f32,
     render_stats: Renderer2DStats,
     scene: Scene,
-    selection_context: Option<Entity>,
+    selection: selection::Selection,
     editor_camera: EditorCamera,
     tilemap_paint: TilemapPaintState,
     undo_system: undo::UndoSystem,
     should_exit: bool,
+    /// Maximum MSAA supported by the GPU (stored as highest MsaaSamples variant).
+    max_msaa_samples: MsaaSamples,
     /// File watcher that monitors `assets/scripts/` for `.lua` changes.
     /// Kept alive so the OS keeps notifying us; the actual data flows
     /// through `script_reload_pending`.
@@ -357,8 +362,9 @@ impl Application for GGEditor {
                 pending_open_path: None,
                 hierarchy_filter: String::new(),
                 reload_shaders_requested: false,
-                clipboard_entity_uuid: None,
+                clipboard_entity_uuids: Vec::new(),
                 create_game_fb: false,
+                msaa_changed: false,
             },
             viewport: ViewportInfo {
                 scene_fb: None,
@@ -387,7 +393,7 @@ impl Application for GGEditor {
             frame_time_ms: 0.0,
             render_stats: Renderer2DStats::default(),
             scene,
-            selection_context: None,
+            selection: selection::Selection::default(),
             editor_camera: {
                 let mut cam = EditorCamera::new(45.0_f32.to_radians(), 0.1, 1000.0);
                 cam.restore_state(
@@ -401,6 +407,7 @@ impl Application for GGEditor {
             tilemap_paint: TilemapPaintState::new(),
             undo_system: undo::UndoSystem::new(),
             should_exit: false,
+            max_msaa_samples: MsaaSamples::S1, // Updated in on_attach
             #[cfg(feature = "lua-scripting")]
             _script_watcher,
             #[cfg(feature = "lua-scripting")]
@@ -425,6 +432,8 @@ impl Application for GGEditor {
     }
 
     fn on_attach(&mut self, renderer: &mut Renderer) {
+        self.max_msaa_samples = MsaaSamples::from_vk(renderer.max_msaa_samples());
+        let msaa_samples = self.editor_settings.msaa_samples.clamp_to_device(self.max_msaa_samples.to_vk());
         match renderer.create_framebuffer(FramebufferSpec {
             width: 800,
             height: 600,
@@ -433,6 +442,7 @@ impl Application for GGEditor {
                 FramebufferTextureFormat::RedInteger.into(),
                 FramebufferTextureFormat::Depth.into(),
             ],
+            samples: msaa_samples.to_vk(),
         }) {
             Ok(fb) => self.viewport.scene_fb = Some(fb),
             Err(e) => warn!("Failed to create scene framebuffer: {e}"),
@@ -611,17 +621,21 @@ impl Application for GGEditor {
                     panels::properties::clear_field_cache();
                 }
 
-                // Delete selected entity — edit mode only, not while typing.
+                // Delete selected entities — edit mode only, not while typing.
                 KeyCode::Delete
                     if !ctrl
                         && !shift
                         && !self.ui.egui_wants_keyboard
                         && self.playback.scene_state == SceneState::Edit =>
                 {
-                    if let Some(entity) = self.selection_context.take() {
+                    if !self.selection.is_empty() {
+                        let entities: Vec<Entity> = self.selection.iter().collect();
+                        self.selection.clear();
                         self.undo_system.record(&self.scene);
-                        if self.scene.destroy_entity(entity).is_ok() {
-                            self.scene_ctx.dirty = true;
+                        for entity in entities {
+                            if self.scene.destroy_entity(entity).is_ok() {
+                                self.scene_ctx.dirty = true;
+                            }
                         }
                     }
                 }
@@ -636,7 +650,7 @@ impl Application for GGEditor {
                     if self.tilemap_paint.is_active() {
                         self.tilemap_paint.clear_brush();
                     } else {
-                        self.selection_context = None;
+                        self.selection.clear();
                     }
                 }
 
@@ -837,9 +851,52 @@ impl Application for GGEditor {
     fn on_render(&mut self, renderer: &mut Renderer) {
         profile_scope!("GGEditor::on_render");
 
+        // Handle MSAA sample count change — recreate framebuffers + pipelines.
+        if self.ui.msaa_changed {
+            self.ui.msaa_changed = false;
+            let msaa = self.editor_settings.msaa_samples.clamp_to_device(self.max_msaa_samples.to_vk());
+            let samples = msaa.to_vk();
+            let attachments = vec![
+                FramebufferTextureFormat::RGBA8.into(),
+                FramebufferTextureFormat::RedInteger.into(),
+                FramebufferTextureFormat::Depth.into(),
+            ];
+
+            // Recreate scene framebuffer.
+            self.viewport.scene_fb = None; // drop old
+            match renderer.create_framebuffer(FramebufferSpec {
+                width: self.viewport.size.0.max(1),
+                height: self.viewport.size.1.max(1),
+                attachments: attachments.clone(),
+                samples,
+            }) {
+                Ok(fb) => self.viewport.scene_fb = Some(fb),
+                Err(e) => error!("Failed to recreate scene FB for MSAA: {e}"),
+            }
+
+            // Recreate game framebuffer if it exists.
+            if self.viewport.game_fb.is_some() {
+                self.viewport.game_fb = None; // drop old
+                match renderer.create_framebuffer(FramebufferSpec {
+                    width: self.viewport.game_size.0.max(1),
+                    height: self.viewport.game_size.1.max(1),
+                    attachments,
+                    samples,
+                }) {
+                    Ok(fb) => self.viewport.game_fb = Some(fb),
+                    Err(e) => error!("Failed to recreate game FB for MSAA: {e}"),
+                }
+            }
+
+            // Offscreen pipeline recreation happens automatically in
+            // application.rs when it detects a new framebuffer render pass.
+            info!("MSAA changed to {msaa}");
+        }
+
         // Deferred game viewport framebuffer creation (toggled from View menu).
         if self.ui.create_game_fb && self.viewport.game_fb.is_none() {
             self.ui.create_game_fb = false;
+            let msaa_samples = self.editor_settings.msaa_samples.clamp_to_device(self.max_msaa_samples.to_vk());
             match renderer.create_framebuffer(FramebufferSpec {
                 width: 800,
                 height: 600,
@@ -848,6 +905,7 @@ impl Application for GGEditor {
                     FramebufferTextureFormat::RedInteger.into(),
                     FramebufferTextureFormat::Depth.into(),
                 ],
+                samples: msaa_samples.to_vk(),
             }) {
                 Ok(fb) => self.viewport.game_fb = Some(fb),
                 Err(e) => warn!("Failed to create game framebuffer: {e}"),
@@ -1139,7 +1197,7 @@ impl Application for GGEditor {
         dock_style.tab.tab_body.bg_fill = egui::Color32::from_rgb(0x1E, 0x1E, 0x1E);
 
         // Compute tileset preview info for viewport overlay.
-        let tileset_preview = self.selection_context.and_then(|entity| {
+        let tileset_preview = self.selection.single().and_then(|entity| {
             let tm = self.scene.get_component::<TilemapComponent>(entity)?;
             let tex = tm.texture.as_ref()?;
             let egui_tex = self.ui.egui_texture_map.get(&tex.egui_handle()).copied()?;
@@ -1164,6 +1222,7 @@ impl Application for GGEditor {
             self.editor_settings.grid_size,
             self.editor_settings.theme,
             self.editor_settings.gizmo_operation,
+            self.editor_settings.msaa_samples,
         );
 
         // Scope the viewer so its borrows are released before we handle
@@ -1174,7 +1233,7 @@ impl Application for GGEditor {
             let mut hierarchy_action = None;
             let mut viewer = EditorTabViewer {
                 scene: &mut self.scene,
-                selection_context: &mut self.selection_context,
+                selection: &mut self.selection,
                 pending_open_path: &mut self.ui.pending_open_path,
                 is_playing: self.playback.scene_state == SceneState::Play, // Simulate still uses editor camera + gizmos
                 scene_dirty: &mut self.scene_ctx.dirty,
@@ -1190,6 +1249,9 @@ impl Application for GGEditor {
                 grid_size: &mut self.editor_settings.grid_size,
                 theme: &mut self.editor_settings.theme,
                 reload_shaders_requested: &mut self.ui.reload_shaders_requested,
+                msaa_samples: &mut self.editor_settings.msaa_samples,
+                max_msaa_samples: self.max_msaa_samples,
+                msaa_changed: &mut self.ui.msaa_changed,
                 viewport: ViewportState {
                     size: &mut self.viewport.size,
                     focused: &mut self.viewport.focused,
@@ -1246,6 +1308,7 @@ impl Application for GGEditor {
             self.editor_settings.grid_size,
             self.editor_settings.theme,
             self.editor_settings.gizmo_operation,
+            self.editor_settings.msaa_samples,
         );
         if settings_snapshot != settings_current {
             self.editor_settings.save();
@@ -1255,7 +1318,8 @@ impl Application for GGEditor {
         // entity or deselects entirely.
         if self.tilemap_paint.is_active() {
             let has_tilemap = self
-                .selection_context
+                .selection
+                .single()
                 .map(|e| self.scene.has_component::<TilemapComponent>(e))
                 .unwrap_or(false);
             if !has_tilemap {
@@ -1289,8 +1353,8 @@ impl Application for GGEditor {
             }
         }
 
-        // Register sprite sheet textures for the selected entity (animation timeline panel).
-        if let Some(entity) = self.selection_context {
+        // Register sprite sheet textures for selected entities (animation timeline panel).
+        for entity in self.selection.iter() {
             if let Some(sprite) = self.scene.get_component::<SpriteRendererComponent>(entity) {
                 if let Some(ref tex) = sprite.texture {
                     handles.push(tex.egui_handle());
@@ -1545,8 +1609,8 @@ impl GGEditor {
             }
         }
 
-        // Selected entity outline.
-        if let Some(selected) = self.selection_context {
+        // Selected entity outlines.
+        for selected in self.selection.iter() {
             if let Some(transform) = self.scene.get_component::<TransformComponent>(selected) {
                 let outline_color = Vec4::new(1.0, 0.5, 0.0, 1.0);
                 let outline_transform =
@@ -1575,7 +1639,7 @@ impl GGEditor {
 
         // Tilemap paint cursor highlight.
         if self.tilemap_paint.is_active() && self.playback.scene_state == SceneState::Edit {
-            if let Some(entity) = self.selection_context {
+            if let Some(entity) = self.selection.single() {
                 if self.scene.has_component::<TilemapComponent>(entity) {
                     if let Some((px, py)) = self.viewport.mouse_pos {
                         let vp = self.editor_camera.view_projection();

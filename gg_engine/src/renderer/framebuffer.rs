@@ -1,9 +1,95 @@
 use std::sync::{Arc, Mutex};
 
 use ash::vk;
+use serde::{Deserialize, Serialize};
 
 use super::gpu_allocation::{GpuAllocation, GpuAllocator, MemoryLocation};
 use super::RendererResources;
+
+// ---------------------------------------------------------------------------
+// MsaaSamples — public MSAA configuration enum
+// ---------------------------------------------------------------------------
+
+/// MSAA sample count for offscreen framebuffers.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum MsaaSamples {
+    /// No multisampling (default).
+    #[default]
+    S1,
+    /// 2x MSAA.
+    S2,
+    /// 4x MSAA.
+    S4,
+    /// 8x MSAA.
+    S8,
+}
+
+impl MsaaSamples {
+    pub const ALL: &[MsaaSamples] = &[
+        MsaaSamples::S1,
+        MsaaSamples::S2,
+        MsaaSamples::S4,
+        MsaaSamples::S8,
+    ];
+
+    pub fn to_vk(self) -> vk::SampleCountFlags {
+        match self {
+            MsaaSamples::S1 => vk::SampleCountFlags::TYPE_1,
+            MsaaSamples::S2 => vk::SampleCountFlags::TYPE_2,
+            MsaaSamples::S4 => vk::SampleCountFlags::TYPE_4,
+            MsaaSamples::S8 => vk::SampleCountFlags::TYPE_8,
+        }
+    }
+
+    pub fn from_vk(flags: vk::SampleCountFlags) -> Self {
+        if flags.contains(vk::SampleCountFlags::TYPE_8) {
+            MsaaSamples::S8
+        } else if flags.contains(vk::SampleCountFlags::TYPE_4) {
+            MsaaSamples::S4
+        } else if flags.contains(vk::SampleCountFlags::TYPE_2) {
+            MsaaSamples::S2
+        } else {
+            MsaaSamples::S1
+        }
+    }
+
+    /// Return all sample counts up to and including the device maximum.
+    pub fn available_up_to(max: vk::SampleCountFlags) -> Vec<MsaaSamples> {
+        let mut result = vec![MsaaSamples::S1];
+        if max.contains(vk::SampleCountFlags::TYPE_2) {
+            result.push(MsaaSamples::S2);
+        }
+        if max.contains(vk::SampleCountFlags::TYPE_4) {
+            result.push(MsaaSamples::S4);
+        }
+        if max.contains(vk::SampleCountFlags::TYPE_8) {
+            result.push(MsaaSamples::S8);
+        }
+        result
+    }
+
+    /// Clamp to the highest supported level given the device maximum.
+    pub fn clamp_to_device(self, max: vk::SampleCountFlags) -> Self {
+        if max.contains(self.to_vk()) {
+            self
+        } else {
+            // Fall back to the highest supported.
+            let available = Self::available_up_to(max);
+            *available.last().unwrap_or(&MsaaSamples::S1)
+        }
+    }
+}
+
+impl std::fmt::Display for MsaaSamples {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            MsaaSamples::S1 => write!(f, "Off"),
+            MsaaSamples::S2 => write!(f, "2x"),
+            MsaaSamples::S4 => write!(f, "4x"),
+            MsaaSamples::S8 => write!(f, "8x"),
+        }
+    }
+}
 
 // ---------------------------------------------------------------------------
 // Attachment format types
@@ -103,6 +189,8 @@ pub struct FramebufferSpec {
     pub width: u32,
     pub height: u32,
     pub attachments: Vec<FramebufferTextureSpec>,
+    /// MSAA sample count. Default is TYPE_1 (no MSAA).
+    pub samples: vk::SampleCountFlags,
 }
 
 // ---------------------------------------------------------------------------
@@ -113,7 +201,7 @@ struct ColorAttachment {
     image: vk::Image,
     _allocation: GpuAllocation,
     view: vk::ImageView,
-    format: FramebufferTextureFormat,
+    _format: FramebufferTextureFormat,
 }
 
 struct DepthAttachment {
@@ -128,15 +216,22 @@ struct DepthAttachment {
 
 /// Offscreen framebuffer with configurable color and depth attachments,
 /// suitable for rendering a scene to a texture that can then be displayed
-/// in egui.
+/// in egui. Supports optional MSAA with automatic resolve.
 pub struct Framebuffer {
-    // Color attachments (one per color spec in order).
+    // Color attachments (1x resolve targets when MSAA; render targets when no MSAA).
     color_attachments: Vec<ColorAttachment>,
     color_attachment_specs: Vec<FramebufferTextureSpec>,
 
-    // Optional depth attachment (at most one).
+    // Optional depth attachment (1x, only used when no MSAA).
     depth_attachment: Option<DepthAttachment>,
     depth_attachment_spec: Option<FramebufferTextureSpec>,
+
+    // MSAA attachments (empty/None when sample_count == TYPE_1).
+    msaa_color_attachments: Vec<ColorAttachment>,
+    msaa_depth_attachment: Option<DepthAttachment>,
+
+    // MSAA sample count (TYPE_1 = no MSAA).
+    sample_count: vk::SampleCountFlags,
 
     // Sampler + descriptor for egui display (always points to color_attachments[0]).
     sampler: vk::Sampler,
@@ -180,6 +275,9 @@ impl Framebuffer {
         let descriptor_set_layout = res.texture_ds_layout;
         let color_format = res.color_format;
         let depth_format = res.depth_format;
+        let sample_count = spec.samples;
+        let msaa = sample_count != vk::SampleCountFlags::TYPE_1;
+
         debug_assert!(
             spec.width > 0
                 && spec.height > 0
@@ -212,29 +310,78 @@ impl Framebuffer {
             depth_spec.as_ref(),
             color_format,
             depth_format,
+            sample_count,
         )?;
 
         let sampler = create_sampler(device)?;
 
+        // 1x color images (resolve targets when MSAA, render targets otherwise).
         let color_attachments: Vec<ColorAttachment> = color_specs
             .iter()
             .map(|cs| {
                 let vk_fmt = resolve_vk_format(cs.format, color_format, depth_format);
-                create_color_attachment(allocator, device, &spec, vk_fmt, cs.format)
+                create_color_attachment(
+                    allocator,
+                    device,
+                    &spec,
+                    vk_fmt,
+                    cs.format,
+                    vk::SampleCountFlags::TYPE_1,
+                )
             })
             .collect::<Result<Vec<_>, _>>()?;
 
-        let depth_attachment = depth_spec
-            .map(|ds| {
-                let vk_fmt = resolve_vk_format(ds.format, color_format, depth_format);
-                create_depth_attachment(allocator, device, &spec, vk_fmt)
-            })
-            .transpose()?;
+        // MSAA color + depth images (only when MSAA enabled).
+        let (msaa_color_attachments, msaa_depth_attachment) = if msaa {
+            let msaa_colors: Vec<ColorAttachment> = color_specs
+                .iter()
+                .map(|cs| {
+                    let vk_fmt = resolve_vk_format(cs.format, color_format, depth_format);
+                    create_color_attachment(
+                        allocator, device, &spec, vk_fmt, cs.format, sample_count,
+                    )
+                })
+                .collect::<Result<Vec<_>, _>>()?;
 
-        let color_views: Vec<vk::ImageView> = color_attachments.iter().map(|a| a.view).collect();
-        let depth_view = depth_attachment.as_ref().map(|a| a.view);
-        let framebuffer =
-            create_vk_framebuffer(device, render_pass, &color_views, depth_view, &spec)?;
+            let msaa_depth = depth_spec
+                .map(|ds| {
+                    let vk_fmt = resolve_vk_format(ds.format, color_format, depth_format);
+                    create_depth_attachment(allocator, device, &spec, vk_fmt, sample_count)
+                })
+                .transpose()?;
+
+            (msaa_colors, msaa_depth)
+        } else {
+            (Vec::new(), None)
+        };
+
+        // 1x depth (only when no MSAA — with MSAA, depth is in msaa_depth_attachment).
+        let depth_attachment = if !msaa {
+            depth_spec
+                .map(|ds| {
+                    let vk_fmt = resolve_vk_format(ds.format, color_format, depth_format);
+                    create_depth_attachment(
+                        allocator,
+                        device,
+                        &spec,
+                        vk_fmt,
+                        vk::SampleCountFlags::TYPE_1,
+                    )
+                })
+                .transpose()?
+        } else {
+            None
+        };
+
+        let framebuffer = create_vk_framebuffer_msaa(
+            device,
+            render_pass,
+            &color_attachments,
+            depth_attachment.as_ref(),
+            &msaa_color_attachments,
+            msaa_depth_attachment.as_ref(),
+            &spec,
+        )?;
 
         let descriptor_set =
             allocate_descriptor_set(device, descriptor_pool, descriptor_set_layout)?;
@@ -243,11 +390,24 @@ impl Framebuffer {
         let (readback_buffer, readback_allocation) =
             create_readback_staging_buffer(allocator, device)?;
 
+        if msaa {
+            log::info!(
+                target: "gg_engine",
+                "Framebuffer created with {}x MSAA ({}x{})",
+                sample_count.as_raw().trailing_zeros().max(1),
+                spec.width,
+                spec.height,
+            );
+        }
+
         Ok(Self {
             color_attachments,
             color_attachment_specs: color_specs,
             depth_attachment,
             depth_attachment_spec: depth_spec,
+            msaa_color_attachments,
+            msaa_depth_attachment,
+            sample_count,
             sampler,
             descriptor_set,
             render_pass,
@@ -289,10 +449,13 @@ impl Framebuffer {
             width,
             height,
             attachments: Vec::new(), // attachments list not needed after initial parse
+            samples: self.sample_count,
         };
 
         // NOTE: Caller must ensure GPU is idle before calling resize()
         // (e.g. via device_wait_idle in application.rs).
+
+        let msaa = self.sample_count != vk::SampleCountFlags::TYPE_1;
 
         // Destroy old framebuffer (keep render pass, sampler, descriptor set).
         unsafe {
@@ -306,8 +469,16 @@ impl Framebuffer {
                 self.device.destroy_image(ca.image, None);
             }
         }
-        // Drop old color attachments (frees allocations).
         self.color_attachments.clear();
+
+        // Destroy old MSAA color attachments.
+        for ca in &self.msaa_color_attachments {
+            unsafe {
+                self.device.destroy_image_view(ca.view, None);
+                self.device.destroy_image(ca.image, None);
+            }
+        }
+        self.msaa_color_attachments.clear();
 
         // Destroy old depth attachment.
         if let Some(da) = self.depth_attachment.take() {
@@ -315,16 +486,22 @@ impl Framebuffer {
                 self.device.destroy_image_view(da.view, None);
                 self.device.destroy_image(da.image, None);
             }
-            // da.allocation auto-frees on drop
+        }
+
+        // Destroy old MSAA depth attachment.
+        if let Some(da) = self.msaa_depth_attachment.take() {
+            unsafe {
+                self.device.destroy_image_view(da.view, None);
+                self.device.destroy_image(da.image, None);
+            }
         }
 
         // Destroy old readback buffer.
         unsafe {
             self.device.destroy_buffer(self.readback_buffer, None);
         }
-        // Replace allocation to free old one.
 
-        // Recreate color attachments at new size.
+        // Recreate 1x color attachments (resolve targets when MSAA).
         self.color_attachments = self
             .color_attachment_specs
             .iter()
@@ -336,33 +513,76 @@ impl Framebuffer {
                     &self.spec,
                     vk_fmt,
                     cs.format,
+                    vk::SampleCountFlags::TYPE_1,
                 )
             })
             .collect::<Result<Vec<_>, _>>()?;
 
-        // Recreate depth attachment at new size if present.
-        self.depth_attachment = self
-            .depth_attachment_spec
-            .map(|ds| {
-                let vk_fmt = resolve_vk_format(ds.format, self.color_format, self.depth_format);
-                create_depth_attachment(&self.allocator, &self.device, &self.spec, vk_fmt)
-            })
-            .transpose()?;
+        // Recreate MSAA attachments if enabled.
+        if msaa {
+            self.msaa_color_attachments = self
+                .color_attachment_specs
+                .iter()
+                .map(|cs| {
+                    let vk_fmt =
+                        resolve_vk_format(cs.format, self.color_format, self.depth_format);
+                    create_color_attachment(
+                        &self.allocator,
+                        &self.device,
+                        &self.spec,
+                        vk_fmt,
+                        cs.format,
+                        self.sample_count,
+                    )
+                })
+                .collect::<Result<Vec<_>, _>>()?;
 
-        let color_views: Vec<vk::ImageView> =
-            self.color_attachments.iter().map(|a| a.view).collect();
-        let depth_view = self.depth_attachment.as_ref().map(|a| a.view);
-        self.framebuffer = create_vk_framebuffer(
+            self.msaa_depth_attachment = self
+                .depth_attachment_spec
+                .map(|ds| {
+                    let vk_fmt =
+                        resolve_vk_format(ds.format, self.color_format, self.depth_format);
+                    create_depth_attachment(
+                        &self.allocator,
+                        &self.device,
+                        &self.spec,
+                        vk_fmt,
+                        self.sample_count,
+                    )
+                })
+                .transpose()?;
+        }
+
+        // Recreate 1x depth (only when no MSAA).
+        if !msaa {
+            self.depth_attachment = self
+                .depth_attachment_spec
+                .map(|ds| {
+                    let vk_fmt =
+                        resolve_vk_format(ds.format, self.color_format, self.depth_format);
+                    create_depth_attachment(
+                        &self.allocator,
+                        &self.device,
+                        &self.spec,
+                        vk_fmt,
+                        vk::SampleCountFlags::TYPE_1,
+                    )
+                })
+                .transpose()?;
+        }
+
+        self.framebuffer = create_vk_framebuffer_msaa(
             &self.device,
             self.render_pass,
-            &color_views,
-            depth_view,
+            &self.color_attachments,
+            self.depth_attachment.as_ref(),
+            &self.msaa_color_attachments,
+            self.msaa_depth_attachment.as_ref(),
             &self.spec,
         )?;
 
         // Recreate readback staging buffer.
         let (rb_buf, rb_alloc) = create_readback_staging_buffer(&self.allocator, &self.device)?;
-        // Drop old readback allocation (the buffer was already destroyed above).
         let old_readback_alloc = std::mem::replace(&mut self.readback_allocation, rb_alloc);
         drop(old_readback_alloc);
         self.readback_buffer = rb_buf;
@@ -403,6 +623,11 @@ impl Framebuffer {
         self.color_attachments.len()
     }
 
+    /// MSAA sample count (TYPE_1 = no MSAA).
+    pub fn sample_count(&self) -> vk::SampleCountFlags {
+        self.sample_count
+    }
+
     pub(crate) fn render_pass(&self) -> vk::RenderPass {
         self.render_pass
     }
@@ -424,36 +649,62 @@ impl Framebuffer {
     /// Color attachments use the supplied clear color; RedInteger clears to -1;
     /// depth clears to 1.0/0.
     ///
+    /// Order must match render pass attachment order:
+    /// - MSAA: [msaa_colors..., msaa_depth, resolve_colors...]
+    /// - No MSAA: [colors..., depth]
+    ///
     /// Returns a stack-allocated [`ClearValues`] (no heap allocation).
     pub(crate) fn clear_values(&self, clear_color: [f32; 4]) -> ClearValues {
         let mut values = ClearValues::new();
+        let msaa = self.sample_count != vk::SampleCountFlags::TYPE_1;
 
-        for ca in &self.color_attachments {
-            match ca.format {
-                FramebufferTextureFormat::RedInteger => {
-                    values.push(vk::ClearValue {
-                        color: vk::ClearColorValue {
-                            int32: [-1, 0, 0, 0],
-                        },
-                    });
+        let push_color_clears =
+            |values: &mut ClearValues, specs: &[FramebufferTextureSpec]| {
+                for cs in specs {
+                    match cs.format {
+                        FramebufferTextureFormat::RedInteger => {
+                            values.push(vk::ClearValue {
+                                color: vk::ClearColorValue {
+                                    int32: [-1, 0, 0, 0],
+                                },
+                            });
+                        }
+                        _ => {
+                            values.push(vk::ClearValue {
+                                color: vk::ClearColorValue {
+                                    float32: clear_color,
+                                },
+                            });
+                        }
+                    }
                 }
-                _ => {
-                    values.push(vk::ClearValue {
-                        color: vk::ClearColorValue {
-                            float32: clear_color,
-                        },
-                    });
-                }
+            };
+
+        if msaa {
+            // MSAA color attachments (rendered to, then auto-resolved).
+            push_color_clears(&mut values, &self.color_attachment_specs);
+            // MSAA depth.
+            if self.msaa_depth_attachment.is_some() {
+                values.push(vk::ClearValue {
+                    depth_stencil: vk::ClearDepthStencilValue {
+                        depth: 1.0,
+                        stencil: 0,
+                    },
+                });
             }
-        }
-
-        if self.depth_attachment.is_some() {
-            values.push(vk::ClearValue {
-                depth_stencil: vk::ClearDepthStencilValue {
-                    depth: 1.0,
-                    stencil: 0,
-                },
-            });
+            // Resolve color attachments (load=DONT_CARE, but clear values still needed).
+            push_color_clears(&mut values, &self.color_attachment_specs);
+        } else {
+            // Non-MSAA: colors then depth.
+            push_color_clears(&mut values, &self.color_attachment_specs);
+            if self.depth_attachment.is_some() {
+                values.push(vk::ClearValue {
+                    depth_stencil: vk::ClearDepthStencilValue {
+                        depth: 1.0,
+                        stencil: 0,
+                    },
+                });
+            }
         }
 
         values
@@ -516,7 +767,17 @@ impl Drop for Framebuffer {
                 self.device.destroy_image(ca.image, None);
             }
 
+            for ca in &self.msaa_color_attachments {
+                self.device.destroy_image_view(ca.view, None);
+                self.device.destroy_image(ca.image, None);
+            }
+
             if let Some(da) = &self.depth_attachment {
+                self.device.destroy_image_view(da.view, None);
+                self.device.destroy_image(da.image, None);
+            }
+
+            if let Some(da) = &self.msaa_depth_attachment {
                 self.device.destroy_image_view(da.view, None);
                 self.device.destroy_image(da.image, None);
             }
@@ -525,7 +786,8 @@ impl Drop for Framebuffer {
             self.device.destroy_render_pass(self.render_pass, None);
             // Descriptor set is freed when the pool is destroyed.
         }
-        // GpuAllocations in color_attachments, depth_attachment, readback_allocation
+        // GpuAllocations in color_attachments, depth_attachment,
+        // msaa_color_attachments, msaa_depth_attachment, readback_allocation
         // auto-free on drop.
     }
 }
@@ -540,82 +802,188 @@ fn create_offscreen_render_pass(
     depth_spec: Option<&FramebufferTextureSpec>,
     color_format: vk::Format,
     depth_format: vk::Format,
+    sample_count: vk::SampleCountFlags,
 ) -> Result<vk::RenderPass, String> {
+    let msaa = sample_count != vk::SampleCountFlags::TYPE_1;
+
     let mut attachment_descriptions = Vec::new();
     let mut color_attachment_refs = Vec::new();
+    let mut resolve_attachment_refs = Vec::new();
 
-    // Color attachments get sequential indices starting at 0.
-    for (i, cs) in color_specs.iter().enumerate() {
-        let vk_fmt = resolve_vk_format(cs.format, color_format, depth_format);
-        let desc = vk::AttachmentDescription::default()
-            .format(vk_fmt)
-            .samples(vk::SampleCountFlags::TYPE_1)
-            .load_op(vk::AttachmentLoadOp::CLEAR)
-            .store_op(vk::AttachmentStoreOp::STORE)
-            .stencil_load_op(vk::AttachmentLoadOp::DONT_CARE)
-            .stencil_store_op(vk::AttachmentStoreOp::DONT_CARE)
-            .initial_layout(vk::ImageLayout::UNDEFINED)
-            .final_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL);
-        attachment_descriptions.push(desc);
+    if msaa {
+        // --- MSAA path ---
+        // Attachment layout:
+        //   [0..N-1]    = MSAA color (rendered to, store=DONT_CARE after resolve)
+        //   [N]         = MSAA depth (if present)
+        //   [N+1..2N]   = 1x resolve color (resolve targets, final=SHADER_READ_ONLY)
 
-        color_attachment_refs.push(vk::AttachmentReference {
-            attachment: i as u32,
-            layout: vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL,
-        });
-    }
-
-    // Depth attachment appended last.
-    let depth_attachment_ref = depth_spec.map(|ds| {
-        let vk_fmt = resolve_vk_format(ds.format, color_format, depth_format);
-        let desc = vk::AttachmentDescription::default()
-            .format(vk_fmt)
-            .samples(vk::SampleCountFlags::TYPE_1)
-            .load_op(vk::AttachmentLoadOp::CLEAR)
-            .store_op(vk::AttachmentStoreOp::DONT_CARE)
-            .stencil_load_op(vk::AttachmentLoadOp::DONT_CARE)
-            .stencil_store_op(vk::AttachmentStoreOp::DONT_CARE)
-            .initial_layout(vk::ImageLayout::UNDEFINED)
-            .final_layout(vk::ImageLayout::DEPTH_STENCIL_ATTACHMENT_OPTIMAL);
-        attachment_descriptions.push(desc);
-
-        vk::AttachmentReference {
-            attachment: color_specs.len() as u32,
-            layout: vk::ImageLayout::DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
+        // MSAA color attachments.
+        for (i, cs) in color_specs.iter().enumerate() {
+            let vk_fmt = resolve_vk_format(cs.format, color_format, depth_format);
+            attachment_descriptions.push(
+                vk::AttachmentDescription::default()
+                    .format(vk_fmt)
+                    .samples(sample_count)
+                    .load_op(vk::AttachmentLoadOp::CLEAR)
+                    .store_op(vk::AttachmentStoreOp::DONT_CARE)
+                    .stencil_load_op(vk::AttachmentLoadOp::DONT_CARE)
+                    .stencil_store_op(vk::AttachmentStoreOp::DONT_CARE)
+                    .initial_layout(vk::ImageLayout::UNDEFINED)
+                    .final_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL),
+            );
+            color_attachment_refs.push(vk::AttachmentReference {
+                attachment: i as u32,
+                layout: vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL,
+            });
         }
-    });
 
-    let mut subpass = vk::SubpassDescription::default()
-        .pipeline_bind_point(vk::PipelineBindPoint::GRAPHICS)
-        .color_attachments(&color_attachment_refs);
+        // MSAA depth attachment (if present).
+        let depth_attachment_ref = depth_spec.map(|ds| {
+            let vk_fmt = resolve_vk_format(ds.format, color_format, depth_format);
+            attachment_descriptions.push(
+                vk::AttachmentDescription::default()
+                    .format(vk_fmt)
+                    .samples(sample_count)
+                    .load_op(vk::AttachmentLoadOp::CLEAR)
+                    .store_op(vk::AttachmentStoreOp::DONT_CARE)
+                    .stencil_load_op(vk::AttachmentLoadOp::DONT_CARE)
+                    .stencil_store_op(vk::AttachmentStoreOp::DONT_CARE)
+                    .initial_layout(vk::ImageLayout::UNDEFINED)
+                    .final_layout(vk::ImageLayout::DEPTH_STENCIL_ATTACHMENT_OPTIMAL),
+            );
+            vk::AttachmentReference {
+                attachment: color_specs.len() as u32,
+                layout: vk::ImageLayout::DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
+            }
+        });
 
-    if let Some(ref depth_ref) = depth_attachment_ref {
-        subpass = subpass.depth_stencil_attachment(depth_ref);
+        // 1x resolve color attachments.
+        let resolve_base = attachment_descriptions.len() as u32;
+        for (i, cs) in color_specs.iter().enumerate() {
+            let vk_fmt = resolve_vk_format(cs.format, color_format, depth_format);
+            attachment_descriptions.push(
+                vk::AttachmentDescription::default()
+                    .format(vk_fmt)
+                    .samples(vk::SampleCountFlags::TYPE_1)
+                    .load_op(vk::AttachmentLoadOp::DONT_CARE)
+                    .store_op(vk::AttachmentStoreOp::STORE)
+                    .stencil_load_op(vk::AttachmentLoadOp::DONT_CARE)
+                    .stencil_store_op(vk::AttachmentStoreOp::DONT_CARE)
+                    .initial_layout(vk::ImageLayout::UNDEFINED)
+                    .final_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL),
+            );
+            resolve_attachment_refs.push(vk::AttachmentReference {
+                attachment: resolve_base + i as u32,
+                layout: vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL,
+            });
+        }
+
+        let mut subpass = vk::SubpassDescription::default()
+            .pipeline_bind_point(vk::PipelineBindPoint::GRAPHICS)
+            .color_attachments(&color_attachment_refs)
+            .resolve_attachments(&resolve_attachment_refs);
+
+        if let Some(ref depth_ref) = depth_attachment_ref {
+            subpass = subpass.depth_stencil_attachment(depth_ref);
+        }
+
+        let dependency = vk::SubpassDependency::default()
+            .src_subpass(vk::SUBPASS_EXTERNAL)
+            .dst_subpass(0)
+            .src_stage_mask(
+                vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT
+                    | vk::PipelineStageFlags::EARLY_FRAGMENT_TESTS,
+            )
+            .src_access_mask(vk::AccessFlags::empty())
+            .dst_stage_mask(
+                vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT
+                    | vk::PipelineStageFlags::EARLY_FRAGMENT_TESTS,
+            )
+            .dst_access_mask(
+                vk::AccessFlags::COLOR_ATTACHMENT_WRITE
+                    | vk::AccessFlags::DEPTH_STENCIL_ATTACHMENT_WRITE,
+            );
+
+        let render_pass_info = vk::RenderPassCreateInfo::default()
+            .attachments(&attachment_descriptions)
+            .subpasses(std::slice::from_ref(&subpass))
+            .dependencies(std::slice::from_ref(&dependency));
+
+        unsafe { device.create_render_pass(&render_pass_info, None) }
+            .map_err(|e| format!("Failed to create MSAA offscreen render pass: {e}"))
+    } else {
+        // --- Non-MSAA path (unchanged) ---
+        for (i, cs) in color_specs.iter().enumerate() {
+            let vk_fmt = resolve_vk_format(cs.format, color_format, depth_format);
+            attachment_descriptions.push(
+                vk::AttachmentDescription::default()
+                    .format(vk_fmt)
+                    .samples(vk::SampleCountFlags::TYPE_1)
+                    .load_op(vk::AttachmentLoadOp::CLEAR)
+                    .store_op(vk::AttachmentStoreOp::STORE)
+                    .stencil_load_op(vk::AttachmentLoadOp::DONT_CARE)
+                    .stencil_store_op(vk::AttachmentStoreOp::DONT_CARE)
+                    .initial_layout(vk::ImageLayout::UNDEFINED)
+                    .final_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL),
+            );
+            color_attachment_refs.push(vk::AttachmentReference {
+                attachment: i as u32,
+                layout: vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL,
+            });
+        }
+
+        let depth_attachment_ref = depth_spec.map(|ds| {
+            let vk_fmt = resolve_vk_format(ds.format, color_format, depth_format);
+            attachment_descriptions.push(
+                vk::AttachmentDescription::default()
+                    .format(vk_fmt)
+                    .samples(vk::SampleCountFlags::TYPE_1)
+                    .load_op(vk::AttachmentLoadOp::CLEAR)
+                    .store_op(vk::AttachmentStoreOp::DONT_CARE)
+                    .stencil_load_op(vk::AttachmentLoadOp::DONT_CARE)
+                    .stencil_store_op(vk::AttachmentStoreOp::DONT_CARE)
+                    .initial_layout(vk::ImageLayout::UNDEFINED)
+                    .final_layout(vk::ImageLayout::DEPTH_STENCIL_ATTACHMENT_OPTIMAL),
+            );
+            vk::AttachmentReference {
+                attachment: color_specs.len() as u32,
+                layout: vk::ImageLayout::DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
+            }
+        });
+
+        let mut subpass = vk::SubpassDescription::default()
+            .pipeline_bind_point(vk::PipelineBindPoint::GRAPHICS)
+            .color_attachments(&color_attachment_refs);
+
+        if let Some(ref depth_ref) = depth_attachment_ref {
+            subpass = subpass.depth_stencil_attachment(depth_ref);
+        }
+
+        let dependency = vk::SubpassDependency::default()
+            .src_subpass(vk::SUBPASS_EXTERNAL)
+            .dst_subpass(0)
+            .src_stage_mask(
+                vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT
+                    | vk::PipelineStageFlags::EARLY_FRAGMENT_TESTS,
+            )
+            .src_access_mask(vk::AccessFlags::empty())
+            .dst_stage_mask(
+                vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT
+                    | vk::PipelineStageFlags::EARLY_FRAGMENT_TESTS,
+            )
+            .dst_access_mask(
+                vk::AccessFlags::COLOR_ATTACHMENT_WRITE
+                    | vk::AccessFlags::DEPTH_STENCIL_ATTACHMENT_WRITE,
+            );
+
+        let render_pass_info = vk::RenderPassCreateInfo::default()
+            .attachments(&attachment_descriptions)
+            .subpasses(std::slice::from_ref(&subpass))
+            .dependencies(std::slice::from_ref(&dependency));
+
+        unsafe { device.create_render_pass(&render_pass_info, None) }
+            .map_err(|e| format!("Failed to create offscreen render pass: {e}"))
     }
-
-    let dependency = vk::SubpassDependency::default()
-        .src_subpass(vk::SUBPASS_EXTERNAL)
-        .dst_subpass(0)
-        .src_stage_mask(
-            vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT
-                | vk::PipelineStageFlags::EARLY_FRAGMENT_TESTS,
-        )
-        .src_access_mask(vk::AccessFlags::empty())
-        .dst_stage_mask(
-            vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT
-                | vk::PipelineStageFlags::EARLY_FRAGMENT_TESTS,
-        )
-        .dst_access_mask(
-            vk::AccessFlags::COLOR_ATTACHMENT_WRITE
-                | vk::AccessFlags::DEPTH_STENCIL_ATTACHMENT_WRITE,
-        );
-
-    let render_pass_info = vk::RenderPassCreateInfo::default()
-        .attachments(&attachment_descriptions)
-        .subpasses(std::slice::from_ref(&subpass))
-        .dependencies(std::slice::from_ref(&dependency));
-
-    unsafe { device.create_render_pass(&render_pass_info, None) }
-        .map_err(|e| format!("Failed to create offscreen render pass: {e}"))
 }
 
 fn create_color_attachment(
@@ -624,7 +992,22 @@ fn create_color_attachment(
     spec: &FramebufferSpec,
     vk_format: vk::Format,
     fb_format: FramebufferTextureFormat,
+    samples: vk::SampleCountFlags,
 ) -> Result<ColorAttachment, String> {
+    let is_msaa = samples != vk::SampleCountFlags::TYPE_1;
+
+    // MSAA images only need COLOR_ATTACHMENT (transient, never sampled/read back).
+    // 1x images need SAMPLED (egui) + TRANSFER_SRC (pixel readback).
+    let usage = if is_msaa {
+        vk::ImageUsageFlags::COLOR_ATTACHMENT | vk::ImageUsageFlags::TRANSIENT_ATTACHMENT
+    } else {
+        vk::ImageUsageFlags::COLOR_ATTACHMENT
+            | vk::ImageUsageFlags::SAMPLED
+            | vk::ImageUsageFlags::TRANSFER_SRC
+    };
+
+    let label = if is_msaa { "FB_MSAA_Color" } else { "FB_Color" };
+
     let image_info = vk::ImageCreateInfo::default()
         .image_type(vk::ImageType::TYPE_2D)
         .extent(vk::Extent3D {
@@ -637,13 +1020,9 @@ fn create_color_attachment(
         .format(vk_format)
         .tiling(vk::ImageTiling::OPTIMAL)
         .initial_layout(vk::ImageLayout::UNDEFINED)
-        .usage(
-            vk::ImageUsageFlags::COLOR_ATTACHMENT
-                | vk::ImageUsageFlags::SAMPLED
-                | vk::ImageUsageFlags::TRANSFER_SRC,
-        )
+        .usage(usage)
         .sharing_mode(vk::SharingMode::EXCLUSIVE)
-        .samples(vk::SampleCountFlags::TYPE_1);
+        .samples(samples);
 
     let image = unsafe { device.create_image(&image_info, None) }
         .map_err(|e| format!("Failed to create FB color image: {e}"))?;
@@ -652,7 +1031,7 @@ fn create_color_attachment(
         allocator,
         device,
         image,
-        "FB_Color",
+        label,
         MemoryLocation::GpuOnly,
     )?;
 
@@ -675,7 +1054,7 @@ fn create_color_attachment(
         image,
         _allocation: allocation,
         view,
-        format: fb_format,
+        _format: fb_format,
     })
 }
 
@@ -684,7 +1063,18 @@ fn create_depth_attachment(
     device: &ash::Device,
     spec: &FramebufferSpec,
     vk_format: vk::Format,
+    samples: vk::SampleCountFlags,
 ) -> Result<DepthAttachment, String> {
+    let is_msaa = samples != vk::SampleCountFlags::TYPE_1;
+    let label = if is_msaa { "FB_MSAA_Depth" } else { "FB_Depth" };
+
+    let usage = if is_msaa {
+        vk::ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT
+            | vk::ImageUsageFlags::TRANSIENT_ATTACHMENT
+    } else {
+        vk::ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT
+    };
+
     let image_info = vk::ImageCreateInfo::default()
         .image_type(vk::ImageType::TYPE_2D)
         .extent(vk::Extent3D {
@@ -697,9 +1087,9 @@ fn create_depth_attachment(
         .format(vk_format)
         .tiling(vk::ImageTiling::OPTIMAL)
         .initial_layout(vk::ImageLayout::UNDEFINED)
-        .usage(vk::ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT)
+        .usage(usage)
         .sharing_mode(vk::SharingMode::EXCLUSIVE)
-        .samples(vk::SampleCountFlags::TYPE_1);
+        .samples(samples);
 
     let image = unsafe { device.create_image(&image_info, None) }
         .map_err(|e| format!("Failed to create FB depth image: {e}"))?;
@@ -708,7 +1098,7 @@ fn create_depth_attachment(
         allocator,
         device,
         image,
-        "FB_Depth",
+        label,
         MemoryLocation::GpuOnly,
     )?;
 
@@ -754,21 +1144,45 @@ fn create_sampler(device: &ash::Device) -> Result<vk::Sampler, String> {
         .map_err(|e| format!("Failed to create FB sampler: {e}"))
 }
 
-fn create_vk_framebuffer(
+/// Build the vk::Framebuffer with attachment views in render pass order.
+///
+/// MSAA order: [msaa_color_views..., msaa_depth_view, resolve_color_views...]
+/// Non-MSAA:   [color_views..., depth_view]
+fn create_vk_framebuffer_msaa(
     device: &ash::Device,
     render_pass: vk::RenderPass,
-    color_views: &[vk::ImageView],
-    depth_view: Option<vk::ImageView>,
+    color_attachments: &[ColorAttachment],
+    depth_attachment: Option<&DepthAttachment>,
+    msaa_color_attachments: &[ColorAttachment],
+    msaa_depth_attachment: Option<&DepthAttachment>,
     spec: &FramebufferSpec,
 ) -> Result<vk::Framebuffer, String> {
-    let mut attachments: Vec<vk::ImageView> = color_views.to_vec();
-    if let Some(dv) = depth_view {
-        attachments.push(dv);
+    let mut views: Vec<vk::ImageView> = Vec::new();
+
+    if !msaa_color_attachments.is_empty() {
+        // MSAA path: msaa colors, msaa depth, resolve colors.
+        for ca in msaa_color_attachments {
+            views.push(ca.view);
+        }
+        if let Some(da) = msaa_depth_attachment {
+            views.push(da.view);
+        }
+        for ca in color_attachments {
+            views.push(ca.view);
+        }
+    } else {
+        // Non-MSAA: colors, depth.
+        for ca in color_attachments {
+            views.push(ca.view);
+        }
+        if let Some(da) = depth_attachment {
+            views.push(da.view);
+        }
     }
 
     let fb_info = vk::FramebufferCreateInfo::default()
         .render_pass(render_pass)
-        .attachments(&attachments)
+        .attachments(&views)
         .width(spec.width)
         .height(spec.height)
         .layers(1);

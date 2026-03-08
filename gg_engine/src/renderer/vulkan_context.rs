@@ -285,6 +285,29 @@ impl VulkanContext {
     pub fn physical_device_properties(&self) -> &vk::PhysicalDeviceProperties {
         &self.physical_device_properties
     }
+
+    /// Return the highest MSAA sample count supported by both color and depth
+    /// framebuffer attachments on this device.
+    pub fn max_msaa_samples(&self) -> vk::SampleCountFlags {
+        let limits = &self.physical_device_properties.limits;
+        let counts = limits.framebuffer_color_sample_counts
+            & limits.framebuffer_depth_sample_counts;
+
+        // Return the highest supported sample count.
+        for &flag in &[
+            vk::SampleCountFlags::TYPE_64,
+            vk::SampleCountFlags::TYPE_32,
+            vk::SampleCountFlags::TYPE_16,
+            vk::SampleCountFlags::TYPE_8,
+            vk::SampleCountFlags::TYPE_4,
+            vk::SampleCountFlags::TYPE_2,
+        ] {
+            if counts.contains(flag) {
+                return flag;
+            }
+        }
+        vk::SampleCountFlags::TYPE_1
+    }
 }
 
 impl Drop for VulkanContext {

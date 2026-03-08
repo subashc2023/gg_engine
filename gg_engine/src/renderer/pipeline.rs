@@ -52,10 +52,11 @@ fn default_rasterizer() -> vk::PipelineRasterizationStateCreateInfo<'static> {
         .line_width(1.0)
 }
 
-/// Standard multisampling state: 1 sample (no MSAA).
-fn default_multisampling() -> vk::PipelineMultisampleStateCreateInfo<'static> {
-    vk::PipelineMultisampleStateCreateInfo::default()
-        .rasterization_samples(vk::SampleCountFlags::TYPE_1)
+/// Standard multisampling state for the given sample count.
+fn default_multisampling(
+    samples: vk::SampleCountFlags,
+) -> vk::PipelineMultisampleStateCreateInfo<'static> {
+    vk::PipelineMultisampleStateCreateInfo::default().rasterization_samples(samples)
 }
 
 /// Build color blend attachment states for batch pipelines.
@@ -147,6 +148,7 @@ pub(crate) fn create_pipeline(
     descriptor_set_layouts: &[vk::DescriptorSetLayout],
     blend_enable: bool,
     pipeline_cache: vk::PipelineCache,
+    samples: vk::SampleCountFlags,
 ) -> Result<Pipeline, String> {
     let _timer = ProfileTimer::new("Pipeline::create");
     let entry_point = c"main";
@@ -185,7 +187,7 @@ pub(crate) fn create_pipeline(
         .scissor_count(1);
 
     let rasterizer = default_rasterizer();
-    let multisampling = default_multisampling();
+    let multisampling = default_multisampling(samples);
 
     let depth_stencil = vk::PipelineDepthStencilStateCreateInfo::default()
         .depth_test_enable(true)
@@ -276,6 +278,7 @@ pub(crate) fn create_batch_pipeline(
     descriptor_set_layouts: &[vk::DescriptorSetLayout],
     color_attachment_count: u32,
     pipeline_cache: vk::PipelineCache,
+    samples: vk::SampleCountFlags,
 ) -> Result<Pipeline, String> {
     let _timer = ProfileTimer::new("Pipeline::create_batch");
     let entry_point = c"main";
@@ -313,7 +316,7 @@ pub(crate) fn create_batch_pipeline(
         .scissor_count(1);
 
     let rasterizer = default_rasterizer();
-    let multisampling = default_multisampling();
+    let multisampling = default_multisampling(samples);
 
     // 2D batch rendering uses painter's algorithm (draw order); no depth test needed.
     let depth_stencil = vk::PipelineDepthStencilStateCreateInfo::default()
@@ -368,6 +371,7 @@ pub(crate) fn create_instanced_batch_pipeline(
     descriptor_set_layouts: &[vk::DescriptorSetLayout],
     color_attachment_count: u32,
     pipeline_cache: vk::PipelineCache,
+    samples: vk::SampleCountFlags,
 ) -> Result<Pipeline, String> {
     let _timer = ProfileTimer::new("Pipeline::create_instanced_batch");
     let entry_point = c"main";
@@ -410,7 +414,7 @@ pub(crate) fn create_instanced_batch_pipeline(
         .scissor_count(1);
 
     let rasterizer = default_rasterizer();
-    let multisampling = default_multisampling();
+    let multisampling = default_multisampling(samples);
 
     let depth_stencil = vk::PipelineDepthStencilStateCreateInfo::default()
         .depth_test_enable(false)
@@ -451,6 +455,7 @@ pub(crate) fn create_instanced_batch_pipeline(
 /// `LINE_WIDTH` as a dynamic state so callers can set it per-draw via
 /// `vkCmdSetLineWidth`. No index buffer is needed — lines are drawn with
 /// `vkCmdDraw` (2 vertices per line segment).
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn create_line_batch_pipeline(
     device: &ash::Device,
     shader: &Shader,
@@ -459,6 +464,7 @@ pub(crate) fn create_line_batch_pipeline(
     camera_ubo_ds_layout: vk::DescriptorSetLayout,
     color_attachment_count: u32,
     pipeline_cache: vk::PipelineCache,
+    samples: vk::SampleCountFlags,
 ) -> Result<Pipeline, String> {
     let _timer = ProfileTimer::new("Pipeline::create_line_batch");
     let entry_point = c"main";
@@ -501,7 +507,7 @@ pub(crate) fn create_line_batch_pipeline(
         .scissor_count(1);
 
     let rasterizer = default_rasterizer();
-    let multisampling = default_multisampling();
+    let multisampling = default_multisampling(samples);
 
     // 2D batch rendering uses painter's algorithm (draw order); no depth test needed.
     let depth_stencil = vk::PipelineDepthStencilStateCreateInfo::default()

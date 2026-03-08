@@ -4,6 +4,7 @@ use gg_engine::egui;
 use gg_engine::prelude::*;
 
 use crate::panels::content_browser::ContentBrowserPayload;
+use crate::selection::Selection;
 
 // ---------------------------------------------------------------------------
 // Drag-and-drop payload for hierarchy reparenting
@@ -54,7 +55,7 @@ const REORDER_EDGE_FRACTION: f32 = 0.3;
 pub(crate) fn scene_hierarchy_ui(
     ui: &mut egui::Ui,
     scene: &mut Scene,
-    selection_context: &mut Option<Entity>,
+    selection: &mut Selection,
     scene_dirty: &mut bool,
     undo_system: &mut crate::undo::UndoSystem,
     filter: &mut String,
@@ -84,7 +85,7 @@ pub(crate) fn scene_hierarchy_ui(
             scene,
             *entity,
             tag,
-            selection_context,
+            selection,
             scene_dirty,
             &mut deferred_action,
             &mut external_action,
@@ -101,13 +102,14 @@ pub(crate) fn scene_hierarchy_ui(
             egui::Rect::from_min_size(remaining.min, egui::vec2(remaining.width(), visible_height));
         let response = ui.allocate_rect(clamped, egui::Sense::click());
         if response.clicked() {
-            *selection_context = None;
+            selection.clear();
         }
         // Right-click on blank space → create entity.
         response.context_menu(|ui| {
             if ui.button("Create Empty Entity").clicked() {
                 undo_system.record(scene);
-                scene.create_entity_with_tag("Empty Entity");
+                let e = scene.create_entity_with_tag("Empty Entity");
+                selection.set(e);
                 *scene_dirty = true;
                 ui.close();
             }
@@ -147,9 +149,7 @@ pub(crate) fn scene_hierarchy_ui(
         match action {
             DeferredHierarchyAction::DeleteEntity(entity) => {
                 undo_system.record(scene);
-                if *selection_context == Some(entity) {
-                    *selection_context = None;
-                }
+                selection.remove(entity);
                 let _ = scene.destroy_entity(entity);
                 *scene_dirty = true;
             }
@@ -157,7 +157,7 @@ pub(crate) fn scene_hierarchy_ui(
                 undo_system.record(scene);
                 let child = scene.create_entity_with_tag("Empty Entity");
                 scene.set_parent(child, parent, false);
-                *selection_context = Some(child);
+                selection.set(child);
                 *scene_dirty = true;
             }
             DeferredHierarchyAction::Reparent { child, new_parent } => {
@@ -198,20 +198,25 @@ fn draw_entity_node(
     scene: &mut Scene,
     entity: Entity,
     tag: &str,
-    selection_context: &mut Option<Entity>,
+    selection: &mut Selection,
     scene_dirty: &mut bool,
     deferred_action: &mut Option<DeferredHierarchyAction>,
     external_action: &mut Option<HierarchyExternalAction>,
 ) {
     let children = scene.get_children(entity);
     let has_parent = scene.get_parent(entity).is_some();
-    let selected = selection_context.is_some_and(|sel| sel == entity);
+    let selected = selection.contains(entity);
 
     if children.is_empty() {
         // Leaf node — simple selectable label.
         let response = ui.selectable_label(selected, tag);
         if response.clicked() {
-            *selection_context = Some(entity);
+            let ctrl = ui.input(|i| i.modifiers.ctrl || i.modifiers.command);
+            if ctrl {
+                selection.toggle(entity);
+            } else {
+                selection.set(entity);
+            }
         }
         entity_context_menu(
             &response,
@@ -232,7 +237,12 @@ fn draw_entity_node(
             .show_header(ui, |ui| {
                 let r = ui.selectable_label(selected, tag);
                 if r.clicked() {
-                    *selection_context = Some(entity);
+                    let ctrl = ui.input(|i| i.modifiers.ctrl || i.modifiers.command);
+                    if ctrl {
+                        selection.toggle(entity);
+                    } else {
+                        selection.set(entity);
+                    }
                 }
                 entity_context_menu(
                     &r,
@@ -258,7 +268,7 @@ fn draw_entity_node(
                             scene,
                             child_entity,
                             &child_tag,
-                            selection_context,
+                            selection,
                             scene_dirty,
                             deferred_action,
                             external_action,

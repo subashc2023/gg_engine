@@ -13,11 +13,13 @@ pub(crate) use scripting::clear_field_cache;
 use gg_engine::egui;
 use gg_engine::prelude::*;
 
+use crate::selection::Selection;
+
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn properties_ui(
     ui: &mut egui::Ui,
     scene: &mut Scene,
-    selection_context: &mut Option<Entity>,
+    selection: &mut Selection,
     asset_manager: &mut Option<EditorAssetManager>,
     is_playing: bool,
     assets_root: &std::path::Path,
@@ -26,8 +28,13 @@ pub(crate) fn properties_ui(
     tilemap_paint: &mut crate::TilemapPaintState,
     egui_texture_map: &std::collections::HashMap<u64, egui::TextureId>,
 ) {
-    if let Some(entity) = *selection_context {
-        if scene.is_alive(entity) {
+    // Remove dead entities from selection.
+    selection.retain(|e| scene.is_alive(*e));
+
+    match selection.len() {
+        0 => {}
+        1 => {
+            let entity = selection.single().unwrap();
             draw_components(
                 ui,
                 scene,
@@ -40,8 +47,11 @@ pub(crate) fn properties_ui(
                 tilemap_paint,
                 egui_texture_map,
             );
-        } else {
-            *selection_context = None;
+        }
+        n => {
+            ui.centered_and_justified(|ui| {
+                ui.label(format!("{} entities selected", n));
+            });
         }
     }
 }

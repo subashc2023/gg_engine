@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
+use gg_engine::MsaaSamples;
 use gg_engine::ui_theme::EditorTheme;
 
 use crate::gizmo::GizmoOperation;
@@ -88,6 +89,8 @@ pub(crate) struct EditorSettings {
     pub dock_layout: Option<egui_dock::DockState<Tab>>,
     #[serde(default)]
     pub theme: EditorTheme,
+    #[serde(default)]
+    pub msaa_samples: MsaaSamples,
 }
 
 impl EditorSettings {
