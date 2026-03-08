@@ -1,7 +1,7 @@
 use std::sync::{Arc, Mutex};
 
 use ash::vk;
-use glam::Vec3;
+use glam::{Mat4, Vec3};
 
 use super::gpu_allocation::GpuAllocator;
 use super::uniform_buffer::UniformBuffer;
@@ -35,7 +35,10 @@ pub struct LightGpuData {
     // Scene-wide data
     pub ambient_color: [f32; 4],   // xyz = color, w = intensity
     pub camera_position: [f32; 4], // xyz = eye position, w = unused
-    pub counts: [i32; 4],          // x = num_point_lights, y = has_directional, z,w = unused
+    pub counts: [i32; 4],          // x = num_point_lights, y = has_directional, z = has_shadow, w = unused
+
+    // Shadow mapping
+    pub shadow_light_vp: [f32; 16], // mat4 = light-space VP matrix (64 bytes)
 }
 
 impl LightGpuData {
@@ -51,6 +54,7 @@ impl LightGpuData {
             ambient_color: [0.03, 0.03, 0.03, 1.0],
             camera_position: [0.0; 4],
             counts: [0, 0, 0, 0],
+            shadow_light_vp: [0.0; 16],
         }
     }
 
@@ -169,6 +173,8 @@ pub struct LightEnvironment {
     pub ambient_color: Vec3,
     pub ambient_intensity: f32,
     pub camera_position: Vec3,
+    /// Light-space VP matrix for shadow mapping. `Some` = shadows enabled.
+    pub shadow_light_vp: Option<Mat4>,
 }
 
 impl Default for LightEnvironment {
@@ -179,6 +185,7 @@ impl Default for LightEnvironment {
             ambient_color: Vec3::new(0.03, 0.03, 0.03),
             ambient_intensity: 1.0,
             camera_position: Vec3::ZERO,
+            shadow_light_vp: None,
         }
     }
 }
@@ -221,6 +228,12 @@ impl LightEnvironment {
             0.0,
         ];
 
+        // Shadow mapping.
+        if let Some(light_vp) = self.shadow_light_vp {
+            data.shadow_light_vp = light_vp.to_cols_array();
+            data.counts[2] = 1; // has_shadow = true
+        }
+
         data
     }
 }
@@ -238,8 +251,9 @@ mod tests {
         // DirectionalLight: 2 × vec4 = 32 bytes
         // PointLights: 16 × 2 × vec4 = 512 bytes
         // ambient + camera_pos + counts = 3 × vec4 = 48 bytes
-        // Total = 32 + 512 + 48 = 592 bytes
-        assert_eq!(LightGpuData::SIZE, 592);
+        // shadow_light_vp: mat4 = 64 bytes
+        // Total = 32 + 512 + 48 + 64 = 656 bytes
+        assert_eq!(LightGpuData::SIZE, 656);
     }
 
     #[test]
@@ -269,6 +283,7 @@ mod tests {
             ambient_color: Vec3::new(0.1, 0.1, 0.1),
             ambient_intensity: 0.5,
             camera_position: Vec3::new(0.0, 5.0, -10.0),
+            shadow_light_vp: None,
         };
         let gpu = env.to_gpu_data();
         assert_eq!(gpu.counts[0], 1); // 1 point light

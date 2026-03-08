@@ -96,6 +96,20 @@ pub struct Pipeline {
 }
 
 impl Pipeline {
+    /// Create a `Pipeline` from raw Vulkan handles. Ownership is transferred;
+    /// the pipeline and layout will be destroyed on drop.
+    pub(crate) fn from_raw(
+        pipeline: vk::Pipeline,
+        layout: vk::PipelineLayout,
+        device: ash::Device,
+    ) -> Self {
+        Self {
+            pipeline,
+            layout,
+            device,
+        }
+    }
+
     pub fn pipeline(&self) -> vk::Pipeline {
         self.pipeline
     }

@@ -5,6 +5,7 @@ use super::{
     SpriteAnimatorComponent, SpriteRendererComponent, TextComponent, TilemapComponent,
     TransformComponent, TILE_FLIP_H, TILE_FLIP_V, TILE_ID_MASK,
 };
+use crate::renderer::shadow_map::compute_directional_light_vp;
 use crate::renderer::{Font, LightEnvironment, Mesh, Renderer, SubTexture2D};
 
 impl Scene {
@@ -1006,6 +1007,116 @@ impl Scene {
 
     /// Render all [`MeshRendererComponent`] entities using the default
     /// mesh3d pipeline. Called after 2D rendering is complete.
+    /// Render the shadow depth pass for directional light shadows.
+    ///
+    /// Must be called OUTSIDE the main render pass (before `begin_scene`).
+    /// If no directional light with `cast_shadows` exists, this is a no-op.
+    ///
+    /// Returns the light-space VP matrix if shadows were rendered, so the
+    /// caller can set it on the `LightEnvironment` for the main pass.
+    pub fn render_shadow_pass(
+        &self,
+        renderer: &mut Renderer,
+        cmd_buf: ash::vk::CommandBuffer,
+        current_frame: usize,
+        viewport_index: usize,
+    ) -> Option<glam::Mat4> {
+        // Find the first directional light with shadows enabled.
+        let shadow_light = self
+            .world
+            .query::<(hecs::Entity, &DirectionalLightComponent)>()
+            .iter()
+            .find(|(_, dl)| dl.cast_shadows)
+            .map(|(handle, _dl)| handle);
+
+        let handle = shadow_light?;
+
+        // Compute the light direction from the entity's world rotation.
+        let world = self.get_world_transform(super::Entity::new(handle));
+        let (_, world_rot, _) = world.to_scale_rotation_translation();
+        let direction = DirectionalLightComponent::direction(world_rot);
+
+        // Collect meshes.
+        let meshes: Vec<(hecs::Entity, glam::Mat4)> = self
+            .world
+            .query::<(hecs::Entity, &MeshRendererComponent)>()
+            .iter()
+            .filter_map(|(h, mc)| {
+                if mc.vertex_array.is_some() {
+                    let w = self.get_world_transform(super::Entity::new(h));
+                    Some((h, w))
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        if meshes.is_empty() {
+            return None;
+        }
+
+        // Compute scene AABB from mesh transforms.
+        let (scene_min, scene_max) = self.compute_mesh_scene_bounds(&meshes);
+
+        // Compute the light-space VP matrix.
+        let light_vp = compute_directional_light_vp(direction, scene_min, scene_max);
+
+        // Initialize shadow pipeline if needed.
+        if !renderer.has_shadow_pipeline() {
+            if let Err(e) = renderer.init_shadow_pipeline() {
+                log::error!("Failed to create shadow pipeline: {e}");
+                return None;
+            }
+        }
+
+        // Render shadow pass.
+        renderer.begin_shadow_pass(&light_vp, cmd_buf, current_frame, viewport_index);
+
+        for (handle, world_transform) in &meshes {
+            let mesh_comp = self.world.get::<&MeshRendererComponent>(*handle).unwrap();
+            if let Some(ref va) = mesh_comp.vertex_array {
+                renderer.submit_shadow(va, world_transform, cmd_buf);
+            }
+        }
+
+        renderer.end_shadow_pass(cmd_buf);
+
+        Some(light_vp)
+    }
+
+    /// Compute a conservative AABB enclosing all mesh entities.
+    fn compute_mesh_scene_bounds(
+        &self,
+        meshes: &[(hecs::Entity, glam::Mat4)],
+    ) -> (glam::Vec3, glam::Vec3) {
+        let mut min = glam::Vec3::splat(f32::MAX);
+        let mut max = glam::Vec3::splat(f32::NEG_INFINITY);
+
+        for (handle, world_transform) in meshes {
+            let mesh_comp = self.world.get::<&MeshRendererComponent>(*handle).unwrap();
+            // Use the mesh primitive's approximate AABB (unit cube).
+            let half = match mesh_comp.primitive {
+                MeshPrimitive::Cube => glam::Vec3::splat(0.5),
+                MeshPrimitive::Sphere => glam::Vec3::splat(0.5),
+                MeshPrimitive::Plane => glam::Vec3::new(0.5, 0.0, 0.5),
+            };
+
+            // Transform the 8 corners of the local AABB to world space.
+            for &sx in &[-1.0_f32, 1.0] {
+                for &sy in &[-1.0_f32, 1.0] {
+                    for &sz in &[-1.0_f32, 1.0] {
+                        let local = glam::Vec3::new(sx * half.x, sy * half.y, sz * half.z);
+                        let world = world_transform.transform_point3(local);
+                        min = min.min(world);
+                        max = max.max(world);
+                    }
+                }
+            }
+        }
+
+        (min, max)
+    }
+
     fn render_meshes(&self, renderer: &mut Renderer) {
         // Check if there are any mesh entities before creating the pipeline.
         let meshes: Vec<(hecs::Entity, glam::Mat4)> = self
@@ -1029,6 +1140,27 @@ impl Scene {
         // Collect scene lights and upload to GPU before drawing 3D meshes.
         let mut light_env = self.collect_lights();
         light_env.camera_position = renderer.camera_position();
+
+        // Check for shadow VP stashed by a prior render_shadow_pass call.
+        // The shadow VP is also set by collect_lights_with_shadows if the
+        // directional light has cast_shadows enabled.
+        if light_env.shadow_light_vp.is_none() {
+            // Check if any directional light has cast_shadows.
+            if let Some((handle, _dl)) = self
+                .world
+                .query::<(hecs::Entity, &DirectionalLightComponent)>()
+                .iter()
+                .find(|(_, dl)| dl.cast_shadows)
+            {
+                let world = self.get_world_transform(super::Entity::new(handle));
+                let (_, world_rot, _) = world.to_scale_rotation_translation();
+                let direction = DirectionalLightComponent::direction(world_rot);
+                let (scene_min, scene_max) = self.compute_mesh_scene_bounds(&meshes);
+                light_env.shadow_light_vp =
+                    Some(compute_directional_light_vp(direction, scene_min, scene_max));
+            }
+        }
+
         renderer.upload_lights(&light_env);
 
         let pipeline = match renderer.mesh3d_pipeline() {

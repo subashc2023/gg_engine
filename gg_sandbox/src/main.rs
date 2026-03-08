@@ -71,6 +71,18 @@ impl Application for Sandbox {
         }
     }
 
+    fn on_render_shadows(
+        &mut self,
+        renderer: &mut Renderer,
+        cmd_buf: gg_engine::ash::vk::CommandBuffer,
+        current_frame: usize,
+    ) {
+        if self.mode == Mode::ThreeD {
+            self.sandbox_3d
+                .on_render_shadows(renderer, cmd_buf, current_frame);
+        }
+    }
+
     fn on_render(&mut self, renderer: &mut Renderer) {
         match self.mode {
             Mode::TwoD => self.sandbox_2d.on_render(renderer),

@@ -26,6 +26,7 @@ pub type Scope<T> = Box<T>;
 
 pub use application::{run, Application, WindowConfig};
 pub use asset::{AssetHandle, AssetMetadata, AssetRegistry, AssetType, EditorAssetManager};
+pub use ash;
 pub use egui;
 pub use error::{EngineError, EngineResult};
 pub use glam;

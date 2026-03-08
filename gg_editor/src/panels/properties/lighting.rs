@@ -58,10 +58,23 @@ pub(crate) fn draw_directional_light_component(
                 changed = true;
             }
 
+            ui.separator();
+
+            let mut cast_shadows = {
+                let dl = scene
+                    .get_component::<DirectionalLightComponent>(entity)
+                    .unwrap();
+                dl.cast_shadows
+            };
+            if ui.checkbox(&mut cast_shadows, "Cast Shadows").changed() {
+                changed = true;
+            }
+
             if changed {
                 if let Some(mut dl) = scene.get_component_mut::<DirectionalLightComponent>(entity) {
                     dl.color = Vec3::from(color_arr);
                     dl.intensity = intensity;
+                    dl.cast_shadows = cast_shadows;
                 }
                 *scene_dirty = true;
             }

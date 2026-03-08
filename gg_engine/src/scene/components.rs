@@ -887,6 +887,8 @@ pub struct DirectionalLightComponent {
     pub color: Vec3,
     /// Brightness multiplier.
     pub intensity: f32,
+    /// Whether this light casts shadows via a shadow map.
+    pub cast_shadows: bool,
 }
 
 impl DirectionalLightComponent {
@@ -906,6 +908,7 @@ impl Default for DirectionalLightComponent {
         Self {
             color: Vec3::ONE,
             intensity: 1.0,
+            cast_shadows: false,
         }
     }
 }

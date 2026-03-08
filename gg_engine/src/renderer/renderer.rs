@@ -12,6 +12,7 @@ use super::framebuffer::{Framebuffer, FramebufferSpec};
 use super::gpu_allocation::GpuAllocator;
 use super::gpu_particle_system::GpuParticleSystem;
 use super::lighting::{LightEnvironment, LightingSystem};
+use super::shadow_map::{self, ShadowMapSystem};
 use super::material::{MaterialHandle, MaterialLibrary};
 use super::pipeline::{self, Pipeline};
 use super::render_command::RenderCommand;
@@ -142,6 +143,10 @@ pub struct Renderer {
     offscreen_render_pass: Option<vk::RenderPass>,
     offscreen_color_attachment_count: u32,
     offscreen_sample_count: vk::SampleCountFlags,
+
+    // Shadow mapping system (lazily initialized).
+    shadow_map: Option<ShadowMapSystem>,
+    shadow_pipeline: Option<Arc<Pipeline>>,
 }
 
 impl Renderer {
@@ -156,14 +161,17 @@ impl Renderer {
         let device = vk_ctx.device();
         let api = RendererAPI::Vulkan(VulkanRendererAPI::new(device));
 
-        // Create descriptor pool for texture samplers + camera/material/lighting UBO sets.
-        // Camera + material + lighting UBOs each need one descriptor set per (frame, viewport) slot.
+        // Create descriptor pool for texture samplers + camera/material/lighting/shadow UBO sets.
+        // Camera + material + lighting + shadow-camera UBOs each need one
+        // descriptor set per (frame, viewport) slot. Shadow also needs sampler sets.
         let ubo_slot_count = (super::MAX_FRAMES_IN_FLIGHT * super::MAX_VIEWPORTS) as u32;
-        let total_ubo_sets = ubo_slot_count * 3; // camera + material + lighting
+        let total_ubo_sets = ubo_slot_count * 4; // camera + material + lighting + shadow camera
+        let total_sampler_descriptors = 100 + ubo_slot_count; // textures + shadow map samplers
+        let total_sets = total_sampler_descriptors + total_ubo_sets;
         let pool_sizes = [
             vk::DescriptorPoolSize {
                 ty: vk::DescriptorType::COMBINED_IMAGE_SAMPLER,
-                descriptor_count: 100,
+                descriptor_count: total_sampler_descriptors,
             },
             vk::DescriptorPoolSize {
                 ty: vk::DescriptorType::UNIFORM_BUFFER,
@@ -172,7 +180,7 @@ impl Renderer {
         ];
         let pool_info = vk::DescriptorPoolCreateInfo::default()
             .pool_sizes(&pool_sizes)
-            .max_sets(100 + total_ubo_sets)
+            .max_sets(total_sets)
             .flags(vk::DescriptorPoolCreateFlags::FREE_DESCRIPTOR_SET);
         let descriptor_pool = unsafe { device.create_descriptor_pool(&pool_info, None) }
             .map_err(|e| format!("Failed to create descriptor pool: {e}"))?;
@@ -197,6 +205,18 @@ impl Renderer {
 
         // Lighting UBO: descriptor set layout, per-slot buffers, descriptor sets.
         let lighting = LightingSystem::new(allocator, device, descriptor_pool)?;
+
+        // Shadow map system: depth image, render pass, UBO, descriptor sets.
+        let shadow_map = ShadowMapSystem::new(
+            allocator,
+            device,
+            descriptor_pool,
+            depth_format,
+            shadow_map::DEFAULT_SHADOW_MAP_SIZE,
+            shadow_map::DEFAULT_SHADOW_MAP_SIZE,
+            command_pool,
+            vk_ctx.graphics_queue(),
+        )?;
 
         // -- Pipeline cache (load from disk if available) --
         let cache_data = Self::load_pipeline_cache_data();
@@ -243,6 +263,8 @@ impl Renderer {
             offscreen_render_pass: None,
             offscreen_color_attachment_count: 0,
             offscreen_sample_count: vk::SampleCountFlags::TYPE_1,
+            shadow_map: Some(shadow_map),
+            shadow_pipeline: None,
         })
     }
 
@@ -381,6 +403,9 @@ impl Renderer {
         color_attachment_count: u32,
         msaa: super::MsaaSamples,
     ) -> Result<Arc<Pipeline>, String> {
+        let shadow_ds_layout = self.shadow_map.as_ref()
+            .expect("Shadow map system not initialized")
+            .ds_layout();
         Ok(Arc::new(pipeline::create_3d_pipeline(
             &self.device,
             shader,
@@ -391,6 +416,7 @@ impl Renderer {
                 self.texture_descriptor_set_layout,
                 self.material_library.ds_layout(),
                 self.lighting.ds_layout(),
+                shadow_ds_layout,
             ],
             cull_mode,
             depth_config,
@@ -631,6 +657,155 @@ impl Renderer {
             let gpu_data = env.to_gpu_data();
             self.lighting
                 .write_ubo(&gpu_data, ctx.current_frame, ctx.viewport_index);
+        }
+    }
+
+    // -- Shadow Mapping ------------------------------------------------------
+
+    /// Lazily create the shadow depth-only pipeline. The shadow map system
+    /// itself is created eagerly in `Renderer::new` (needed for descriptor
+    /// set layout at pipeline creation time).
+    pub fn init_shadow_pipeline(&mut self) -> Result<(), String> {
+        if self.shadow_pipeline.is_some() {
+            return Ok(());
+        }
+        let sm = self.shadow_map.as_ref().expect("Shadow map system not initialized");
+
+        let shader = self.create_shader(
+            "shadow",
+            super::shaders::SHADOW_VERT_SPV,
+            super::shaders::SHADOW_FRAG_SPV,
+        )?;
+        let pipeline = Arc::new(shadow_map::create_shadow_pipeline(
+            &self.device,
+            &shader,
+            sm.render_pass(),
+            sm.camera_ds_layout(),
+            self.pipeline_cache,
+        )?);
+
+        self.shadow_pipeline = Some(pipeline);
+        log::info!(target: "gg_engine", "Shadow pipeline created ({}x{})",
+            sm.width(), sm.height());
+        Ok(())
+    }
+
+    /// Returns `true` if the shadow pipeline is ready for rendering.
+    pub fn has_shadow_pipeline(&self) -> bool {
+        self.shadow_pipeline.is_some()
+    }
+
+    /// Begin the shadow depth-only render pass. Must be called OUTSIDE the
+    /// main render pass (before `begin_scene`). Records into `cmd_buf`.
+    pub fn begin_shadow_pass(
+        &self,
+        light_vp: &Mat4,
+        cmd_buf: vk::CommandBuffer,
+        current_frame: usize,
+        viewport_index: usize,
+    ) {
+        let sm = self.shadow_map.as_ref().expect("Shadow map not initialized");
+        let pipeline = self.shadow_pipeline.as_ref().expect("Shadow pipeline not initialized");
+
+        // Write the light VP to the shadow camera UBO.
+        sm.write_light_vp(light_vp, current_frame, viewport_index);
+
+        let extent = vk::Extent2D {
+            width: sm.width(),
+            height: sm.height(),
+        };
+
+        let clear_value = vk::ClearValue {
+            depth_stencil: vk::ClearDepthStencilValue {
+                depth: 1.0,
+                stencil: 0,
+            },
+        };
+
+        let rp_info = vk::RenderPassBeginInfo::default()
+            .render_pass(sm.render_pass())
+            .framebuffer(sm.framebuffer())
+            .render_area(vk::Rect2D {
+                offset: vk::Offset2D { x: 0, y: 0 },
+                extent,
+            })
+            .clear_values(std::slice::from_ref(&clear_value));
+
+        unsafe {
+            self.device.cmd_begin_render_pass(cmd_buf, &rp_info, vk::SubpassContents::INLINE);
+
+            // Set viewport and scissor to shadow map dimensions.
+            self.device.cmd_set_viewport(cmd_buf, 0, &[vk::Viewport {
+                x: 0.0,
+                y: 0.0,
+                width: sm.width() as f32,
+                height: sm.height() as f32,
+                min_depth: 0.0,
+                max_depth: 1.0,
+            }]);
+            self.device.cmd_set_scissor(cmd_buf, 0, &[vk::Rect2D {
+                offset: vk::Offset2D { x: 0, y: 0 },
+                extent,
+            }]);
+
+            // Bind shadow pipeline.
+            self.device.cmd_bind_pipeline(
+                cmd_buf,
+                vk::PipelineBindPoint::GRAPHICS,
+                pipeline.pipeline(),
+            );
+
+            // Bind shadow camera descriptor set (set 0 = light VP UBO).
+            let camera_ds = sm.camera_descriptor_set(current_frame, viewport_index);
+            self.device.cmd_bind_descriptor_sets(
+                cmd_buf,
+                vk::PipelineBindPoint::GRAPHICS,
+                pipeline.layout(),
+                0,
+                &[camera_ds],
+                &[],
+            );
+        }
+    }
+
+    /// Submit a mesh to the shadow pass. Push the model matrix and draw.
+    /// Must be called between `begin_shadow_pass` / `end_shadow_pass`.
+    pub fn submit_shadow(
+        &self,
+        vertex_array: &VertexArray,
+        transform: &Mat4,
+        cmd_buf: vk::CommandBuffer,
+    ) {
+        let pipeline = self.shadow_pipeline.as_ref().expect("Shadow pipeline not initialized");
+
+        unsafe {
+            let transform_bytes = std::slice::from_raw_parts(
+                transform as *const Mat4 as *const u8,
+                std::mem::size_of::<Mat4>(),
+            );
+            self.device.cmd_push_constants(
+                cmd_buf,
+                pipeline.layout(),
+                vk::ShaderStageFlags::VERTEX,
+                0,
+                transform_bytes,
+            );
+        }
+
+        vertex_array.bind(cmd_buf);
+        let index_count = vertex_array
+            .index_buffer()
+            .expect("VertexArray has no index buffer")
+            .count();
+        unsafe {
+            self.device.cmd_draw_indexed(cmd_buf, index_count, 1, 0, 0, 0);
+        }
+    }
+
+    /// End the shadow depth-only render pass.
+    pub fn end_shadow_pass(&self, cmd_buf: vk::CommandBuffer) {
+        unsafe {
+            self.device.cmd_end_render_pass(cmd_buf);
         }
     }
 
@@ -1766,6 +1941,19 @@ impl Renderer {
                 &[lighting_ds],
                 &[],
             );
+
+            // Set 4: shadow map (if initialized).
+            if let Some(ref sm) = self.shadow_map {
+                let shadow_ds = sm.descriptor_set(ctx.current_frame, ctx.viewport_index);
+                device.cmd_bind_descriptor_sets(
+                    cmd,
+                    vk::PipelineBindPoint::GRAPHICS,
+                    pipeline.layout(),
+                    4,
+                    &[shadow_ds],
+                    &[],
+                );
+            }
         }
 
         // Bind vertex/index buffers and draw.
@@ -1815,6 +2003,9 @@ impl Renderer {
                 super::shaders::MESH3D_FRAG_SPV,
             )?;
             let vertex_layout = super::mesh::Mesh::vertex_layout();
+            let shadow_ds_layout = self.shadow_map.as_ref()
+                .expect("Shadow map system not initialized")
+                .ds_layout();
             let pipeline = Arc::new(pipeline::create_3d_pipeline(
                 &self.device,
                 &shader,
@@ -1825,6 +2016,7 @@ impl Renderer {
                     self.texture_descriptor_set_layout,
                     self.material_library.ds_layout(),
                     self.lighting.ds_layout(),
+                    shadow_ds_layout,
                 ],
                 super::CullMode::Back,
                 super::DepthConfig::STANDARD_3D,
@@ -1855,6 +2047,9 @@ impl Renderer {
                 super::shaders::MESH3D_SWAPCHAIN_FRAG_SPV,
             )?;
             let vertex_layout = super::mesh::Mesh::vertex_layout();
+            let shadow_ds_layout = self.shadow_map.as_ref()
+                .expect("Shadow map system not initialized")
+                .ds_layout();
             let pipeline = Arc::new(pipeline::create_3d_pipeline(
                 &self.device,
                 &shader,
@@ -1865,6 +2060,7 @@ impl Renderer {
                     self.texture_descriptor_set_layout,
                     self.material_library.ds_layout(),
                     self.lighting.ds_layout(),
+                    shadow_ds_layout,
                 ],
                 super::CullMode::Back,
                 super::DepthConfig::STANDARD_3D,
@@ -1953,6 +2149,10 @@ impl Drop for Renderer {
         drop(self.renderer_2d.take());
         // Drop GPU particle system (owns its own descriptor pool/layout).
         drop(self.gpu_particles.take());
+        // Drop shadow pipeline before shadow map (pipeline references render pass).
+        drop(self.shadow_pipeline.take());
+        // Drop shadow map system (owns descriptor set layouts, render pass, image).
+        drop(self.shadow_map.take());
         unsafe {
             self.device
                 .destroy_pipeline_cache(self.pipeline_cache, None);

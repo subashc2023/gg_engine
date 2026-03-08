@@ -2,9 +2,10 @@ use std::sync::Arc;
 
 use gg_engine::prelude::*;
 use gg_engine::renderer::Pipeline;
+use gg_engine::renderer::shadow_map::compute_directional_light_vp;
 
 /// 3D test scene: cube, sphere, and ground plane with directional + point lighting,
-/// backface culling, depth testing, and material support.
+/// backface culling, depth testing, material support, and directional shadow mapping.
 /// Middle-click drag to orbit, scroll to zoom.
 pub struct Sandbox3D {
     pipeline: Option<Arc<Pipeline>>,
@@ -28,6 +29,10 @@ pub struct Sandbox3D {
     window_height: u32,
     last_dt: f32,
     elapsed: f32,
+
+    // Shadow mapping.
+    shadows_enabled: bool,
+    shadow_light_vp: Option<Mat4>,
 }
 
 impl Sandbox3D {
@@ -49,6 +54,8 @@ impl Sandbox3D {
             window_height: 720,
             last_dt: 0.0,
             elapsed: 0.0,
+            shadows_enabled: true,
+            shadow_light_vp: None,
         }
     }
 
@@ -125,6 +132,62 @@ impl Sandbox3D {
         self.orbit_dist += (self.target_dist - self.orbit_dist) * t;
     }
 
+    pub fn on_render_shadows(
+        &mut self,
+        renderer: &mut Renderer,
+        cmd_buf: gg_engine::ash::vk::CommandBuffer,
+        current_frame: usize,
+    ) {
+        if !self.shadows_enabled {
+            self.shadow_light_vp = None;
+            return;
+        }
+
+        // Initialize shadow pipeline lazily.
+        if !renderer.has_shadow_pipeline() {
+            if let Err(e) = renderer.init_shadow_pipeline() {
+                gg_engine::log::error!("Failed to create shadow pipeline: {e}");
+                self.shadow_light_vp = None;
+                return;
+            }
+        }
+
+        let light_dir = Vec3::new(-0.3, -1.0, -0.5).normalize();
+
+        // Scene AABB (conservative, covering all objects).
+        let scene_min = Vec3::new(-4.0, -1.0, -4.0);
+        let scene_max = Vec3::new(4.0, 2.0, 4.0);
+
+        let light_vp = compute_directional_light_vp(light_dir, scene_min, scene_max);
+        self.shadow_light_vp = Some(light_vp);
+
+        renderer.begin_shadow_pass(&light_vp, cmd_buf, current_frame, 0);
+
+        // Submit all meshes to the shadow pass.
+        if let Some(va) = &self.plane_va {
+            let model = Mat4::from_scale_rotation_translation(
+                Vec3::new(6.0, 1.0, 6.0),
+                Quat::IDENTITY,
+                Vec3::new(0.0, -0.5, 0.0),
+            );
+            renderer.submit_shadow(va, &model, cmd_buf);
+        }
+        if let Some(va) = &self.cube_va {
+            let model = Mat4::from_translation(Vec3::new(0.0, 0.0, 0.0));
+            renderer.submit_shadow(va, &model, cmd_buf);
+        }
+        if let Some(va) = &self.sphere_va {
+            let model = Mat4::from_scale_rotation_translation(
+                Vec3::splat(1.5),
+                Quat::IDENTITY,
+                Vec3::new(2.0, 0.25, 0.0),
+            );
+            renderer.submit_shadow(va, &model, cmd_buf);
+        }
+
+        renderer.end_shadow_pass(cmd_buf);
+    }
+
     pub fn on_render(&mut self, renderer: &mut Renderer) {
         let pipeline = match &self.pipeline {
             Some(p) => p,
@@ -162,6 +225,7 @@ impl Sandbox3D {
             ambient_color: Vec3::new(0.05, 0.05, 0.08),
             ambient_intensity: 1.0,
             camera_position: eye,
+            shadow_light_vp: self.shadow_light_vp,
         };
         renderer.upload_lights(&light_env);
 
@@ -217,6 +281,7 @@ impl Sandbox3D {
             ui.separator();
             ui.label("Directional light (sun) + orbiting point light (warm)");
             ui.label("Blinn-Phong shading with material UBO");
+            ui.checkbox(&mut self.shadows_enabled, "Shadows");
             ui.separator();
             ui.label(format!(
                 "Yaw {:.1}\u{00b0}  Pitch {:.1}\u{00b0}  Dist {:.1}",

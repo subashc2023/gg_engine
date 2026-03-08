@@ -514,6 +514,17 @@ impl Application for GGEditor {
         }
     }
 
+    fn on_render_shadows(
+        &mut self,
+        renderer: &mut Renderer,
+        cmd_buf: gg_engine::ash::vk::CommandBuffer,
+        current_frame: usize,
+    ) {
+        // Run the shadow depth pass (shared shadow map for all viewports).
+        self.scene
+            .render_shadow_pass(renderer, cmd_buf, current_frame, 0);
+    }
+
     fn on_render_viewport(&mut self, renderer: &mut Renderer, viewport_index: usize) {
         match viewport_index {
             0 => {

@@ -81,6 +81,18 @@ pub trait Application {
     /// Submit draw calls. Called each frame between `begin_scene` / `end_scene`.
     fn on_render(&mut self, _renderer: &mut Renderer) {}
 
+    /// Called before any render pass begins to render shadow depth maps.
+    /// Override this if your application uses 3D scenes with shadow-casting
+    /// directional lights. The `cmd_buf` is the active command buffer
+    /// (before the main render pass is started).
+    fn on_render_shadows(
+        &mut self,
+        _renderer: &mut Renderer,
+        _cmd_buf: vk::CommandBuffer,
+        _current_frame: usize,
+    ) {
+    }
+
     /// Build immediate-mode UI each frame. Called inside `egui::Context::run`.
     /// The `window` handle is provided for custom title bar controls
     /// (drag, minimize, maximize, close).
@@ -967,6 +979,9 @@ fn render_frame<T: Application>(
 
     // Dispatch GPU particle compute (before any render pass).
     renderer.dispatch_particle_compute(cmd_buf, swapchain.current_frame(), dt_seconds);
+
+    // Shadow pass (before any render pass — uses its own depth-only render pass).
+    app.on_render_shadows(renderer, cmd_buf, swapchain.current_frame());
 
     if !viewport_infos.is_empty() {
         // --- Multi-viewport dual-pass path: N offscreen scene passes + swapchain egui ---

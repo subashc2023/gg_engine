@@ -275,6 +275,18 @@ impl Application for GGPlayer {
         self.scene.update_spatial_audio();
     }
 
+    fn on_render_shadows(
+        &mut self,
+        renderer: &mut Renderer,
+        cmd_buf: gg_engine::ash::vk::CommandBuffer,
+        current_frame: usize,
+    ) {
+        if self.runtime_started {
+            self.scene
+                .render_shadow_pass(renderer, cmd_buf, current_frame, 0);
+        }
+    }
+
     fn on_render(&mut self, renderer: &mut Renderer) {
         profile_scope!("GGPlayer::on_render");
 

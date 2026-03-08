@@ -60,7 +60,7 @@ layout(set = 2, binding = 0) uniform MaterialUBO {
     float _pad[3];
 } material;
 
-// Lighting UBO (set 3) — scene lights.
+// Lighting UBO (set 3) — scene lights + shadow data.
 layout(set = 3, binding = 0) uniform LightingUBO {
     // Directional light
     vec4 dir_direction;   // xyz = direction, w = unused
@@ -73,8 +73,14 @@ layout(set = 3, binding = 0) uniform LightingUBO {
     // Scene-wide
     vec4 ambient_color;    // xyz = color, w = intensity
     vec4 camera_position;  // xyz = eye position, w = unused
-    ivec4 counts;          // x = num_point_lights, y = has_directional, z,w = unused
+    ivec4 counts;          // x = num_point_lights, y = has_directional, z = has_shadow, w = unused
+
+    // Shadow mapping
+    mat4 shadow_light_vp;  // light-space VP matrix
 } lighting;
+
+// Shadow map (set 4) — depth comparison sampler.
+layout(set = 4, binding = 0) uniform sampler2DShadow u_shadow_map;
 
 layout(location = 0) in vec4 v_color;
 layout(location = 1) in vec3 v_normal;
@@ -88,6 +94,37 @@ layout(location = 0) out vec4 out_color;
 #ifdef OFFSCREEN
 layout(location = 1) out int out_entity_id;
 #endif
+
+// Calculate shadow factor for directional light (1.0 = fully lit, 0.0 = fully shadowed).
+float calculate_shadow(vec3 world_pos, vec3 normal) {
+    if (lighting.counts.z == 0) return 1.0; // No shadow mapping active
+
+    vec4 light_space_pos = lighting.shadow_light_vp * vec4(world_pos, 1.0);
+    vec3 proj_coords = light_space_pos.xyz / light_space_pos.w;
+
+    // Vulkan NDC: x,y in [-1, 1], z in [0, 1].
+    proj_coords.xy = proj_coords.xy * 0.5 + 0.5;
+
+    // Outside shadow map frustum = not in shadow.
+    if (proj_coords.x < 0.0 || proj_coords.x > 1.0 ||
+        proj_coords.y < 0.0 || proj_coords.y > 1.0 ||
+        proj_coords.z > 1.0) {
+        return 1.0;
+    }
+
+    // 5x5 PCF (percentage-closer filtering).
+    float shadow = 0.0;
+    vec2 texel_size = 1.0 / textureSize(u_shadow_map, 0);
+    for (int x = -2; x <= 2; ++x) {
+        for (int y = -2; y <= 2; ++y) {
+            vec2 offset = vec2(x, y) * texel_size;
+            shadow += texture(u_shadow_map, vec3(proj_coords.xy + offset, proj_coords.z));
+        }
+    }
+    shadow /= 25.0;
+
+    return shadow;
+}
 
 // Blinn-Phong specular with roughness-based shininess.
 vec3 blinn_phong(vec3 light_dir, vec3 light_color, float light_intensity,
@@ -119,7 +156,8 @@ void main() {
     if (lighting.counts.y > 0) {
         vec3 light_dir = normalize(-lighting.dir_direction.xyz);
         float intensity = lighting.dir_color.w;
-        result += blinn_phong(light_dir, lighting.dir_color.rgb, intensity, n, view_dir, albedo);
+        float shadow = calculate_shadow(v_world_position, n);
+        result += shadow * blinn_phong(light_dir, lighting.dir_color.rgb, intensity, n, view_dir, albedo);
     }
 
     // Point lights.

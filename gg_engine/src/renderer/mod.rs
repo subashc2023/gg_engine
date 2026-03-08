@@ -23,6 +23,7 @@ mod shader;
 mod shader_compiler;
 mod shader_library;
 pub mod shaders;
+pub mod shadow_map;
 mod sub_texture;
 mod swapchain;
 mod texture;

@@ -692,6 +692,8 @@ struct DirectionalLightData {
     color: [f32; 3],
     #[serde(rename = "Intensity", default = "default_light_intensity")]
     intensity: f32,
+    #[serde(rename = "CastShadows", default)]
+    cast_shadows: bool,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -1278,6 +1280,7 @@ impl SceneSerializer {
                     _direction: None,
                     color: dl.color.into(),
                     intensity: dl.intensity,
+                    cast_shadows: dl.cast_shadows,
                 }),
             point_light: scene
                 .get_component::<PointLightComponent>(entity)
@@ -1673,6 +1676,7 @@ impl SceneSerializer {
                 DirectionalLightComponent {
                     color: Vec3::from(dl.color),
                     intensity: dl.intensity,
+                    cast_shadows: dl.cast_shadows,
                 },
             );
         }

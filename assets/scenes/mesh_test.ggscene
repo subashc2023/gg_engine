@@ -59,12 +59,12 @@ Entities:
   TransformComponent:
     Translation:
     - 2.5
-    - 0.5
+    - 0.50122654
     - 0.0
     Rotation:
-    - -0.0
-    - -0.0
-    - -0.0
+    - 0.0
+    - 0.0
+    - 0.0
     - 1.0
     Scale:
     - 1.0
@@ -101,3 +101,28 @@ Entities:
     - 0.3
     - 0.3
     - 1.0
+- Entity: 8072808792126240
+  TagComponent:
+    Tag: Empty Entity
+  TransformComponent:
+    Translation:
+    - 0.0
+    - 0.0
+    - 0.0
+    Rotation:
+    - -0.52277327
+    - 0.1980011
+    - 0.29368648
+    - 0.77540433
+    Scale:
+    - 0.99999374
+    - 0.99999124
+    - 0.999994
+  DirectionalLightComponent:
+    Direction: null
+    Color:
+    - 1.0
+    - 1.0
+    - 1.0
+    Intensity: 1.0
+    CastShadows: true
