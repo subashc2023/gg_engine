@@ -120,16 +120,36 @@ impl Drop for Pipeline {
 
 /// Standard rasterizer state: fill mode, no culling, CCW front face.
 fn default_rasterizer() -> vk::PipelineRasterizationStateCreateInfo<'static> {
-    rasterizer(CullMode::None)
+    rasterizer(CullMode::None, false)
 }
 
-/// Rasterizer state with configurable face culling.
-fn rasterizer(cull_mode: CullMode) -> vk::PipelineRasterizationStateCreateInfo<'static> {
-    vk::PipelineRasterizationStateCreateInfo::default()
-        .polygon_mode(vk::PolygonMode::FILL)
-        .cull_mode(cull_mode.to_vk())
+/// Rasterizer state with configurable face culling and optional wireframe mode.
+///
+/// When `wireframe` is true, polygon mode is `LINE` with depth bias enabled
+/// (constant factor -1.0) so wireframe overlays render in front of filled
+/// geometry without z-fighting. Culling is also disabled in wireframe mode
+/// so all edges are visible.
+fn rasterizer(
+    cull_mode: CullMode,
+    wireframe: bool,
+) -> vk::PipelineRasterizationStateCreateInfo<'static> {
+    let info = vk::PipelineRasterizationStateCreateInfo::default()
+        .polygon_mode(if wireframe {
+            vk::PolygonMode::LINE
+        } else {
+            vk::PolygonMode::FILL
+        })
+        .cull_mode(if wireframe {
+            vk::CullModeFlags::NONE
+        } else {
+            cull_mode.to_vk()
+        })
         .front_face(vk::FrontFace::COUNTER_CLOCKWISE)
         .line_width(1.0)
+        .depth_bias_enable(wireframe)
+        .depth_bias_constant_factor(if wireframe { -1.0 } else { 0.0 })
+        .depth_bias_slope_factor(if wireframe { -1.0 } else { 0.0 });
+    info
 }
 
 /// Standard multisampling state for the given sample count.
@@ -229,6 +249,7 @@ pub(crate) fn create_pipeline(
     blend_enable: bool,
     pipeline_cache: vk::PipelineCache,
     samples: vk::SampleCountFlags,
+    wireframe: bool,
 ) -> Result<Pipeline, String> {
     let _timer = ProfileTimer::new("Pipeline::create");
     let entry_point = c"main";
@@ -266,7 +287,7 @@ pub(crate) fn create_pipeline(
         .viewport_count(1)
         .scissor_count(1);
 
-    let rasterizer = default_rasterizer();
+    let rasterizer = rasterizer(CullMode::None, wireframe);
     let multisampling = default_multisampling(samples);
 
     let depth_stencil = vk::PipelineDepthStencilStateCreateInfo::default()
@@ -359,6 +380,7 @@ pub(crate) fn create_batch_pipeline(
     color_attachment_count: u32,
     pipeline_cache: vk::PipelineCache,
     samples: vk::SampleCountFlags,
+    wireframe: bool,
 ) -> Result<Pipeline, String> {
     let _timer = ProfileTimer::new("Pipeline::create_batch");
     let entry_point = c"main";
@@ -395,7 +417,7 @@ pub(crate) fn create_batch_pipeline(
         .viewport_count(1)
         .scissor_count(1);
 
-    let rasterizer = default_rasterizer();
+    let rast = rasterizer(CullMode::None, wireframe);
     let multisampling = default_multisampling(samples);
 
     // 2D batch rendering uses painter's algorithm (draw order); no depth test needed.
@@ -420,7 +442,7 @@ pub(crate) fn create_batch_pipeline(
         .vertex_input_state(&vertex_input)
         .input_assembly_state(&input_assembly)
         .viewport_state(&viewport_state)
-        .rasterization_state(&rasterizer)
+        .rasterization_state(&rast)
         .multisample_state(&multisampling)
         .depth_stencil_state(&depth_stencil)
         .color_blend_state(&color_blending)
@@ -452,6 +474,7 @@ pub(crate) fn create_instanced_batch_pipeline(
     color_attachment_count: u32,
     pipeline_cache: vk::PipelineCache,
     samples: vk::SampleCountFlags,
+    wireframe: bool,
 ) -> Result<Pipeline, String> {
     let _timer = ProfileTimer::new("Pipeline::create_instanced_batch");
     let entry_point = c"main";
@@ -493,7 +516,7 @@ pub(crate) fn create_instanced_batch_pipeline(
         .viewport_count(1)
         .scissor_count(1);
 
-    let rasterizer = default_rasterizer();
+    let rast = rasterizer(CullMode::None, wireframe);
     let multisampling = default_multisampling(samples);
 
     let depth_stencil = vk::PipelineDepthStencilStateCreateInfo::default()
@@ -517,7 +540,7 @@ pub(crate) fn create_instanced_batch_pipeline(
         .vertex_input_state(&vertex_input)
         .input_assembly_state(&input_assembly)
         .viewport_state(&viewport_state)
-        .rasterization_state(&rasterizer)
+        .rasterization_state(&rast)
         .multisample_state(&multisampling)
         .depth_stencil_state(&depth_stencil)
         .color_blend_state(&color_blending)
@@ -675,6 +698,7 @@ pub(crate) fn create_3d_pipeline(
     color_attachment_count: u32,
     pipeline_cache: vk::PipelineCache,
     samples: vk::SampleCountFlags,
+    wireframe: bool,
 ) -> Result<Pipeline, String> {
     let _timer = ProfileTimer::new("Pipeline::create_3d");
     let entry_point = c"main";
@@ -711,7 +735,7 @@ pub(crate) fn create_3d_pipeline(
         .viewport_count(1)
         .scissor_count(1);
 
-    let rast = rasterizer(cull_mode);
+    let rast = rasterizer(cull_mode, wireframe);
     let multisampling = default_multisampling(samples);
 
     let depth_stencil = vk::PipelineDepthStencilStateCreateInfo::default()

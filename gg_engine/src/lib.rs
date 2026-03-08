@@ -48,7 +48,7 @@ pub use renderer::{
     MaterialLibrary, Mesh, MeshVertex, MsaaSamples, OrthographicCamera, Pipeline, PresentMode,
     ProjectionType, Renderer, Renderer2DStats, RendererBackend, SceneCamera, Shader,
     ShaderDataType, ShaderLibrary, SubTexture2D, Texture2D, TextureSpecification, VertexArray,
-    VertexBuffer,
+    VertexBuffer, WireframeMode,
 };
 pub use scene::{Aabb2D, CullingStats, SpatialGrid};
 pub use scene::{
@@ -93,7 +93,7 @@ pub mod prelude {
         MaterialLibrary, Mesh, MeshVertex, MsaaSamples, OrthographicCamera, Pipeline, PresentMode,
         ProjectionType, Renderer, Renderer2DStats, RendererBackend, SceneCamera, Shader,
         ShaderDataType, ShaderLibrary, SubTexture2D, Texture2D, TextureSpecification, VertexArray,
-        VertexBuffer,
+        VertexBuffer, WireframeMode,
     };
     pub use crate::scene::{Aabb2D, SpatialGrid};
     pub use crate::scene::{

@@ -2,6 +2,7 @@ use std::path::{Path, PathBuf};
 
 use gg_engine::egui;
 use gg_engine::prelude::*;
+use gg_engine::WireframeMode;
 
 use super::panels::Tab;
 use super::{panels, EditorMode, GGEditor, SceneState};
@@ -147,6 +148,39 @@ impl GGEditor {
             {
                 ui.close();
             }
+            ui.separator();
+            ui.menu_button("Wireframe", |ui| {
+                if ui
+                    .radio_value(
+                        &mut self.ui.wireframe_mode,
+                        WireframeMode::Off,
+                        "Off",
+                    )
+                    .clicked()
+                {
+                    ui.close();
+                }
+                if ui
+                    .radio_value(
+                        &mut self.ui.wireframe_mode,
+                        WireframeMode::WireOnly,
+                        "Wireframe",
+                    )
+                    .clicked()
+                {
+                    ui.close();
+                }
+                if ui
+                    .radio_value(
+                        &mut self.ui.wireframe_mode,
+                        WireframeMode::Overlay,
+                        "Shaded Wireframe",
+                    )
+                    .clicked()
+                {
+                    ui.close();
+                }
+            });
             ui.separator();
             let mut game_vp = self.viewport.game_viewport_enabled;
             if ui.checkbox(&mut game_vp, "Game Viewport").clicked() {

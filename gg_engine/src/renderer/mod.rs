@@ -45,7 +45,7 @@ pub use material::{BlendMode, Material, MaterialGpuData, MaterialHandle, Materia
 pub use mesh::{load_gltf, Mesh, MeshVertex};
 pub use orthographic_camera::OrthographicCamera;
 pub use pipeline::{CullMode, DepthConfig, Pipeline};
-pub use renderer::Renderer;
+pub use renderer::{Renderer, WireframeMode};
 pub use renderer_2d::Renderer2DStats;
 pub use scene_camera::{ProjectionType, SceneCamera};
 pub use shader::Shader;

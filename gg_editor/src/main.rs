@@ -172,6 +172,8 @@ struct UiState {
     create_game_fb: bool,
     /// MSAA sample count changed in settings — triggers framebuffer + pipeline recreation.
     msaa_changed: bool,
+    /// Current wireframe rendering mode (Off / WireOnly / Overlay).
+    wireframe_mode: WireframeMode,
 }
 
 // ---------------------------------------------------------------------------
@@ -365,6 +367,7 @@ impl Application for GGEditor {
                 clipboard_entity_uuids: Vec::new(),
                 create_game_fb: false,
                 msaa_changed: false,
+                wireframe_mode: WireframeMode::Off,
             },
             viewport: ViewportInfo {
                 scene_fb: None,
@@ -997,6 +1000,10 @@ impl Application for GGEditor {
         }
         self.scene.resolve_meshes(renderer);
 
+        // Apply wireframe mode to the renderer.
+        let wf_mode = self.ui.wireframe_mode;
+        renderer.set_wireframe_mode(wf_mode);
+
         match self.playback.scene_state {
             SceneState::Edit => {
                 self.scene
@@ -1010,6 +1017,14 @@ impl Application for GGEditor {
                 self.scene.on_update_runtime(renderer);
             }
         }
+
+        // Wireframe overlay: draw dark outlines on top of shaded geometry.
+        if wf_mode == WireframeMode::Overlay {
+            self.draw_wireframe_overlay(renderer);
+        }
+
+        // Reset wireframe mode so overlays/grid/gizmos render filled.
+        renderer.set_wireframe_mode(WireframeMode::Off);
 
         // -- Overlay rendering (collider visualization) --
         self.on_overlay_render(renderer);
@@ -1573,6 +1588,49 @@ impl GGEditor {
         }
         // The game viewport always renders from the primary camera's perspective.
         self.scene.on_update_runtime(renderer);
+    }
+
+    /// Draw dark wireframe outlines on top of shaded geometry (Shaded Wireframe mode).
+    fn draw_wireframe_overlay(&self, renderer: &mut Renderer) {
+        let wire_color = Vec4::new(0.0, 0.0, 0.0, 0.6);
+        let prev_line_width = renderer.line_width();
+        renderer.set_line_width(1.0);
+
+        // Collect all entity handles + relevant data (avoids borrow conflicts with Scene).
+        let entities = self.scene.each_entity_with_tag();
+
+        for (entity, _tag) in &entities {
+            // 2D sprites — quad outlines.
+            if self
+                .scene
+                .get_component::<SpriteRendererComponent>(*entity)
+                .is_some()
+            {
+                let world = self.scene.get_world_transform(*entity);
+                renderer.draw_rect_transform(&world, wire_color, -1);
+                continue;
+            }
+
+            // 2D circles — underlying quad outlines.
+            if self
+                .scene
+                .get_component::<CircleRendererComponent>(*entity)
+                .is_some()
+            {
+                let world = self.scene.get_world_transform(*entity);
+                renderer.draw_rect_transform(&world, wire_color, -1);
+                continue;
+            }
+
+            // 3D meshes — bounding box outlines.
+            if let Some(mesh) = self.scene.get_component::<MeshRendererComponent>(*entity) {
+                let bounds = mesh.primitive.local_bounds();
+                let world = self.scene.get_world_transform(*entity);
+                renderer.draw_box_outline(&world, bounds.0, bounds.1, wire_color, -1);
+            }
+        }
+
+        renderer.set_line_width(prev_line_width);
     }
 
     fn on_overlay_render(&self, renderer: &mut Renderer) {

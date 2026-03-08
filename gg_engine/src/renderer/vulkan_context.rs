@@ -210,7 +210,9 @@ impl VulkanContext {
             .sampler_anisotropy(true)
             .independent_blend(true)
             // wide_lines is not supported on macOS (MoltenVK / Metal).
-            .wide_lines(!cfg!(target_os = "macos"));
+            .wide_lines(!cfg!(target_os = "macos"))
+            // Required for PolygonMode::LINE (wireframe rendering).
+            .fill_mode_non_solid(true);
 
         let mut features12 = vk::PhysicalDeviceVulkan12Features::default()
             .descriptor_binding_partially_bound(true)

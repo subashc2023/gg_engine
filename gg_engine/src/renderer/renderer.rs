@@ -31,6 +31,22 @@ use crate::profiling::ProfileTimer;
 use crate::scene::{CircleRendererComponent, SpriteRendererComponent, TextComponent};
 
 // ---------------------------------------------------------------------------
+// WireframeMode — editor wireframe visualization
+// ---------------------------------------------------------------------------
+
+/// Controls how wireframe rendering is applied.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum WireframeMode {
+    /// Normal filled rendering (default).
+    #[default]
+    Off,
+    /// Full wireframe: all geometry rendered as lines only.
+    WireOnly,
+    /// Wireframe overlay: geometry rendered filled first, then wireframe on top.
+    Overlay,
+}
+
+// ---------------------------------------------------------------------------
 // Unit quad positions and tex coords (used for CPU pre-transformation)
 // ---------------------------------------------------------------------------
 
@@ -104,6 +120,16 @@ pub struct Renderer {
     mesh3d_pipeline: Option<Arc<Pipeline>>,
     mesh3d_offscreen_pipeline: Option<Arc<Pipeline>>,
     mesh3d_use_offscreen: bool,
+
+    // Wireframe 3D mesh pipeline variants (PolygonMode::LINE).
+    mesh3d_wireframe_pipeline: Option<Arc<Pipeline>>,
+    mesh3d_wireframe_offscreen_pipeline: Option<Arc<Pipeline>>,
+
+    // Current wireframe rendering mode.
+    wireframe_mode: WireframeMode,
+    // Tracks whether wireframe is active for the current draw pass
+    // (set by set_wireframe_active, used by mesh3d_pipeline).
+    wireframe_active: bool,
 
     // Offscreen render pass info (stored when offscreen pipelines are created).
     offscreen_render_pass: Option<vk::RenderPass>,
@@ -198,6 +224,10 @@ impl Renderer {
             mesh3d_pipeline: None,
             mesh3d_offscreen_pipeline: None,
             mesh3d_use_offscreen: false,
+            mesh3d_wireframe_pipeline: None,
+            mesh3d_wireframe_offscreen_pipeline: None,
+            wireframe_mode: WireframeMode::Off,
+            wireframe_active: false,
             offscreen_render_pass: None,
             offscreen_color_attachment_count: 0,
             offscreen_sample_count: vk::SampleCountFlags::TYPE_1,
@@ -294,6 +324,7 @@ impl Renderer {
             blend_enable,
             self.pipeline_cache,
             vk::SampleCountFlags::TYPE_1,
+            false,
         )?))
     }
 
@@ -316,6 +347,7 @@ impl Renderer {
             true,
             self.pipeline_cache,
             vk::SampleCountFlags::TYPE_1,
+            false,
         )?))
     }
 
@@ -353,6 +385,7 @@ impl Renderer {
             color_attachment_count,
             self.pipeline_cache,
             msaa.to_vk(),
+            false,
         )?))
     }
 
@@ -533,8 +566,9 @@ impl Renderer {
         self.offscreen_render_pass = Some(render_pass);
         self.offscreen_color_attachment_count = color_attachment_count;
         self.offscreen_sample_count = samples;
-        // Invalidate cached offscreen mesh3d pipeline (render pass may have changed).
+        // Invalidate cached offscreen mesh3d pipelines (render pass may have changed).
         self.mesh3d_offscreen_pipeline = None;
+        self.mesh3d_wireframe_offscreen_pipeline = None;
 
         if let Some(data) = &mut self.renderer_2d {
             data.create_offscreen_pipeline(
@@ -581,6 +615,30 @@ impl Renderer {
             data.set_use_offscreen(use_offscreen);
         }
         self.mesh3d_use_offscreen = use_offscreen;
+    }
+
+    /// Set the wireframe rendering mode.
+    pub fn set_wireframe_mode(&mut self, mode: WireframeMode) {
+        self.wireframe_mode = mode;
+        let wireframe = mode == WireframeMode::WireOnly;
+        self.wireframe_active = wireframe;
+        if let Some(data) = &mut self.renderer_2d {
+            data.set_wireframe(wireframe);
+        }
+    }
+
+    /// Get the current wireframe rendering mode.
+    pub fn wireframe_mode(&self) -> WireframeMode {
+        self.wireframe_mode
+    }
+
+    /// Temporarily enable/disable wireframe for both 2D and 3D renderers.
+    /// Used for the overlay pass (render filled, then wireframe on top).
+    pub fn set_wireframe_active(&mut self, wireframe: bool) {
+        self.wireframe_active = wireframe;
+        if let Some(data) = &mut self.renderer_2d {
+            data.set_wireframe(wireframe);
+        }
     }
 
     /// Hot-reload all shaders from the given source directory.
@@ -1677,9 +1735,23 @@ impl Renderer {
     /// depth testing, and opaque blending. Automatically selects the
     /// offscreen or swapchain variant based on `use_offscreen_pipeline()`.
     pub fn mesh3d_pipeline(&mut self) -> Result<Arc<Pipeline>, String> {
+        self.mesh3d_pipeline_inner(self.wireframe_active)
+    }
+
+    /// Get the wireframe variant of the mesh3d pipeline (for overlay pass).
+    pub fn mesh3d_wireframe_pipeline(&mut self) -> Result<Arc<Pipeline>, String> {
+        self.mesh3d_pipeline_inner(true)
+    }
+
+    fn mesh3d_pipeline_inner(&mut self, wireframe: bool) -> Result<Arc<Pipeline>, String> {
         if self.mesh3d_use_offscreen {
-            // Offscreen variant (editor viewport with entity ID attachment).
-            if let Some(ref pipeline) = self.mesh3d_offscreen_pipeline {
+            // Select the appropriate cached pipeline.
+            let cached = if wireframe {
+                &self.mesh3d_wireframe_offscreen_pipeline
+            } else {
+                &self.mesh3d_offscreen_pipeline
+            };
+            if let Some(ref pipeline) = cached {
                 return Ok(Arc::clone(pipeline));
             }
             let offscreen_rp = self
@@ -1707,12 +1779,21 @@ impl Renderer {
                 self.offscreen_color_attachment_count,
                 self.pipeline_cache,
                 self.offscreen_sample_count,
+                wireframe,
             )?);
-            self.mesh3d_offscreen_pipeline = Some(Arc::clone(&pipeline));
+            if wireframe {
+                self.mesh3d_wireframe_offscreen_pipeline = Some(Arc::clone(&pipeline));
+            } else {
+                self.mesh3d_offscreen_pipeline = Some(Arc::clone(&pipeline));
+            }
             Ok(pipeline)
         } else {
-            // Swapchain variant (single color attachment).
-            if let Some(ref pipeline) = self.mesh3d_pipeline {
+            let cached = if wireframe {
+                &self.mesh3d_wireframe_pipeline
+            } else {
+                &self.mesh3d_pipeline
+            };
+            if let Some(ref pipeline) = cached {
                 return Ok(Arc::clone(pipeline));
             }
             let shader = self.create_shader(
@@ -1721,16 +1802,29 @@ impl Renderer {
                 super::shaders::MESH3D_SWAPCHAIN_FRAG_SPV,
             )?;
             let vertex_layout = super::mesh::Mesh::vertex_layout();
-            let pipeline = self.create_3d_pipeline(
+            let pipeline = Arc::new(pipeline::create_3d_pipeline(
+                &self.device,
                 &shader,
                 &vertex_layout,
+                self.render_pass,
+                self.camera.ds_layout(),
+                &[
+                    self.texture_descriptor_set_layout,
+                    self.material_library.ds_layout(),
+                ],
                 super::CullMode::Back,
                 super::DepthConfig::STANDARD_3D,
                 super::BlendMode::Opaque,
                 1,
-                super::MsaaSamples::S1,
-            )?;
-            self.mesh3d_pipeline = Some(Arc::clone(&pipeline));
+                self.pipeline_cache,
+                vk::SampleCountFlags::TYPE_1,
+                wireframe,
+            )?);
+            if wireframe {
+                self.mesh3d_wireframe_pipeline = Some(Arc::clone(&pipeline));
+            } else {
+                self.mesh3d_pipeline = Some(Arc::clone(&pipeline));
+            }
             Ok(pipeline)
         }
     }

@@ -271,11 +271,31 @@ struct PipelineSet {
     offscreen_shader: Arc<Shader>,
     pipeline: Arc<Pipeline>,
     offscreen_pipeline: Option<Arc<Pipeline>>,
+    /// Wireframe variant (PolygonMode::LINE) of the swapchain pipeline.
+    wireframe_pipeline: Option<Arc<Pipeline>>,
+    /// Wireframe variant of the offscreen pipeline.
+    wireframe_offscreen_pipeline: Option<Arc<Pipeline>>,
 }
 
 impl PipelineSet {
-    /// Return the active pipeline (offscreen if enabled and available, else swapchain).
-    fn active(&self, use_offscreen: bool) -> &Arc<Pipeline> {
+    /// Return the active pipeline based on offscreen and wireframe state.
+    fn active(&self, use_offscreen: bool, wireframe: bool) -> &Arc<Pipeline> {
+        if wireframe {
+            let wire = if use_offscreen {
+                self.wireframe_offscreen_pipeline
+                    .as_ref()
+                    .or(self.wireframe_pipeline.as_ref())
+            } else {
+                self.wireframe_pipeline.as_ref()
+            };
+            // Fall back to fill pipeline if no wireframe variant exists (e.g. lines).
+            wire.unwrap_or_else(|| self.active_fill(use_offscreen))
+        } else {
+            self.active_fill(use_offscreen)
+        }
+    }
+
+    fn active_fill(&self, use_offscreen: bool) -> &Arc<Pipeline> {
         if use_offscreen {
             self.offscreen_pipeline.as_ref().unwrap_or(&self.pipeline)
         } else {
@@ -297,6 +317,7 @@ pub(super) struct Renderer2DData {
     instance_ps: PipelineSet,
 
     use_offscreen: bool,
+    wireframe: bool,
 
     // -- Quad batch resources --
     vertex_buffers: [DynamicVertexBuffer; FRAMES_IN_FLIGHT],
@@ -549,6 +570,19 @@ impl Renderer2DData {
             1,
             pipeline_cache,
             vk::SampleCountFlags::TYPE_1,
+            false,
+        )?);
+        let batch_wireframe_pipeline = Arc::new(pipeline::create_batch_pipeline(
+            device,
+            &batch_swapchain_shader,
+            vertex_buffers[0].layout(),
+            render_pass,
+            camera_ubo_ds_layout,
+            &[bindless_ds_layout],
+            1,
+            pipeline_cache,
+            vk::SampleCountFlags::TYPE_1,
+            true,
         )?);
 
         // -- Circle Pipeline (swapchain: 1 color attachment, no entity ID output) --
@@ -563,10 +597,24 @@ impl Renderer2DData {
             1,
             pipeline_cache,
             vk::SampleCountFlags::TYPE_1,
+            false,
+        )?);
+        let circle_wireframe_pipeline = Arc::new(pipeline::create_batch_pipeline(
+            device,
+            &circle_swapchain_shader,
+            circle_vertex_buffers[0].layout(),
+            render_pass,
+            camera_ubo_ds_layout,
+            &[],
+            1,
+            pipeline_cache,
+            vk::SampleCountFlags::TYPE_1,
+            true,
         )?);
 
         // -- Line Pipeline (swapchain: 1 color attachment, no entity ID output) --
         // Lines don't use textures, so no bindless descriptor set needed.
+        // No wireframe variant — already LINE_LIST topology.
         let line_pipeline = Arc::new(pipeline::create_line_batch_pipeline(
             device,
             &line_swapchain_shader,
@@ -590,6 +638,7 @@ impl Renderer2DData {
             1,
             pipeline_cache,
             vk::SampleCountFlags::TYPE_1,
+            false,
         )?);
 
         // -- Instanced Sprite Pipeline (swapchain: 1 color attachment) --
@@ -604,6 +653,20 @@ impl Renderer2DData {
             1,
             pipeline_cache,
             vk::SampleCountFlags::TYPE_1,
+            false,
+        )?);
+        let instance_wireframe_pipeline = Arc::new(pipeline::create_instanced_batch_pipeline(
+            device,
+            &instance_swapchain_shader,
+            &uq_layout,
+            &inst_layout,
+            render_pass,
+            camera_ubo_ds_layout,
+            &[bindless_ds_layout],
+            1,
+            pipeline_cache,
+            vk::SampleCountFlags::TYPE_1,
+            true,
         )?);
 
         // -- Bindless descriptor pool (UPDATE_AFTER_BIND) --
@@ -640,33 +703,44 @@ impl Renderer2DData {
                 offscreen_shader: batch_shader,
                 pipeline: batch_pipeline,
                 offscreen_pipeline: None,
+                wireframe_pipeline: Some(batch_wireframe_pipeline),
+                wireframe_offscreen_pipeline: None,
             },
             circle_ps: PipelineSet {
                 swapchain_shader: circle_swapchain_shader,
                 offscreen_shader: circle_shader,
                 pipeline: circle_pipeline,
                 offscreen_pipeline: None,
+                wireframe_pipeline: Some(circle_wireframe_pipeline),
+                wireframe_offscreen_pipeline: None,
             },
             line_ps: PipelineSet {
                 swapchain_shader: line_swapchain_shader,
                 offscreen_shader: line_shader,
                 pipeline: line_pipeline,
                 offscreen_pipeline: None,
+                wireframe_pipeline: None, // Already LINE_LIST topology.
+                wireframe_offscreen_pipeline: None,
             },
             text_ps: PipelineSet {
                 swapchain_shader: text_swapchain_shader,
                 offscreen_shader: text_shader,
                 pipeline: text_pipeline,
                 offscreen_pipeline: None,
+                wireframe_pipeline: None, // MSDF text — wireframe not useful.
+                wireframe_offscreen_pipeline: None,
             },
             instance_ps: PipelineSet {
                 swapchain_shader: instance_swapchain_shader,
                 offscreen_shader: instance_shader,
                 pipeline: instance_pipeline,
                 offscreen_pipeline: None,
+                wireframe_pipeline: Some(instance_wireframe_pipeline),
+                wireframe_offscreen_pipeline: None,
             },
 
             use_offscreen: false,
+            wireframe: false,
             vertex_buffers,
             index_buffer,
             quad_batch: RefCell::new(BatchState::new(MAX_VERTICES)),
@@ -822,7 +896,7 @@ impl Renderer2DData {
 
         // 2. Record Vulkan commands.
         let index_count = (batch.count * 6) as u32;
-        let active_pipeline = self.quad_ps.active(self.use_offscreen);
+        let active_pipeline = self.quad_ps.active(self.use_offscreen, self.wireframe);
         let pipeline = active_pipeline.pipeline();
         let layout = active_pipeline.layout();
 
@@ -920,7 +994,7 @@ impl Renderer2DData {
 
         // 2. Record Vulkan commands.
         let index_count = (batch.count * 6) as u32;
-        let active_pipeline = self.circle_ps.active(self.use_offscreen);
+        let active_pipeline = self.circle_ps.active(self.use_offscreen, self.wireframe);
         let pipeline = active_pipeline.pipeline();
         let layout = active_pipeline.layout();
 
@@ -1027,7 +1101,7 @@ impl Renderer2DData {
 
         // 2. Record Vulkan commands.
         let vertex_count = (batch.count * 2) as u32;
-        let active_pipeline = self.line_ps.active(self.use_offscreen);
+        let active_pipeline = self.line_ps.active(self.use_offscreen, self.wireframe);
         let pipeline = active_pipeline.pipeline();
         let layout = active_pipeline.layout();
 
@@ -1122,7 +1196,7 @@ impl Renderer2DData {
 
         // 2. Record Vulkan commands.
         let index_count = (batch.count * 6) as u32;
-        let active_pipeline = self.text_ps.active(self.use_offscreen);
+        let active_pipeline = self.text_ps.active(self.use_offscreen, self.wireframe);
         let pipeline = active_pipeline.pipeline();
         let layout = active_pipeline.layout();
 
@@ -1223,7 +1297,7 @@ impl Renderer2DData {
 
         // 2. Record Vulkan commands.
         let instance_count = batch.count as u32;
-        let active_pipeline = self.instance_ps.active(self.use_offscreen);
+        let active_pipeline = self.instance_ps.active(self.use_offscreen, self.wireframe);
         let pipeline = active_pipeline.pipeline();
         let layout = active_pipeline.layout();
 
@@ -1324,7 +1398,21 @@ impl Renderer2DData {
             color_attachment_count,
             pipeline_cache,
             samples,
+            false,
         )?));
+        self.quad_ps.wireframe_offscreen_pipeline =
+            Some(Arc::new(pipeline::create_batch_pipeline(
+                device,
+                &self.quad_ps.offscreen_shader,
+                self.vertex_buffers[0].layout(),
+                render_pass,
+                camera_ubo_ds_layout,
+                &[self.bindless_ds_layout],
+                color_attachment_count,
+                pipeline_cache,
+                samples,
+                true,
+            )?));
 
         // Circle offscreen pipeline (no textures).
         self.circle_ps.offscreen_pipeline = Some(Arc::new(pipeline::create_batch_pipeline(
@@ -1337,7 +1425,21 @@ impl Renderer2DData {
             color_attachment_count,
             pipeline_cache,
             samples,
+            false,
         )?));
+        self.circle_ps.wireframe_offscreen_pipeline =
+            Some(Arc::new(pipeline::create_batch_pipeline(
+                device,
+                &self.circle_ps.offscreen_shader,
+                self.circle_vertex_buffers[0].layout(),
+                render_pass,
+                camera_ubo_ds_layout,
+                &[],
+                color_attachment_count,
+                pipeline_cache,
+                samples,
+                true,
+            )?));
 
         // Line offscreen pipeline (no textures, LINE_LIST topology).
         self.line_ps.offscreen_pipeline = Some(Arc::new(pipeline::create_line_batch_pipeline(
@@ -1362,6 +1464,7 @@ impl Renderer2DData {
             color_attachment_count,
             pipeline_cache,
             samples,
+            false,
         )?));
 
         // Instanced sprite offscreen pipeline.
@@ -1377,6 +1480,21 @@ impl Renderer2DData {
                 color_attachment_count,
                 pipeline_cache,
                 samples,
+                false,
+            )?));
+        self.instance_ps.wireframe_offscreen_pipeline =
+            Some(Arc::new(pipeline::create_instanced_batch_pipeline(
+                device,
+                &self.instance_ps.offscreen_shader,
+                &self.unit_quad_layout,
+                &self.instance_layout,
+                render_pass,
+                camera_ubo_ds_layout,
+                &[self.bindless_ds_layout],
+                color_attachment_count,
+                pipeline_cache,
+                samples,
+                true,
             )?));
 
         Ok(())
@@ -1385,6 +1503,11 @@ impl Renderer2DData {
     /// Tell the batch renderer to use the offscreen pipeline (or switch back).
     pub(super) fn set_use_offscreen(&mut self, use_it: bool) {
         self.use_offscreen = use_it;
+    }
+
+    /// Tell the batch renderer to use wireframe pipelines (or switch back).
+    pub(super) fn set_wireframe(&mut self, wireframe: bool) {
+        self.wireframe = wireframe;
     }
 
     /// Hot-reload all shaders from the given source directory.
@@ -1450,7 +1573,20 @@ impl Renderer2DData {
             1,
             self.pipeline_cache,
             vk::SampleCountFlags::TYPE_1,
+            false,
         )?);
+        self.quad_ps.wireframe_pipeline = Some(Arc::new(pipeline::create_batch_pipeline(
+            &self.device,
+            &self.quad_ps.swapchain_shader,
+            self.vertex_buffers[0].layout(),
+            self.swapchain_render_pass,
+            self.camera_ubo_ds_layout,
+            &[self.bindless_ds_layout],
+            1,
+            self.pipeline_cache,
+            vk::SampleCountFlags::TYPE_1,
+            true,
+        )?));
 
         self.circle_ps.pipeline = Arc::new(pipeline::create_batch_pipeline(
             &self.device,
@@ -1462,7 +1598,20 @@ impl Renderer2DData {
             1,
             self.pipeline_cache,
             vk::SampleCountFlags::TYPE_1,
+            false,
         )?);
+        self.circle_ps.wireframe_pipeline = Some(Arc::new(pipeline::create_batch_pipeline(
+            &self.device,
+            &self.circle_ps.swapchain_shader,
+            self.circle_vertex_buffers[0].layout(),
+            self.swapchain_render_pass,
+            self.camera_ubo_ds_layout,
+            &[],
+            1,
+            self.pipeline_cache,
+            vk::SampleCountFlags::TYPE_1,
+            true,
+        )?));
 
         self.line_ps.pipeline = Arc::new(pipeline::create_line_batch_pipeline(
             &self.device,
@@ -1485,6 +1634,7 @@ impl Renderer2DData {
             1,
             self.pipeline_cache,
             vk::SampleCountFlags::TYPE_1,
+            false,
         )?);
 
         self.instance_ps.pipeline = Arc::new(pipeline::create_instanced_batch_pipeline(
@@ -1498,7 +1648,22 @@ impl Renderer2DData {
             1,
             self.pipeline_cache,
             vk::SampleCountFlags::TYPE_1,
+            false,
         )?);
+        self.instance_ps.wireframe_pipeline =
+            Some(Arc::new(pipeline::create_instanced_batch_pipeline(
+                &self.device,
+                &self.instance_ps.swapchain_shader,
+                &self.unit_quad_layout,
+                &self.instance_layout,
+                self.swapchain_render_pass,
+                self.camera_ubo_ds_layout,
+                &[self.bindless_ds_layout],
+                1,
+                self.pipeline_cache,
+                vk::SampleCountFlags::TYPE_1,
+                true,
+            )?));
 
         // Rebuild offscreen pipelines if they exist.
         if let Some(offscreen_rp) = self.offscreen_render_pass {
@@ -1521,7 +1686,7 @@ impl Renderer2DData {
 
     /// Get the currently active instanced pipeline (offscreen or swapchain).
     pub(super) fn active_instance_pipeline(&self) -> &Arc<Pipeline> {
-        self.instance_ps.active(self.use_offscreen)
+        self.instance_ps.active(self.use_offscreen, self.wireframe)
     }
 
     /// Get the bindless descriptor set for a given frame.
