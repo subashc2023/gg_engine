@@ -12,12 +12,14 @@ use crate::scene::entity::Entity;
 use crate::scene::LuaScriptComponent;
 use crate::scene::{
     AmbientLightComponent, AnimationClip, AnimationControllerComponent, AnimationTransition,
-    AudioListenerComponent, AudioSourceComponent, BoxCollider2DComponent, CameraComponent,
-    CircleCollider2DComponent, CircleRendererComponent, DirectionalLightComponent, FloatOrdering,
-    IdComponent, InstancedSpriteAnimator, MeshPrimitive, MeshRendererComponent,
-    ParticleEmitterComponent, PointLightComponent, RelationshipComponent, RigidBody2DComponent,
-    RigidBody2DType, Scene, SpriteAnimatorComponent, SpriteRendererComponent, TagComponent,
-    TextComponent, TilemapComponent, TransformComponent, TransitionCondition,
+    AudioListenerComponent, AudioSourceComponent, BoxCollider2DComponent, BoxCollider3DComponent,
+    CameraComponent, CapsuleCollider3DComponent, CircleCollider2DComponent,
+    CircleRendererComponent, DirectionalLightComponent, FloatOrdering, IdComponent,
+    InstancedSpriteAnimator, MeshPrimitive, MeshRendererComponent, ParticleEmitterComponent,
+    PointLightComponent, RelationshipComponent, RigidBody2DComponent, RigidBody2DType,
+    RigidBody3DComponent, RigidBody3DType, Scene, SphereCollider3DComponent,
+    SpriteAnimatorComponent, SpriteRendererComponent, TagComponent, TextComponent,
+    TilemapComponent, TransformComponent, TransitionCondition,
 };
 
 /// Default value for collision layer/mask fields — all bits set (collides with everything).
@@ -101,6 +103,30 @@ struct EntityData {
         default
     )]
     circle_collider_2d: Option<CircleCollider2DData>,
+    #[serde(
+        rename = "RigidBody3DComponent",
+        skip_serializing_if = "Option::is_none",
+        default
+    )]
+    rigidbody_3d: Option<RigidBody3DData>,
+    #[serde(
+        rename = "BoxCollider3DComponent",
+        skip_serializing_if = "Option::is_none",
+        default
+    )]
+    box_collider_3d: Option<BoxCollider3DData>,
+    #[serde(
+        rename = "SphereCollider3DComponent",
+        skip_serializing_if = "Option::is_none",
+        default
+    )]
+    sphere_collider_3d: Option<SphereCollider3DData>,
+    #[serde(
+        rename = "CapsuleCollider3DComponent",
+        skip_serializing_if = "Option::is_none",
+        default
+    )]
+    capsule_collider_3d: Option<CapsuleCollider3DData>,
     #[serde(
         rename = "LuaScriptComponent",
         skip_serializing_if = "Option::is_none",
@@ -382,6 +408,86 @@ struct CircleCollider2DData {
     /// Legacy field, ignored on load — rapier2d has no restitution threshold.
     #[serde(rename = "RestitutionThreshold", default, skip_serializing)]
     _restitution_threshold: f32,
+}
+
+#[derive(Serialize, Deserialize)]
+struct RigidBody3DData {
+    #[serde(rename = "BodyType")]
+    body_type: String,
+    #[serde(rename = "LockRotationX", default)]
+    lock_rotation_x: bool,
+    #[serde(rename = "LockRotationY", default)]
+    lock_rotation_y: bool,
+    #[serde(rename = "LockRotationZ", default)]
+    lock_rotation_z: bool,
+    #[serde(rename = "GravityScale", default = "default_gravity_scale")]
+    gravity_scale: f32,
+    #[serde(rename = "LinearDamping", default)]
+    linear_damping: f32,
+    #[serde(rename = "AngularDamping", default)]
+    angular_damping: f32,
+}
+
+#[derive(Serialize, Deserialize)]
+struct BoxCollider3DData {
+    #[serde(rename = "Offset")]
+    offset: [f32; 3],
+    #[serde(rename = "Size")]
+    size: [f32; 3],
+    #[serde(rename = "Density")]
+    density: f32,
+    #[serde(rename = "Friction")]
+    friction: f32,
+    #[serde(rename = "Restitution")]
+    restitution: f32,
+    #[serde(rename = "CollisionLayer", default = "default_collision_bits")]
+    collision_layer: u32,
+    #[serde(rename = "CollisionMask", default = "default_collision_bits")]
+    collision_mask: u32,
+    #[serde(rename = "IsSensor", default)]
+    is_sensor: bool,
+}
+
+#[derive(Serialize, Deserialize)]
+struct SphereCollider3DData {
+    #[serde(rename = "Offset")]
+    offset: [f32; 3],
+    #[serde(rename = "Radius")]
+    radius: f32,
+    #[serde(rename = "Density")]
+    density: f32,
+    #[serde(rename = "Friction")]
+    friction: f32,
+    #[serde(rename = "Restitution")]
+    restitution: f32,
+    #[serde(rename = "CollisionLayer", default = "default_collision_bits")]
+    collision_layer: u32,
+    #[serde(rename = "CollisionMask", default = "default_collision_bits")]
+    collision_mask: u32,
+    #[serde(rename = "IsSensor", default)]
+    is_sensor: bool,
+}
+
+#[derive(Serialize, Deserialize)]
+struct CapsuleCollider3DData {
+    #[serde(rename = "Offset")]
+    offset: [f32; 3],
+    #[serde(rename = "HalfHeight")]
+    half_height: f32,
+    #[serde(rename = "Radius")]
+    radius: f32,
+    #[serde(rename = "Density")]
+    density: f32,
+    #[serde(rename = "Friction")]
+    friction: f32,
+    #[serde(rename = "Restitution")]
+    restitution: f32,
+    #[serde(rename = "CollisionLayer", default = "default_collision_bits")]
+    collision_layer: u32,
+    #[serde(rename = "CollisionMask", default = "default_collision_bits")]
+    collision_mask: u32,
+    #[serde(rename = "IsSensor", default)]
+    is_sensor: bool,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -1086,6 +1192,66 @@ impl SceneSerializer {
                 _restitution_threshold: 0.0,
             });
 
+        let rigidbody_3d_data = scene
+            .get_component::<RigidBody3DComponent>(entity)
+            .map(|rb| {
+                let body_type_str = match rb.body_type {
+                    RigidBody3DType::Static => "Static",
+                    RigidBody3DType::Dynamic => "Dynamic",
+                    RigidBody3DType::Kinematic => "Kinematic",
+                };
+                RigidBody3DData {
+                    body_type: body_type_str.to_string(),
+                    lock_rotation_x: rb.lock_rotation_x,
+                    lock_rotation_y: rb.lock_rotation_y,
+                    lock_rotation_z: rb.lock_rotation_z,
+                    gravity_scale: rb.gravity_scale,
+                    linear_damping: rb.linear_damping,
+                    angular_damping: rb.angular_damping,
+                }
+            });
+
+        let box_collider_3d_data =
+            scene
+                .get_component::<BoxCollider3DComponent>(entity)
+                .map(|bc| BoxCollider3DData {
+                    offset: bc.offset.into(),
+                    size: bc.size.into(),
+                    density: bc.density,
+                    friction: bc.friction,
+                    restitution: bc.restitution,
+                    collision_layer: bc.collision_layer,
+                    collision_mask: bc.collision_mask,
+                    is_sensor: bc.is_sensor,
+                });
+
+        let sphere_collider_3d_data = scene
+            .get_component::<SphereCollider3DComponent>(entity)
+            .map(|sc| SphereCollider3DData {
+                offset: sc.offset.into(),
+                radius: sc.radius,
+                density: sc.density,
+                friction: sc.friction,
+                restitution: sc.restitution,
+                collision_layer: sc.collision_layer,
+                collision_mask: sc.collision_mask,
+                is_sensor: sc.is_sensor,
+            });
+
+        let capsule_collider_3d_data = scene
+            .get_component::<CapsuleCollider3DComponent>(entity)
+            .map(|cc| CapsuleCollider3DData {
+                offset: cc.offset.into(),
+                half_height: cc.half_height,
+                radius: cc.radius,
+                density: cc.density,
+                friction: cc.friction,
+                restitution: cc.restitution,
+                collision_layer: cc.collision_layer,
+                collision_mask: cc.collision_mask,
+                is_sensor: cc.is_sensor,
+            });
+
         #[cfg(feature = "lua-scripting")]
         let lua_script_data = scene
             .get_component::<LuaScriptComponent>(entity)
@@ -1254,6 +1420,10 @@ impl SceneSerializer {
             rigidbody_2d: rigidbody_2d_data,
             box_collider_2d: box_collider_2d_data,
             circle_collider_2d: circle_collider_2d_data,
+            rigidbody_3d: rigidbody_3d_data,
+            box_collider_3d: box_collider_3d_data,
+            sphere_collider_3d: sphere_collider_3d_data,
+            capsule_collider_3d: capsule_collider_3d_data,
             lua_script: lua_script_data,
             sprite_animator: sprite_animator_data,
             instanced_animator: instanced_animator_data,
@@ -1476,6 +1646,78 @@ impl SceneSerializer {
                 entity,
                 CircleCollider2DComponent {
                     offset: Vec2::from(ccd.offset),
+                    radius: ccd.radius,
+                    density: ccd.density,
+                    friction: ccd.friction,
+                    restitution: ccd.restitution,
+                    collision_layer: ccd.collision_layer,
+                    collision_mask: ccd.collision_mask,
+                    is_sensor: ccd.is_sensor,
+                    runtime_fixture: None,
+                },
+            );
+        }
+
+        // RigidBody3DComponent
+        if let Some(ref rbd) = entity_data.rigidbody_3d {
+            let body_type = match rbd.body_type.as_str() {
+                "Dynamic" => RigidBody3DType::Dynamic,
+                "Kinematic" => RigidBody3DType::Kinematic,
+                _ => RigidBody3DType::Static,
+            };
+            let mut rb = RigidBody3DComponent::new(body_type);
+            rb.lock_rotation_x = rbd.lock_rotation_x;
+            rb.lock_rotation_y = rbd.lock_rotation_y;
+            rb.lock_rotation_z = rbd.lock_rotation_z;
+            rb.gravity_scale = rbd.gravity_scale;
+            rb.linear_damping = rbd.linear_damping;
+            rb.angular_damping = rbd.angular_damping;
+            scene.add_component(entity, rb);
+        }
+
+        // BoxCollider3DComponent
+        if let Some(ref bcd) = entity_data.box_collider_3d {
+            scene.add_component(
+                entity,
+                BoxCollider3DComponent {
+                    offset: Vec3::from(bcd.offset),
+                    size: Vec3::from(bcd.size),
+                    density: bcd.density,
+                    friction: bcd.friction,
+                    restitution: bcd.restitution,
+                    collision_layer: bcd.collision_layer,
+                    collision_mask: bcd.collision_mask,
+                    is_sensor: bcd.is_sensor,
+                    runtime_fixture: None,
+                },
+            );
+        }
+
+        // SphereCollider3DComponent
+        if let Some(ref scd) = entity_data.sphere_collider_3d {
+            scene.add_component(
+                entity,
+                SphereCollider3DComponent {
+                    offset: Vec3::from(scd.offset),
+                    radius: scd.radius,
+                    density: scd.density,
+                    friction: scd.friction,
+                    restitution: scd.restitution,
+                    collision_layer: scd.collision_layer,
+                    collision_mask: scd.collision_mask,
+                    is_sensor: scd.is_sensor,
+                    runtime_fixture: None,
+                },
+            );
+        }
+
+        // CapsuleCollider3DComponent
+        if let Some(ref ccd) = entity_data.capsule_collider_3d {
+            scene.add_component(
+                entity,
+                CapsuleCollider3DComponent {
+                    offset: Vec3::from(ccd.offset),
+                    half_height: ccd.half_height,
                     radius: ccd.radius,
                     density: ccd.density,
                     friction: ccd.friction,

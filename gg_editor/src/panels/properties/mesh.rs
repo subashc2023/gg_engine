@@ -19,7 +19,14 @@ pub(crate) fn draw_mesh_renderer_component(
         bold_family,
         entity,
         |ui| {
-            let (mut primitive, mut color_arr, mut metallic, mut roughness, mut emissive_arr, mut emissive_strength) = {
+            let (
+                mut primitive,
+                mut color_arr,
+                mut metallic,
+                mut roughness,
+                mut emissive_arr,
+                mut emissive_strength,
+            ) = {
                 let mc = scene
                     .get_component::<MeshRendererComponent>(entity)
                     .unwrap();
@@ -94,7 +101,9 @@ pub(crate) fn draw_mesh_renderer_component(
                 }
             });
             if ui
-                .add(egui::Slider::new(&mut emissive_strength, 0.0..=10.0).text("Emissive Strength"))
+                .add(
+                    egui::Slider::new(&mut emissive_strength, 0.0..=10.0).text("Emissive Strength"),
+                )
                 .changed()
             {
                 changed = true;

@@ -1,5 +1,6 @@
 use super::{
-    Entity, IdComponent, NativeScriptComponent, RigidBody2DComponent, Scene, TransformComponent,
+    Entity, IdComponent, NativeScriptComponent, RigidBody2DComponent, RigidBody3DComponent, Scene,
+    TransformComponent,
 };
 use crate::input::Input;
 use crate::timestep::Timestep;
@@ -15,6 +16,7 @@ impl Scene {
     pub fn on_runtime_start(&mut self) {
         let _timer = crate::profiling::ProfileTimer::new("Scene::on_runtime_start");
         self.on_physics_2d_start();
+        self.on_physics_3d_start();
         #[cfg(feature = "lua-scripting")]
         self.on_lua_scripting_start();
         self.on_audio_start();
@@ -29,6 +31,7 @@ impl Scene {
         self.on_native_scripting_stop();
         #[cfg(feature = "lua-scripting")]
         self.on_lua_scripting_stop();
+        self.on_physics_3d_stop();
         self.on_physics_2d_stop();
     }
 
@@ -73,12 +76,14 @@ impl Scene {
     /// without initializing scripts — physics only.
     pub fn on_simulation_start(&mut self) {
         self.on_physics_2d_start();
+        self.on_physics_3d_start();
     }
 
     /// Tear down physics for simulation mode.
     ///
     /// Call this when exiting simulate mode.
     pub fn on_simulation_stop(&mut self) {
+        self.on_physics_3d_stop();
         self.on_physics_2d_stop();
     }
 
@@ -162,6 +167,122 @@ impl Scene {
                     }
                 }
             }
+        }
+    }
+
+    /// Step the 3D physics simulation and write body transforms back to entities.
+    ///
+    /// Same fixed-timestep accumulator pattern as [`on_update_physics`] but for
+    /// 3D rigid bodies. Scripts are interleaved when `input` is `Some` (play mode).
+    pub fn on_update_physics_3d(&mut self, dt: Timestep, input: Option<&Input>) {
+        let _timer = crate::profiling::ProfileTimer::new("Scene::on_update_physics_3d");
+
+        let Some(physics) = self.physics_world_3d.as_mut() else {
+            return;
+        };
+        physics.accumulate(dt.seconds());
+        let fixed_dt = physics.fixed_timestep();
+
+        loop {
+            if !self.physics_world_3d.as_ref().unwrap().can_step() {
+                break;
+            }
+
+            self.physics_world_3d.as_mut().unwrap().reset_all_forces();
+
+            if let Some(inp) = input {
+                #[cfg(feature = "lua-scripting")]
+                self.call_lua_fixed_update(fixed_dt, inp);
+                self.run_native_fixed_update(Timestep::from_seconds(fixed_dt), inp);
+            }
+
+            let physics = self.physics_world_3d.as_mut().unwrap();
+            physics.snapshot_transforms();
+            physics.step_once();
+
+            #[cfg(feature = "lua-scripting")]
+            if input.is_some() {
+                self.dispatch_collision_events_3d();
+                self.flush_pending_destroys();
+            }
+        }
+
+        let physics = self.physics_world_3d.as_ref().unwrap();
+        let alpha = physics.alpha();
+
+        // Write back interpolated transforms for smooth rendering.
+        for (transform, rb) in self
+            .world
+            .query_mut::<(&mut TransformComponent, &RigidBody3DComponent)>()
+        {
+            if let Some(body_handle) = rb.runtime_body {
+                if let Some(body) = physics.bodies.get(body_handle) {
+                    let cur_pos = body.translation();
+                    let cur_rot = body.rotation();
+
+                    if let Some((prev_pos, prev_rot)) = physics.prev_transform(body_handle) {
+                        // Lerp position.
+                        transform.translation.x = prev_pos.x + (cur_pos.x - prev_pos.x) * alpha;
+                        transform.translation.y = prev_pos.y + (cur_pos.y - prev_pos.y) * alpha;
+                        transform.translation.z = prev_pos.z + (cur_pos.z - prev_pos.z) * alpha;
+                        // Slerp rotation.
+                        let interp = prev_rot.slerp(cur_rot, alpha);
+                        let (x, y, z, w) = (interp.i, interp.j, interp.k, interp.w);
+                        transform.rotation = glam::Quat::from_xyzw(x, y, z, w);
+                    } else {
+                        // First frame — no previous, use current directly.
+                        transform.translation.x = cur_pos.x;
+                        transform.translation.y = cur_pos.y;
+                        transform.translation.z = cur_pos.z;
+                        let (x, y, z, w) = (cur_rot.i, cur_rot.j, cur_rot.k, cur_rot.w);
+                        transform.rotation = glam::Quat::from_xyzw(x, y, z, w);
+                    }
+                }
+            }
+        }
+    }
+
+    /// Drain 3D collision events from the physics world and dispatch to Lua scripts.
+    #[cfg(feature = "lua-scripting")]
+    pub(super) fn dispatch_collision_events_3d(&mut self) {
+        use super::script_glue::SceneScriptContext;
+
+        let events: Vec<(u64, u64, bool)> = match self.physics_world_3d.as_ref() {
+            Some(physics) => physics.drain_collision_events(),
+            None => return,
+        };
+
+        if events.is_empty() {
+            return;
+        }
+
+        let mut engine = match self.script_engine.take() {
+            Some(e) => e,
+            None => return,
+        };
+
+        let scene_ptr: *mut Scene = self;
+
+        let ctx = SceneScriptContext {
+            scene: scene_ptr,
+            input: std::ptr::null(),
+        };
+        engine.lua().set_app_data(ctx);
+
+        for (uuid_a, uuid_b, started) in &events {
+            let callback = if *started {
+                "on_collision_enter"
+            } else {
+                "on_collision_exit"
+            };
+            engine.call_entity_collision(*uuid_a, callback, *uuid_b);
+            engine.call_entity_collision(*uuid_b, callback, *uuid_a);
+        }
+
+        engine.lua().remove_app_data::<SceneScriptContext>();
+
+        unsafe {
+            (*scene_ptr).script_engine = Some(engine);
         }
     }
 

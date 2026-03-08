@@ -9,6 +9,11 @@ layout(set = 0, binding = 0) uniform CameraBuffer {
 layout(push_constant) uniform PushConstants {
     mat4 u_model;
     int u_entity_id;
+    float u_metallic;
+    float u_roughness;
+    float u_emissive_strength;
+    vec4 u_albedo_color;
+    vec4 u_emissive_color;
 } push;
 
 layout(location = 0) in vec3 a_position;
@@ -47,18 +52,16 @@ layout(set = 0, binding = 0) uniform CameraBuffer {
     float u_time;
 } camera;
 
-// Material UBO (set 2) — PBR surface properties.
-layout(set = 2, binding = 0) uniform MaterialUBO {
-    vec4 albedo_color;
-    vec3 emissive_color;
-    float metallic;
-    float roughness;
-    float emissive_strength;
-    float alpha_cutoff;
-    int albedo_tex_index;
-    int normal_tex_index;
-    float _pad[3];
-} material;
+// Material properties passed via push constants (per-draw).
+layout(push_constant) uniform PushConstants {
+    mat4 u_model;
+    int u_entity_id;
+    float u_metallic;
+    float u_roughness;
+    float u_emissive_strength;
+    vec4 u_albedo_color;
+    vec4 u_emissive_color;
+} push;
 
 // Lighting UBO (set 3) — scene lights + shadow data.
 layout(set = 3, binding = 0) uniform LightingUBO {
@@ -135,10 +138,10 @@ vec3 blinn_phong(vec3 light_dir, vec3 light_color, float light_intensity,
 
     // Specular (Blinn-Phong)
     vec3 half_dir = normalize(light_dir + view_dir);
-    float shininess = max(2.0 / (material.roughness * material.roughness + 0.001) - 2.0, 1.0);
+    float shininess = max(2.0 / (push.u_roughness * push.u_roughness + 0.001) - 2.0, 1.0);
     float spec = pow(max(dot(normal, half_dir), 0.0), shininess);
     // Metallic surfaces reflect the albedo color; dielectrics reflect white.
-    vec3 spec_color = mix(vec3(0.04), albedo, material.metallic);
+    vec3 spec_color = mix(vec3(0.04), albedo, push.u_metallic);
     vec3 specular = spec_color * light_color * light_intensity * spec;
 
     return diffuse + specular;
@@ -147,7 +150,7 @@ vec3 blinn_phong(vec3 light_dir, vec3 light_color, float light_intensity,
 void main() {
     vec3 n = normalize(v_normal);
     vec3 view_dir = normalize(lighting.camera_position.xyz - v_world_position);
-    vec3 albedo = v_color.rgb * material.albedo_color.rgb;
+    vec3 albedo = v_color.rgb * push.u_albedo_color.rgb;
 
     // Ambient contribution.
     vec3 result = albedo * lighting.ambient_color.rgb * lighting.ambient_color.w;
@@ -183,9 +186,9 @@ void main() {
     }
 
     // Emissive contribution.
-    result += material.emissive_color * material.emissive_strength;
+    result += push.u_emissive_color.rgb * push.u_emissive_strength;
 
-    out_color = vec4(result, v_color.a * material.albedo_color.a);
+    out_color = vec4(result, v_color.a * push.u_albedo_color.a);
 
 #ifdef OFFSCREEN
     out_entity_id = v_entity_id;

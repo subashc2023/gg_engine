@@ -105,8 +105,7 @@ impl ShadowMapSystem {
         let framebuffer = Self::create_framebuffer(device, render_pass, depth_view, width, height)?;
 
         // --- Light VP UBO (64 bytes = mat4) ---
-        let light_vp_ubo =
-            UniformBuffer::new(allocator, device, std::mem::size_of::<[f32; 16]>())?;
+        let light_vp_ubo = UniformBuffer::new(allocator, device, std::mem::size_of::<[f32; 16]>())?;
 
         // --- Shadow camera descriptor set layout (for shadow pass, set 0) ---
         //     binding 0: UBO (light VP matrix), vertex stage
@@ -145,9 +144,8 @@ impl ShadowMapSystem {
             .descriptor_pool(descriptor_pool)
             .set_layouts(&camera_layouts);
         let shadow_camera_descriptor_sets =
-            unsafe { device.allocate_descriptor_sets(&camera_alloc_info) }.map_err(|e| {
-                format!("Failed to allocate shadow camera descriptor sets: {e}")
-            })?;
+            unsafe { device.allocate_descriptor_sets(&camera_alloc_info) }
+                .map_err(|e| format!("Failed to allocate shadow camera descriptor sets: {e}"))?;
 
         // Write UBO to each shadow camera descriptor set
         for (i, &ds) in shadow_camera_descriptor_sets.iter().enumerate() {
@@ -288,9 +286,7 @@ impl ShadowMapSystem {
             .array_layers(1)
             .samples(vk::SampleCountFlags::TYPE_1)
             .tiling(vk::ImageTiling::OPTIMAL)
-            .usage(
-                vk::ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT | vk::ImageUsageFlags::SAMPLED,
-            )
+            .usage(vk::ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT | vk::ImageUsageFlags::SAMPLED)
             .sharing_mode(vk::SharingMode::EXCLUSIVE)
             .initial_layout(vk::ImageLayout::UNDEFINED);
 
@@ -480,7 +476,11 @@ impl Drop for ShadowMapSystem {
 ///
 /// The Vulkan Y-flip is applied so the result can be used directly
 /// as a VP matrix in the shadow pass and for fragment-shader projection.
-pub fn compute_directional_light_vp(light_direction: Vec3, scene_min: Vec3, scene_max: Vec3) -> Mat4 {
+pub fn compute_directional_light_vp(
+    light_direction: Vec3,
+    scene_min: Vec3,
+    scene_max: Vec3,
+) -> Mat4 {
     let light_dir = light_direction.normalize();
     let center = (scene_min + scene_max) * 0.5;
     let extent = (scene_max - scene_min).length() * 0.5;
@@ -496,9 +496,7 @@ pub fn compute_directional_light_vp(light_direction: Vec3, scene_min: Vec3, scen
     };
 
     let light_view = Mat4::look_at_lh(light_pos, center, up);
-    let mut light_proj = Mat4::orthographic_lh(
-        -extent, extent, -extent, extent, 0.0, extent * 2.0,
-    );
+    let mut light_proj = Mat4::orthographic_lh(-extent, extent, -extent, extent, 0.0, extent * 2.0);
 
     // Vulkan Y-flip: applied to the projection BEFORE view multiplication,
     // matching the convention used by EditorCamera, SceneCamera, and sandbox.
@@ -619,5 +617,9 @@ pub(crate) fn create_shadow_pipeline(
                 format!("Failed to create shadow pipeline: {e}")
             })?[0];
 
-    Ok(Pipeline::from_raw(pipeline, pipeline_layout, device.clone()))
+    Ok(Pipeline::from_raw(
+        pipeline,
+        pipeline_layout,
+        device.clone(),
+    ))
 }

@@ -850,6 +850,7 @@ impl Application for GGEditor {
                         dt
                     };
                     self.scene.on_update_physics(physics_dt, None);
+                    self.scene.on_update_physics_3d(physics_dt, None);
                     self.scene.on_update_animations(physics_dt.seconds());
                     self.scene.update_spatial_audio();
                     if self.playback.step_frames > 0 {
@@ -869,6 +870,7 @@ impl Application for GGEditor {
                     };
                     // Step physics + Lua fixed-update interleaved.
                     self.scene.on_update_physics(step_dt, Some(input));
+                    self.scene.on_update_physics_3d(step_dt, Some(input));
                     // Run native scripts (e.g. CameraController) with up-to-date transforms.
                     self.scene.on_update_scripts(step_dt, input);
                     // Run Lua scripts.
@@ -1784,7 +1786,9 @@ impl GGEditor {
                     if !self.selection.contains(*entity) {
                         return None;
                     }
-                    let dl = self.scene.get_component::<DirectionalLightComponent>(*entity)?;
+                    let dl = self
+                        .scene
+                        .get_component::<DirectionalLightComponent>(*entity)?;
                     let world = self.scene.get_world_transform(*entity);
                     let (_, world_rot, pos) = world.to_scale_rotation_translation();
                     let direction = DirectionalLightComponent::direction(world_rot);

@@ -1176,8 +1176,9 @@ impl Scene {
                 let (_, world_rot, _) = world.to_scale_rotation_translation();
                 let direction = DirectionalLightComponent::direction(world_rot);
                 let (scene_min, scene_max) = self.compute_mesh_scene_bounds(&meshes);
-                light_env.shadow_light_vp =
-                    Some(compute_directional_light_vp(direction, scene_min, scene_max));
+                light_env.shadow_light_vp = Some(compute_directional_light_vp(
+                    direction, scene_min, scene_max,
+                ));
             }
         }
 
@@ -1208,7 +1209,13 @@ impl Scene {
                     mat.emissive_color = mesh_comp.emissive_color;
                     mat.emissive_strength = mesh_comp.emissive_strength;
                 }
-                renderer.submit_3d(&pipeline, va, world_transform, Some(&default_handle), handle.id() as i32);
+                renderer.submit_3d(
+                    &pipeline,
+                    va,
+                    world_transform,
+                    Some(&default_handle),
+                    handle.id() as i32,
+                );
             }
         }
     }

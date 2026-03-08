@@ -25,8 +25,8 @@ pub type Ref<T> = std::sync::Arc<T>;
 pub type Scope<T> = Box<T>;
 
 pub use application::{run, Application, WindowConfig};
-pub use asset::{AssetHandle, AssetMetadata, AssetRegistry, AssetType, EditorAssetManager};
 pub use ash;
+pub use asset::{AssetHandle, AssetMetadata, AssetRegistry, AssetType, EditorAssetManager};
 pub use egui;
 pub use error::{EngineError, EngineResult};
 pub use glam;
@@ -54,14 +54,15 @@ pub use renderer::{
 pub use scene::{Aabb2D, CullingStats, SpatialGrid};
 pub use scene::{
     AmbientLightComponent, AnimationClip, AnimationControllerComponent, AnimationTransition,
-    AudioListenerComponent, AudioSourceComponent, BoxCollider2DComponent, CameraComponent,
-    CircleCollider2DComponent, CircleRendererComponent, DirectionalLightComponent, Entity,
-    FloatOrdering, IdComponent, InstancedSpriteAnimator, MeshPrimitive, MeshRendererComponent,
-    NativeScript, NativeScriptComponent, ParticleEmitterComponent, PointLightComponent,
-    RelationshipComponent, RigidBody2DComponent, RigidBody2DType, Scene, SceneSerializer,
-    SpriteAnimatorComponent, SpriteRendererComponent, TagComponent, TextComponent,
-    TilemapComponent, TransformComponent, TransitionCondition, TILE_FLIP_H, TILE_FLIP_V,
-    TILE_ID_MASK,
+    AudioListenerComponent, AudioSourceComponent, BoxCollider2DComponent, BoxCollider3DComponent,
+    CameraComponent, CapsuleCollider3DComponent, CircleCollider2DComponent,
+    CircleRendererComponent, DirectionalLightComponent, Entity, FloatOrdering, IdComponent,
+    InstancedSpriteAnimator, MeshPrimitive, MeshRendererComponent, NativeScript,
+    NativeScriptComponent, ParticleEmitterComponent, PointLightComponent, RelationshipComponent,
+    RigidBody2DComponent, RigidBody2DType, RigidBody3DComponent, RigidBody3DType, Scene,
+    SceneSerializer, SphereCollider3DComponent, SpriteAnimatorComponent, SpriteRendererComponent,
+    TagComponent, TextComponent, TilemapComponent, TransformComponent, TransitionCondition,
+    TILE_FLIP_H, TILE_FLIP_V, TILE_ID_MASK,
 };
 #[cfg(feature = "lua-scripting")]
 pub use scene::{LuaScriptComponent, ScriptEngine, ScriptFieldValue};
@@ -101,11 +102,13 @@ pub mod prelude {
     pub use crate::scene::{Aabb2D, SpatialGrid};
     pub use crate::scene::{
         AmbientLightComponent, AnimationClip, AnimationControllerComponent, AnimationTransition,
-        AudioListenerComponent, AudioSourceComponent, BoxCollider2DComponent, CameraComponent,
+        AudioListenerComponent, AudioSourceComponent, BoxCollider2DComponent,
+        BoxCollider3DComponent, CameraComponent, CapsuleCollider3DComponent,
         CircleCollider2DComponent, CircleRendererComponent, DirectionalLightComponent, Entity,
         FloatOrdering, IdComponent, InstancedSpriteAnimator, MeshPrimitive, MeshRendererComponent,
         NativeScript, NativeScriptComponent, ParticleEmitterComponent, PointLightComponent,
-        RelationshipComponent, RigidBody2DComponent, RigidBody2DType, Scene, SceneSerializer,
+        RelationshipComponent, RigidBody2DComponent, RigidBody2DType, RigidBody3DComponent,
+        RigidBody3DType, Scene, SceneSerializer, SphereCollider3DComponent,
         SpriteAnimatorComponent, SpriteRendererComponent, TagComponent, TextComponent,
         TilemapComponent, TransformComponent, TransitionCondition, TILE_FLIP_H, TILE_FLIP_V,
         TILE_ID_MASK,

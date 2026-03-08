@@ -44,6 +44,7 @@ gltf = "1"
 
 # Physics
 rapier2d = { version = "0.22", features = ["simd-stable"] }
+rapier3d = { version = "0.22", features = ["simd-stable"] }
 
 # Scripting
 mlua = { version = "0.10", features = ["luajit", "vendored"] }

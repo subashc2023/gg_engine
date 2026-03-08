@@ -1,8 +1,8 @@
 use std::sync::Arc;
 
 use gg_engine::prelude::*;
-use gg_engine::renderer::Pipeline;
 use gg_engine::renderer::shadow_map::compute_directional_light_vp;
+use gg_engine::renderer::Pipeline;
 
 /// 3D test scene: cube, sphere, and ground plane with directional + point lighting,
 /// backface culling, depth testing, material support, and directional shadow mapping.

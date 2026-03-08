@@ -776,16 +776,25 @@ pub(crate) fn create_3d_pipeline(
     let all_layouts =
         prepare_descriptor_layouts(camera_ubo_ds_layout, extra_descriptor_set_layouts);
 
-    // Push constant: model matrix (mat4 = 64 bytes) + entity_id (i32 = 4 bytes), vertex stage.
-    let push_constant_range = vk::PushConstantRange {
+    // Push constants: vertex stage gets model matrix (64) + entity_id (4) = 68 bytes.
+    // Fragment stage gets material properties at offset 68: metallic(4) + roughness(4) +
+    // emissive_strength(4) + albedo_color(16) + emissive_color(16) = 44 bytes.
+    // Total: 112 bytes (within 128-byte Vulkan minimum guarantee).
+    let vertex_range = vk::PushConstantRange {
         stage_flags: vk::ShaderStageFlags::VERTEX,
         offset: 0,
         size: (std::mem::size_of::<[f32; 16]>() + std::mem::size_of::<i32>()) as u32,
     };
+    let fragment_range = vk::PushConstantRange {
+        stage_flags: vk::ShaderStageFlags::FRAGMENT,
+        offset: 68,
+        size: 44,
+    };
+    let push_ranges = [vertex_range, fragment_range];
 
     let layout_info = vk::PipelineLayoutCreateInfo::default()
         .set_layouts(&all_layouts)
-        .push_constant_ranges(std::slice::from_ref(&push_constant_range));
+        .push_constant_ranges(&push_ranges);
     let pipeline_layout = unsafe { device.create_pipeline_layout(&layout_info, None) }
         .map_err(|e| format!("Failed to create 3D pipeline layout: {e}"))?;
 

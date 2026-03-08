@@ -12,7 +12,6 @@ use super::framebuffer::{Framebuffer, FramebufferSpec};
 use super::gpu_allocation::GpuAllocator;
 use super::gpu_particle_system::GpuParticleSystem;
 use super::lighting::{LightEnvironment, LightingSystem};
-use super::shadow_map::{self, ShadowMapSystem};
 use super::material::{MaterialHandle, MaterialLibrary};
 use super::pipeline::{self, Pipeline};
 use super::render_command::RenderCommand;
@@ -22,6 +21,7 @@ use super::renderer_2d::{
 };
 use super::renderer_api::{RendererAPI, VulkanRendererAPI};
 use super::shader::Shader;
+use super::shadow_map::{self, ShadowMapSystem};
 use super::sub_texture::SubTexture2D;
 use super::texture::TextureCpuData;
 use super::texture::TextureSpecification;
@@ -403,7 +403,9 @@ impl Renderer {
         color_attachment_count: u32,
         msaa: super::MsaaSamples,
     ) -> Result<Arc<Pipeline>, String> {
-        let shadow_ds_layout = self.shadow_map.as_ref()
+        let shadow_ds_layout = self
+            .shadow_map
+            .as_ref()
             .expect("Shadow map system not initialized")
             .ds_layout();
         Ok(Arc::new(pipeline::create_3d_pipeline(
@@ -669,7 +671,10 @@ impl Renderer {
         if self.shadow_pipeline.is_some() {
             return Ok(());
         }
-        let sm = self.shadow_map.as_ref().expect("Shadow map system not initialized");
+        let sm = self
+            .shadow_map
+            .as_ref()
+            .expect("Shadow map system not initialized");
 
         let shader = self.create_shader(
             "shadow",
@@ -704,8 +709,14 @@ impl Renderer {
         current_frame: usize,
         viewport_index: usize,
     ) {
-        let sm = self.shadow_map.as_ref().expect("Shadow map not initialized");
-        let pipeline = self.shadow_pipeline.as_ref().expect("Shadow pipeline not initialized");
+        let sm = self
+            .shadow_map
+            .as_ref()
+            .expect("Shadow map not initialized");
+        let pipeline = self
+            .shadow_pipeline
+            .as_ref()
+            .expect("Shadow pipeline not initialized");
 
         // Write the light VP to the shadow camera UBO.
         sm.write_light_vp(light_vp, current_frame, viewport_index);
@@ -732,21 +743,30 @@ impl Renderer {
             .clear_values(std::slice::from_ref(&clear_value));
 
         unsafe {
-            self.device.cmd_begin_render_pass(cmd_buf, &rp_info, vk::SubpassContents::INLINE);
+            self.device
+                .cmd_begin_render_pass(cmd_buf, &rp_info, vk::SubpassContents::INLINE);
 
             // Set viewport and scissor to shadow map dimensions.
-            self.device.cmd_set_viewport(cmd_buf, 0, &[vk::Viewport {
-                x: 0.0,
-                y: 0.0,
-                width: sm.width() as f32,
-                height: sm.height() as f32,
-                min_depth: 0.0,
-                max_depth: 1.0,
-            }]);
-            self.device.cmd_set_scissor(cmd_buf, 0, &[vk::Rect2D {
-                offset: vk::Offset2D { x: 0, y: 0 },
-                extent,
-            }]);
+            self.device.cmd_set_viewport(
+                cmd_buf,
+                0,
+                &[vk::Viewport {
+                    x: 0.0,
+                    y: 0.0,
+                    width: sm.width() as f32,
+                    height: sm.height() as f32,
+                    min_depth: 0.0,
+                    max_depth: 1.0,
+                }],
+            );
+            self.device.cmd_set_scissor(
+                cmd_buf,
+                0,
+                &[vk::Rect2D {
+                    offset: vk::Offset2D { x: 0, y: 0 },
+                    extent,
+                }],
+            );
 
             // Bind shadow pipeline.
             self.device.cmd_bind_pipeline(
@@ -776,7 +796,10 @@ impl Renderer {
         transform: &Mat4,
         cmd_buf: vk::CommandBuffer,
     ) {
-        let pipeline = self.shadow_pipeline.as_ref().expect("Shadow pipeline not initialized");
+        let pipeline = self
+            .shadow_pipeline
+            .as_ref()
+            .expect("Shadow pipeline not initialized");
 
         unsafe {
             let transform_bytes = std::slice::from_raw_parts(
@@ -798,7 +821,8 @@ impl Renderer {
             .expect("VertexArray has no index buffer")
             .count();
         unsafe {
-            self.device.cmd_draw_indexed(cmd_buf, index_count, 1, 0, 0, 0);
+            self.device
+                .cmd_draw_indexed(cmd_buf, index_count, 1, 0, 0, 0);
         }
     }
 
@@ -1908,15 +1932,40 @@ impl Renderer {
                 &push_data,
             );
 
-            // Set 2: material UBO (always bound — shader reads material properties for lighting).
+            // Material: push properties as fragment push constants (offset 68, 44 bytes).
+            // This ensures each draw call gets its own material data embedded in the
+            // command stream, unlike the UBO which is shared across all draws.
             let mat_handle = material_handle
                 .cloned()
                 .unwrap_or_else(|| self.material_library.default_handle());
-            self.material_library.write_material_ubo(
-                &mat_handle,
-                ctx.current_frame,
-                ctx.viewport_index,
-            );
+            if let Some(mat) = self.material_library.get(&mat_handle) {
+                let frag_data: [f32; 11] = [
+                    mat.metallic,
+                    mat.roughness,
+                    mat.emissive_strength,
+                    mat.albedo_color.x,
+                    mat.albedo_color.y,
+                    mat.albedo_color.z,
+                    mat.albedo_color.w,
+                    mat.emissive_color.x,
+                    mat.emissive_color.y,
+                    mat.emissive_color.z,
+                    0.0, // padding (.w of emissive_color vec4)
+                ];
+                let frag_bytes = std::slice::from_raw_parts(
+                    frag_data.as_ptr() as *const u8,
+                    44,
+                );
+                device.cmd_push_constants(
+                    cmd,
+                    pipeline.layout(),
+                    vk::ShaderStageFlags::FRAGMENT,
+                    68,
+                    frag_bytes,
+                );
+            }
+
+            // Set 2: material descriptor set (still bound for pipeline layout compatibility).
             let material_ds = self
                 .material_library
                 .descriptor_set(ctx.current_frame, ctx.viewport_index);
@@ -2003,7 +2052,9 @@ impl Renderer {
                 super::shaders::MESH3D_FRAG_SPV,
             )?;
             let vertex_layout = super::mesh::Mesh::vertex_layout();
-            let shadow_ds_layout = self.shadow_map.as_ref()
+            let shadow_ds_layout = self
+                .shadow_map
+                .as_ref()
                 .expect("Shadow map system not initialized")
                 .ds_layout();
             let pipeline = Arc::new(pipeline::create_3d_pipeline(
@@ -2047,7 +2098,9 @@ impl Renderer {
                 super::shaders::MESH3D_SWAPCHAIN_FRAG_SPV,
             )?;
             let vertex_layout = super::mesh::Mesh::vertex_layout();
-            let shadow_ds_layout = self.shadow_map.as_ref()
+            let shadow_ds_layout = self
+                .shadow_map
+                .as_ref()
                 .expect("Shadow map system not initialized")
                 .ds_layout();
             let pipeline = Arc::new(pipeline::create_3d_pipeline(

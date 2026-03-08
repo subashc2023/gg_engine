@@ -640,6 +640,58 @@ fn draw_components(
         *scene_dirty = true;
     }
 
+    if physics::draw_rigidbody3d_component(
+        ui,
+        scene,
+        entity,
+        &bold_family,
+        scene_dirty,
+        undo_system,
+    ) {
+        undo_system.record(scene, "Remove Rigidbody 3D");
+        scene.remove_component::<RigidBody3DComponent>(entity);
+        *scene_dirty = true;
+    }
+
+    if physics::draw_box_collider3d_component(
+        ui,
+        scene,
+        entity,
+        &bold_family,
+        scene_dirty,
+        undo_system,
+    ) {
+        undo_system.record(scene, "Remove Box Collider 3D");
+        scene.remove_component::<BoxCollider3DComponent>(entity);
+        *scene_dirty = true;
+    }
+
+    if physics::draw_sphere_collider3d_component(
+        ui,
+        scene,
+        entity,
+        &bold_family,
+        scene_dirty,
+        undo_system,
+    ) {
+        undo_system.record(scene, "Remove Sphere Collider 3D");
+        scene.remove_component::<SphereCollider3DComponent>(entity);
+        *scene_dirty = true;
+    }
+
+    if physics::draw_capsule_collider3d_component(
+        ui,
+        scene,
+        entity,
+        &bold_family,
+        scene_dirty,
+        undo_system,
+    ) {
+        undo_system.record(scene, "Remove Capsule Collider 3D");
+        scene.remove_component::<CapsuleCollider3DComponent>(entity);
+        *scene_dirty = true;
+    }
+
     if scripting::draw_native_script_component(
         ui,
         scene,

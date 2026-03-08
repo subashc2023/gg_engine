@@ -560,6 +560,249 @@ impl Default for CircleCollider2DComponent {
 }
 
 // ---------------------------------------------------------------------------
+// 3D Physics Components
+// ---------------------------------------------------------------------------
+
+/// Body type for a 3D rigid body.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum RigidBody3DType {
+    #[default]
+    Static,
+    Dynamic,
+    Kinematic,
+}
+
+impl RigidBody3DType {
+    pub(crate) fn to_rapier(self) -> rapier3d::dynamics::RigidBodyType {
+        match self {
+            Self::Static => rapier3d::dynamics::RigidBodyType::Fixed,
+            Self::Dynamic => rapier3d::dynamics::RigidBodyType::Dynamic,
+            Self::Kinematic => rapier3d::dynamics::RigidBodyType::KinematicPositionBased,
+        }
+    }
+}
+
+/// 3D rigid body attached to an entity for physics simulation.
+///
+/// Requires a [`TransformComponent`] on the same entity. At runtime start
+/// the scene creates a rapier3d rigid body from this component's settings and
+/// the entity's transform.
+pub struct RigidBody3DComponent {
+    pub body_type: RigidBody3DType,
+    /// Lock rotation around individual axes.
+    pub lock_rotation_x: bool,
+    pub lock_rotation_y: bool,
+    pub lock_rotation_z: bool,
+    /// Per-body gravity multiplier (0.0 = no gravity, 1.0 = normal, 2.0 = double).
+    pub gravity_scale: f32,
+    /// Velocity damping (drag). Higher = more resistance to linear motion.
+    pub linear_damping: f32,
+    /// Angular velocity damping. Higher = more resistance to rotation.
+    pub angular_damping: f32,
+    /// Runtime-only handle into the physics world. Not serialized.
+    pub(crate) runtime_body: Option<rapier3d::dynamics::RigidBodyHandle>,
+}
+
+impl RigidBody3DComponent {
+    pub fn new(body_type: RigidBody3DType) -> Self {
+        Self {
+            body_type,
+            lock_rotation_x: false,
+            lock_rotation_y: false,
+            lock_rotation_z: false,
+            gravity_scale: 1.0,
+            linear_damping: 0.0,
+            angular_damping: 0.0,
+            runtime_body: None,
+        }
+    }
+}
+
+impl Clone for RigidBody3DComponent {
+    fn clone(&self) -> Self {
+        Self {
+            body_type: self.body_type,
+            lock_rotation_x: self.lock_rotation_x,
+            lock_rotation_y: self.lock_rotation_y,
+            lock_rotation_z: self.lock_rotation_z,
+            gravity_scale: self.gravity_scale,
+            linear_damping: self.linear_damping,
+            angular_damping: self.angular_damping,
+            runtime_body: None, // Runtime-only, not copied.
+        }
+    }
+}
+
+impl Default for RigidBody3DComponent {
+    fn default() -> Self {
+        Self {
+            body_type: RigidBody3DType::Dynamic,
+            lock_rotation_x: false,
+            lock_rotation_y: false,
+            lock_rotation_z: false,
+            gravity_scale: 1.0,
+            linear_damping: 0.0,
+            angular_damping: 0.0,
+            runtime_body: None,
+        }
+    }
+}
+
+/// 3D box collider attached to an entity for collision detection.
+///
+/// Requires a [`RigidBody3DComponent`] on the same entity. The collider
+/// is created as a cuboid whose half-extents are `size * entity_scale`.
+pub struct BoxCollider3DComponent {
+    pub offset: Vec3,
+    /// Half-extents of the box (default 0.5 × 0.5 × 0.5 to match a unit cube).
+    pub size: Vec3,
+    pub density: f32,
+    pub friction: f32,
+    pub restitution: f32,
+    /// Collision group membership bitmask.
+    pub collision_layer: u32,
+    /// Collision group filter bitmask.
+    pub collision_mask: u32,
+    /// If true, this collider acts as a trigger/sensor.
+    pub is_sensor: bool,
+    /// Runtime-only handle into the physics world. Not serialized.
+    pub(crate) runtime_fixture: Option<rapier3d::geometry::ColliderHandle>,
+}
+
+impl Clone for BoxCollider3DComponent {
+    fn clone(&self) -> Self {
+        Self {
+            offset: self.offset,
+            size: self.size,
+            density: self.density,
+            friction: self.friction,
+            restitution: self.restitution,
+            collision_layer: self.collision_layer,
+            collision_mask: self.collision_mask,
+            is_sensor: self.is_sensor,
+            runtime_fixture: None,
+        }
+    }
+}
+
+impl Default for BoxCollider3DComponent {
+    fn default() -> Self {
+        Self {
+            offset: Vec3::ZERO,
+            size: Vec3::new(0.5, 0.5, 0.5),
+            density: 1.0,
+            friction: 0.5,
+            restitution: 0.0,
+            collision_layer: u32::MAX,
+            collision_mask: u32::MAX,
+            is_sensor: false,
+            runtime_fixture: None,
+        }
+    }
+}
+
+/// 3D sphere collider attached to an entity for collision detection.
+///
+/// Requires a [`RigidBody3DComponent`] on the same entity.
+pub struct SphereCollider3DComponent {
+    pub offset: Vec3,
+    /// Radius of the sphere (default 0.5 to match a unit sphere).
+    pub radius: f32,
+    pub density: f32,
+    pub friction: f32,
+    pub restitution: f32,
+    pub collision_layer: u32,
+    pub collision_mask: u32,
+    pub is_sensor: bool,
+    pub(crate) runtime_fixture: Option<rapier3d::geometry::ColliderHandle>,
+}
+
+impl Clone for SphereCollider3DComponent {
+    fn clone(&self) -> Self {
+        Self {
+            offset: self.offset,
+            radius: self.radius,
+            density: self.density,
+            friction: self.friction,
+            restitution: self.restitution,
+            collision_layer: self.collision_layer,
+            collision_mask: self.collision_mask,
+            is_sensor: self.is_sensor,
+            runtime_fixture: None,
+        }
+    }
+}
+
+impl Default for SphereCollider3DComponent {
+    fn default() -> Self {
+        Self {
+            offset: Vec3::ZERO,
+            radius: 0.5,
+            density: 1.0,
+            friction: 0.5,
+            restitution: 0.0,
+            collision_layer: u32::MAX,
+            collision_mask: u32::MAX,
+            is_sensor: false,
+            runtime_fixture: None,
+        }
+    }
+}
+
+/// 3D capsule collider attached to an entity for collision detection.
+///
+/// Requires a [`RigidBody3DComponent`] on the same entity. The capsule
+/// is aligned along the Y axis by default (half_height along Y + hemisphere caps).
+pub struct CapsuleCollider3DComponent {
+    pub offset: Vec3,
+    /// Half the height of the cylindrical segment (excluding hemisphere caps).
+    pub half_height: f32,
+    /// Radius of the hemisphere caps.
+    pub radius: f32,
+    pub density: f32,
+    pub friction: f32,
+    pub restitution: f32,
+    pub collision_layer: u32,
+    pub collision_mask: u32,
+    pub is_sensor: bool,
+    pub(crate) runtime_fixture: Option<rapier3d::geometry::ColliderHandle>,
+}
+
+impl Clone for CapsuleCollider3DComponent {
+    fn clone(&self) -> Self {
+        Self {
+            offset: self.offset,
+            half_height: self.half_height,
+            radius: self.radius,
+            density: self.density,
+            friction: self.friction,
+            restitution: self.restitution,
+            collision_layer: self.collision_layer,
+            collision_mask: self.collision_mask,
+            is_sensor: self.is_sensor,
+            runtime_fixture: None,
+        }
+    }
+}
+
+impl Default for CapsuleCollider3DComponent {
+    fn default() -> Self {
+        Self {
+            offset: Vec3::ZERO,
+            half_height: 0.5,
+            radius: 0.25,
+            density: 1.0,
+            friction: 0.5,
+            restitution: 0.0,
+            collision_layer: u32::MAX,
+            collision_mask: u32::MAX,
+            is_sensor: false,
+            runtime_fixture: None,
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Audio Source Component
 // ---------------------------------------------------------------------------
 

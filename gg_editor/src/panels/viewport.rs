@@ -481,15 +481,11 @@ pub(crate) fn viewport_ui(
                         // Directional lights: allow translate + rotate (rotation
                         // controls direction), suppress scale.
                         // Ambient lights: translate only (no direction/scale).
-                        let is_dir_light =
-                            scene.has_component::<DirectionalLightComponent>(entity);
-                        let is_ambient_light =
-                            scene.has_component::<AmbientLightComponent>(entity);
+                        let is_dir_light = scene.has_component::<DirectionalLightComponent>(entity);
+                        let is_ambient_light = scene.has_component::<AmbientLightComponent>(entity);
                         let modes = if is_ambient_light {
                             gizmo_modes_for(GizmoOperation::Translate)
-                        } else if is_dir_light
-                            && *gizmo_operation == GizmoOperation::Scale
-                        {
+                        } else if is_dir_light && *gizmo_operation == GizmoOperation::Scale {
                             // Redirect scale → translate for directional lights.
                             gizmo_modes_for(GizmoOperation::Translate)
                         } else {

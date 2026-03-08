@@ -262,6 +262,41 @@ pub fn register_all(lua: &Lua) -> LuaResult<()> {
     )?;
     engine.set("raycast", lua.create_function(lua_raycast)?)?;
 
+    // 3D Physics
+    engine.set(
+        "apply_impulse_3d",
+        lua.create_function(lua_apply_impulse_3d)?,
+    )?;
+    engine.set(
+        "apply_impulse_at_point_3d",
+        lua.create_function(lua_apply_impulse_at_point_3d)?,
+    )?;
+    engine.set("apply_force_3d", lua.create_function(lua_apply_force_3d)?)?;
+    engine.set(
+        "apply_torque_impulse_3d",
+        lua.create_function(lua_apply_torque_impulse_3d)?,
+    )?;
+    engine.set("apply_torque_3d", lua.create_function(lua_apply_torque_3d)?)?;
+    engine.set(
+        "get_linear_velocity_3d",
+        lua.create_function(lua_get_linear_velocity_3d)?,
+    )?;
+    engine.set(
+        "set_linear_velocity_3d",
+        lua.create_function(lua_set_linear_velocity_3d)?,
+    )?;
+    engine.set(
+        "get_angular_velocity_3d",
+        lua.create_function(lua_get_angular_velocity_3d)?,
+    )?;
+    engine.set(
+        "set_angular_velocity_3d",
+        lua.create_function(lua_set_angular_velocity_3d)?,
+    )?;
+    engine.set("raycast_3d", lua.create_function(lua_raycast_3d)?)?;
+    engine.set("set_gravity_3d", lua.create_function(lua_set_gravity_3d)?)?;
+    engine.set("get_gravity_3d", lua.create_function(lua_get_gravity_3d)?)?;
+
     // Entity queries
     engine.set(
         "find_entities_with_component",
@@ -440,6 +475,7 @@ fn set_translation(lua: &Lua, (entity_id, x, y, z): (u64, f32, f32, f32)) -> Lua
             tc.translation = glam::Vec3::new(x, y, z);
         }
         scene.sync_physics_translation(entity, x, y);
+        scene.sync_physics_translation_3d(entity, x, y, z);
     })
 }
 
@@ -1090,6 +1126,145 @@ fn lua_raycast(
         )
         .map(|(uuid, hx, hy, nx, ny, toi)| (Some(uuid), hx, hy, nx, ny, toi))
         .unwrap_or(zero))
+}
+
+// ---------------------------------------------------------------------------
+// 3D Physics bindings
+// ---------------------------------------------------------------------------
+
+/// `Engine.apply_impulse_3d(entity_id, ix, iy, iz)`
+fn lua_apply_impulse_3d(lua: &Lua, (entity_id, ix, iy, iz): (u64, f32, f32, f32)) -> LuaResult<()> {
+    with_entity_mut(lua, entity_id, (), |scene, entity| {
+        scene.apply_impulse_3d(entity, glam::Vec3::new(ix, iy, iz));
+    })
+}
+
+/// `Engine.apply_impulse_at_point_3d(entity_id, ix, iy, iz, px, py, pz)`
+fn lua_apply_impulse_at_point_3d(
+    lua: &Lua,
+    (entity_id, ix, iy, iz, px, py, pz): (u64, f32, f32, f32, f32, f32, f32),
+) -> LuaResult<()> {
+    with_entity_mut(lua, entity_id, (), |scene, entity| {
+        scene.apply_impulse_at_point_3d(
+            entity,
+            glam::Vec3::new(ix, iy, iz),
+            glam::Vec3::new(px, py, pz),
+        );
+    })
+}
+
+/// `Engine.apply_force_3d(entity_id, fx, fy, fz)`
+fn lua_apply_force_3d(lua: &Lua, (entity_id, fx, fy, fz): (u64, f32, f32, f32)) -> LuaResult<()> {
+    with_entity_mut(lua, entity_id, (), |scene, entity| {
+        scene.apply_force_3d(entity, glam::Vec3::new(fx, fy, fz));
+    })
+}
+
+/// `Engine.apply_torque_impulse_3d(entity_id, tx, ty, tz)`
+fn lua_apply_torque_impulse_3d(
+    lua: &Lua,
+    (entity_id, tx, ty, tz): (u64, f32, f32, f32),
+) -> LuaResult<()> {
+    with_entity_mut(lua, entity_id, (), |scene, entity| {
+        scene.apply_torque_impulse_3d(entity, glam::Vec3::new(tx, ty, tz));
+    })
+}
+
+/// `Engine.apply_torque_3d(entity_id, tx, ty, tz)`
+fn lua_apply_torque_3d(lua: &Lua, (entity_id, tx, ty, tz): (u64, f32, f32, f32)) -> LuaResult<()> {
+    with_entity_mut(lua, entity_id, (), |scene, entity| {
+        scene.apply_torque_3d(entity, glam::Vec3::new(tx, ty, tz));
+    })
+}
+
+/// `Engine.get_linear_velocity_3d(entity_id)` — returns `(vx, vy, vz)`.
+fn lua_get_linear_velocity_3d(lua: &Lua, entity_id: u64) -> LuaResult<(f32, f32, f32)> {
+    with_entity(lua, entity_id, (0.0, 0.0, 0.0), |scene, entity| {
+        scene
+            .get_linear_velocity_3d(entity)
+            .map(|v| (v.x, v.y, v.z))
+            .unwrap_or((0.0, 0.0, 0.0))
+    })
+}
+
+/// `Engine.set_linear_velocity_3d(entity_id, vx, vy, vz)`
+fn lua_set_linear_velocity_3d(
+    lua: &Lua,
+    (entity_id, vx, vy, vz): (u64, f32, f32, f32),
+) -> LuaResult<()> {
+    with_entity_mut(lua, entity_id, (), |scene, entity| {
+        scene.set_linear_velocity_3d(entity, glam::Vec3::new(vx, vy, vz));
+    })
+}
+
+/// `Engine.get_angular_velocity_3d(entity_id)` — returns `(wx, wy, wz)` in rad/s.
+fn lua_get_angular_velocity_3d(lua: &Lua, entity_id: u64) -> LuaResult<(f32, f32, f32)> {
+    with_entity(lua, entity_id, (0.0, 0.0, 0.0), |scene, entity| {
+        scene
+            .get_angular_velocity_3d(entity)
+            .map(|w| (w.x, w.y, w.z))
+            .unwrap_or((0.0, 0.0, 0.0))
+    })
+}
+
+/// `Engine.set_angular_velocity_3d(entity_id, wx, wy, wz)`
+fn lua_set_angular_velocity_3d(
+    lua: &Lua,
+    (entity_id, wx, wy, wz): (u64, f32, f32, f32),
+) -> LuaResult<()> {
+    with_entity_mut(lua, entity_id, (), |scene, entity| {
+        scene.set_angular_velocity_3d(entity, glam::Vec3::new(wx, wy, wz));
+    })
+}
+
+/// `Engine.raycast_3d(ox, oy, oz, dx, dy, dz, max_distance, exclude_entity_id)`
+///
+/// Returns `(hit_entity_id, hx, hy, hz, nx, ny, nz, distance)` or `nil` values on miss.
+#[allow(clippy::type_complexity)]
+fn lua_raycast_3d(
+    lua: &Lua,
+    (ox, oy, oz, dx, dy, dz, max_dist, exclude_id): (
+        f32,
+        f32,
+        f32,
+        f32,
+        f32,
+        f32,
+        f32,
+        Option<u64>,
+    ),
+) -> LuaResult<(Option<u64>, f32, f32, f32, f32, f32, f32, f32)> {
+    let zero = (None, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0);
+    let ctx = match lua.app_data_mut::<SceneScriptContext>() {
+        Some(ctx) => ctx,
+        None => return Ok(zero),
+    };
+    let scene = unsafe { ctx.scene() };
+    let exclude_entity = exclude_id.and_then(|uuid| scene.find_entity_by_uuid(uuid));
+    Ok(scene
+        .raycast_3d(
+            glam::Vec3::new(ox, oy, oz),
+            glam::Vec3::new(dx, dy, dz),
+            max_dist,
+            exclude_entity,
+        )
+        .map(|(uuid, hx, hy, hz, nx, ny, nz, toi)| (Some(uuid), hx, hy, hz, nx, ny, nz, toi))
+        .unwrap_or(zero))
+}
+
+/// `Engine.set_gravity_3d(x, y, z)`
+fn lua_set_gravity_3d(lua: &Lua, (x, y, z): (f32, f32, f32)) -> LuaResult<()> {
+    with_scene_mut(lua, (), |scene| scene.set_gravity_3d(x, y, z))
+}
+
+/// `Engine.get_gravity_3d()` — returns `(x, y, z)`.
+fn lua_get_gravity_3d(lua: &Lua, _: ()) -> LuaResult<(f32, f32, f32)> {
+    let ctx = match lua.app_data_mut::<SceneScriptContext>() {
+        Some(ctx) => ctx,
+        None => return Ok((0.0, -9.81, 0.0)),
+    };
+    let scene = unsafe { ctx.scene() };
+    Ok(scene.get_gravity_3d())
 }
 
 // ---------------------------------------------------------------------------

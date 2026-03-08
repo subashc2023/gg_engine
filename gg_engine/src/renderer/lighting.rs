@@ -35,7 +35,7 @@ pub struct LightGpuData {
     // Scene-wide data
     pub ambient_color: [f32; 4],   // xyz = color, w = intensity
     pub camera_position: [f32; 4], // xyz = eye position, w = unused
-    pub counts: [i32; 4],          // x = num_point_lights, y = has_directional, z = has_shadow, w = unused
+    pub counts: [i32; 4], // x = num_point_lights, y = has_directional, z = has_shadow, w = unused
 
     // Shadow mapping
     pub shadow_light_vp: [f32; 16], // mat4 = light-space VP matrix (64 bytes)
