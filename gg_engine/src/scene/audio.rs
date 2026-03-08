@@ -26,6 +26,20 @@ impl SoundHandle {
         }
     }
 
+    fn pause(&mut self, tween: Tween) {
+        match self {
+            Self::Static(h) => h.pause(tween),
+            Self::Streaming(h) => h.pause(tween),
+        }
+    }
+
+    fn resume(&mut self, tween: Tween) {
+        match self {
+            Self::Static(h) => h.resume(tween),
+            Self::Streaming(h) => h.resume(tween),
+        }
+    }
+
     fn set_volume(&mut self, volume: kira::Decibels, tween: Tween) {
         match self {
             Self::Static(h) => h.set_volume(volume, tween),
@@ -41,6 +55,9 @@ impl SoundHandle {
     }
 }
 
+/// Maximum number of cached static sound data entries before LRU eviction kicks in.
+const SOUND_CACHE_MAX: usize = 128;
+
 /// Wrapper around kira's AudioManager, providing entity-keyed playback.
 ///
 /// Supports multiple simultaneous sounds per entity (e.g. footsteps + breathing),
@@ -53,6 +70,8 @@ pub(crate) struct AudioEngine {
     /// Cached sound data keyed by file path (avoids re-loading from disk).
     /// Only used for static (non-streaming) sounds.
     sound_cache: HashMap<String, StaticSoundData>,
+    /// LRU order for sound cache eviction. Most recently used at back.
+    cache_order: Vec<String>,
 }
 
 impl AudioEngine {
@@ -62,6 +81,7 @@ impl AudioEngine {
                 manager,
                 active_sounds: HashMap::new(),
                 sound_cache: HashMap::new(),
+                cache_order: Vec::new(),
             }),
             Err(e) => {
                 log::error!("Failed to create AudioManager: {}", e);
@@ -102,18 +122,34 @@ impl AudioEngine {
         looping: bool,
     ) {
         // Load or retrieve cached sound data.
-        let sound_data = match self.sound_cache.get(path) {
-            Some(data) => data.clone(),
-            None => match StaticSoundData::from_file(path) {
+        let sound_data = if let Some(data) = self.sound_cache.get(path) {
+            // Move to back of LRU.
+            if let Some(pos) = self.cache_order.iter().position(|s| s == path) {
+                self.cache_order.remove(pos);
+            }
+            self.cache_order.push(path.to_string());
+            data.clone()
+        } else {
+            match StaticSoundData::from_file(path) {
                 Ok(data) => {
+                    // Evict oldest entries if cache is full.
+                    while self.sound_cache.len() >= SOUND_CACHE_MAX {
+                        if let Some(oldest) = self.cache_order.first().cloned() {
+                            self.sound_cache.remove(&oldest);
+                            self.cache_order.remove(0);
+                        } else {
+                            break;
+                        }
+                    }
                     self.sound_cache.insert(path.to_string(), data.clone());
+                    self.cache_order.push(path.to_string());
                     data
                 }
                 Err(e) => {
                     log::error!("Failed to load audio file '{}': {}", path, e);
                     return;
                 }
-            },
+            }
         };
 
         let mut settings = StaticSoundSettings::new()
@@ -170,6 +206,28 @@ impl AudioEngine {
                     entity_uuid,
                     e
                 );
+            }
+        }
+    }
+
+    /// Pause all sounds for the given entity (can be resumed).
+    pub fn pause_sound(&mut self, entity_uuid: u64) {
+        if let Some(handles) = self.active_sounds.get_mut(&entity_uuid) {
+            for handle in handles.iter_mut() {
+                if handle.state() == PlaybackState::Playing {
+                    handle.pause(Tween::default());
+                }
+            }
+        }
+    }
+
+    /// Resume all paused sounds for the given entity.
+    pub fn resume_sound(&mut self, entity_uuid: u64) {
+        if let Some(handles) = self.active_sounds.get_mut(&entity_uuid) {
+            for handle in handles.iter_mut() {
+                if handle.state() == PlaybackState::Paused {
+                    handle.resume(Tween::default());
+                }
             }
         }
     }

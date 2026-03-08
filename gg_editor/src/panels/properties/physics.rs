@@ -13,9 +13,9 @@ pub(crate) fn draw_rigidbody2d_component(
         return false;
     }
     super::component_header(ui, "Rigidbody 2D", "rigidbody_2d", bold_family, entity, |ui| {
-        let (mut body_type, mut fixed_rotation) = {
+        let (mut body_type, mut fixed_rotation, mut gravity_scale, mut linear_damping, mut angular_damping) = {
             let rb = scene.get_component::<RigidBody2DComponent>(entity).unwrap();
-            (rb.body_type, rb.fixed_rotation)
+            (rb.body_type, rb.fixed_rotation, rb.gravity_scale, rb.linear_damping, rb.angular_damping)
         };
 
         let mut changed = false;
@@ -52,10 +52,42 @@ pub(crate) fn draw_rigidbody2d_component(
 
         changed |= ui.checkbox(&mut fixed_rotation, "Fixed Rotation").changed();
 
+        ui.horizontal(|ui| {
+            ui.label("Gravity Scale");
+            changed |= ui
+                .add(egui::DragValue::new(&mut gravity_scale).speed(0.01))
+                .changed();
+        });
+
+        ui.horizontal(|ui| {
+            ui.label("Linear Damping");
+            changed |= ui
+                .add(
+                    egui::DragValue::new(&mut linear_damping)
+                        .speed(0.01)
+                        .range(0.0..=f32::MAX),
+                )
+                .changed();
+        });
+
+        ui.horizontal(|ui| {
+            ui.label("Angular Damping");
+            changed |= ui
+                .add(
+                    egui::DragValue::new(&mut angular_damping)
+                        .speed(0.01)
+                        .range(0.0..=f32::MAX),
+                )
+                .changed();
+        });
+
         if changed {
             if let Some(mut rb) = scene.get_component_mut::<RigidBody2DComponent>(entity) {
                 rb.body_type = body_type;
                 rb.fixed_rotation = fixed_rotation;
+                rb.gravity_scale = gravity_scale;
+                rb.linear_damping = linear_damping;
+                rb.angular_damping = angular_damping;
             }
             *scene_dirty = true;
         }
@@ -82,6 +114,7 @@ pub(crate) fn draw_box_collider2d_component(
             mut restitution,
             mut collision_layer,
             mut collision_mask,
+            mut is_sensor,
         ) = {
             let bc = scene
                 .get_component::<BoxCollider2DComponent>(entity)
@@ -94,6 +127,7 @@ pub(crate) fn draw_box_collider2d_component(
                 bc.restitution,
                 bc.collision_layer,
                 bc.collision_mask,
+                bc.is_sensor,
             )
         };
 
@@ -196,6 +230,8 @@ pub(crate) fn draw_box_collider2d_component(
                 .changed();
         });
 
+        changed |= ui.checkbox(&mut is_sensor, "Is Sensor (Trigger)").changed();
+
         if changed {
             if let Some(mut bc) = scene.get_component_mut::<BoxCollider2DComponent>(entity) {
                 bc.offset = offset;
@@ -205,6 +241,7 @@ pub(crate) fn draw_box_collider2d_component(
                 bc.restitution = restitution;
                 bc.collision_layer = collision_layer;
                 bc.collision_mask = collision_mask;
+                bc.is_sensor = is_sensor;
             }
             *scene_dirty = true;
         }
@@ -231,6 +268,7 @@ pub(crate) fn draw_circle_collider2d_component(
             mut restitution,
             mut collision_layer,
             mut collision_mask,
+            mut is_sensor,
         ) = {
             let cc = scene
                 .get_component::<CircleCollider2DComponent>(entity)
@@ -243,6 +281,7 @@ pub(crate) fn draw_circle_collider2d_component(
                 cc.restitution,
                 cc.collision_layer,
                 cc.collision_mask,
+                cc.is_sensor,
             )
         };
 
@@ -330,6 +369,8 @@ pub(crate) fn draw_circle_collider2d_component(
                 .changed();
         });
 
+        changed |= ui.checkbox(&mut is_sensor, "Is Sensor (Trigger)").changed();
+
         if changed {
             if let Some(mut cc) = scene.get_component_mut::<CircleCollider2DComponent>(entity) {
                 cc.offset = offset;
@@ -339,6 +380,7 @@ pub(crate) fn draw_circle_collider2d_component(
                 cc.restitution = restitution;
                 cc.collision_layer = collision_layer;
                 cc.collision_mask = collision_mask;
+                cc.is_sensor = is_sensor;
             }
             *scene_dirty = true;
         }

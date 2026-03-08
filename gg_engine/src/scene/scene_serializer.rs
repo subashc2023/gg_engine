@@ -282,6 +282,16 @@ struct RigidBody2DData {
     body_type: String,
     #[serde(rename = "FixedRotation")]
     fixed_rotation: bool,
+    #[serde(rename = "GravityScale", default = "default_gravity_scale")]
+    gravity_scale: f32,
+    #[serde(rename = "LinearDamping", default)]
+    linear_damping: f32,
+    #[serde(rename = "AngularDamping", default)]
+    angular_damping: f32,
+}
+
+fn default_gravity_scale() -> f32 {
+    1.0
 }
 
 #[derive(Serialize, Deserialize)]
@@ -300,6 +310,8 @@ struct BoxCollider2DData {
     collision_layer: u32,
     #[serde(rename = "CollisionMask", default = "default_collision_bits")]
     collision_mask: u32,
+    #[serde(rename = "IsSensor", default)]
+    is_sensor: bool,
     /// Legacy field, ignored on load — rapier2d has no restitution threshold.
     #[serde(rename = "RestitutionThreshold", default, skip_serializing)]
     _restitution_threshold: f32,
@@ -321,6 +333,8 @@ struct CircleCollider2DData {
     collision_layer: u32,
     #[serde(rename = "CollisionMask", default = "default_collision_bits")]
     collision_mask: u32,
+    #[serde(rename = "IsSensor", default)]
+    is_sensor: bool,
     /// Legacy field, ignored on load — rapier2d has no restitution threshold.
     #[serde(rename = "RestitutionThreshold", default, skip_serializing)]
     _restitution_threshold: f32,
@@ -925,6 +939,9 @@ impl SceneSerializer {
                 RigidBody2DData {
                     body_type: body_type_str.to_string(),
                     fixed_rotation: rb.fixed_rotation,
+                    gravity_scale: rb.gravity_scale,
+                    linear_damping: rb.linear_damping,
+                    angular_damping: rb.angular_damping,
                 }
             });
 
@@ -939,6 +956,7 @@ impl SceneSerializer {
                     restitution: bc.restitution,
                     collision_layer: bc.collision_layer,
                     collision_mask: bc.collision_mask,
+                    is_sensor: bc.is_sensor,
                     _restitution_threshold: 0.0,
                 });
 
@@ -952,6 +970,7 @@ impl SceneSerializer {
                 restitution: cc.restitution,
                 collision_layer: cc.collision_layer,
                 collision_mask: cc.collision_mask,
+                is_sensor: cc.is_sensor,
                 _restitution_threshold: 0.0,
             });
 
@@ -1272,6 +1291,9 @@ impl SceneSerializer {
             };
             let mut rb = RigidBody2DComponent::new(body_type);
             rb.fixed_rotation = rbd.fixed_rotation;
+            rb.gravity_scale = rbd.gravity_scale;
+            rb.linear_damping = rbd.linear_damping;
+            rb.angular_damping = rbd.angular_damping;
             scene.add_component(entity, rb);
         }
 
@@ -1287,6 +1309,7 @@ impl SceneSerializer {
                     restitution: bcd.restitution,
                     collision_layer: bcd.collision_layer,
                     collision_mask: bcd.collision_mask,
+                    is_sensor: bcd.is_sensor,
                     runtime_fixture: None,
                 },
             );
@@ -1304,6 +1327,7 @@ impl SceneSerializer {
                     restitution: ccd.restitution,
                     collision_layer: ccd.collision_layer,
                     collision_mask: ccd.collision_mask,
+                    is_sensor: ccd.is_sensor,
                     runtime_fixture: None,
                 },
             );

@@ -32,6 +32,7 @@ fn configure_collider(
     scale: glam::Vec3,
     collision_layer: u32,
     collision_mask: u32,
+    is_sensor: bool,
     entity_uuid: u64,
 ) -> rapier2d::geometry::Collider {
     let density = validate_physics_value(density, 0.0, "density", entity_uuid);
@@ -50,7 +51,8 @@ fn configure_collider(
             collision_layer.into(),
             collision_mask.into(),
         ))
-        .active_events(rapier2d::prelude::ActiveEvents::COLLISION_EVENTS);
+        .active_events(rapier2d::prelude::ActiveEvents::COLLISION_EVENTS)
+        .sensor(is_sensor);
 
     if friction == 0.0 {
         builder =
@@ -58,6 +60,20 @@ fn configure_collider(
     }
 
     builder.build()
+}
+
+/// Extracted body data for physics body creation (avoids complex tuple type).
+struct BodySetup {
+    handle: hecs::Entity,
+    uuid: u64,
+    translation: glam::Vec3,
+    rotation: glam::Vec3,
+    scale: glam::Vec3,
+    body_type: super::RigidBody2DType,
+    fixed_rotation: bool,
+    gravity_scale: f32,
+    linear_damping: f32,
+    angular_damping: f32,
 }
 
 impl Scene {
@@ -76,7 +92,7 @@ impl Scene {
         // Snapshot entities with RigidBody2DComponent to avoid borrow conflicts.
         // Skip parented entities — physics bodies ignore parent transforms, so
         // allowing them would cause confusing mismatches between visual and physics position.
-        let body_entities: Vec<(hecs::Entity, u64, glam::Vec3, glam::Vec3, glam::Vec3, super::RigidBody2DType, bool)> = self
+        let body_entities: Vec<BodySetup> = self
             .world
             .query::<(
                 hecs::Entity,
@@ -95,46 +111,50 @@ impl Scene {
                     );
                     return None;
                 }
-                Some((
+                Some(BodySetup {
                     handle,
-                    id.id.raw(),
-                    transform.translation,
-                    transform.rotation,
-                    transform.scale,
-                    rb.body_type,
-                    rb.fixed_rotation,
-                ))
+                    uuid: id.id.raw(),
+                    translation: transform.translation,
+                    rotation: transform.rotation,
+                    scale: transform.scale,
+                    body_type: rb.body_type,
+                    fixed_rotation: rb.fixed_rotation,
+                    gravity_scale: rb.gravity_scale,
+                    linear_damping: rb.linear_damping,
+                    angular_damping: rb.angular_damping,
+                })
             })
             .collect();
 
-        for (handle, entity_uuid, translation, rotation, scale, body_type, fixed_rotation) in
-            body_entities
-        {
+        for bs in body_entities {
             // Create rapier rigid body.
-            let mut body_builder = rapier2d::dynamics::RigidBodyBuilder::new(body_type.to_rapier())
-                .translation(na::Vector2::new(translation.x, translation.y))
-                .rotation(rotation.z);
+            let mut body_builder = rapier2d::dynamics::RigidBodyBuilder::new(bs.body_type.to_rapier())
+                .translation(na::Vector2::new(bs.translation.x, bs.translation.y))
+                .rotation(bs.rotation.z)
+                .gravity_scale(bs.gravity_scale)
+                .linear_damping(bs.linear_damping)
+                .angular_damping(bs.angular_damping);
 
-            if fixed_rotation {
+            if bs.fixed_rotation {
                 body_builder = body_builder.lock_rotations();
             }
 
             let body_handle = physics.bodies.insert(body_builder.build());
 
             // Store the handle back on the component.
-            if let Ok(mut rb) = self.world.get::<&mut RigidBody2DComponent>(handle) {
+            if let Ok(mut rb) = self.world.get::<&mut RigidBody2DComponent>(bs.handle) {
                 rb.runtime_body = Some(body_handle);
             }
 
             // If entity also has a BoxCollider2DComponent, create a collider.
-            if let Ok(mut bc) = self.world.get::<&mut BoxCollider2DComponent>(handle) {
-                let half_x = bc.size.x * scale.x.abs();
-                let half_y = bc.size.y * scale.y.abs();
+            if let Ok(mut bc) = self.world.get::<&mut BoxCollider2DComponent>(bs.handle) {
+                let half_x = bc.size.x * bs.scale.x.abs();
+                let half_y = bc.size.y * bs.scale.y.abs();
 
                 if half_x <= 0.0 || half_y <= 0.0 {
                     log::warn!(
                         "Entity {} has zero-size box collider ({} x {}), skipping",
-                        entity_uuid,
+                        bs.uuid,
                         half_x * 2.0,
                         half_y * 2.0
                     );
@@ -142,36 +162,36 @@ impl Scene {
                     let collider = configure_collider(
                         rapier2d::geometry::ColliderBuilder::cuboid(half_x, half_y),
                         bc.density, bc.friction, bc.restitution,
-                        bc.offset, scale, bc.collision_layer, bc.collision_mask, entity_uuid,
+                        bc.offset, bs.scale, bc.collision_layer, bc.collision_mask, bc.is_sensor, bs.uuid,
                     );
                     let collider_handle = physics.colliders.insert_with_parent(
                         collider, body_handle, &mut physics.bodies,
                     );
                     bc.runtime_fixture = Some(collider_handle);
-                    physics.register_collider(collider_handle, entity_uuid);
+                    physics.register_collider(collider_handle, bs.uuid);
                 }
             }
 
             // If entity also has a CircleCollider2DComponent, create a collider.
-            if let Ok(mut cc) = self.world.get::<&mut CircleCollider2DComponent>(handle) {
-                let scaled_radius = cc.radius * scale.x.abs().max(scale.y.abs());
+            if let Ok(mut cc) = self.world.get::<&mut CircleCollider2DComponent>(bs.handle) {
+                let scaled_radius = cc.radius * bs.scale.x.abs().max(bs.scale.y.abs());
 
                 if scaled_radius <= 0.0 {
                     log::warn!(
                         "Entity {} has zero-radius circle collider, skipping",
-                        entity_uuid
+                        bs.uuid
                     );
                 } else {
                     let collider = configure_collider(
                         rapier2d::geometry::ColliderBuilder::ball(scaled_radius),
                         cc.density, cc.friction, cc.restitution,
-                        cc.offset, scale, cc.collision_layer, cc.collision_mask, entity_uuid,
+                        cc.offset, bs.scale, cc.collision_layer, cc.collision_mask, cc.is_sensor, bs.uuid,
                     );
                     let collider_handle = physics.colliders.insert_with_parent(
                         collider, body_handle, &mut physics.bodies,
                     );
                     cc.runtime_fixture = Some(collider_handle);
-                    physics.register_collider(collider_handle, entity_uuid);
+                    physics.register_collider(collider_handle, bs.uuid);
                 }
             }
         }
@@ -309,6 +329,37 @@ impl Scene {
             if let Some(body) = physics.bodies.get_mut(handle) {
                 body.set_angvel(omega, true);
             }
+        }
+    }
+
+    /// Sync the physics body position to match the transform.
+    ///
+    /// Called when scripts set an entity's translation directly, so the
+    /// physics body stays in sync.
+    pub fn sync_physics_translation(&mut self, entity: Entity, x: f32, y: f32) {
+        let body_handle = self
+            .get_component::<RigidBody2DComponent>(entity)
+            .and_then(|rb| rb.runtime_body);
+        if let (Some(handle), Some(ref mut physics)) = (body_handle, &mut self.physics_world) {
+            if let Some(body) = physics.bodies.get_mut(handle) {
+                body.set_translation(na::Vector2::new(x, y), true);
+            }
+        }
+    }
+
+    /// Set the global gravity vector for the physics world.
+    pub fn set_gravity(&mut self, x: f32, y: f32) {
+        if let Some(ref mut physics) = self.physics_world {
+            physics.set_gravity(x, y);
+        }
+    }
+
+    /// Get the current gravity vector.
+    pub fn get_gravity(&self) -> (f32, f32) {
+        if let Some(ref physics) = self.physics_world {
+            physics.get_gravity()
+        } else {
+            (0.0, -9.81)
         }
     }
 

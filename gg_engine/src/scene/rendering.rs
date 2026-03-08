@@ -24,8 +24,9 @@ impl Scene {
     /// For scenes above [`PAR_THRESHOLD`](crate::jobs::parallel::PAR_THRESHOLD),
     /// the per-entity animation tick is parallelized via extract-process-writeback.
     pub fn on_update_animations(&mut self, dt: f32) {
-        // Advance scene global time.
+        // Advance scene global time and store dt for Engine.delta_time().
         self.global_time += dt as f64;
+        self.last_dt = dt;
 
         // Phase 1: extract + parallel tick SpriteAnimatorComponent timers.
         struct AnimWork {

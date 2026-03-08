@@ -687,6 +687,48 @@ impl Application for GGEditor {
                 {
                     self.gizmo_state.operation = GizmoOperation::Scale;
                 }
+
+                // Play/Stop toggle (F5) — mirrors toolbar play button.
+                KeyCode::F5 if !ctrl && !shift && !self.ui.egui_wants_keyboard => {
+                    match self.playback.scene_state {
+                        SceneState::Edit => self.on_scene_play(),
+                        SceneState::Simulate => {
+                            self.on_scene_stop();
+                            self.on_scene_play();
+                        }
+                        SceneState::Play => self.on_scene_stop(),
+                    }
+                }
+                // Simulate toggle (F6) — mirrors toolbar simulate button.
+                KeyCode::F6 if !ctrl && !shift && !self.ui.egui_wants_keyboard => {
+                    match self.playback.scene_state {
+                        SceneState::Edit => self.on_scene_simulate(),
+                        SceneState::Play => {
+                            self.on_scene_stop();
+                            self.on_scene_simulate();
+                        }
+                        SceneState::Simulate => self.on_scene_stop(),
+                    }
+                }
+                // Pause toggle (F7) — mirrors toolbar pause button.
+                KeyCode::F7
+                    if !ctrl
+                        && !shift
+                        && !self.ui.egui_wants_keyboard
+                        && self.playback.scene_state != SceneState::Edit =>
+                {
+                    self.on_scene_pause();
+                }
+                // Step frame (F8) — mirrors toolbar step button.
+                KeyCode::F8
+                    if !ctrl
+                        && !shift
+                        && !self.ui.egui_wants_keyboard
+                        && self.playback.scene_state != SceneState::Edit =>
+                {
+                    self.on_scene_step();
+                }
+
                 _ => {}
             }
         }

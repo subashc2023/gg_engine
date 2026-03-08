@@ -79,6 +79,8 @@ pub struct Scene {
     /// Monotonic scene time in seconds. Incremented each frame by `dt`.
     /// Used by [`InstancedSpriteAnimator`] for stateless frame computation.
     global_time: f64,
+    /// Last frame delta time in seconds, stored for `Engine.delta_time()`.
+    last_dt: f32,
     /// Spatial grid for efficient 2D region queries.
     /// Rebuilt on demand via [`rebuild_spatial_grid`](Self::rebuild_spatial_grid).
     spatial_grid: Option<SpatialGrid>,
@@ -166,6 +168,7 @@ impl Scene {
             name_cache: None,
             pending_destroy: Vec::new(),
             global_time: 0.0,
+            last_dt: 0.0,
             spatial_grid: None,
             culling_stats: Cell::new(CullingStats::default()),
         }
@@ -706,6 +709,11 @@ impl Scene {
     /// Returns the current scene global time in seconds.
     pub fn global_time(&self) -> f64 {
         self.global_time
+    }
+
+    /// Returns the last frame delta time in seconds.
+    pub fn last_dt(&self) -> f32 {
+        self.last_dt
     }
 
     /// Notify the scene that the viewport (or framebuffer) dimensions changed.

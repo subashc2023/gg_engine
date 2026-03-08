@@ -49,6 +49,11 @@ impl Input {
         self.mouse_buttons_pressed.contains(&button)
     }
 
+    /// Returns `true` only on the first frame the key is released.
+    pub fn is_key_just_released(&self, key: KeyCode) -> bool {
+        !self.keys_pressed.contains(&key) && self.keys_prev.contains(&key)
+    }
+
     /// Returns `true` only on the first frame the mouse button is pressed.
     pub fn is_mouse_button_just_pressed(&self, button: MouseButton) -> bool {
         self.mouse_buttons_pressed.contains(&button) && !self.mouse_buttons_prev.contains(&button)

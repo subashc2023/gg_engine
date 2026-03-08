@@ -223,6 +223,8 @@ pub fn register_all(lua: &Lua) -> LuaResult<()> {
     // Audio
     engine.set("play_sound", lua.create_function(lua_play_sound)?)?;
     engine.set("stop_sound", lua.create_function(lua_stop_sound)?)?;
+    engine.set("pause_sound", lua.create_function(lua_pause_sound)?)?;
+    engine.set("resume_sound", lua.create_function(lua_resume_sound)?)?;
     engine.set("set_volume", lua.create_function(lua_set_volume)?)?;
     engine.set("set_panning", lua.create_function(lua_set_panning)?)?;
 
@@ -284,6 +286,23 @@ pub fn register_all(lua: &Lua) -> LuaResult<()> {
     engine.set("set_timeout", lua.create_function(lua_set_timeout)?)?;
     engine.set("set_interval", lua.create_function(lua_set_interval)?)?;
     engine.set("cancel_timer", lua.create_function(lua_cancel_timer)?)?;
+
+    // Physics: gravity
+    engine.set("set_gravity", lua.create_function(lua_set_gravity)?)?;
+    engine.set("get_gravity", lua.create_function(lua_get_gravity)?)?;
+
+    // Time
+    engine.set("get_time", lua.create_function(lua_get_time)?)?;
+    engine.set("delta_time", lua.create_function(lua_delta_time)?)?;
+
+    // Input: key released
+    engine.set(
+        "is_key_released",
+        lua.create_function(lua_is_key_just_released)?,
+    )?;
+
+    // Logging
+    engine.set("log", lua.create_function(lua_log)?)?;
 
     lua.globals().set("Engine", engine)?;
 
@@ -411,12 +430,14 @@ fn get_translation(lua: &Lua, entity_id: u64) -> LuaResult<(f32, f32, f32)> {
     })
 }
 
-/// `Engine.set_translation(entity_id, x, y, z)` — writes to the entity's TransformComponent.
+/// `Engine.set_translation(entity_id, x, y, z)` — writes to the entity's TransformComponent
+/// and syncs the physics body position if one exists.
 fn set_translation(lua: &Lua, (entity_id, x, y, z): (u64, f32, f32, f32)) -> LuaResult<()> {
     with_entity_mut(lua, entity_id, (), |scene, entity| {
         if let Some(mut tc) = scene.get_component_mut::<super::TransformComponent>(entity) {
             tc.translation = glam::Vec3::new(x, y, z);
         }
+        scene.sync_physics_translation(entity, x, y);
     })
 }
 
@@ -907,6 +928,20 @@ fn lua_stop_sound(lua: &Lua, entity_id: u64) -> LuaResult<()> {
     })
 }
 
+/// `Engine.pause_sound(entity_id)` — pause the entity's audio playback (can be resumed).
+fn lua_pause_sound(lua: &Lua, entity_id: u64) -> LuaResult<()> {
+    with_entity_mut(lua, entity_id, (), |scene, entity| {
+        scene.pause_entity_sound(entity);
+    })
+}
+
+/// `Engine.resume_sound(entity_id)` — resume paused audio.
+fn lua_resume_sound(lua: &Lua, entity_id: u64) -> LuaResult<()> {
+    with_entity_mut(lua, entity_id, (), |scene, entity| {
+        scene.resume_entity_sound(entity);
+    })
+}
+
 /// `Engine.set_volume(entity_id, volume)` — adjust volume at runtime.
 fn lua_set_volume(lua: &Lua, (entity_id, volume): (u64, f32)) -> LuaResult<()> {
     with_entity_mut(lua, entity_id, (), |scene, entity| {
@@ -1184,9 +1219,13 @@ fn lua_find_entities_with_component(lua: &Lua, name: String) -> LuaResult<LuaTab
         "RigidBody2D" => collect_uuids!(super::RigidBody2DComponent),
         "BoxCollider2D" => collect_uuids!(super::BoxCollider2DComponent),
         "CircleCollider2D" => collect_uuids!(super::CircleCollider2DComponent),
+        "NativeScript" => collect_uuids!(super::NativeScriptComponent),
         "Tilemap" => collect_uuids!(super::TilemapComponent),
         "AudioSource" | "Audio" => collect_uuids!(super::AudioSourceComponent),
+        "AudioListener" => collect_uuids!(super::AudioListenerComponent),
+        "ParticleEmitter" => collect_uuids!(super::ParticleEmitterComponent),
         "Text" => collect_uuids!(super::TextComponent),
+        "SpriteAnimator" => collect_uuids!(super::SpriteAnimatorComponent),
         #[cfg(feature = "lua-scripting")]
         "LuaScript" => collect_uuids!(super::LuaScriptComponent),
         _ => {
@@ -1260,6 +1299,84 @@ fn lua_set_text(lua: &Lua, (entity_id, text): (u64, String)) -> LuaResult<()> {
             tc.text = text;
         }
     })
+}
+
+// ---------------------------------------------------------------------------
+// Physics: gravity
+// ---------------------------------------------------------------------------
+
+/// `Engine.set_gravity(x, y)` — set the physics world gravity vector.
+fn lua_set_gravity(lua: &Lua, (x, y): (f32, f32)) -> LuaResult<()> {
+    with_scene_mut(lua, (), |scene| scene.set_gravity(x, y))
+}
+
+/// `Engine.get_gravity()` → (x, y).
+fn lua_get_gravity(lua: &Lua, _: ()) -> LuaResult<(f32, f32)> {
+    let ctx = match lua.app_data_mut::<SceneScriptContext>() {
+        Some(ctx) => ctx,
+        None => return Ok((0.0, -9.81)),
+    };
+    let scene = unsafe { ctx.scene() };
+    Ok(scene.get_gravity())
+}
+
+// ---------------------------------------------------------------------------
+// Time
+// ---------------------------------------------------------------------------
+
+/// `Engine.get_time()` → scene elapsed time in seconds (f64).
+fn lua_get_time(lua: &Lua, _: ()) -> LuaResult<f64> {
+    let ctx = match lua.app_data_mut::<SceneScriptContext>() {
+        Some(ctx) => ctx,
+        None => return Ok(0.0),
+    };
+    let scene = unsafe { ctx.scene() };
+    Ok(scene.global_time())
+}
+
+/// `Engine.delta_time()` → current frame delta time in seconds.
+fn lua_delta_time(lua: &Lua, _: ()) -> LuaResult<f32> {
+    let ctx = match lua.app_data_mut::<SceneScriptContext>() {
+        Some(ctx) => ctx,
+        None => return Ok(0.0),
+    };
+    let scene = unsafe { ctx.scene() };
+    Ok(scene.last_dt())
+}
+
+// ---------------------------------------------------------------------------
+// Input: is_key_just_released
+// ---------------------------------------------------------------------------
+
+/// `Engine.is_key_released(key_name)` — returns true on the first frame the key is released.
+fn lua_is_key_just_released(lua: &Lua, key_name: String) -> LuaResult<bool> {
+    with_input(lua, false, |input| {
+        key_name_to_keycode(&key_name)
+            .map(|kc| input.is_key_just_released(kc))
+            .unwrap_or(false)
+    })
+}
+
+// ---------------------------------------------------------------------------
+// Logging
+// ---------------------------------------------------------------------------
+
+/// `Engine.log(message)` — log to the engine console at Info level.
+fn lua_log(lua: &Lua, args: mlua::Variadic<LuaValue>) -> LuaResult<()> {
+    let _ = lua; // suppress unused warning
+    let parts: Vec<String> = args
+        .iter()
+        .map(|v| match v {
+            LuaValue::Nil => "nil".to_string(),
+            LuaValue::Boolean(b) => b.to_string(),
+            LuaValue::Integer(i) => i.to_string(),
+            LuaValue::Number(n) => n.to_string(),
+            LuaValue::String(s) => s.to_str().map(|s| s.to_string()).unwrap_or_else(|_| "<invalid utf8>".to_string()),
+            _ => format!("{:?}", v),
+        })
+        .collect();
+    log::info!("[Lua] {}", parts.join("\t"));
+    Ok(())
 }
 
 #[cfg(test)]

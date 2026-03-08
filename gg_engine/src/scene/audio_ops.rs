@@ -146,6 +146,28 @@ impl Scene {
         }
     }
 
+    /// Pause audio for an entity (used by Lua scripts).
+    pub fn pause_entity_sound(&mut self, entity: Entity) {
+        let uuid = match self.get_component::<IdComponent>(entity) {
+            Some(id) => id.id.raw(),
+            None => return,
+        };
+        if let Some(ref mut engine) = self.audio_engine {
+            engine.pause_sound(uuid);
+        }
+    }
+
+    /// Resume audio for an entity (used by Lua scripts).
+    pub fn resume_entity_sound(&mut self, entity: Entity) {
+        let uuid = match self.get_component::<IdComponent>(entity) {
+            Some(id) => id.id.raw(),
+            None => return,
+        };
+        if let Some(ref mut engine) = self.audio_engine {
+            engine.resume_sound(uuid);
+        }
+    }
+
     /// Stop audio for an entity (used by Lua scripts).
     pub fn stop_entity_sound(&mut self, entity: Entity) {
         let uuid = match self.get_component::<IdComponent>(entity) {

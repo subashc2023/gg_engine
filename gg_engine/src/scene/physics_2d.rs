@@ -135,6 +135,16 @@ impl PhysicsWorld2D {
         self.collider_to_uuid.insert(collider, uuid);
     }
 
+    /// Set the global gravity vector.
+    pub(crate) fn set_gravity(&mut self, x: f32, y: f32) {
+        self.gravity = na::Vector2::new(x, y);
+    }
+
+    /// Get the current gravity vector.
+    pub(crate) fn get_gravity(&self) -> (f32, f32) {
+        (self.gravity.x, self.gravity.y)
+    }
+
     /// The fixed timestep value (1/60 s).
     pub(crate) fn fixed_timestep(&self) -> f32 {
         FIXED_TIMESTEP

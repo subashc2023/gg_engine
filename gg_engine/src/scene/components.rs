@@ -385,6 +385,12 @@ impl RigidBody2DType {
 pub struct RigidBody2DComponent {
     pub body_type: RigidBody2DType,
     pub fixed_rotation: bool,
+    /// Per-body gravity multiplier (0.0 = no gravity, 1.0 = normal, 2.0 = double).
+    pub gravity_scale: f32,
+    /// Velocity damping (drag). Higher = more resistance to linear motion.
+    pub linear_damping: f32,
+    /// Angular velocity damping. Higher = more resistance to rotation.
+    pub angular_damping: f32,
     /// Runtime-only handle into the physics world. Not serialized.
     pub(crate) runtime_body: Option<rapier2d::dynamics::RigidBodyHandle>,
 }
@@ -394,6 +400,9 @@ impl RigidBody2DComponent {
         Self {
             body_type,
             fixed_rotation: false,
+            gravity_scale: 1.0,
+            linear_damping: 0.0,
+            angular_damping: 0.0,
             runtime_body: None,
         }
     }
@@ -404,6 +413,9 @@ impl Clone for RigidBody2DComponent {
         Self {
             body_type: self.body_type,
             fixed_rotation: self.fixed_rotation,
+            gravity_scale: self.gravity_scale,
+            linear_damping: self.linear_damping,
+            angular_damping: self.angular_damping,
             runtime_body: None, // Runtime-only, not copied.
         }
     }
@@ -414,6 +426,9 @@ impl Default for RigidBody2DComponent {
         Self {
             body_type: RigidBody2DType::Dynamic,
             fixed_rotation: false,
+            gravity_scale: 1.0,
+            linear_damping: 0.0,
+            angular_damping: 0.0,
             runtime_body: None,
         }
     }
@@ -436,6 +451,9 @@ pub struct BoxCollider2DComponent {
     /// Collision group filter bitmask (which groups this collider interacts with).
     /// Default: `u32::MAX` (interacts with all groups).
     pub collision_mask: u32,
+    /// If true, this collider acts as a trigger/sensor: detects overlaps but
+    /// does not generate contact forces.
+    pub is_sensor: bool,
     /// Runtime-only handle into the physics world. Not serialized.
     pub(crate) runtime_fixture: Option<rapier2d::geometry::ColliderHandle>,
 }
@@ -450,6 +468,7 @@ impl Clone for BoxCollider2DComponent {
             restitution: self.restitution,
             collision_layer: self.collision_layer,
             collision_mask: self.collision_mask,
+            is_sensor: self.is_sensor,
             runtime_fixture: None, // Runtime-only, not copied.
         }
     }
@@ -465,6 +484,7 @@ impl Default for BoxCollider2DComponent {
             restitution: 0.0,
             collision_layer: u32::MAX,
             collision_mask: u32::MAX,
+            is_sensor: false,
             runtime_fixture: None,
         }
     }
@@ -487,6 +507,9 @@ pub struct CircleCollider2DComponent {
     /// Collision group filter bitmask (which groups this collider interacts with).
     /// Default: `u32::MAX` (interacts with all groups).
     pub collision_mask: u32,
+    /// If true, this collider acts as a trigger/sensor: detects overlaps but
+    /// does not generate contact forces.
+    pub is_sensor: bool,
     /// Runtime-only handle into the physics world. Not serialized.
     pub(crate) runtime_fixture: Option<rapier2d::geometry::ColliderHandle>,
 }
@@ -501,6 +524,7 @@ impl Clone for CircleCollider2DComponent {
             restitution: self.restitution,
             collision_layer: self.collision_layer,
             collision_mask: self.collision_mask,
+            is_sensor: self.is_sensor,
             runtime_fixture: None, // Runtime-only, not copied.
         }
     }
@@ -516,6 +540,7 @@ impl Default for CircleCollider2DComponent {
             restitution: 0.0,
             collision_layer: u32::MAX,
             collision_mask: u32::MAX,
+            is_sensor: false,
             runtime_fixture: None,
         }
     }
