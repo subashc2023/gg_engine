@@ -85,6 +85,7 @@ pub(crate) fn content_browser_ui(
     assets_root: &std::path::Path,
     asset_manager: &mut Option<EditorAssetManager>,
     scene: &Scene,
+    egui_texture_map: &std::collections::HashMap<u64, egui::TextureId>,
 ) {
     let assets_root = assets_root.to_path_buf();
 
@@ -130,7 +131,7 @@ pub(crate) fn content_browser_ui(
             file_browser_ui(ui, current_directory, &assets_root, asset_manager);
         }
         ContentBrowserMode::Asset => {
-            asset_browser_ui(ui, &assets_root, asset_manager, scene);
+            asset_browser_ui(ui, &assets_root, asset_manager, scene, egui_texture_map);
         }
     }
 }
@@ -500,6 +501,7 @@ fn asset_browser_ui(
     _assets_root: &std::path::Path,
     asset_manager: &mut Option<EditorAssetManager>,
     scene: &Scene,
+    egui_texture_map: &std::collections::HashMap<u64, egui::TextureId>,
 ) {
     let Some(am) = asset_manager.as_mut() else {
         ui.label("No project loaded");
@@ -526,40 +528,101 @@ fn asset_browser_ui(
         entries.retain(|(_, file_path, _)| file_path.to_lowercase().contains(&filter_lower));
     }
 
+    // Request async load for Texture2D assets so thumbnails become available.
+    for (handle, _, asset_type) in &entries {
+        if *asset_type == AssetType::Texture2D {
+            am.request_load(handle);
+        }
+    }
+
+    // Snapshot loaded texture egui handles for thumbnail display.
+    let thumbnail_handles: std::collections::HashMap<Uuid, u64> = entries
+        .iter()
+        .filter(|(_, _, t)| *t == AssetType::Texture2D)
+        .filter_map(|(handle, _, _)| {
+            am.get_texture(handle).map(|tex| (*handle, tex.egui_handle()))
+        })
+        .collect();
+
     // Track which handle to remove (if any) after iteration.
     let mut remove_handle: Option<Uuid> = None;
 
+    let padding = 16.0;
+    let button_size = 64.0;
+    let cell_size = button_size + padding;
+    let label_font = egui::FontId::new(11.0, egui::FontFamily::Proportional);
+
+    ui.add_space(4.0);
+
     egui::ScrollArea::vertical().show(ui, |ui| {
-        for (handle, file_path, asset_type) in &entries {
-            let label = format!("[{:?}] {}", asset_type, file_path);
+        let available_width = ui.available_width();
+        let columns = ((available_width / cell_size) as usize).max(1);
+        let mut col = 0;
 
-            let response = ui.selectable_label(false, &label);
+        ui.horizontal_wrapped(|ui| {
+            ui.spacing_mut().item_spacing = egui::vec2(padding * 0.5, padding * 0.5);
 
-            // Drag source for asset entries.
-            if response.drag_started() || response.dragged() {
-                let abs_path = am.asset_directory().join(file_path);
-                let name = std::path::Path::new(file_path)
+            for (handle, file_path, asset_type) in &entries {
+                let display_name = std::path::Path::new(file_path)
                     .file_name()
                     .map(|n| n.to_string_lossy().to_string())
                     .unwrap_or_else(|| file_path.clone());
-                egui::DragAndDrop::set_payload(
-                    ui.ctx(),
-                    ContentBrowserPayload {
-                        path: abs_path,
-                        name,
-                        is_directory: false,
+
+                // Check if we have a thumbnail texture for this asset.
+                let egui_tex = thumbnail_handles
+                    .get(handle)
+                    .and_then(|h| egui_texture_map.get(h));
+
+                let response = ui.allocate_ui_with_layout(
+                    egui::vec2(cell_size, cell_size + 14.0),
+                    egui::Layout::top_down(egui::Align::Center),
+                    |ui| {
+                        let btn = if let Some(&tex_id) = egui_tex {
+                            // Texture thumbnail: show actual image.
+                            thumbnail_button(ui, button_size, tex_id)
+                        } else {
+                            // Non-texture or not-yet-loaded: show type icon.
+                            icon_button(ui, button_size, |painter, rect| {
+                                paint_asset_type_icon(painter, rect, *asset_type);
+                            })
+                        };
+                        ui.add(
+                            egui::Label::new(
+                                egui::RichText::new(&display_name).font(label_font.clone()),
+                            )
+                            .truncate(),
+                        );
+                        btn
                     },
                 );
-            }
 
-            // Right-click context menu: Remove from registry.
-            response.context_menu(|ui| {
-                if ui.button("Remove from registry").clicked() {
-                    remove_handle = Some(*handle);
-                    ui.close();
+                // Drag source for asset entries.
+                if response.inner.drag_started() || response.inner.dragged() {
+                    let abs_path = am.asset_directory().join(file_path);
+                    egui::DragAndDrop::set_payload(
+                        ui.ctx(),
+                        ContentBrowserPayload {
+                            path: abs_path,
+                            name: display_name.clone(),
+                            is_directory: false,
+                        },
+                    );
                 }
-            });
-        }
+
+                // Right-click context menu: Remove from registry.
+                response.inner.context_menu(|ui| {
+                    if ui.button("Remove from registry").clicked() {
+                        remove_handle = Some(*handle);
+                        ui.close();
+                    }
+                });
+
+                col += 1;
+                if col >= columns {
+                    col = 0;
+                }
+            }
+        });
     });
 
     // Process deferred removal — check for references first.
@@ -697,6 +760,166 @@ fn paint_folder_icon(painter: &egui::Painter, rect: egui::Rect) {
     let body =
         egui::Rect::from_min_max(egui::pos2(cx - w, cy - h + 2.0), egui::pos2(cx + w, cy + h));
     painter.rect_filled(body, egui::CornerRadius::same(3), color);
+}
+
+/// Allocate a square button and render a texture thumbnail inside it.
+fn thumbnail_button(ui: &mut egui::Ui, size: f32, tex_id: egui::TextureId) -> egui::Response {
+    let (rect, response) =
+        ui.allocate_exact_size(egui::vec2(size, size), egui::Sense::click_and_drag());
+    if ui.is_rect_visible(rect) {
+        let bg = if response.hovered() {
+            egui::Color32::from_rgb(0x3C, 0x3C, 0x3C)
+        } else {
+            egui::Color32::from_rgb(0x2A, 0x2A, 0x2A)
+        };
+        ui.painter()
+            .rect_filled(rect, egui::CornerRadius::same(4), bg);
+
+        // Inset the image slightly for padding.
+        let inset = 4.0;
+        let img_rect = rect.shrink(inset);
+        let mut mesh = egui::Mesh::with_texture(tex_id);
+        mesh.add_rect_with_uv(
+            img_rect,
+            egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
+            egui::Color32::WHITE,
+        );
+        ui.painter().add(egui::Shape::mesh(mesh));
+    }
+    response
+}
+
+/// Paint a type-specific icon for an asset type.
+fn paint_asset_type_icon(painter: &egui::Painter, rect: egui::Rect, asset_type: AssetType) {
+    match asset_type {
+        AssetType::Texture2D => paint_image_icon(painter, rect),
+        AssetType::Scene => paint_scene_icon(painter, rect),
+        AssetType::Audio => paint_audio_icon(painter, rect),
+        AssetType::Prefab => paint_prefab_icon(painter, rect),
+        AssetType::None => paint_file_icon(painter, rect),
+    }
+}
+
+/// Paint a stylized image/photo icon (landscape with sun).
+fn paint_image_icon(painter: &egui::Painter, rect: egui::Rect) {
+    let color = egui::Color32::from_rgb(0x6A, 0xB0, 0x6A);
+    let cx = rect.center().x;
+    let cy = rect.center().y;
+    let w = rect.width() * 0.35;
+    let h = rect.height() * 0.3;
+
+    // Frame.
+    let body = egui::Rect::from_min_max(egui::pos2(cx - w, cy - h), egui::pos2(cx + w, cy + h));
+    painter.rect_filled(body, egui::CornerRadius::same(2), color);
+
+    // Small "sun" circle.
+    painter.circle_filled(
+        egui::pos2(cx - w * 0.4, cy - h * 0.3),
+        w * 0.25,
+        egui::Color32::from_rgb(0xDD, 0xDD, 0x55),
+    );
+}
+
+/// Paint a scene icon (layered squares suggesting multiple objects).
+fn paint_scene_icon(painter: &egui::Painter, rect: egui::Rect) {
+    let color = egui::Color32::from_rgb(0x7A, 0xA2, 0xD6);
+    let cx = rect.center().x;
+    let cy = rect.center().y;
+    let s = rect.width() * 0.2;
+
+    // Back square (offset up-left).
+    let back = egui::Rect::from_min_max(
+        egui::pos2(cx - s - 3.0, cy - s - 3.0),
+        egui::pos2(cx + s - 3.0, cy + s - 3.0),
+    );
+    painter.rect_filled(
+        back,
+        egui::CornerRadius::same(2),
+        color.gamma_multiply(0.5),
+    );
+
+    // Front square.
+    let front = egui::Rect::from_min_max(
+        egui::pos2(cx - s + 3.0, cy - s + 3.0),
+        egui::pos2(cx + s + 3.0, cy + s + 3.0),
+    );
+    painter.rect_filled(front, egui::CornerRadius::same(2), color);
+}
+
+/// Paint an audio/speaker icon.
+fn paint_audio_icon(painter: &egui::Painter, rect: egui::Rect) {
+    let color = egui::Color32::from_rgb(0xD6, 0x9A, 0x5E);
+    let cx = rect.center().x;
+    let cy = rect.center().y;
+    let s = rect.width() * 0.15;
+
+    // Speaker body (small rectangle).
+    let body = egui::Rect::from_min_max(
+        egui::pos2(cx - s * 1.5, cy - s * 0.6),
+        egui::pos2(cx - s * 0.3, cy + s * 0.6),
+    );
+    painter.rect_filled(body, egui::CornerRadius::ZERO, color);
+
+    // Speaker cone (triangle).
+    let cone = vec![
+        egui::pos2(cx - s * 0.3, cy - s * 0.6),
+        egui::pos2(cx + s * 0.5, cy - s * 1.5),
+        egui::pos2(cx + s * 0.5, cy + s * 1.5),
+        egui::pos2(cx - s * 0.3, cy + s * 0.6),
+    ];
+    painter.add(egui::Shape::convex_polygon(
+        cone,
+        color,
+        egui::Stroke::NONE,
+    ));
+
+    // Sound waves (two arcs).
+    for i in 1..=2 {
+        let r = s * (1.0 + i as f32 * 0.7);
+        let wave_color = color.gamma_multiply(0.6);
+        painter.circle_stroke(
+            egui::pos2(cx + s * 0.5, cy),
+            r,
+            egui::Stroke::new(1.5, wave_color),
+        );
+    }
+}
+
+/// Paint a prefab/component icon (interlocking blocks).
+fn paint_prefab_icon(painter: &egui::Painter, rect: egui::Rect) {
+    let color = egui::Color32::from_rgb(0xB0, 0x7A, 0xD6);
+    let cx = rect.center().x;
+    let cy = rect.center().y;
+    let s = rect.width() * 0.15;
+
+    // Top block.
+    let top = egui::Rect::from_min_max(
+        egui::pos2(cx - s, cy - s * 2.5),
+        egui::pos2(cx + s, cy - s * 0.5),
+    );
+    painter.rect_filled(top, egui::CornerRadius::same(2), color);
+
+    // Bottom-left block.
+    let bl = egui::Rect::from_min_max(
+        egui::pos2(cx - s * 2.0, cy + s * 0.2),
+        egui::pos2(cx - s * 0.2, cy + s * 2.2),
+    );
+    painter.rect_filled(
+        bl,
+        egui::CornerRadius::same(2),
+        color.gamma_multiply(0.7),
+    );
+
+    // Bottom-right block.
+    let br = egui::Rect::from_min_max(
+        egui::pos2(cx + s * 0.2, cy + s * 0.2),
+        egui::pos2(cx + s * 2.0, cy + s * 2.2),
+    );
+    painter.rect_filled(
+        br,
+        egui::CornerRadius::same(2),
+        color.gamma_multiply(0.7),
+    );
 }
 
 /// Paint a file/document icon inside `rect`.

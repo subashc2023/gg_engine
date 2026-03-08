@@ -1305,6 +1305,11 @@ impl Application for GGEditor {
             }
         }
 
+        // Register loaded asset textures for content browser thumbnails.
+        if let Some(ref am) = self.project_state.asset_manager {
+            handles.extend(am.loaded_texture_egui_handles());
+        }
+
         handles
     }
 

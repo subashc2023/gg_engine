@@ -147,6 +147,18 @@ impl EditorAssetManager {
         self.loaded_assets.get(handle)
     }
 
+    /// Return egui handles for all currently-loaded textures.
+    /// Used by the editor to register thumbnail textures with egui.
+    pub fn loaded_texture_egui_handles(&self) -> Vec<u64> {
+        self.loaded_assets
+            .values()
+            .map(|data| {
+                let AssetData::Texture(tex) = data;
+                tex.egui_handle()
+            })
+            .collect()
+    }
+
     /// Convenience: get a loaded texture by handle. Updates LRU access time.
     pub fn get_texture(&mut self, handle: &AssetHandle) -> Option<Ref<Texture2D>> {
         match self.loaded_assets.get(handle) {

@@ -283,6 +283,7 @@ impl egui_dock::TabViewer for EditorTabViewer<'_> {
                     self.project.assets_root,
                     self.project.asset_manager,
                     self.scene,
+                    self.project.egui_texture_map,
                 );
             }
 

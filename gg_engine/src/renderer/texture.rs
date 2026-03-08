@@ -85,6 +85,9 @@ impl TransferBatch {
 
     /// Record a staging-buffer-to-image copy with layout transitions.
     /// The staging buffer and allocation are held until the fence signals.
+    ///
+    /// When `mip_levels > 1`, generates mipmaps via blit chain after uploading
+    /// mip level 0. The image must have been created with `TRANSFER_SRC` usage.
     pub fn record_image_upload(
         &mut self,
         image: vk::Image,
@@ -92,6 +95,7 @@ impl TransferBatch {
         staging_alloc: GpuAllocation,
         width: u32,
         height: u32,
+        mip_levels: u32,
     ) -> Result<(), String> {
         self.ensure_active()?;
         let cmd_buf = self.active_cmd_buf.unwrap();
@@ -102,6 +106,8 @@ impl TransferBatch {
             image,
             vk::ImageLayout::UNDEFINED,
             vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+            0,
+            mip_levels,
         );
 
         let region = vk::BufferImageCopy {
@@ -132,13 +138,19 @@ impl TransferBatch {
             );
         }
 
-        transition_image_layout(
-            &self.device,
-            cmd_buf,
-            image,
-            vk::ImageLayout::TRANSFER_DST_OPTIMAL,
-            vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
-        );
+        if mip_levels > 1 {
+            generate_mipmaps_cmd(&self.device, cmd_buf, image, width, height, mip_levels);
+        } else {
+            transition_image_layout(
+                &self.device,
+                cmd_buf,
+                image,
+                vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+                vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
+                0,
+                1,
+            );
+        }
 
         self.active_staging.push((staging_buffer, staging_alloc));
         Ok(())
@@ -278,6 +290,9 @@ pub struct TextureSpecification {
     pub anisotropy: bool,
     /// Maximum anisotropy level (ignored if `anisotropy` is false).
     pub max_anisotropy: f32,
+    /// Generate mipmaps via GPU blit chain. Useful for textures viewed at
+    /// varying zoom levels. Not recommended for pixel-art with NEAREST filtering.
+    pub generate_mipmaps: bool,
 }
 
 impl Default for TextureSpecification {
@@ -288,6 +303,7 @@ impl Default for TextureSpecification {
             address_mode: vk::SamplerAddressMode::REPEAT,
             anisotropy: true,
             max_anisotropy: 16.0,
+            generate_mipmaps: false,
         }
     }
 }
@@ -301,6 +317,7 @@ impl TextureSpecification {
             address_mode: vk::SamplerAddressMode::CLAMP_TO_EDGE,
             anisotropy: false,
             max_anisotropy: 1.0,
+            generate_mipmaps: false,
         }
     }
 }
@@ -424,11 +441,20 @@ impl Texture2D {
         let descriptor_set_layout = res.texture_ds_layout;
 
         let vk_format = spec.format.to_vk();
+        let mip_levels = if spec.generate_mipmaps {
+            calculate_mip_levels(width, height)
+        } else {
+            1
+        };
 
         // 1. Create staging buffer with pixel data.
         let (staging_buffer, _staging_alloc) = create_staging_buffer(allocator, device, pixels)?;
 
         // 2. Create Vulkan image.
+        let mut usage = vk::ImageUsageFlags::TRANSFER_DST | vk::ImageUsageFlags::SAMPLED;
+        if mip_levels > 1 {
+            usage |= vk::ImageUsageFlags::TRANSFER_SRC;
+        }
         let image_info = vk::ImageCreateInfo::default()
             .image_type(vk::ImageType::TYPE_2D)
             .extent(vk::Extent3D {
@@ -436,12 +462,12 @@ impl Texture2D {
                 height,
                 depth: 1,
             })
-            .mip_levels(1)
+            .mip_levels(mip_levels)
             .array_layers(1)
             .format(vk_format)
             .tiling(vk::ImageTiling::OPTIMAL)
             .initial_layout(vk::ImageLayout::UNDEFINED)
-            .usage(vk::ImageUsageFlags::TRANSFER_DST | vk::ImageUsageFlags::SAMPLED)
+            .usage(usage)
             .sharing_mode(vk::SharingMode::EXCLUSIVE)
             .samples(vk::SampleCountFlags::TYPE_1);
 
@@ -457,7 +483,7 @@ impl Texture2D {
             MemoryLocation::GpuOnly,
         )?;
 
-        // 4. One-shot command buffer: transition + copy + transition.
+        // 4. One-shot command buffer: transition + copy + mipmap generation.
         execute_one_shot(device, command_pool, graphics_queue, |cmd_buf| {
             transition_image_layout(
                 device,
@@ -465,6 +491,8 @@ impl Texture2D {
                 image,
                 vk::ImageLayout::UNDEFINED,
                 vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+                0,
+                mip_levels,
             );
 
             let region = vk::BufferImageCopy {
@@ -495,13 +523,19 @@ impl Texture2D {
                 );
             }
 
-            transition_image_layout(
-                device,
-                cmd_buf,
-                image,
-                vk::ImageLayout::TRANSFER_DST_OPTIMAL,
-                vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
-            );
+            if mip_levels > 1 {
+                generate_mipmaps_cmd(device, cmd_buf, image, width, height, mip_levels);
+            } else {
+                transition_image_layout(
+                    device,
+                    cmd_buf,
+                    image,
+                    vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+                    vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
+                    0,
+                    1,
+                );
+            }
         })?;
 
         // 5. Staging buffer + allocation auto-freed when _staging_alloc drops.
@@ -518,7 +552,7 @@ impl Texture2D {
             .subresource_range(vk::ImageSubresourceRange {
                 aspect_mask: vk::ImageAspectFlags::COLOR,
                 base_mip_level: 0,
-                level_count: 1,
+                level_count: mip_levels,
                 base_array_layer: 0,
                 layer_count: 1,
             });
@@ -546,7 +580,7 @@ impl Texture2D {
             .mipmap_mode(mipmap_mode)
             .mip_lod_bias(0.0)
             .min_lod(0.0)
-            .max_lod(0.0);
+            .max_lod(if mip_levels > 1 { mip_levels as f32 } else { 0.0 });
 
         let sampler = unsafe { device.create_sampler(&sampler_info, None) }
             .map_err(|e| format!("Failed to create texture sampler: {e}"))?;
@@ -676,11 +710,20 @@ impl Texture2D {
         let descriptor_set_layout = res.texture_ds_layout;
 
         let vk_format = spec.format.to_vk();
+        let mip_levels = if spec.generate_mipmaps {
+            calculate_mip_levels(width, height)
+        } else {
+            1
+        };
 
         // 1. Create staging buffer with pixel data.
         let (staging_buffer, staging_alloc) = create_staging_buffer(allocator, device, pixels)?;
 
         // 2. Create Vulkan image.
+        let mut usage = vk::ImageUsageFlags::TRANSFER_DST | vk::ImageUsageFlags::SAMPLED;
+        if mip_levels > 1 {
+            usage |= vk::ImageUsageFlags::TRANSFER_SRC;
+        }
         let image_info = vk::ImageCreateInfo::default()
             .image_type(vk::ImageType::TYPE_2D)
             .extent(vk::Extent3D {
@@ -688,12 +731,12 @@ impl Texture2D {
                 height,
                 depth: 1,
             })
-            .mip_levels(1)
+            .mip_levels(mip_levels)
             .array_layers(1)
             .format(vk_format)
             .tiling(vk::ImageTiling::OPTIMAL)
             .initial_layout(vk::ImageLayout::UNDEFINED)
-            .usage(vk::ImageUsageFlags::TRANSFER_DST | vk::ImageUsageFlags::SAMPLED)
+            .usage(usage)
             .sharing_mode(vk::SharingMode::EXCLUSIVE)
             .samples(vk::SampleCountFlags::TYPE_1);
 
@@ -710,7 +753,7 @@ impl Texture2D {
         )?;
 
         // 4. Record the staging copy + layout transitions into the batch.
-        batch.record_image_upload(image, staging_buffer, staging_alloc, width, height)?;
+        batch.record_image_upload(image, staging_buffer, staging_alloc, width, height, mip_levels)?;
 
         // 5. Create image view.
         let view_info = vk::ImageViewCreateInfo::default()
@@ -720,7 +763,7 @@ impl Texture2D {
             .subresource_range(vk::ImageSubresourceRange {
                 aspect_mask: vk::ImageAspectFlags::COLOR,
                 base_mip_level: 0,
-                level_count: 1,
+                level_count: mip_levels,
                 base_array_layer: 0,
                 layer_count: 1,
             });
@@ -748,7 +791,7 @@ impl Texture2D {
             .mipmap_mode(mipmap_mode)
             .mip_lod_bias(0.0)
             .min_lod(0.0)
-            .max_lod(0.0);
+            .max_lod(if mip_levels > 1 { mip_levels as f32 } else { 0.0 });
 
         let sampler = unsafe { device.create_sampler(&sampler_info, None) }
             .map_err(|e| format!("Failed to create texture sampler: {e}"))?;
@@ -858,13 +901,22 @@ fn execute_one_shot(
     Ok(())
 }
 
+/// Calculate the number of mip levels for an image of the given dimensions.
+fn calculate_mip_levels(width: u32, height: u32) -> u32 {
+    (width.max(height) as f32).log2().floor() as u32 + 1
+}
+
 /// Insert a pipeline barrier to transition an image between layouts.
+///
+/// `base_mip_level` and `level_count` specify which mip levels to transition.
 fn transition_image_layout(
     device: &ash::Device,
     cmd_buf: vk::CommandBuffer,
     image: vk::Image,
     old_layout: vk::ImageLayout,
     new_layout: vk::ImageLayout,
+    base_mip_level: u32,
+    level_count: u32,
 ) {
     let (src_access, dst_access, src_stage, dst_stage) = match (old_layout, new_layout) {
         (vk::ImageLayout::UNDEFINED, vk::ImageLayout::TRANSFER_DST_OPTIMAL) => (
@@ -897,8 +949,8 @@ fn transition_image_layout(
         .image(image)
         .subresource_range(vk::ImageSubresourceRange {
             aspect_mask: vk::ImageAspectFlags::COLOR,
-            base_mip_level: 0,
-            level_count: 1,
+            base_mip_level,
+            level_count,
             base_array_layer: 0,
             layer_count: 1,
         })
@@ -914,6 +966,161 @@ fn transition_image_layout(
             &[],
             &[],
             &[barrier],
+        );
+    }
+}
+
+/// Generate mipmaps for an image using `vkCmdBlitImage`.
+///
+/// Assumes mip level 0 is in `TRANSFER_DST_OPTIMAL` layout with valid data.
+/// Leaves **all** mip levels in `SHADER_READ_ONLY_OPTIMAL` layout.
+fn generate_mipmaps_cmd(
+    device: &ash::Device,
+    cmd_buf: vk::CommandBuffer,
+    image: vk::Image,
+    width: u32,
+    height: u32,
+    mip_levels: u32,
+) {
+    let mut mip_width = width as i32;
+    let mut mip_height = height as i32;
+
+    for i in 1..mip_levels {
+        // Transition mip (i-1): TRANSFER_DST → TRANSFER_SRC (so we can blit from it).
+        let barrier_to_src = vk::ImageMemoryBarrier::default()
+            .old_layout(vk::ImageLayout::TRANSFER_DST_OPTIMAL)
+            .new_layout(vk::ImageLayout::TRANSFER_SRC_OPTIMAL)
+            .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+            .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+            .image(image)
+            .subresource_range(vk::ImageSubresourceRange {
+                aspect_mask: vk::ImageAspectFlags::COLOR,
+                base_mip_level: i - 1,
+                level_count: 1,
+                base_array_layer: 0,
+                layer_count: 1,
+            })
+            .src_access_mask(vk::AccessFlags::TRANSFER_WRITE)
+            .dst_access_mask(vk::AccessFlags::TRANSFER_READ);
+
+        unsafe {
+            device.cmd_pipeline_barrier(
+                cmd_buf,
+                vk::PipelineStageFlags::TRANSFER,
+                vk::PipelineStageFlags::TRANSFER,
+                vk::DependencyFlags::empty(),
+                &[],
+                &[],
+                &[barrier_to_src],
+            );
+        }
+
+        // Blit from mip (i-1) to mip i.
+        let next_width = (mip_width / 2).max(1);
+        let next_height = (mip_height / 2).max(1);
+
+        let blit = vk::ImageBlit {
+            src_subresource: vk::ImageSubresourceLayers {
+                aspect_mask: vk::ImageAspectFlags::COLOR,
+                mip_level: i - 1,
+                base_array_layer: 0,
+                layer_count: 1,
+            },
+            src_offsets: [
+                vk::Offset3D { x: 0, y: 0, z: 0 },
+                vk::Offset3D {
+                    x: mip_width,
+                    y: mip_height,
+                    z: 1,
+                },
+            ],
+            dst_subresource: vk::ImageSubresourceLayers {
+                aspect_mask: vk::ImageAspectFlags::COLOR,
+                mip_level: i,
+                base_array_layer: 0,
+                layer_count: 1,
+            },
+            dst_offsets: [
+                vk::Offset3D { x: 0, y: 0, z: 0 },
+                vk::Offset3D {
+                    x: next_width,
+                    y: next_height,
+                    z: 1,
+                },
+            ],
+        };
+
+        unsafe {
+            device.cmd_blit_image(
+                cmd_buf,
+                image,
+                vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
+                image,
+                vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+                &[blit],
+                vk::Filter::LINEAR,
+            );
+        }
+
+        // Transition mip (i-1): TRANSFER_SRC → SHADER_READ_ONLY (done with it).
+        let barrier_to_read = vk::ImageMemoryBarrier::default()
+            .old_layout(vk::ImageLayout::TRANSFER_SRC_OPTIMAL)
+            .new_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
+            .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+            .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+            .image(image)
+            .subresource_range(vk::ImageSubresourceRange {
+                aspect_mask: vk::ImageAspectFlags::COLOR,
+                base_mip_level: i - 1,
+                level_count: 1,
+                base_array_layer: 0,
+                layer_count: 1,
+            })
+            .src_access_mask(vk::AccessFlags::TRANSFER_READ)
+            .dst_access_mask(vk::AccessFlags::SHADER_READ);
+
+        unsafe {
+            device.cmd_pipeline_barrier(
+                cmd_buf,
+                vk::PipelineStageFlags::TRANSFER,
+                vk::PipelineStageFlags::FRAGMENT_SHADER,
+                vk::DependencyFlags::empty(),
+                &[],
+                &[],
+                &[barrier_to_read],
+            );
+        }
+
+        mip_width = next_width;
+        mip_height = next_height;
+    }
+
+    // Transition last mip level: TRANSFER_DST → SHADER_READ_ONLY.
+    let barrier_last = vk::ImageMemoryBarrier::default()
+        .old_layout(vk::ImageLayout::TRANSFER_DST_OPTIMAL)
+        .new_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
+        .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+        .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+        .image(image)
+        .subresource_range(vk::ImageSubresourceRange {
+            aspect_mask: vk::ImageAspectFlags::COLOR,
+            base_mip_level: mip_levels - 1,
+            level_count: 1,
+            base_array_layer: 0,
+            layer_count: 1,
+        })
+        .src_access_mask(vk::AccessFlags::TRANSFER_WRITE)
+        .dst_access_mask(vk::AccessFlags::SHADER_READ);
+
+    unsafe {
+        device.cmd_pipeline_barrier(
+            cmd_buf,
+            vk::PipelineStageFlags::TRANSFER,
+            vk::PipelineStageFlags::FRAGMENT_SHADER,
+            vk::DependencyFlags::empty(),
+            &[],
+            &[],
+            &[barrier_last],
         );
     }
 }
