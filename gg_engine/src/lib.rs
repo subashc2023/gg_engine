@@ -31,6 +31,7 @@ pub use egui;
 pub use error::{EngineError, EngineResult};
 pub use glam;
 pub use hecs;
+pub use events::gamepad::{GamepadAxis, GamepadButton, GamepadEvent, GamepadId};
 pub use input::Input;
 pub use layer::{Layer, LayerStack};
 pub use log;
@@ -51,7 +52,7 @@ pub use renderer::{
     ShaderDataType, ShaderLibrary, SubTexture2D, Texture2D, TextureSpecification, VertexArray,
     VertexBuffer, WireframeMode,
 };
-pub use scene::{Aabb2D, CullingStats, SpatialGrid};
+pub use scene::{Aabb2D, Aabb3D, CullingStats, Frustum3D, SpatialGrid, SpatialGrid3D};
 pub use scene::{
     AmbientLightComponent, AnimationClip, AnimationControllerComponent, AnimationTransition,
     AudioCategory, AudioListenerComponent, AudioSourceComponent, BoxCollider2DComponent,
@@ -79,6 +80,7 @@ pub fn engine_version() -> &'static str {
 pub mod prelude {
     pub use crate::asset::{AssetHandle, AssetType, EditorAssetManager};
     pub use crate::error::{EngineError, EngineResult};
+    pub use crate::events::gamepad::{GamepadAxis, GamepadButton, GamepadEvent, GamepadId};
     pub use crate::events::{Event, KeyCode, KeyEvent, MouseButton, MouseEvent, WindowEvent};
     pub use crate::input::Input;
     pub use crate::layer::{Layer, LayerStack};
@@ -100,7 +102,7 @@ pub mod prelude {
         Texture2D, TextureSpecification, VertexArray, VertexBuffer, WireframeMode,
         MAX_POINT_LIGHTS,
     };
-    pub use crate::scene::{Aabb2D, SpatialGrid};
+    pub use crate::scene::{Aabb2D, Aabb3D, Frustum3D, SpatialGrid, SpatialGrid3D};
     pub use crate::scene::{
         AmbientLightComponent, AnimationClip, AnimationControllerComponent, AnimationTransition,
         AudioCategory, AudioListenerComponent, AudioSourceComponent, BoxCollider2DComponent,

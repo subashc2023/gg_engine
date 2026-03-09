@@ -543,10 +543,17 @@ impl<T: Application> ApplicationHandler for EngineRunner<T> {
                     }
                 }
             }
-            winit::event::WindowEvent::Focused(false) => {
-                // Clear all pressed keys/buttons on focus loss to prevent
-                // "stuck" keys when the user Alt+Tabs away while holding keys.
-                self.input.clear_all();
+            winit::event::WindowEvent::Focused(focused) => {
+                if !focused {
+                    // Clear all pressed keys/buttons on focus loss to prevent
+                    // "stuck" keys when the user Alt+Tabs away while holding keys.
+                    self.input.clear_all();
+                }
+                // Dispatch focus event to application.
+                let focus_event = Event::Window(WindowEvent::Focused(*focused));
+                if !self.layers.dispatch_event(&focus_event, &self.input) {
+                    self.app.on_event(&focus_event, &self.input);
+                }
             }
             _ => {}
         }
@@ -1310,6 +1317,27 @@ fn render_frame<T: Application>(
 
 pub fn run<T: Application>() {
     crate::log_init();
+
+    // Install a panic hook that logs the panic info before the default handler runs.
+    // This ensures panics are captured in the engine log even when the terminal
+    // output is lost (e.g. windowed applications, crash reports).
+    let default_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        let location = info
+            .location()
+            .map(|l| format!("{}:{}:{}", l.file(), l.line(), l.column()))
+            .unwrap_or_else(|| "<unknown>".to_string());
+        let payload = if let Some(s) = info.payload().downcast_ref::<&str>() {
+            (*s).to_string()
+        } else if let Some(s) = info.payload().downcast_ref::<String>() {
+            s.clone()
+        } else {
+            "Box<dyn Any>".to_string()
+        };
+        log::error!(target: "gg_engine", "PANIC at {location}: {payload}");
+        default_hook(info);
+    }));
+
     log::info!(target: "gg_engine", "Engine v{}", crate::engine_version());
 
     crate::profiling::begin_session("Startup", "gg_profile_startup.json");

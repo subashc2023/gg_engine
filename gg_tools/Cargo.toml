@@ -3,6 +3,7 @@ name = "gg_tools"
 version = "0.1.0"
 edition = "2021"
 license = "MIT"
+rust-version.workspace = true
 
 [dependencies]
 serde.workspace = true

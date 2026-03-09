@@ -1,5 +1,6 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
+use crate::events::gamepad::{GamepadAxis, GamepadButton, GamepadId};
 use crate::events::{KeyCode, MouseButton};
 
 /// Tracks the current state of keyboard and mouse input.
@@ -20,6 +21,11 @@ pub struct Input {
     mouse_y: f64,
     mouse_delta_x: f64,
     mouse_delta_y: f64,
+    // Gamepad state
+    gamepad_buttons: HashMap<GamepadId, HashSet<GamepadButton>>,
+    gamepad_buttons_prev: HashMap<GamepadId, HashSet<GamepadButton>>,
+    gamepad_axes: HashMap<GamepadId, HashMap<GamepadAxis, f32>>,
+    connected_gamepads: HashSet<GamepadId>,
 }
 
 impl Input {
@@ -33,6 +39,10 @@ impl Input {
             mouse_y: 0.0,
             mouse_delta_x: 0.0,
             mouse_delta_y: 0.0,
+            gamepad_buttons: HashMap::new(),
+            gamepad_buttons_prev: HashMap::new(),
+            gamepad_axes: HashMap::new(),
+            connected_gamepads: HashSet::new(),
         }
     }
 
@@ -81,6 +91,68 @@ impl Input {
         (self.mouse_delta_x, self.mouse_delta_y)
     }
 
+    // -- Gamepad query API ----------------------------------------------------
+
+    /// Returns `true` while the gamepad button is held down.
+    pub fn is_gamepad_button_pressed(&self, gamepad: GamepadId, button: GamepadButton) -> bool {
+        self.gamepad_buttons
+            .get(&gamepad)
+            .is_some_and(|b| b.contains(&button))
+    }
+
+    /// Returns `true` only on the first frame the gamepad button is pressed.
+    pub fn is_gamepad_button_just_pressed(
+        &self,
+        gamepad: GamepadId,
+        button: GamepadButton,
+    ) -> bool {
+        let pressed = self
+            .gamepad_buttons
+            .get(&gamepad)
+            .is_some_and(|b| b.contains(&button));
+        let was_pressed = self
+            .gamepad_buttons_prev
+            .get(&gamepad)
+            .is_some_and(|b| b.contains(&button));
+        pressed && !was_pressed
+    }
+
+    /// Returns `true` only on the first frame the gamepad button is released.
+    pub fn is_gamepad_button_just_released(
+        &self,
+        gamepad: GamepadId,
+        button: GamepadButton,
+    ) -> bool {
+        let pressed = self
+            .gamepad_buttons
+            .get(&gamepad)
+            .is_some_and(|b| b.contains(&button));
+        let was_pressed = self
+            .gamepad_buttons_prev
+            .get(&gamepad)
+            .is_some_and(|b| b.contains(&button));
+        !pressed && was_pressed
+    }
+
+    /// Get the current value of a gamepad axis (0.0 if not connected or no data).
+    pub fn gamepad_axis(&self, gamepad: GamepadId, axis: GamepadAxis) -> f32 {
+        self.gamepad_axes
+            .get(&gamepad)
+            .and_then(|a| a.get(&axis))
+            .copied()
+            .unwrap_or(0.0)
+    }
+
+    /// Returns `true` if the given gamepad is connected.
+    pub fn is_gamepad_connected(&self, gamepad: GamepadId) -> bool {
+        self.connected_gamepads.contains(&gamepad)
+    }
+
+    /// Returns all connected gamepad IDs.
+    pub fn connected_gamepads(&self) -> impl Iterator<Item = GamepadId> + '_ {
+        self.connected_gamepads.iter().copied()
+    }
+
     // -- Mutation (engine-internal) -------------------------------------------
 
     pub(crate) fn press_key(&mut self, key: KeyCode) {
@@ -109,6 +181,42 @@ impl Input {
         self.mouse_delta_y += dy;
     }
 
+    #[allow(dead_code)]
+    pub(crate) fn gamepad_connect(&mut self, gamepad: GamepadId) {
+        self.connected_gamepads.insert(gamepad);
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn gamepad_disconnect(&mut self, gamepad: GamepadId) {
+        self.connected_gamepads.remove(&gamepad);
+        self.gamepad_buttons.remove(&gamepad);
+        self.gamepad_buttons_prev.remove(&gamepad);
+        self.gamepad_axes.remove(&gamepad);
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn press_gamepad_button(&mut self, gamepad: GamepadId, button: GamepadButton) {
+        self.gamepad_buttons
+            .entry(gamepad)
+            .or_default()
+            .insert(button);
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn release_gamepad_button(&mut self, gamepad: GamepadId, button: GamepadButton) {
+        if let Some(buttons) = self.gamepad_buttons.get_mut(&gamepad) {
+            buttons.remove(&button);
+        }
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn set_gamepad_axis(&mut self, gamepad: GamepadId, axis: GamepadAxis, value: f32) {
+        self.gamepad_axes
+            .entry(gamepad)
+            .or_default()
+            .insert(axis, value);
+    }
+
     /// Clear all pressed state (call on window focus loss to avoid stuck keys).
     /// Clears both current and previous frame sets to prevent spurious
     /// "just released" events on the next frame.
@@ -127,6 +235,9 @@ impl Input {
             .clone_from(&self.mouse_buttons_pressed);
         self.mouse_delta_x = 0.0;
         self.mouse_delta_y = 0.0;
+        // Snapshot gamepad buttons for just-pressed/just-released detection.
+        self.gamepad_buttons_prev
+            .clone_from(&self.gamepad_buttons);
     }
 }
 

@@ -4,6 +4,8 @@ use std::fmt;
 pub enum WindowEvent {
     Close,
     Resize { width: u32, height: u32 },
+    /// The window gained or lost focus. `true` = gained, `false` = lost.
+    Focused(bool),
 }
 
 impl fmt::Display for WindowEvent {
@@ -13,6 +15,7 @@ impl fmt::Display for WindowEvent {
             WindowEvent::Resize { width, height } => {
                 write!(f, "WindowResize({width}, {height})")
             }
+            WindowEvent::Focused(focused) => write!(f, "WindowFocused({focused})"),
         }
     }
 }

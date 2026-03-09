@@ -189,13 +189,65 @@ impl Scene {
 
     /// Build a cache of world transforms for all entities.
     ///
-    /// Call once per frame before rendering to avoid redundant parent-chain
-    /// walks (O(n) total instead of O(n·d) where d is hierarchy depth).
+    /// Uses persistent caching with snapshot-based dirty detection: on each
+    /// call, every entity's local transform and parent UUID are compared with
+    /// a snapshot taken when the cache was last built. If nothing changed (and
+    /// the entity count is the same), the cached transforms are returned
+    /// without recomputation.
     ///
     /// For scenes above [`PAR_THRESHOLD`](crate::jobs::parallel::PAR_THRESHOLD),
-    /// root subtrees are processed in parallel via rayon. Each subtree is
-    /// independent (a child has exactly one parent), so no data races occur.
+    /// root subtrees are processed in parallel via rayon.
     pub(super) fn build_world_transform_cache(&self) -> HashMap<hecs::Entity, glam::Mat4> {
+        // --- Dirty detection: compare current transforms against cached snapshots ---
+        let needs_rebuild = {
+            let snapshots = self.transform_snapshots.borrow();
+            if snapshots.len() != self.world.len() as usize {
+                true
+            } else {
+                let mut changed = false;
+                for (handle, tc, rel) in self
+                    .world
+                    .query::<(hecs::Entity, &TransformComponent, &RelationshipComponent)>()
+                    .iter()
+                {
+                    if let Some(&(cached_local, cached_parent)) = snapshots.get(&handle) {
+                        if tc.get_transform() != cached_local || rel.parent != cached_parent {
+                            changed = true;
+                            break;
+                        }
+                    } else {
+                        changed = true;
+                        break;
+                    }
+                }
+                changed
+            }
+        };
+
+        if !needs_rebuild {
+            return self.transform_cache.borrow().clone();
+        }
+
+        // --- Full rebuild ---
+        let cache = self.build_world_transform_cache_impl();
+
+        // Take a snapshot of current local transforms for next frame's dirty detection.
+        let mut snapshots =
+            HashMap::with_capacity(self.world.len() as usize);
+        for (handle, tc, rel) in self
+            .world
+            .query::<(hecs::Entity, &TransformComponent, &RelationshipComponent)>()
+            .iter()
+        {
+            snapshots.insert(handle, (tc.get_transform(), rel.parent));
+        }
+        *self.transform_snapshots.borrow_mut() = snapshots;
+        *self.transform_cache.borrow_mut() = cache.clone();
+        cache
+    }
+
+    /// Full world-transform rebuild (parallel or sequential depending on entity count).
+    fn build_world_transform_cache_impl(&self) -> HashMap<hecs::Entity, glam::Mat4> {
         let entity_count = self.world.len() as usize;
         if entity_count < crate::jobs::parallel::PAR_THRESHOLD {
             return self.build_world_transform_cache_sequential();

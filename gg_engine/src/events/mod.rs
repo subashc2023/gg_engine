@@ -1,7 +1,9 @@
+pub mod gamepad;
 mod key;
 mod mouse;
 mod window;
 
+pub use gamepad::{GamepadAxis, GamepadButton, GamepadEvent, GamepadId};
 pub use key::{KeyCode, KeyEvent};
 pub use mouse::{MouseButton, MouseEvent};
 pub use window::WindowEvent;
@@ -13,6 +15,7 @@ pub enum Event {
     Window(WindowEvent),
     Key(KeyEvent),
     Mouse(MouseEvent),
+    Gamepad(GamepadEvent),
 }
 
 impl fmt::Display for Event {
@@ -21,6 +24,7 @@ impl fmt::Display for Event {
             Event::Window(e) => write!(f, "{e}"),
             Event::Key(e) => write!(f, "{e}"),
             Event::Mouse(e) => write!(f, "{e}"),
+            Event::Gamepad(e) => write!(f, "{e}"),
         }
     }
 }

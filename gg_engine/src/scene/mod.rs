@@ -43,12 +43,12 @@ pub use physics_3d::RaycastHit3D;
 pub use scene_serializer::SceneSerializer;
 #[cfg(feature = "lua-scripting")]
 pub use script_engine::{ScriptEngine, ScriptFieldValue};
-pub use spatial::{Aabb2D, Frustum2D, SpatialGrid};
+pub use spatial::{Aabb2D, Aabb3D, Frustum2D, Frustum3D, SpatialGrid, SpatialGrid3D};
 
 use crate::renderer::VertexArray;
 use crate::uuid::Uuid;
 
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, VecDeque};
 
 use physics_2d::PhysicsWorld2D;
@@ -86,7 +86,8 @@ pub struct Scene {
     id_cache: HashMap<u32, hecs::Entity>,
     /// Lazy name → UUID cache for `find_entity_by_name`. Built on first call,
     /// invalidated on entity create/destroy. Only stores first match per name.
-    name_cache: Option<HashMap<String, u64>>,
+    /// Uses `RefCell` for interior mutability so `find_entity_by_name` can take `&self`.
+    name_cache: RefCell<Option<HashMap<String, u64>>>,
     /// Deferred entity destruction queue (UUIDs). Flushed after script callbacks.
     pending_destroy: Vec<u64>,
     /// Monotonic scene time in seconds. Incremented each frame by `dt`.
@@ -97,6 +98,9 @@ pub struct Scene {
     /// Spatial grid for efficient 2D region queries.
     /// Rebuilt on demand via [`rebuild_spatial_grid`](Self::rebuild_spatial_grid).
     spatial_grid: Option<SpatialGrid>,
+    /// Spatial grid for efficient 3D region queries.
+    /// Rebuilt on demand via [`rebuild_spatial_grid_3d`](Self::rebuild_spatial_grid_3d).
+    spatial_grid_3d: Option<SpatialGrid3D>,
     /// Per-frame frustum culling statistics (interior-mutable, written by render_scene).
     culling_stats: Cell<CullingStats>,
     /// Deferred-destroy queue for vertex arrays. Prevents destroying GPU buffers
@@ -104,6 +108,14 @@ pub struct Scene {
     /// in [`rotate_va_graveyard`](Self::rotate_va_graveyard); entries survive at
     /// least `MAX_FRAMES_IN_FLIGHT` frames before being dropped.
     va_graveyard: VecDeque<Vec<VertexArray>>,
+    /// Persistent world transform cache. Updated lazily by
+    /// [`build_world_transform_cache`](Self::build_world_transform_cache)
+    /// using snapshot-based dirty detection. Only rebuilds when local
+    /// transforms or hierarchy actually change between frames.
+    transform_cache: RefCell<HashMap<hecs::Entity, glam::Mat4>>,
+    /// Snapshot of each entity's local transform + parent UUID at the time
+    /// the transform cache was last built. Used for change detection.
+    transform_snapshots: RefCell<HashMap<hecs::Entity, (glam::Mat4, Option<u64>)>>,
     /// When `true`, all texture handles have been resolved and
     /// `resolve_texture_handles_async` can skip scanning every entity.
     /// Reset to `false` when entities are created or components change.
@@ -210,13 +222,16 @@ impl Scene {
             audio_engine: None,
             uuid_cache: HashMap::new(),
             id_cache: HashMap::new(),
-            name_cache: None,
+            name_cache: RefCell::new(None),
             pending_destroy: Vec::new(),
             global_time: 0.0,
             last_dt: 0.0,
             spatial_grid: None,
+            spatial_grid_3d: None,
             culling_stats: Cell::new(CullingStats::default()),
             va_graveyard: VecDeque::new(),
+            transform_cache: RefCell::new(HashMap::new()),
+            transform_snapshots: RefCell::new(HashMap::new()),
             textures_all_resolved: false,
             master_volume: 1.0,
             category_volumes: [1.0; AudioCategory::COUNT],
@@ -256,7 +271,7 @@ impl Scene {
             );
         }
         self.id_cache.insert(handle.id(), handle);
-        self.name_cache = None; // invalidate
+        *self.name_cache.borrow_mut() = None; // invalidate
         self.textures_all_resolved = false; // new entity may need texture resolution
         Entity::new(handle)
     }
@@ -299,7 +314,7 @@ impl Scene {
         // Remove from caches and invalidate name cache.
         if let Some(u) = uuid {
             self.uuid_cache.remove(&u);
-            self.name_cache = None;
+            *self.name_cache.borrow_mut() = None;
         }
         self.id_cache.remove(&entity.handle().id());
 
@@ -641,18 +656,22 @@ impl Scene {
     /// returned is arbitrary (depends on hecs iteration order, which is not
     /// guaranteed to be stable). Callers that need deterministic results
     /// should ensure entity names are unique or use UUID-based lookup instead.
-    pub fn find_entity_by_name(&mut self, name: &str) -> Option<(Entity, u64)> {
-        // Build the name cache lazily on first call.
-        if self.name_cache.is_none() {
-            let mut cache = HashMap::new();
-            for (tag, id) in self.world.query::<(&TagComponent, &IdComponent)>().iter() {
-                // First entity registered per name wins (matches old linear scan).
-                cache.entry(tag.tag.clone()).or_insert(id.id.raw());
+    pub fn find_entity_by_name(&self, name: &str) -> Option<(Entity, u64)> {
+        // Build the name cache lazily on first call (interior mutability via RefCell).
+        {
+            let needs_build = self.name_cache.borrow().is_none();
+            if needs_build {
+                let mut cache = HashMap::new();
+                for (tag, id) in self.world.query::<(&TagComponent, &IdComponent)>().iter() {
+                    // First entity registered per name wins (matches old linear scan).
+                    cache.entry(tag.tag.clone()).or_insert(id.id.raw());
+                }
+                *self.name_cache.borrow_mut() = Some(cache);
             }
-            self.name_cache = Some(cache);
         }
 
-        let uuid = *self.name_cache.as_ref().unwrap().get(name)?;
+        let cache = self.name_cache.borrow();
+        let uuid = *cache.as_ref().unwrap().get(name)?;
         let entity = self.find_entity_by_uuid(uuid)?;
         Some((entity, uuid))
     }
@@ -771,6 +790,81 @@ impl Scene {
     /// Returns a reference to the spatial grid, if built.
     pub fn spatial_grid(&self) -> Option<&SpatialGrid> {
         self.spatial_grid.as_ref()
+    }
+
+    // -----------------------------------------------------------------
+    // 3D Spatial queries
+    // -----------------------------------------------------------------
+
+    /// Rebuild the 3D spatial grid from current entity transforms and mesh bounds.
+    ///
+    /// Inserts all entities with a [`MeshRendererComponent`] using their
+    /// world-space AABB. Other 3D entities without mesh bounds use a
+    /// unit-cube AABB from their world transform.
+    pub fn rebuild_spatial_grid_3d(&mut self, cell_size: f32) {
+        let wt_cache = self.build_world_transform_cache();
+        let mut grid = SpatialGrid3D::new(cell_size);
+        for (&handle, wt) in wt_cache.iter() {
+            // Use mesh local bounds if available, otherwise unit cube.
+            let aabb = if let Ok(mesh) = self.world.get::<&MeshRendererComponent>(handle) {
+                if let Some(ref bounds) = mesh.local_bounds {
+                    Aabb3D::from_local_bounds(bounds.0, bounds.1, wt)
+                } else {
+                    Aabb3D::from_unit_cube_transform(wt)
+                }
+            } else {
+                Aabb3D::from_unit_cube_transform(wt)
+            };
+            grid.insert(handle, &aabb);
+        }
+        self.spatial_grid_3d = Some(grid);
+    }
+
+    /// Query all entities whose 3D AABB overlaps the given world-space region.
+    pub fn query_entities_in_region_3d(
+        &self,
+        min: glam::Vec3,
+        max: glam::Vec3,
+    ) -> Vec<Entity> {
+        let Some(ref grid) = self.spatial_grid_3d else {
+            return Vec::new();
+        };
+        let region = Aabb3D::new(min, max);
+        grid.query_region_dedup(&region)
+            .into_iter()
+            .map(Entity::new)
+            .collect()
+    }
+
+    /// Query all entities within `radius` world units of `center` in 3D.
+    pub fn query_entities_in_radius_3d(
+        &self,
+        center: glam::Vec3,
+        radius: f32,
+    ) -> Vec<Entity> {
+        let Some(ref grid) = self.spatial_grid_3d else {
+            return Vec::new();
+        };
+        let region = Aabb3D::new(
+            center - glam::Vec3::splat(radius),
+            center + glam::Vec3::splat(radius),
+        );
+        let r2 = radius * radius;
+        grid.query_region_dedup(&region)
+            .into_iter()
+            .filter(|&handle| {
+                let entity = Entity::new(handle);
+                let wt = self.get_world_transform(entity);
+                let pos = glam::Vec3::new(wt.w_axis.x, wt.w_axis.y, wt.w_axis.z);
+                (pos - center).length_squared() <= r2
+            })
+            .map(Entity::new)
+            .collect()
+    }
+
+    /// Returns a reference to the 3D spatial grid, if built.
+    pub fn spatial_grid_3d(&self) -> Option<&SpatialGrid3D> {
+        self.spatial_grid_3d.as_ref()
     }
 
     /// Returns the frustum culling statistics from the last `render_scene` call.

@@ -297,6 +297,277 @@ impl SpatialGrid {
     }
 }
 
+// =========================================================================
+// 3D Spatial Types
+// =========================================================================
+
+/// Axis-aligned bounding box in 3D world space.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct Aabb3D {
+    pub min: glam::Vec3,
+    pub max: glam::Vec3,
+}
+
+impl Aabb3D {
+    #[inline]
+    pub fn new(min: glam::Vec3, max: glam::Vec3) -> Self {
+        Self { min, max }
+    }
+
+    /// Test if two AABBs overlap (inclusive on all edges).
+    #[inline]
+    pub fn overlaps(&self, other: &Aabb3D) -> bool {
+        self.min.x <= other.max.x
+            && self.max.x >= other.min.x
+            && self.min.y <= other.max.y
+            && self.max.y >= other.min.y
+            && self.min.z <= other.max.z
+            && self.max.z >= other.min.z
+    }
+
+    /// Compute the AABB of a unit cube (`[-0.5, 0.5]³`) under the given 4×4
+    /// world transform.
+    #[inline]
+    pub fn from_unit_cube_transform(m: &glam::Mat4) -> Self {
+        let center = glam::Vec3::new(m.w_axis.x, m.w_axis.y, m.w_axis.z);
+        // For a unit cube, each basis vector contributes ±0.5 to the extent.
+        let hx = (m.x_axis.x.abs() + m.y_axis.x.abs() + m.z_axis.x.abs()) * 0.5;
+        let hy = (m.x_axis.y.abs() + m.y_axis.y.abs() + m.z_axis.y.abs()) * 0.5;
+        let hz = (m.x_axis.z.abs() + m.y_axis.z.abs() + m.z_axis.z.abs()) * 0.5;
+        Self {
+            min: center - glam::Vec3::new(hx, hy, hz),
+            max: center + glam::Vec3::new(hx, hy, hz),
+        }
+    }
+
+    /// Compute the AABB enclosing a mesh's local-space min/max after
+    /// applying the given world transform.
+    #[inline]
+    pub fn from_local_bounds(local_min: glam::Vec3, local_max: glam::Vec3, m: &glam::Mat4) -> Self {
+        let center_local = (local_min + local_max) * 0.5;
+        let half_local = (local_max - local_min) * 0.5;
+        // Transform center to world space.
+        let center = m.transform_point3(center_local);
+        // Use absolute basis vectors to compute world-space extents.
+        let hx = (m.x_axis.x.abs() * half_local.x)
+            + (m.y_axis.x.abs() * half_local.y)
+            + (m.z_axis.x.abs() * half_local.z);
+        let hy = (m.x_axis.y.abs() * half_local.x)
+            + (m.y_axis.y.abs() * half_local.y)
+            + (m.z_axis.y.abs() * half_local.z);
+        let hz = (m.x_axis.z.abs() * half_local.x)
+            + (m.y_axis.z.abs() * half_local.y)
+            + (m.z_axis.z.abs() * half_local.z);
+        Self {
+            min: center - glam::Vec3::new(hx, hy, hz),
+            max: center + glam::Vec3::new(hx, hy, hz),
+        }
+    }
+
+    /// Returns true if both min and max are finite (not NaN or Inf).
+    #[inline]
+    pub fn is_valid(&self) -> bool {
+        self.min.is_finite() && self.max.is_finite()
+    }
+
+    /// Expand the AABB by `margin` in all directions.
+    #[inline]
+    pub fn expand(&self, margin: f32) -> Self {
+        Self {
+            min: self.min - glam::Vec3::splat(margin),
+            max: self.max + glam::Vec3::splat(margin),
+        }
+    }
+
+    /// Returns true if the point is inside the AABB (inclusive).
+    #[inline]
+    pub fn contains_point(&self, point: glam::Vec3) -> bool {
+        point.x >= self.min.x
+            && point.x <= self.max.x
+            && point.y >= self.min.y
+            && point.y <= self.max.y
+            && point.z >= self.min.z
+            && point.z <= self.max.z
+    }
+
+    /// Compute the union of two AABBs.
+    #[inline]
+    pub fn union(&self, other: &Aabb3D) -> Self {
+        Self {
+            min: self.min.min(other.min),
+            max: self.max.max(other.max),
+        }
+    }
+
+    /// Surface area of the AABB (useful for BVH cost heuristics).
+    #[inline]
+    pub fn surface_area(&self) -> f32 {
+        let d = self.max - self.min;
+        2.0 * (d.x * d.y + d.x * d.z + d.y * d.z)
+    }
+}
+
+/// Frustum culling via 6 half-plane tests in 3D.
+///
+/// Extracts all six frustum planes (left, right, bottom, top, near, far)
+/// from a view-projection matrix using the Gribb/Hartmann method.
+pub struct Frustum3D {
+    /// Six planes: `(a, b, c, d)` where `ax + by + cz + d >= 0` means inside.
+    /// Order: left, right, bottom, top, near, far.
+    planes: [(f32, f32, f32, f32); 6],
+}
+
+impl Frustum3D {
+    /// Extract 3D frustum planes from a view-projection matrix.
+    pub fn from_view_projection(vp: &glam::Mat4) -> Self {
+        let c0 = vp.x_axis;
+        let c1 = vp.y_axis;
+        let c2 = vp.z_axis;
+        let c3 = vp.w_axis;
+
+        // Left:   row3 + row0
+        let left = (c0.w + c0.x, c1.w + c1.x, c2.w + c2.x, c3.w + c3.x);
+        // Right:  row3 - row0
+        let right = (c0.w - c0.x, c1.w - c1.x, c2.w - c2.x, c3.w - c3.x);
+        // Bottom: row3 + row1
+        let bottom = (c0.w + c0.y, c1.w + c1.y, c2.w + c2.y, c3.w + c3.y);
+        // Top:    row3 - row1
+        let top = (c0.w - c0.y, c1.w - c1.y, c2.w - c2.y, c3.w - c3.y);
+        // Near:   row3 + row2  (for [0,1] depth like Vulkan)
+        let near = (c0.w + c0.z, c1.w + c1.z, c2.w + c2.z, c3.w + c3.z);
+        // Far:    row3 - row2
+        let far = (c0.w - c0.z, c1.w - c1.z, c2.w - c2.z, c3.w - c3.z);
+
+        Self {
+            planes: [left, right, bottom, top, near, far],
+        }
+    }
+
+    /// Test whether a 3D AABB is at least partially inside the frustum.
+    ///
+    /// Returns `false` if the AABB is fully outside any frustum plane (culled).
+    /// Uses the p-vertex test per plane.
+    #[inline]
+    pub fn contains_aabb(&self, aabb: &Aabb3D) -> bool {
+        for &(a, b, c, d) in &self.planes {
+            let px = if a >= 0.0 { aabb.max.x } else { aabb.min.x };
+            let py = if b >= 0.0 { aabb.max.y } else { aabb.min.y };
+            let pz = if c >= 0.0 { aabb.max.z } else { aabb.min.z };
+            if a * px + b * py + c * pz + d < 0.0 {
+                return false;
+            }
+        }
+        true
+    }
+
+    /// Test whether a sphere is at least partially inside the frustum.
+    #[inline]
+    pub fn contains_sphere(&self, center: glam::Vec3, radius: f32) -> bool {
+        for &(a, b, c, d) in &self.planes {
+            let len = (a * a + b * b + c * c).sqrt();
+            if len < 1e-10 {
+                continue;
+            }
+            let dist = (a * center.x + b * center.y + c * center.z + d) / len;
+            if dist < -radius {
+                return false;
+            }
+        }
+        true
+    }
+}
+
+/// Uniform spatial grid for efficient 3D region queries.
+///
+/// Divides world space into cubic cells of fixed size. Each entity is
+/// inserted into every cell its AABB overlaps.
+pub struct SpatialGrid3D {
+    cell_size: f32,
+    inv_cell_size: f32,
+    cells: HashMap<(i32, i32, i32), Vec<hecs::Entity>>,
+    entity_count: usize,
+}
+
+impl SpatialGrid3D {
+    /// Create an empty spatial grid with the given cell size in world units.
+    pub fn new(cell_size: f32) -> Self {
+        let cell_size = cell_size.max(0.01);
+        Self {
+            cell_size,
+            inv_cell_size: 1.0 / cell_size,
+            cells: HashMap::new(),
+            entity_count: 0,
+        }
+    }
+
+    /// Insert an entity into all grid cells overlapped by its AABB.
+    pub fn insert(&mut self, entity: hecs::Entity, aabb: &Aabb3D) {
+        let (min_cx, min_cy, min_cz) = self.cell_coords(aabb.min);
+        let (max_cx, max_cy, max_cz) = self.cell_coords(aabb.max);
+        for cz in min_cz..=max_cz {
+            for cy in min_cy..=max_cy {
+                for cx in min_cx..=max_cx {
+                    self.cells.entry((cx, cy, cz)).or_default().push(entity);
+                }
+            }
+        }
+        self.entity_count += 1;
+    }
+
+    /// Query all entities whose cells overlap the given AABB region.
+    ///
+    /// May contain duplicates. Use [`query_region_dedup`](Self::query_region_dedup)
+    /// for unique results.
+    pub fn query_region(&self, region: &Aabb3D) -> Vec<hecs::Entity> {
+        let (min_cx, min_cy, min_cz) = self.cell_coords(region.min);
+        let (max_cx, max_cy, max_cz) = self.cell_coords(region.max);
+        let mut result = Vec::new();
+        for cz in min_cz..=max_cz {
+            for cy in min_cy..=max_cy {
+                for cx in min_cx..=max_cx {
+                    if let Some(entities) = self.cells.get(&(cx, cy, cz)) {
+                        result.extend_from_slice(entities);
+                    }
+                }
+            }
+        }
+        result
+    }
+
+    /// Query all unique entities whose cells overlap the given AABB region.
+    pub fn query_region_dedup(&self, region: &Aabb3D) -> Vec<hecs::Entity> {
+        let mut result = self.query_region(region);
+        result.sort_unstable_by_key(|e| e.id());
+        result.dedup();
+        result
+    }
+
+    /// Number of occupied cells.
+    pub fn cell_count(&self) -> usize {
+        self.cells.len()
+    }
+
+    /// Number of entities inserted.
+    pub fn entity_count(&self) -> usize {
+        self.entity_count
+    }
+
+    /// The cell size used by this grid.
+    pub fn cell_size(&self) -> f32 {
+        self.cell_size
+    }
+
+    /// Convert a world-space position to grid cell coordinates.
+    #[inline]
+    fn cell_coords(&self, pos: glam::Vec3) -> (i32, i32, i32) {
+        (
+            (pos.x * self.inv_cell_size).floor() as i32,
+            (pos.y * self.inv_cell_size).floor() as i32,
+            (pos.z * self.inv_cell_size).floor() as i32,
+        )
+    }
+}
+
 // -------------------------------------------------------------------------
 // Tests
 // -------------------------------------------------------------------------
@@ -659,5 +930,184 @@ mod tests {
             aabb
         );
         assert!(aabb.is_valid());
+    }
+
+    // --- Aabb3D tests ---
+
+    #[test]
+    fn aabb3d_overlap() {
+        let a = Aabb3D::new(glam::Vec3::ZERO, glam::Vec3::ONE);
+        let b = Aabb3D::new(glam::Vec3::splat(0.5), glam::Vec3::splat(1.5));
+        assert!(a.overlaps(&b));
+        assert!(b.overlaps(&a));
+    }
+
+    #[test]
+    fn aabb3d_no_overlap() {
+        let a = Aabb3D::new(glam::Vec3::ZERO, glam::Vec3::ONE);
+        let b = Aabb3D::new(glam::Vec3::splat(2.0), glam::Vec3::splat(3.0));
+        assert!(!a.overlaps(&b));
+    }
+
+    #[test]
+    fn aabb3d_from_identity_transform() {
+        let aabb = Aabb3D::from_unit_cube_transform(&glam::Mat4::IDENTITY);
+        assert!((aabb.min.x - (-0.5)).abs() < 1e-5);
+        assert!((aabb.max.x - 0.5).abs() < 1e-5);
+        assert!((aabb.min.y - (-0.5)).abs() < 1e-5);
+        assert!((aabb.max.y - 0.5).abs() < 1e-5);
+        assert!((aabb.min.z - (-0.5)).abs() < 1e-5);
+        assert!((aabb.max.z - 0.5).abs() < 1e-5);
+    }
+
+    #[test]
+    fn aabb3d_from_scaled_transform() {
+        let m = glam::Mat4::from_scale(glam::Vec3::new(4.0, 2.0, 6.0));
+        let aabb = Aabb3D::from_unit_cube_transform(&m);
+        assert!((aabb.min.x - (-2.0)).abs() < 1e-5);
+        assert!((aabb.max.x - 2.0).abs() < 1e-5);
+        assert!((aabb.min.y - (-1.0)).abs() < 1e-5);
+        assert!((aabb.max.y - 1.0).abs() < 1e-5);
+        assert!((aabb.min.z - (-3.0)).abs() < 1e-5);
+        assert!((aabb.max.z - 3.0).abs() < 1e-5);
+    }
+
+    #[test]
+    fn aabb3d_from_translated_transform() {
+        let m = glam::Mat4::from_translation(glam::Vec3::new(10.0, 20.0, 30.0));
+        let aabb = Aabb3D::from_unit_cube_transform(&m);
+        assert!((aabb.min.x - 9.5).abs() < 1e-5);
+        assert!((aabb.max.x - 10.5).abs() < 1e-5);
+        assert!((aabb.min.y - 19.5).abs() < 1e-5);
+        assert!((aabb.max.y - 20.5).abs() < 1e-5);
+        assert!((aabb.min.z - 29.5).abs() < 1e-5);
+        assert!((aabb.max.z - 30.5).abs() < 1e-5);
+    }
+
+    #[test]
+    fn aabb3d_from_local_bounds() {
+        // A 2x3x4 box centered at (1,2,3) with identity transform.
+        let local_min = glam::Vec3::new(0.0, 0.5, 1.0);
+        let local_max = glam::Vec3::new(2.0, 3.5, 5.0);
+        let aabb = Aabb3D::from_local_bounds(local_min, local_max, &glam::Mat4::IDENTITY);
+        assert!((aabb.min.x - 0.0).abs() < 1e-5);
+        assert!((aabb.max.x - 2.0).abs() < 1e-5);
+        assert!((aabb.min.y - 0.5).abs() < 1e-5);
+        assert!((aabb.max.y - 3.5).abs() < 1e-5);
+    }
+
+    #[test]
+    fn aabb3d_contains_point() {
+        let aabb = Aabb3D::new(glam::Vec3::ZERO, glam::Vec3::ONE);
+        assert!(aabb.contains_point(glam::Vec3::splat(0.5)));
+        assert!(!aabb.contains_point(glam::Vec3::splat(2.0)));
+        assert!(aabb.contains_point(glam::Vec3::ZERO)); // edge inclusive
+    }
+
+    #[test]
+    fn aabb3d_union() {
+        let a = Aabb3D::new(glam::Vec3::ZERO, glam::Vec3::ONE);
+        let b = Aabb3D::new(glam::Vec3::splat(-1.0), glam::Vec3::splat(0.5));
+        let u = a.union(&b);
+        assert!((u.min.x - (-1.0)).abs() < 1e-5);
+        assert!((u.max.x - 1.0).abs() < 1e-5);
+    }
+
+    #[test]
+    fn aabb3d_surface_area() {
+        let aabb = Aabb3D::new(glam::Vec3::ZERO, glam::Vec3::new(2.0, 3.0, 4.0));
+        let sa = aabb.surface_area();
+        // 2*(2*3 + 2*4 + 3*4) = 2*(6+8+12) = 52
+        assert!((sa - 52.0).abs() < 1e-5);
+    }
+
+    // --- Frustum3D tests ---
+
+    #[test]
+    fn frustum3d_perspective() {
+        let mut proj =
+            glam::Mat4::perspective_lh(std::f32::consts::FRAC_PI_4, 16.0 / 9.0, 0.1, 1000.0);
+        proj.y_axis.y *= -1.0; // Vulkan Y-flip
+        let view = glam::Mat4::look_at_lh(
+            glam::Vec3::new(0.0, 0.0, -10.0),
+            glam::Vec3::ZERO,
+            glam::Vec3::Y,
+        );
+        let vp = proj * view;
+        let frustum = Frustum3D::from_view_projection(&vp);
+
+        // Entity at origin should be visible.
+        let center = Aabb3D::new(glam::Vec3::splat(-0.5), glam::Vec3::splat(0.5));
+        assert!(frustum.contains_aabb(&center));
+
+        // Entity far to the side should be culled.
+        let far = Aabb3D::new(glam::Vec3::new(100.0, 100.0, 0.0), glam::Vec3::new(101.0, 101.0, 1.0));
+        assert!(!frustum.contains_aabb(&far));
+
+        // Entity behind the camera should be culled.
+        let behind = Aabb3D::new(
+            glam::Vec3::new(-0.5, -0.5, -20.0),
+            glam::Vec3::new(0.5, 0.5, -19.0),
+        );
+        assert!(!frustum.contains_aabb(&behind));
+    }
+
+    #[test]
+    fn frustum3d_sphere_test() {
+        let mut proj =
+            glam::Mat4::perspective_lh(std::f32::consts::FRAC_PI_4, 1.0, 0.1, 100.0);
+        proj.y_axis.y *= -1.0;
+        let view = glam::Mat4::look_at_lh(
+            glam::Vec3::new(0.0, 0.0, -10.0),
+            glam::Vec3::ZERO,
+            glam::Vec3::Y,
+        );
+        let vp = proj * view;
+        let frustum = Frustum3D::from_view_projection(&vp);
+
+        // Sphere at origin should be visible.
+        assert!(frustum.contains_sphere(glam::Vec3::ZERO, 1.0));
+
+        // Sphere far away should be culled.
+        assert!(!frustum.contains_sphere(glam::Vec3::new(200.0, 0.0, 0.0), 1.0));
+    }
+
+    // --- SpatialGrid3D tests ---
+
+    #[test]
+    fn spatial_grid_3d_insert_and_query() {
+        let mut world = hecs::World::new();
+        let e1 = world.spawn(());
+        let e2 = world.spawn(());
+        let e3 = world.spawn(());
+
+        let mut grid = SpatialGrid3D::new(10.0);
+        grid.insert(e1, &Aabb3D::new(glam::Vec3::splat(1.0), glam::Vec3::splat(5.0)));
+        grid.insert(e2, &Aabb3D::new(glam::Vec3::splat(20.0), glam::Vec3::splat(25.0)));
+        grid.insert(e3, &Aabb3D::new(glam::Vec3::splat(5.0), glam::Vec3::splat(15.0)));
+
+        let result = grid.query_region_dedup(&Aabb3D::new(glam::Vec3::ZERO, glam::Vec3::splat(5.0)));
+        assert!(result.contains(&e1));
+        assert!(result.contains(&e3));
+        assert!(!result.contains(&e2));
+    }
+
+    #[test]
+    fn spatial_grid_3d_empty_query() {
+        let grid = SpatialGrid3D::new(10.0);
+        let result = grid.query_region(&Aabb3D::new(glam::Vec3::ZERO, glam::Vec3::splat(100.0)));
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn spatial_grid_3d_entity_count() {
+        let mut world = hecs::World::new();
+        let e1 = world.spawn(());
+        let e2 = world.spawn(());
+
+        let mut grid = SpatialGrid3D::new(10.0);
+        grid.insert(e1, &Aabb3D::new(glam::Vec3::ZERO, glam::Vec3::ONE));
+        grid.insert(e2, &Aabb3D::new(glam::Vec3::splat(50.0), glam::Vec3::splat(51.0)));
+        assert_eq!(grid.entity_count(), 2);
     }
 }

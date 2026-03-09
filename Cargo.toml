@@ -8,6 +8,9 @@ members = [
 ]
 resolver = "2"
 
+[workspace.package]
+rust-version = "1.87"
+
 [workspace.dependencies]
 # Logging
 log = { version = "0.4", features = ["release_max_level_info"] }
