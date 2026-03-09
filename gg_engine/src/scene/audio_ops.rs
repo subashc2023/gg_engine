@@ -121,6 +121,16 @@ impl Scene {
             }
         }
 
+        for (tag, mesh) in self
+            .world
+            .query::<(&TagComponent, &super::MeshRendererComponent)>()
+            .iter()
+        {
+            if mesh.texture_handle == asset_handle {
+                refs.push((tag.tag.clone(), "Mesh"));
+            }
+        }
+
         refs
     }
 

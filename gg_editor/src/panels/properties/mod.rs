@@ -787,7 +787,7 @@ fn draw_components(
         *scene_dirty = true;
     }
 
-    if mesh::draw_mesh_renderer_component(ui, scene, entity, &bold_family, scene_dirty, undo_system)
+    if mesh::draw_mesh_renderer_component(ui, scene, entity, &bold_family, asset_manager, assets_root, scene_dirty, undo_system)
     {
         undo_system.record(scene, "Remove Mesh Renderer");
         scene.remove_component::<MeshRendererComponent>(entity);

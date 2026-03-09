@@ -776,15 +776,15 @@ pub(crate) fn create_3d_pipeline(
     let all_layouts =
         prepare_descriptor_layouts(camera_ubo_ds_layout, extra_descriptor_set_layouts);
 
-    // Push constants: both stages declare the same 112-byte block in SPIR-V.
+    // Push constants: both stages declare the same 116-byte block in SPIR-V.
     // Vertex accesses: model matrix (64) + entity_id (4) = bytes [0, 68).
-    // Fragment accesses: material properties = bytes [68, 112).
+    // Fragment accesses: material properties + albedo_tex_index = bytes [68, 116).
     // A single range with VERTEX | FRAGMENT covers the full block per Vulkan spec
     // (each stage's range must contain the entire block declared in that stage).
     let push_range = vk::PushConstantRange {
         stage_flags: vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT,
         offset: 0,
-        size: 112,
+        size: 116,
     };
     let push_ranges = [push_range];
 

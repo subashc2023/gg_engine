@@ -1089,6 +1089,11 @@ pub struct MeshRendererComponent {
     pub emissive_color: Vec3,
     /// Multiplier on emissive color for HDR bloom intensity.
     pub emissive_strength: f32,
+    /// Runtime-only loaded albedo texture. Not serialized.
+    pub texture: Option<Ref<Texture2D>>,
+    /// Asset handle referencing an albedo texture in the asset registry.
+    /// 0 = no texture assigned.
+    pub texture_handle: Uuid,
     /// Runtime-only uploaded vertex array. Not serialized.
     pub(crate) vertex_array: Option<crate::renderer::VertexArray>,
 }
@@ -1102,6 +1107,8 @@ impl Clone for MeshRendererComponent {
             roughness: self.roughness,
             emissive_color: self.emissive_color,
             emissive_strength: self.emissive_strength,
+            texture: self.texture.clone(),
+            texture_handle: self.texture_handle,
             vertex_array: None, // Runtime-only, not copied.
         }
     }
@@ -1116,6 +1123,8 @@ impl MeshRendererComponent {
             roughness: 0.5,
             emissive_color: Vec3::ZERO,
             emissive_strength: 1.0,
+            texture: None,
+            texture_handle: Uuid::from_raw(0),
             vertex_array: None,
         }
     }
@@ -1130,6 +1139,8 @@ impl Default for MeshRendererComponent {
             roughness: 0.5,
             emissive_color: Vec3::ZERO,
             emissive_strength: 1.0,
+            texture: None,
+            texture_handle: Uuid::from_raw(0),
             vertex_array: None,
         }
     }

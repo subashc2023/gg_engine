@@ -587,12 +587,15 @@ pub(crate) fn create_shadow_pipeline(
         .scissor_count(1);
 
     // Front-face culling to reduce peter-panning artifact.
+    // Depth bias to prevent shadow acne (self-shadowing artifacts).
     let rasterizer = vk::PipelineRasterizationStateCreateInfo::default()
         .polygon_mode(vk::PolygonMode::FILL)
         .cull_mode(vk::CullModeFlags::FRONT)
         .front_face(vk::FrontFace::COUNTER_CLOCKWISE)
         .line_width(1.0)
-        .depth_bias_enable(false);
+        .depth_bias_enable(true)
+        .depth_bias_constant_factor(1.25)
+        .depth_bias_slope_factor(1.75);
 
     let multisampling = vk::PipelineMultisampleStateCreateInfo::default()
         .rasterization_samples(vk::SampleCountFlags::TYPE_1);

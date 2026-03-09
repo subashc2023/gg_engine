@@ -14,6 +14,7 @@ layout(push_constant) uniform PushConstants {
     float u_emissive_strength;
     vec4 u_albedo_color;
     vec4 u_emissive_color;
+    int u_albedo_tex_index;
 } push;
 
 layout(location = 0) in vec3 a_position;
@@ -61,7 +62,11 @@ layout(push_constant) uniform PushConstants {
     float u_emissive_strength;
     vec4 u_albedo_color;
     vec4 u_emissive_color;
+    int u_albedo_tex_index;
 } push;
+
+// Bindless texture array (set 1) — shared with 2D renderer.
+layout(set = 1, binding = 0) uniform sampler2D u_textures[4096];
 
 // Lighting UBO (set 3) — scene lights + shadow data.
 layout(set = 3, binding = 0) uniform LightingUBO {
@@ -102,7 +107,10 @@ layout(location = 1) out int out_entity_id;
 float calculate_shadow(vec3 world_pos, vec3 normal) {
     if (lighting.counts.z == 0) return 1.0; // No shadow mapping active
 
-    vec4 light_space_pos = lighting.shadow_light_vp * vec4(world_pos, 1.0);
+    // Offset along surface normal to reduce shadow acne on curved geometry.
+    float normal_bias = 0.005;
+    vec3 biased_pos = world_pos + normal * normal_bias;
+    vec4 light_space_pos = lighting.shadow_light_vp * vec4(biased_pos, 1.0);
     vec3 proj_coords = light_space_pos.xyz / light_space_pos.w;
 
     // Vulkan NDC: x,y in [-1, 1], z in [0, 1].
@@ -150,7 +158,14 @@ vec3 blinn_phong(vec3 light_dir, vec3 light_color, float light_intensity,
 void main() {
     vec3 n = normalize(v_normal);
     vec3 view_dir = normalize(lighting.camera_position.xyz - v_world_position);
-    vec3 albedo = v_color.rgb * push.u_albedo_color.rgb;
+
+    // Sample albedo texture if assigned, otherwise use white.
+    vec4 tex_color = vec4(1.0);
+    if (push.u_albedo_tex_index >= 0) {
+        tex_color = texture(u_textures[push.u_albedo_tex_index], v_uv);
+    }
+
+    vec3 albedo = v_color.rgb * push.u_albedo_color.rgb * tex_color.rgb;
 
     // Ambient contribution.
     vec3 result = albedo * lighting.ambient_color.rgb * lighting.ambient_color.w;
@@ -188,7 +203,7 @@ void main() {
     // Emissive contribution.
     result += push.u_emissive_color.rgb * push.u_emissive_strength;
 
-    out_color = vec4(result, v_color.a * push.u_albedo_color.a);
+    out_color = vec4(result, v_color.a * push.u_albedo_color.a * tex_color.a);
 
 #ifdef OFFSCREEN
     out_entity_id = v_entity_id;

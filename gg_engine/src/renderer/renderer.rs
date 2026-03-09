@@ -1916,6 +1916,19 @@ impl Renderer {
                 &[],
             );
 
+            // Set 1: bindless texture array (shared with 2D renderer).
+            if let Some(ref r2d) = self.renderer_2d {
+                let bindless_ds = r2d.bindless_descriptor_set(ctx.current_frame);
+                device.cmd_bind_descriptor_sets(
+                    cmd,
+                    vk::PipelineBindPoint::GRAPHICS,
+                    pipeline.layout(),
+                    1,
+                    &[bindless_ds],
+                    &[],
+                );
+            }
+
             // Push model transform (offset 0, 64 bytes) + entity_id (offset 64, 4 bytes).
             let mut push_data = [0u8; 68];
             let transform_bytes = std::slice::from_raw_parts(
@@ -1932,29 +1945,35 @@ impl Renderer {
                 &push_data,
             );
 
-            // Material: push properties at offset 68 (44 bytes).
+            // Material: push properties at offset 68 (48 bytes).
             // This ensures each draw call gets its own material data embedded in the
             // command stream, unlike the UBO which is shared across all draws.
             let mat_handle = material_handle
                 .cloned()
                 .unwrap_or_else(|| self.material_library.default_handle());
             if let Some(mat) = self.material_library.get(&mat_handle) {
-                let frag_data: [f32; 11] = [
-                    mat.metallic,
-                    mat.roughness,
-                    mat.emissive_strength,
-                    mat.albedo_color.x,
-                    mat.albedo_color.y,
-                    mat.albedo_color.z,
-                    mat.albedo_color.w,
-                    mat.emissive_color.x,
-                    mat.emissive_color.y,
-                    mat.emissive_color.z,
-                    0.0, // padding (.w of emissive_color vec4)
-                ];
+                let albedo_tex_index: i32 = mat
+                    .albedo_texture
+                    .as_ref()
+                    .map(|t| t.bindless_index() as i32)
+                    .unwrap_or(-1);
+                // 11 floats (44 bytes) of material data + 1 int (4 bytes) texture index = 48 bytes.
+                let mut frag_data = [0u32; 12];
+                frag_data[0] = mat.metallic.to_bits();
+                frag_data[1] = mat.roughness.to_bits();
+                frag_data[2] = mat.emissive_strength.to_bits();
+                frag_data[3] = mat.albedo_color.x.to_bits();
+                frag_data[4] = mat.albedo_color.y.to_bits();
+                frag_data[5] = mat.albedo_color.z.to_bits();
+                frag_data[6] = mat.albedo_color.w.to_bits();
+                frag_data[7] = mat.emissive_color.x.to_bits();
+                frag_data[8] = mat.emissive_color.y.to_bits();
+                frag_data[9] = mat.emissive_color.z.to_bits();
+                frag_data[10] = 0; // padding (.w of emissive_color vec4)
+                frag_data[11] = albedo_tex_index as u32;
                 let frag_bytes = std::slice::from_raw_parts(
                     frag_data.as_ptr() as *const u8,
-                    44,
+                    48,
                 );
                 device.cmd_push_constants(
                     cmd,
@@ -2033,6 +2052,14 @@ impl Renderer {
     }
 
     fn mesh3d_pipeline_inner(&mut self, wireframe: bool) -> Result<Arc<Pipeline>, String> {
+        // Use the bindless texture descriptor set layout (from Renderer2DData)
+        // so that 3D meshes can sample from the shared bindless texture array.
+        let bindless_layout = self
+            .renderer_2d
+            .as_ref()
+            .map(|r2d| r2d.bindless_ds_layout())
+            .unwrap_or(self.texture_descriptor_set_layout);
+
         if self.mesh3d_use_offscreen {
             // Select the appropriate cached pipeline.
             let cached = if wireframe {
@@ -2064,7 +2091,7 @@ impl Renderer {
                 offscreen_rp,
                 self.camera.ds_layout(),
                 &[
-                    self.texture_descriptor_set_layout,
+                    bindless_layout,
                     self.material_library.ds_layout(),
                     self.lighting.ds_layout(),
                     shadow_ds_layout,
@@ -2110,7 +2137,7 @@ impl Renderer {
                 self.render_pass,
                 self.camera.ds_layout(),
                 &[
-                    self.texture_descriptor_set_layout,
+                    bindless_layout,
                     self.material_library.ds_layout(),
                     self.lighting.ds_layout(),
                     shadow_ds_layout,

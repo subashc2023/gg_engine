@@ -1,11 +1,14 @@
 use gg_engine::egui;
 use gg_engine::prelude::*;
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn draw_mesh_renderer_component(
     ui: &mut egui::Ui,
     scene: &mut Scene,
     entity: Entity,
     bold_family: &egui::FontFamily,
+    asset_manager: &mut Option<EditorAssetManager>,
+    assets_root: &std::path::Path,
     scene_dirty: &mut bool,
     _undo_system: &mut crate::undo::UndoSystem,
 ) -> bool {
@@ -26,6 +29,7 @@ pub(crate) fn draw_mesh_renderer_component(
                 mut roughness,
                 mut emissive_arr,
                 mut emissive_strength,
+                texture_handle_raw,
             ) = {
                 let mc = scene
                     .get_component::<MeshRendererComponent>(entity)
@@ -37,6 +41,7 @@ pub(crate) fn draw_mesh_renderer_component(
                     mc.roughness,
                     <[f32; 3]>::from(mc.emissive_color),
                     mc.emissive_strength,
+                    mc.texture_handle.raw(),
                 )
             };
 
@@ -76,6 +81,40 @@ pub(crate) fn draw_mesh_renderer_component(
             if super::color_picker_rgba(ui, "Color", &mut color_arr) {
                 changed = true;
             }
+
+            // Albedo texture picker.
+            ui.horizontal(|ui| {
+                ui.label("Albedo Texture");
+                match super::asset_handle_picker(
+                    ui,
+                    texture_handle_raw,
+                    asset_manager,
+                    assets_root,
+                    "textures",
+                    "Image files",
+                    &["png", "jpg", "jpeg"],
+                ) {
+                    super::AssetPickerAction::Selected(handle) => {
+                        if let Some(mut mc) =
+                            scene.get_component_mut::<MeshRendererComponent>(entity)
+                        {
+                            mc.texture_handle = handle;
+                            mc.texture = None;
+                        }
+                        *scene_dirty = true;
+                    }
+                    super::AssetPickerAction::Cleared => {
+                        if let Some(mut mc) =
+                            scene.get_component_mut::<MeshRendererComponent>(entity)
+                        {
+                            mc.texture_handle = Uuid::from_raw(0);
+                            mc.texture = None;
+                        }
+                        *scene_dirty = true;
+                    }
+                    super::AssetPickerAction::None => {}
+                }
+            });
 
             ui.separator();
 

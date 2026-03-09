@@ -1694,6 +1694,11 @@ impl Renderer2DData {
         self.bindless_ds[frame]
     }
 
+    /// Get the bindless descriptor set layout (for 3D pipeline creation).
+    pub(super) fn bindless_ds_layout(&self) -> vk::DescriptorSetLayout {
+        self.bindless_ds_layout
+    }
+
     /// Get the unit quad vertex buffer handle.
     pub(super) fn unit_quad_vb_handle(&self) -> vk::Buffer {
         self.unit_quad_vb.handle()

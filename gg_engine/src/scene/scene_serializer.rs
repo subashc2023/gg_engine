@@ -790,6 +790,8 @@ struct MeshRendererData {
     emissive_color: [f32; 3],
     #[serde(rename = "EmissiveStrength", default = "default_emissive_strength")]
     emissive_strength: f32,
+    #[serde(rename = "AlbedoTexture", default)]
+    albedo_texture: u64,
 }
 
 fn default_roughness() -> f32 {
@@ -1462,6 +1464,7 @@ impl SceneSerializer {
                         roughness: mc.roughness,
                         emissive_color: mc.emissive_color.into(),
                         emissive_strength: mc.emissive_strength,
+                        albedo_texture: mc.texture_handle.raw(),
                     }
                 }),
             directional_light: scene
@@ -1930,6 +1933,8 @@ impl SceneSerializer {
                     roughness: mrd.roughness,
                     emissive_color: Vec3::from(mrd.emissive_color),
                     emissive_strength: mrd.emissive_strength,
+                    texture: None,
+                    texture_handle: Uuid::from_raw(mrd.albedo_texture),
                     vertex_array: None,
                 },
             );

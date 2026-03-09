@@ -369,7 +369,31 @@ impl Scene {
             }
         }
 
-        // Phase 3: resolve per-clip animator textures.
+        // Phase 3: mesh renderer textures.
+        let mesh_needs: Vec<(hecs::Entity, crate::uuid::Uuid)> = self
+            .world
+            .query::<(hecs::Entity, &MeshRendererComponent)>()
+            .iter()
+            .filter_map(|(handle, mesh)| {
+                if mesh.texture_handle.raw() != 0 && mesh.texture.is_none() {
+                    Some((handle, mesh.texture_handle))
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        for (handle, asset_handle) in mesh_needs {
+            if let Some(texture) = asset_manager.get_texture(&asset_handle) {
+                if let Ok(mut mesh) = self.world.get::<&mut MeshRendererComponent>(handle) {
+                    mesh.texture = Some(texture);
+                }
+            } else {
+                asset_manager.request_load(&asset_handle);
+            }
+        }
+
+        // Phase 4: resolve per-clip animator textures.
         self.resolve_animator_clip_textures(asset_manager, None);
     }
 
@@ -1242,6 +1266,7 @@ impl Scene {
                     mat.roughness = mesh_comp.roughness;
                     mat.emissive_color = mesh_comp.emissive_color;
                     mat.emissive_strength = mesh_comp.emissive_strength;
+                    mat.albedo_texture = mesh_comp.texture.clone();
                 }
                 renderer.submit_3d(
                     &pipeline,
