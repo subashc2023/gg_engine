@@ -1,9 +1,9 @@
 use super::{
     AmbientLightComponent, AnimationControllerComponent, CircleRendererComponent,
     DirectionalLightComponent, Entity, IdComponent, InstancedSpriteAnimator, MeshPrimitive,
-    MeshRendererComponent, ParticleEmitterComponent, PointLightComponent, Scene,
-    SpriteAnimatorComponent, SpriteRendererComponent, TextComponent, TilemapComponent,
-    TransformComponent, TILE_FLIP_H, TILE_FLIP_V, TILE_ID_MASK,
+    MeshRendererComponent, ParticleEmitterComponent, PointLightComponent, RigidBody3DComponent,
+    RigidBody3DType, Scene, SpriteAnimatorComponent, SpriteRendererComponent, TextComponent,
+    TilemapComponent, TransformComponent, TILE_FLIP_H, TILE_FLIP_V, TILE_ID_MASK,
 };
 use crate::renderer::shadow_map::compute_directional_light_vp;
 use crate::renderer::{Font, LightEnvironment, Mesh, Renderer, SubTexture2D};
@@ -1104,37 +1104,71 @@ impl Scene {
         Some(light_vp)
     }
 
-    /// Compute a conservative AABB enclosing all mesh entities.
+    /// Compute a conservative AABB for shadow frustum fitting.
+    ///
+    /// Only static/kinematic meshes contribute to the AABB so that dynamic
+    /// objects (which move every frame) don't cause shadow jitter. Dynamic
+    /// meshes still cast and receive shadows — they just don't influence the
+    /// frustum bounds. Falls back to all meshes if no static ones exist.
     fn compute_mesh_scene_bounds(
         &self,
         meshes: &[(hecs::Entity, glam::Mat4)],
     ) -> (glam::Vec3, glam::Vec3) {
         let mut min = glam::Vec3::splat(f32::MAX);
         let mut max = glam::Vec3::splat(f32::NEG_INFINITY);
+        let mut count = 0;
 
+        // First pass: AABB from non-dynamic meshes only (stable frustum).
         for (handle, world_transform) in meshes {
-            let mesh_comp = self.world.get::<&MeshRendererComponent>(*handle).unwrap();
-            // Use the mesh primitive's approximate AABB (unit cube).
-            let half = match mesh_comp.primitive {
-                MeshPrimitive::Cube => glam::Vec3::splat(0.5),
-                MeshPrimitive::Sphere => glam::Vec3::splat(0.5),
-                MeshPrimitive::Plane => glam::Vec3::new(0.5, 0.0, 0.5),
-            };
+            let is_dynamic = self
+                .world
+                .get::<&RigidBody3DComponent>(*handle)
+                .map(|rb| rb.body_type == RigidBody3DType::Dynamic)
+                .unwrap_or(false);
 
-            // Transform the 8 corners of the local AABB to world space.
-            for &sx in &[-1.0_f32, 1.0] {
-                for &sy in &[-1.0_f32, 1.0] {
-                    for &sz in &[-1.0_f32, 1.0] {
-                        let local = glam::Vec3::new(sx * half.x, sy * half.y, sz * half.z);
-                        let world = world_transform.transform_point3(local);
-                        min = min.min(world);
-                        max = max.max(world);
-                    }
-                }
+            if is_dynamic {
+                continue;
+            }
+
+            self.expand_aabb_for_mesh(*handle, world_transform, &mut min, &mut max);
+            count += 1;
+        }
+
+        // Fallback: if every mesh is dynamic, include them all.
+        if count == 0 {
+            for (handle, world_transform) in meshes {
+                self.expand_aabb_for_mesh(*handle, world_transform, &mut min, &mut max);
             }
         }
 
         (min, max)
+    }
+
+    /// Expand an AABB by the 8 world-space corners of a mesh entity's local bounds.
+    fn expand_aabb_for_mesh(
+        &self,
+        handle: hecs::Entity,
+        world_transform: &glam::Mat4,
+        min: &mut glam::Vec3,
+        max: &mut glam::Vec3,
+    ) {
+        let mesh_comp = self.world.get::<&MeshRendererComponent>(handle).unwrap();
+        let half = match mesh_comp.primitive {
+            MeshPrimitive::Cube => glam::Vec3::splat(0.5),
+            MeshPrimitive::Sphere => glam::Vec3::splat(0.5),
+            MeshPrimitive::Plane => glam::Vec3::new(0.5, 0.0, 0.5),
+        };
+
+        for &sx in &[-1.0_f32, 1.0] {
+            for &sy in &[-1.0_f32, 1.0] {
+                for &sz in &[-1.0_f32, 1.0] {
+                    let local = glam::Vec3::new(sx * half.x, sy * half.y, sz * half.z);
+                    let world = world_transform.transform_point3(local);
+                    *min = min.min(world);
+                    *max = max.max(world);
+                }
+            }
+        }
     }
 
     fn render_meshes(&self, renderer: &mut Renderer) {

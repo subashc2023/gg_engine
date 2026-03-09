@@ -170,15 +170,7 @@ macro_rules! for_each_addable_component {
             ($crate::scene::AudioListenerComponent, "Audio Listener"),
             ($crate::scene::ParticleEmitterComponent, "Particle Emitter"),
             ($crate::scene::RigidBody3DComponent, "Rigidbody 3D"),
-            ($crate::scene::BoxCollider3DComponent, "Box Collider 3D"),
-            (
-                $crate::scene::SphereCollider3DComponent,
-                "Sphere Collider 3D"
-            ),
-            (
-                $crate::scene::CapsuleCollider3DComponent,
-                "Capsule Collider 3D"
-            ),
+            // 3D colliders handled manually in editor for mesh-aware defaults.
             ($crate::scene::MeshRendererComponent, "Mesh Renderer"),
             (
                 $crate::scene::DirectionalLightComponent,

@@ -776,21 +776,17 @@ pub(crate) fn create_3d_pipeline(
     let all_layouts =
         prepare_descriptor_layouts(camera_ubo_ds_layout, extra_descriptor_set_layouts);
 
-    // Push constants: vertex stage gets model matrix (64) + entity_id (4) = 68 bytes.
-    // Fragment stage gets material properties at offset 68: metallic(4) + roughness(4) +
-    // emissive_strength(4) + albedo_color(16) + emissive_color(16) = 44 bytes.
-    // Total: 112 bytes (within 128-byte Vulkan minimum guarantee).
-    let vertex_range = vk::PushConstantRange {
-        stage_flags: vk::ShaderStageFlags::VERTEX,
+    // Push constants: both stages declare the same 112-byte block in SPIR-V.
+    // Vertex accesses: model matrix (64) + entity_id (4) = bytes [0, 68).
+    // Fragment accesses: material properties = bytes [68, 112).
+    // A single range with VERTEX | FRAGMENT covers the full block per Vulkan spec
+    // (each stage's range must contain the entire block declared in that stage).
+    let push_range = vk::PushConstantRange {
+        stage_flags: vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT,
         offset: 0,
-        size: (std::mem::size_of::<[f32; 16]>() + std::mem::size_of::<i32>()) as u32,
+        size: 112,
     };
-    let fragment_range = vk::PushConstantRange {
-        stage_flags: vk::ShaderStageFlags::FRAGMENT,
-        offset: 68,
-        size: 44,
-    };
-    let push_ranges = [vertex_range, fragment_range];
+    let push_ranges = [push_range];
 
     let layout_info = vk::PipelineLayoutCreateInfo::default()
         .set_layouts(&all_layouts)

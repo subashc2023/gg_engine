@@ -6,18 +6,18 @@ Entities:
     Tag: Camera
   TransformComponent:
     Translation:
-    - 3.0
-    - 2.0
-    - 5.0
+    - 0.47120634
+    - 1.2929113
+    - -4.4713187
     Rotation:
-    - -0.14479247
-    - 0.24462588
-    - -0.036971588
-    - 0.9580326
+    - -0.01177665
+    - 0.03488374
+    - 0.014783624
+    - 0.9992126
     Scale:
-    - 1.0
-    - 1.0
-    - 1.0
+    - 0.99998224
+    - 0.999962
+    - 0.9999802
   CameraComponent:
     Camera:
       ProjectionType: 0
@@ -35,17 +35,40 @@ Entities:
   TransformComponent:
     Translation:
     - 0.0
-    - 0.5
+    - 1.7324868
     - 0.0
     Rotation:
-    - -0.0
-    - -0.0
-    - -0.0
+    - 0.0
+    - 0.0
+    - 0.0
     - 1.0
     Scale:
     - 1.0
     - 1.0
     - 1.0
+  RigidBody3DComponent:
+    BodyType: Dynamic
+    LockRotationX: false
+    LockRotationY: false
+    LockRotationZ: false
+    GravityScale: 1.0
+    LinearDamping: 0.0
+    AngularDamping: 0.0
+  BoxCollider3DComponent:
+    Offset:
+    - 0.0
+    - 0.0
+    - 0.0
+    Size:
+    - 0.5
+    - 0.5
+    - 0.5
+    Density: 1.0
+    Friction: 0.5
+    Restitution: 0.0
+    CollisionLayer: 4294967295
+    CollisionMask: 4294967295
+    IsSensor: false
   MeshRendererComponent:
     Primitive: Cube
     Color:
@@ -53,14 +76,21 @@ Entities:
     - 0.4
     - 0.2
     - 1.0
+    Metallic: 0.0
+    Roughness: 0.5
+    EmissiveColor:
+    - 0.0
+    - 0.0
+    - 0.0
+    EmissiveStrength: 1.0
 - Entity: 300
   TagComponent:
     Tag: Sphere
   TransformComponent:
     Translation:
-    - 2.5
+    - 0.3201393
     - 0.50122654
-    - 0.0
+    - 0.07173788
     Rotation:
     - 0.0
     - 0.0
@@ -70,6 +100,26 @@ Entities:
     - 1.0
     - 1.0
     - 1.0
+  RigidBody3DComponent:
+    BodyType: Dynamic
+    LockRotationX: false
+    LockRotationY: false
+    LockRotationZ: false
+    GravityScale: 1.0
+    LinearDamping: 0.0
+    AngularDamping: 0.0
+  SphereCollider3DComponent:
+    Offset:
+    - 0.0
+    - 0.0
+    - 0.0
+    Radius: 0.5
+    Density: 1.0
+    Friction: 0.5
+    Restitution: 0.0
+    CollisionLayer: 4294967295
+    CollisionMask: 4294967295
+    IsSensor: false
   MeshRendererComponent:
     Primitive: Sphere
     Color:
@@ -77,23 +127,53 @@ Entities:
     - 0.5
     - 0.9
     - 1.0
+    Metallic: 0.0
+    Roughness: 0.5
+    EmissiveColor:
+    - 0.0
+    - 0.0
+    - 0.0
+    EmissiveStrength: 1.0
 - Entity: 400
   TagComponent:
     Tag: Ground
   TransformComponent:
     Translation:
     - 0.0
-    - 0.0
+    - -0.22164628
     - 0.0
     Rotation:
-    - -0.0
-    - -0.0
-    - -0.0
+    - 0.0
+    - 0.0
+    - 0.0
     - 1.0
     Scale:
     - 6.0
     - 1.0
     - 6.0
+  RigidBody3DComponent:
+    BodyType: Static
+    LockRotationX: false
+    LockRotationY: false
+    LockRotationZ: false
+    GravityScale: 1.0
+    LinearDamping: 0.0
+    AngularDamping: 0.0
+  BoxCollider3DComponent:
+    Offset:
+    - 0.0
+    - -0.025
+    - 0.0
+    Size:
+    - 0.5
+    - 0.025
+    - 0.5
+    Density: 1.0
+    Friction: 0.5
+    Restitution: 0.0
+    CollisionLayer: 4294967295
+    CollisionMask: 4294967295
+    IsSensor: false
   MeshRendererComponent:
     Primitive: Plane
     Color:
@@ -101,6 +181,13 @@ Entities:
     - 0.3
     - 0.3
     - 1.0
+    Metallic: 0.0
+    Roughness: 0.5
+    EmissiveColor:
+    - 0.0
+    - 0.0
+    - 0.0
+    EmissiveStrength: 1.0
 - Entity: 8072808792126240
   TagComponent:
     Tag: Empty Entity

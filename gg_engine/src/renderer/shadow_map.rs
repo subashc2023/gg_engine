@@ -471,8 +471,18 @@ impl Drop for ShadowMapSystem {
 // Light-space matrix computation
 // ---------------------------------------------------------------------------
 
+/// Maximum shadow frustum half-extent (world units). Prevents unbounded growth
+/// when physics objects fall far from the scene.
+const MAX_SHADOW_EXTENT: f32 = 200.0;
+/// Minimum shadow frustum half-extent to avoid degenerate projections.
+const MIN_SHADOW_EXTENT: f32 = 1.0;
+
 /// Compute an orthographic light-space view-projection matrix for a
 /// directional light, fitted to the given scene AABB.
+///
+/// The extent is clamped to prevent unbounded frustum growth (e.g. when
+/// physics objects fall far away). Texel snapping is applied to prevent
+/// shadow shimmer from sub-texel jitter as objects move.
 ///
 /// The Vulkan Y-flip is applied so the result can be used directly
 /// as a VP matrix in the shadow pass and for fragment-shader projection.
@@ -483,7 +493,8 @@ pub fn compute_directional_light_vp(
 ) -> Mat4 {
     let light_dir = light_direction.normalize();
     let center = (scene_min + scene_max) * 0.5;
-    let extent = (scene_max - scene_min).length() * 0.5;
+    let extent =
+        ((scene_max - scene_min).length() * 0.5).clamp(MIN_SHADOW_EXTENT, MAX_SHADOW_EXTENT);
 
     // Position the light camera behind the scene center, looking along the light direction.
     let light_pos = center - light_dir * extent;
@@ -501,6 +512,22 @@ pub fn compute_directional_light_vp(
     // Vulkan Y-flip: applied to the projection BEFORE view multiplication,
     // matching the convention used by EditorCamera, SceneCamera, and sandbox.
     light_proj.y_axis.y *= -1.0;
+
+    // Shadow map texel snapping: quantize the VP translation to shadow map
+    // texel boundaries, preventing sub-texel jitter as objects move.
+    let shadow_vp = light_proj * light_view;
+    let half_texels = DEFAULT_SHADOW_MAP_SIZE as f32 * 0.5;
+
+    // Transform the origin into clip space to find the sub-texel offset.
+    let origin_clip = shadow_vp.transform_point3(Vec3::ZERO);
+    let tx = origin_clip.x * half_texels;
+    let ty = origin_clip.y * half_texels;
+    let offset_x = (tx.round() - tx) / half_texels;
+    let offset_y = (ty.round() - ty) / half_texels;
+
+    // Apply the snap offset to the projection matrix.
+    light_proj.w_axis.x += offset_x;
+    light_proj.w_axis.y += offset_y;
 
     light_proj * light_view
 }

@@ -1927,12 +1927,12 @@ impl Renderer {
             device.cmd_push_constants(
                 cmd,
                 pipeline.layout(),
-                vk::ShaderStageFlags::VERTEX,
+                vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT,
                 0,
                 &push_data,
             );
 
-            // Material: push properties as fragment push constants (offset 68, 44 bytes).
+            // Material: push properties at offset 68 (44 bytes).
             // This ensures each draw call gets its own material data embedded in the
             // command stream, unlike the UBO which is shared across all draws.
             let mat_handle = material_handle
@@ -1959,7 +1959,7 @@ impl Renderer {
                 device.cmd_push_constants(
                     cmd,
                     pipeline.layout(),
-                    vk::ShaderStageFlags::FRAGMENT,
+                    vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT,
                     68,
                     frag_bytes,
                 );

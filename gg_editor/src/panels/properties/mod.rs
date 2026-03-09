@@ -458,6 +458,47 @@ fn draw_components(
                 }
                 gg_engine::for_each_addable_component!(add_component_buttons);
 
+                // 3D colliders — mesh-aware defaults so colliders match primitives.
+                {
+                    let mesh_prim = scene
+                        .get_component::<MeshRendererComponent>(entity)
+                        .map(|m| m.primitive);
+
+                    // Box Collider 3D
+                    if !scene.has_component::<BoxCollider3DComponent>(entity)
+                        && ui.button("Box Collider 3D").clicked()
+                    {
+                        undo_system.record(scene, "Add Box Collider 3D");
+                        let mut comp = BoxCollider3DComponent::default();
+                        if mesh_prim == Some(MeshPrimitive::Plane) {
+                            // Plane mesh is infinitely thin at Y=0.
+                            // Use a very thin collider offset so the top surface aligns with Y=0.
+                            comp.size = Vec3::new(0.5, 0.025, 0.5);
+                            comp.offset = Vec3::new(0.0, -0.025, 0.0);
+                        }
+                        scene.add_component(entity, comp);
+                        *scene_dirty = true;
+                    }
+
+                    // Sphere Collider 3D
+                    if !scene.has_component::<SphereCollider3DComponent>(entity)
+                        && ui.button("Sphere Collider 3D").clicked()
+                    {
+                        undo_system.record(scene, "Add Sphere Collider 3D");
+                        scene.add_component(entity, SphereCollider3DComponent::default());
+                        *scene_dirty = true;
+                    }
+
+                    // Capsule Collider 3D
+                    if !scene.has_component::<CapsuleCollider3DComponent>(entity)
+                        && ui.button("Capsule Collider 3D").clicked()
+                    {
+                        undo_system.record(scene, "Add Capsule Collider 3D");
+                        scene.add_component(entity, CapsuleCollider3DComponent::default());
+                        *scene_dirty = true;
+                    }
+                }
+
                 #[cfg(feature = "lua-scripting")]
                 {
                     if !scene.has_component::<LuaScriptComponent>(entity)
