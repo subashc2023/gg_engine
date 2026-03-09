@@ -106,6 +106,13 @@ impl UndoSystem {
         }
     }
 
+    /// Cancel an in-progress edit gesture without pushing to the undo stack.
+    /// Use when the edit should be discarded (e.g. stopping play mode).
+    pub fn cancel_edit(&mut self) {
+        self.editing_in_progress = false;
+        self.pending_entry = None;
+    }
+
     /// Record a discrete (instantaneous) edit.
     ///
     /// Captures the current state and pushes it to undo immediately.

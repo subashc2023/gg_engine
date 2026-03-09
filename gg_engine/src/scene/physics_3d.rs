@@ -3,6 +3,18 @@ use rapier3d::prelude::*;
 use std::collections::HashMap;
 use std::sync::Mutex;
 
+/// Result of a 3D raycast query.
+pub struct RaycastHit3D {
+    pub entity_uuid: u64,
+    pub hit_x: f32,
+    pub hit_y: f32,
+    pub hit_z: f32,
+    pub normal_x: f32,
+    pub normal_y: f32,
+    pub normal_z: f32,
+    pub toi: f32,
+}
+
 /// Fixed physics timestep (1/60 s ≈ 16.67 ms).
 const FIXED_TIMESTEP: f32 = 1.0 / 60.0;
 
@@ -156,15 +168,14 @@ impl PhysicsWorld3D {
         self.prev_transforms.get(&handle).copied()
     }
 
-    /// Cast a ray and return the first hit:
-    /// `(entity_uuid, hit_x, hit_y, hit_z, normal_x, normal_y, normal_z, toi)`.
+    /// Cast a ray and return the first hit.
     pub(crate) fn raycast(
         &self,
         origin: na::Point3<f32>,
         direction: na::Vector3<f32>,
         max_toi: f32,
         exclude_uuid: Option<u64>,
-    ) -> Option<(u64, f32, f32, f32, f32, f32, f32, f32)> {
+    ) -> Option<RaycastHit3D> {
         let ray = rapier3d::geometry::Ray::new(origin, direction);
         let predicate = |handle: ColliderHandle, _collider: &Collider| {
             if let Some(exclude) = exclude_uuid {
@@ -186,16 +197,16 @@ impl PhysicsWorld3D {
         ) {
             if let Some(&uuid) = self.collider_to_uuid.get(&collider_handle) {
                 let hit_point = ray.point_at(intersection.time_of_impact);
-                return Some((
-                    uuid,
-                    hit_point.x,
-                    hit_point.y,
-                    hit_point.z,
-                    intersection.normal.x,
-                    intersection.normal.y,
-                    intersection.normal.z,
-                    intersection.time_of_impact,
-                ));
+                return Some(RaycastHit3D {
+                    entity_uuid: uuid,
+                    hit_x: hit_point.x,
+                    hit_y: hit_point.y,
+                    hit_z: hit_point.z,
+                    normal_x: intersection.normal.x,
+                    normal_y: intersection.normal.y,
+                    normal_z: intersection.normal.z,
+                    toi: intersection.time_of_impact,
+                });
             }
         }
         None

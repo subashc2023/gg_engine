@@ -260,6 +260,44 @@ impl<V> BatchState<V> {
             )
         }
     }
+
+    /// Upload vertex data to the GPU buffer, handling capacity overflow.
+    ///
+    /// Returns `Some((vb_offset, data_len))` on success, or `None` if
+    /// the batch is empty or overflows capacity (in which case it is reset).
+    fn upload_to(
+        &mut self,
+        buffer: &DynamicVertexBuffer,
+        capacity: usize,
+        type_name: &str,
+    ) -> Option<(usize, usize)> {
+        if self.count == 0 {
+            return None;
+        }
+        let vertex_data = self.as_bytes();
+        let vb_offset = self.vb_write_offset;
+        let data_len = vertex_data.len();
+        if vb_offset + data_len > capacity {
+            warn!(
+                "{type_name} batch overflow: exceeded {MAX_BATCHES_PER_FRAME} flushes per frame. {} dropped.",
+                self.count
+            );
+            self.vertices.clear();
+            self.count = 0;
+            return None;
+        }
+        buffer.write_at(vb_offset, vertex_data);
+        Some((vb_offset, data_len))
+    }
+
+    /// Update stats, advance write offset, and reset for next batch.
+    fn finish_flush(&mut self, data_len: usize) {
+        self.stats.draw_calls += 1;
+        self.stats.quad_count += self.count as u32;
+        self.vb_write_offset += data_len;
+        self.vertices.clear();
+        self.count = 0;
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -873,28 +911,16 @@ impl Renderer2DData {
         current_frame: usize,
     ) {
         let mut batch = self.quad_batch.borrow_mut();
-        if batch.count == 0 {
+        let Some((vb_offset, data_len)) = batch.upload_to(
+            &self.vertex_buffers[current_frame],
+            QUAD_VB_CAPACITY,
+            "Quad",
+        ) else {
             return;
-        }
+        };
 
         let _timer = ProfileTimer::new("Renderer2D::flush_quads");
 
-        // 1. Copy vertex data to the mapped VB at the current write offset.
-        let vertex_data = batch.as_bytes();
-        let vb_offset = batch.vb_write_offset;
-        let data_len = vertex_data.len();
-        if vb_offset + data_len > QUAD_VB_CAPACITY {
-            warn!(
-                "Quad batch overflow: exceeded {} flushes per frame. {} quads dropped.",
-                MAX_BATCHES_PER_FRAME, batch.count
-            );
-            batch.vertices.clear();
-            batch.count = 0;
-            return;
-        }
-        self.vertex_buffers[current_frame].write_at(vb_offset, vertex_data);
-
-        // 2. Record Vulkan commands.
         let index_count = (batch.count * 6) as u32;
         let active_pipeline = self.quad_ps.active(self.use_offscreen, self.wireframe);
         let pipeline = active_pipeline.pipeline();
@@ -904,7 +930,6 @@ impl Renderer2DData {
             self.device
                 .cmd_bind_pipeline(cmd_buf, vk::PipelineBindPoint::GRAPHICS, pipeline);
 
-            // Bind camera UBO (set 0) and bindless textures (set 1) together.
             self.device.cmd_bind_descriptor_sets(
                 cmd_buf,
                 vk::PipelineBindPoint::GRAPHICS,
@@ -914,13 +939,10 @@ impl Renderer2DData {
                 &[],
             );
 
-            // Bind vertex buffer at this batch's offset so the GPU reads
-            // the correct region (each flush writes to a distinct sub-region).
             let vb_handle = self.vertex_buffers[current_frame].handle();
             self.device
                 .cmd_bind_vertex_buffers(cmd_buf, 0, &[vb_handle], &[vb_offset as u64]);
 
-            // Bind index buffer.
             self.device.cmd_bind_index_buffer(
                 cmd_buf,
                 self.index_buffer.buffer(),
@@ -928,18 +950,11 @@ impl Renderer2DData {
                 vk::IndexType::UINT32,
             );
 
-            // Draw!
             self.device
                 .cmd_draw_indexed(cmd_buf, index_count, 1, 0, 0, 0);
         }
 
-        // 3. Update stats, advance write offset, and reset vertices for next batch.
-        batch.stats.draw_calls += 1;
-        batch.stats.quad_count += batch.count as u32;
-        batch.vb_write_offset = vb_offset + data_len;
-
-        batch.vertices.clear();
-        batch.count = 0;
+        batch.finish_flush(data_len);
     }
 
     // -- Circle batch operations --
@@ -971,28 +986,16 @@ impl Renderer2DData {
         current_frame: usize,
     ) {
         let mut batch = self.circle_batch.borrow_mut();
-        if batch.count == 0 {
+        let Some((vb_offset, data_len)) = batch.upload_to(
+            &self.circle_vertex_buffers[current_frame],
+            CIRCLE_VB_CAPACITY,
+            "Circle",
+        ) else {
             return;
-        }
+        };
 
         let _timer = ProfileTimer::new("Renderer2D::flush_circles");
 
-        // 1. Copy vertex data to the mapped VB at the current write offset.
-        let vertex_data = batch.as_bytes();
-        let vb_offset = batch.vb_write_offset;
-        let data_len = vertex_data.len();
-        if vb_offset + data_len > CIRCLE_VB_CAPACITY {
-            warn!(
-                "Circle batch overflow: exceeded {} flushes per frame. {} circles dropped.",
-                MAX_BATCHES_PER_FRAME, batch.count
-            );
-            batch.vertices.clear();
-            batch.count = 0;
-            return;
-        }
-        self.circle_vertex_buffers[current_frame].write_at(vb_offset, vertex_data);
-
-        // 2. Record Vulkan commands.
         let index_count = (batch.count * 6) as u32;
         let active_pipeline = self.circle_ps.active(self.use_offscreen, self.wireframe);
         let pipeline = active_pipeline.pipeline();
@@ -1002,7 +1005,6 @@ impl Renderer2DData {
             self.device
                 .cmd_bind_pipeline(cmd_buf, vk::PipelineBindPoint::GRAPHICS, pipeline);
 
-            // Bind camera UBO (set 0) only — circles don't use textures.
             self.device.cmd_bind_descriptor_sets(
                 cmd_buf,
                 vk::PipelineBindPoint::GRAPHICS,
@@ -1012,12 +1014,10 @@ impl Renderer2DData {
                 &[],
             );
 
-            // Bind circle vertex buffer at this batch's offset.
             let vb_handle = self.circle_vertex_buffers[current_frame].handle();
             self.device
                 .cmd_bind_vertex_buffers(cmd_buf, 0, &[vb_handle], &[vb_offset as u64]);
 
-            // Bind index buffer (shared with quads — same topology).
             self.device.cmd_bind_index_buffer(
                 cmd_buf,
                 self.index_buffer.buffer(),
@@ -1025,18 +1025,11 @@ impl Renderer2DData {
                 vk::IndexType::UINT32,
             );
 
-            // Draw!
             self.device
                 .cmd_draw_indexed(cmd_buf, index_count, 1, 0, 0, 0);
         }
 
-        // 3. Update stats, advance write offset, and reset vertices for next batch.
-        batch.stats.draw_calls += 1;
-        batch.stats.quad_count += batch.count as u32;
-        batch.vb_write_offset = vb_offset + data_len;
-
-        batch.vertices.clear();
-        batch.count = 0;
+        batch.finish_flush(data_len);
     }
 
     /// Get the accumulated quad statistics for this frame.
@@ -1078,28 +1071,16 @@ impl Renderer2DData {
         line_width: f32,
     ) {
         let mut batch = self.line_batch.borrow_mut();
-        if batch.count == 0 {
+        let Some((vb_offset, data_len)) = batch.upload_to(
+            &self.line_vertex_buffers[current_frame],
+            LINE_VB_CAPACITY,
+            "Line",
+        ) else {
             return;
-        }
+        };
 
         let _timer = ProfileTimer::new("Renderer2D::flush_lines");
 
-        // 1. Copy vertex data to the mapped VB at the current write offset.
-        let vertex_data = batch.as_bytes();
-        let vb_offset = batch.vb_write_offset;
-        let data_len = vertex_data.len();
-        if vb_offset + data_len > LINE_VB_CAPACITY {
-            warn!(
-                "Line batch overflow: exceeded {} flushes per frame. {} lines dropped.",
-                MAX_BATCHES_PER_FRAME, batch.count
-            );
-            batch.vertices.clear();
-            batch.count = 0;
-            return;
-        }
-        self.line_vertex_buffers[current_frame].write_at(vb_offset, vertex_data);
-
-        // 2. Record Vulkan commands.
         let vertex_count = (batch.count * 2) as u32;
         let active_pipeline = self.line_ps.active(self.use_offscreen, self.wireframe);
         let pipeline = active_pipeline.pipeline();
@@ -1109,10 +1090,8 @@ impl Renderer2DData {
             self.device
                 .cmd_bind_pipeline(cmd_buf, vk::PipelineBindPoint::GRAPHICS, pipeline);
 
-            // Set line width (dynamic state).
             self.device.cmd_set_line_width(cmd_buf, line_width);
 
-            // Bind camera UBO (set 0) only — lines don't use textures.
             self.device.cmd_bind_descriptor_sets(
                 cmd_buf,
                 vk::PipelineBindPoint::GRAPHICS,
@@ -1122,22 +1101,14 @@ impl Renderer2DData {
                 &[],
             );
 
-            // Bind line vertex buffer at this batch's offset.
             let vb_handle = self.line_vertex_buffers[current_frame].handle();
             self.device
                 .cmd_bind_vertex_buffers(cmd_buf, 0, &[vb_handle], &[vb_offset as u64]);
 
-            // Draw! Lines use cmd_draw (non-indexed).
             self.device.cmd_draw(cmd_buf, vertex_count, 1, 0, 0);
         }
 
-        // 3. Update stats, advance write offset, and reset vertices for next batch.
-        batch.stats.draw_calls += 1;
-        batch.stats.quad_count += batch.count as u32;
-        batch.vb_write_offset = vb_offset + data_len;
-
-        batch.vertices.clear();
-        batch.count = 0;
+        batch.finish_flush(data_len);
     }
 
     /// Get the accumulated line statistics for this frame.
@@ -1173,28 +1144,16 @@ impl Renderer2DData {
         current_frame: usize,
     ) {
         let mut batch = self.text_batch.borrow_mut();
-        if batch.count == 0 {
+        let Some((vb_offset, data_len)) = batch.upload_to(
+            &self.text_vertex_buffers[current_frame],
+            QUAD_VB_CAPACITY,
+            "Text",
+        ) else {
             return;
-        }
+        };
 
         let _timer = ProfileTimer::new("Renderer2D::flush_text");
 
-        // 1. Copy vertex data to the mapped VB at the current write offset.
-        let vertex_data = batch.as_bytes();
-        let vb_offset = batch.vb_write_offset;
-        let data_len = vertex_data.len();
-        if vb_offset + data_len > QUAD_VB_CAPACITY {
-            warn!(
-                "Text batch overflow: exceeded {} flushes per frame. {} text quads dropped.",
-                MAX_BATCHES_PER_FRAME, batch.count
-            );
-            batch.vertices.clear();
-            batch.count = 0;
-            return;
-        }
-        self.text_vertex_buffers[current_frame].write_at(vb_offset, vertex_data);
-
-        // 2. Record Vulkan commands.
         let index_count = (batch.count * 6) as u32;
         let active_pipeline = self.text_ps.active(self.use_offscreen, self.wireframe);
         let pipeline = active_pipeline.pipeline();
@@ -1204,7 +1163,6 @@ impl Renderer2DData {
             self.device
                 .cmd_bind_pipeline(cmd_buf, vk::PipelineBindPoint::GRAPHICS, pipeline);
 
-            // Bind camera UBO (set 0) and bindless textures (set 1).
             self.device.cmd_bind_descriptor_sets(
                 cmd_buf,
                 vk::PipelineBindPoint::GRAPHICS,
@@ -1214,12 +1172,10 @@ impl Renderer2DData {
                 &[],
             );
 
-            // Bind text vertex buffer at this batch's offset.
             let vb_handle = self.text_vertex_buffers[current_frame].handle();
             self.device
                 .cmd_bind_vertex_buffers(cmd_buf, 0, &[vb_handle], &[vb_offset as u64]);
 
-            // Bind index buffer (shared with quads — same topology).
             self.device.cmd_bind_index_buffer(
                 cmd_buf,
                 self.index_buffer.buffer(),
@@ -1227,18 +1183,11 @@ impl Renderer2DData {
                 vk::IndexType::UINT32,
             );
 
-            // Draw!
             self.device
                 .cmd_draw_indexed(cmd_buf, index_count, 1, 0, 0, 0);
         }
 
-        // 3. Update stats, advance write offset, and reset vertices for next batch.
-        batch.stats.draw_calls += 1;
-        batch.stats.quad_count += batch.count as u32;
-        batch.vb_write_offset = vb_offset + data_len;
-
-        batch.vertices.clear();
-        batch.count = 0;
+        batch.finish_flush(data_len);
     }
 
     /// Get the accumulated text statistics for this frame.
@@ -1274,28 +1223,16 @@ impl Renderer2DData {
         current_frame: usize,
     ) {
         let mut batch = self.instance_batch.borrow_mut();
-        if batch.count == 0 {
+        let Some((ib_offset, data_len)) = batch.upload_to(
+            &self.instance_buffers[current_frame],
+            INSTANCE_VB_CAPACITY,
+            "Instance",
+        ) else {
             return;
-        }
+        };
 
         let _timer = ProfileTimer::new("Renderer2D::flush_instances");
 
-        // 1. Copy instance data to the mapped instance buffer at the current write offset.
-        let instance_data = batch.as_bytes();
-        let ib_offset = batch.vb_write_offset;
-        let data_len = instance_data.len();
-        if ib_offset + data_len > INSTANCE_VB_CAPACITY {
-            warn!(
-                "Instance batch overflow: exceeded {} flushes per frame. {} instances dropped.",
-                MAX_BATCHES_PER_FRAME, batch.count
-            );
-            batch.vertices.clear();
-            batch.count = 0;
-            return;
-        }
-        self.instance_buffers[current_frame].write_at(ib_offset, instance_data);
-
-        // 2. Record Vulkan commands.
         let instance_count = batch.count as u32;
         let active_pipeline = self.instance_ps.active(self.use_offscreen, self.wireframe);
         let pipeline = active_pipeline.pipeline();
@@ -1305,7 +1242,6 @@ impl Renderer2DData {
             self.device
                 .cmd_bind_pipeline(cmd_buf, vk::PipelineBindPoint::GRAPHICS, pipeline);
 
-            // Bind camera UBO (set 0) and bindless textures (set 1).
             self.device.cmd_bind_descriptor_sets(
                 cmd_buf,
                 vk::PipelineBindPoint::GRAPHICS,
@@ -1315,8 +1251,6 @@ impl Renderer2DData {
                 &[],
             );
 
-            // Bind vertex buffers: binding 0 = unit quad (static, offset 0),
-            //                      binding 1 = instance data (at this batch's offset).
             let uq_handle = self.unit_quad_vb.handle();
             let inst_handle = self.instance_buffers[current_frame].handle();
             self.device.cmd_bind_vertex_buffers(
@@ -1326,7 +1260,6 @@ impl Renderer2DData {
                 &[0, ib_offset as u64],
             );
 
-            // Bind index buffer (unit quad: 6 indices).
             self.device.cmd_bind_index_buffer(
                 cmd_buf,
                 self.unit_quad_ib.buffer(),
@@ -1334,18 +1267,11 @@ impl Renderer2DData {
                 vk::IndexType::UINT32,
             );
 
-            // Draw instanced! 6 indices per quad, N instances.
             self.device
                 .cmd_draw_indexed(cmd_buf, 6, instance_count, 0, 0, 0);
         }
 
-        // 3. Update stats, advance write offset, and reset instances for next batch.
-        batch.stats.draw_calls += 1;
-        batch.stats.quad_count += batch.count as u32;
-        batch.vb_write_offset = ib_offset + data_len;
-
-        batch.vertices.clear();
-        batch.count = 0;
+        batch.finish_flush(data_len);
     }
 
     /// Get the accumulated instance statistics for this frame.

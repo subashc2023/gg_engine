@@ -1014,6 +1014,11 @@ impl Application for GGEditor {
         renderer.flush_transfers();
 
         // Step 2: Resolve texture, audio, font, and mesh handles (async — non-blocking).
+        // If the scene was modified this frame, invalidate the texture resolution
+        // cache so new or changed texture handles get picked up.
+        if self.scene_ctx.dirty {
+            self.scene.invalidate_texture_cache();
+        }
         if let Some(ref mut am) = self.project_state.asset_manager {
             self.scene.resolve_texture_handles_async(am);
             self.scene.resolve_audio_handles(am);

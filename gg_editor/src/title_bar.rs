@@ -267,8 +267,15 @@ pub fn title_bar_ui(
                         egui::Color32::from_rgb(0x2A, 0x50, 0x70),
                     );
                 }
-                if resp.hovered() {
+                if resp.hovered() && !is_paused {
                     painter.rect_filled(rect, egui::CornerRadius::same(3), BUTTON_HOVER_BG);
+                } else if resp.hovered() && is_paused {
+                    // Lighter variant of pause highlight so the active state stays visible.
+                    painter.rect_filled(
+                        rect,
+                        egui::CornerRadius::same(3),
+                        egui::Color32::from_rgb(0x35, 0x62, 0x88),
+                    );
                 }
                 super::icons::paint_pause_icon(painter, rect.center(), 10.0);
             }

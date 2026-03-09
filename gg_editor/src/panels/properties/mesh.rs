@@ -60,10 +60,16 @@ pub(crate) fn draw_mesh_renderer_component(
             egui::ComboBox::from_label("Mesh Source")
                 .selected_text(current_source)
                 .show_ui(ui, |ui| {
-                    if ui.selectable_value(&mut source_idx, 0, source_labels[0]).changed() {
+                    if ui
+                        .selectable_value(&mut source_idx, 0, source_labels[0])
+                        .changed()
+                    {
                         source_changed = true;
                     }
-                    if ui.selectable_value(&mut source_idx, 1, source_labels[1]).changed() {
+                    if ui
+                        .selectable_value(&mut source_idx, 1, source_labels[1])
+                        .changed()
+                    {
                         source_changed = true;
                     }
                 });
@@ -72,18 +78,14 @@ pub(crate) fn draw_mesh_renderer_component(
             if source_changed {
                 if source_idx == 0 && !is_primitive {
                     // Switch to primitive.
-                    if let Some(mut mc) =
-                        scene.get_component_mut::<MeshRendererComponent>(entity)
-                    {
+                    if let Some(mut mc) = scene.get_component_mut::<MeshRendererComponent>(entity) {
                         mc.mesh_source = MeshSource::Primitive(MeshPrimitive::Cube);
                     }
                     scene.invalidate_mesh(entity);
                     *scene_dirty = true;
                 } else if source_idx == 1 && is_primitive {
                     // Switch to asset (no asset selected yet).
-                    if let Some(mut mc) =
-                        scene.get_component_mut::<MeshRendererComponent>(entity)
-                    {
+                    if let Some(mut mc) = scene.get_component_mut::<MeshRendererComponent>(entity) {
                         mc.mesh_source = MeshSource::Asset(Uuid::from_raw(0));
                     }
                     scene.invalidate_mesh(entity);

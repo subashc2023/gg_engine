@@ -1,6 +1,6 @@
 use super::{
-    Entity, IdComponent, NativeScriptComponent, RigidBody2DComponent, RigidBody3DComponent, Scene,
-    TransformComponent,
+    Entity, IdComponent, NativeScript, NativeScriptComponent, RigidBody2DComponent,
+    RigidBody3DComponent, Scene, TransformComponent,
 };
 use crate::input::Input;
 use crate::timestep::Timestep;
@@ -410,8 +410,31 @@ impl Scene {
     /// Call this from [`Application::on_update`] each frame, **before** rendering.
     pub fn on_update_scripts(&mut self, dt: Timestep, input: &Input) {
         let _timer = crate::profiling::ProfileTimer::new("Scene::on_update_scripts");
-        // Collect entity handles that have a NativeScriptComponent.
-        // We snapshot first because we need &mut self inside the loop.
+        self.run_native_scripts(dt, input, |inst, entity, scene, dt, input| {
+            inst.on_update(entity, scene, dt, input);
+        });
+    }
+
+    /// Run `on_fixed_update` on all [`NativeScriptComponent`] instances.
+    ///
+    /// Called inside the physics step loop at the fixed physics rate.
+    pub(super) fn run_native_fixed_update(&mut self, dt: Timestep, input: &Input) {
+        self.run_native_scripts(dt, input, |inst, entity, scene, dt, input| {
+            inst.on_fixed_update(entity, scene, dt, input);
+        });
+    }
+
+    /// Shared take-execute-replace loop for native scripts.
+    ///
+    /// Collects all entities with a [`NativeScriptComponent`], lazily
+    /// instantiates if needed, takes the instance out (releasing the hecs
+    /// borrow), calls `callback`, and puts the instance back.
+    fn run_native_scripts(
+        &mut self,
+        dt: Timestep,
+        input: &Input,
+        callback: impl Fn(&mut dyn NativeScript, Entity, &mut Scene, Timestep, &Input),
+    ) {
         let script_entities: Vec<(hecs::Entity, bool)> = self
             .world
             .query::<(hecs::Entity, &NativeScriptComponent)>()
@@ -446,54 +469,9 @@ impl Scene {
             if needs_create {
                 instance.on_create(entity, self);
             }
-            instance.on_update(entity, self, dt, input);
+            callback(&mut *instance, entity, self, dt, input);
 
             // Put the instance back.
-            if let Ok(mut nsc) = self.world.get::<&mut NativeScriptComponent>(handle) {
-                nsc.instance = Some(instance);
-            }
-        }
-    }
-
-    /// Run `on_fixed_update` on all [`NativeScriptComponent`] instances.
-    ///
-    /// Called inside the physics step loop at the fixed physics rate.
-    /// Uses the same take-modify-replace pattern as [`on_update_scripts`].
-    pub(super) fn run_native_fixed_update(&mut self, dt: Timestep, input: &Input) {
-        let script_entities: Vec<(hecs::Entity, bool)> = self
-            .world
-            .query::<(hecs::Entity, &NativeScriptComponent)>()
-            .iter()
-            .map(|(e, nsc)| (e, nsc.instance.is_some()))
-            .collect();
-
-        for (handle, had_instance) in script_entities {
-            let entity = Entity::new(handle);
-
-            // Lazy instantiation.
-            if !had_instance {
-                if let Ok(mut nsc) = self.world.get::<&mut NativeScriptComponent>(handle) {
-                    nsc.instance = Some((nsc.instantiate_fn)());
-                }
-            }
-
-            let (mut instance, needs_create) = {
-                let Ok(mut nsc) = self.world.get::<&mut NativeScriptComponent>(handle) else {
-                    continue;
-                };
-                let Some(inst) = nsc.instance.take() else {
-                    continue;
-                };
-                let needs_create = !nsc.created;
-                nsc.created = true;
-                (inst, needs_create)
-            };
-
-            if needs_create {
-                instance.on_create(entity, self);
-            }
-            instance.on_fixed_update(entity, self, dt, input);
-
             if let Ok(mut nsc) = self.world.get::<&mut NativeScriptComponent>(handle) {
                 nsc.instance = Some(instance);
             }

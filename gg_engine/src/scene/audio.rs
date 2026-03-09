@@ -58,6 +58,16 @@ impl SoundHandle {
 /// Maximum number of cached static sound data entries before LRU eviction kicks in.
 const SOUND_CACHE_MAX: usize = 128;
 
+/// Convert linear amplitude (0.0–1.0) to decibels for kira.
+/// Returns -80 dB for silence (volume <= 0).
+pub(crate) fn linear_to_db(volume: f32) -> f32 {
+    if volume <= 0.0 {
+        -80.0
+    } else {
+        20.0 * volume.log10()
+    }
+}
+
 /// Wrapper around kira's AudioManager, providing entity-keyed playback.
 ///
 /// Supports multiple simultaneous sounds per entity (e.g. footsteps + breathing),
@@ -153,7 +163,7 @@ impl AudioEngine {
         };
 
         let mut settings = StaticSoundSettings::new()
-            .volume(volume)
+            .volume(Decibels(linear_to_db(volume)))
             .playback_rate(pitch as f64);
         if looping {
             settings = settings.loop_region(..);
@@ -188,7 +198,9 @@ impl AudioEngine {
             }
         };
 
-        let mut data = sound_data.volume(volume).playback_rate(pitch as f64);
+        let mut data = sound_data
+            .volume(Decibels(linear_to_db(volume)))
+            .playback_rate(pitch as f64);
         if looping {
             data = data.loop_region(..);
         }

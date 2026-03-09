@@ -2,9 +2,8 @@ use super::{
     AmbientLightComponent, AnimationControllerComponent, CircleRendererComponent,
     DirectionalLightComponent, Entity, IdComponent, InstancedSpriteAnimator, MeshPrimitive,
     MeshRendererComponent, MeshSource, ParticleEmitterComponent, PointLightComponent,
-    RigidBody3DComponent, RigidBody3DType, Scene, SpriteAnimatorComponent,
-    SpriteRendererComponent, TextComponent, TilemapComponent, TransformComponent, TILE_FLIP_H,
-    TILE_FLIP_V, TILE_ID_MASK,
+    RigidBody3DComponent, RigidBody3DType, Scene, SpriteAnimatorComponent, SpriteRendererComponent,
+    TextComponent, TilemapComponent, TransformComponent, TILE_FLIP_H, TILE_FLIP_V, TILE_ID_MASK,
 };
 use crate::renderer::shadow_map::compute_directional_light_vp;
 use crate::renderer::{Font, LightEnvironment, Mesh, Renderer, SubTexture2D};
@@ -257,54 +256,48 @@ impl Scene {
     ) {
         let _timer = crate::profiling::ProfileTimer::new("Scene::resolve_texture_handles");
 
-        // Phase 1: collect entities that need texture resolution.
-        let needs_resolve: Vec<(hecs::Entity, crate::uuid::Uuid)> = self
-            .world
-            .query::<(hecs::Entity, &SpriteRendererComponent)>()
-            .iter()
-            .filter_map(|(handle, sprite)| {
-                if sprite.texture_handle.raw() != 0 && sprite.texture.is_none() {
-                    Some((handle, sprite.texture_handle))
-                } else {
-                    None
-                }
-            })
-            .collect();
+        /// Collect entities with an unresolved texture handle and assign textures.
+        macro_rules! resolve_textures_sync {
+            ($world:expr, $asset_manager:expr, $renderer:expr, $Component:ty, $texture_field:ident) => {{
+                let needs: Vec<(hecs::Entity, crate::uuid::Uuid)> = $world
+                    .query::<(hecs::Entity, &$Component)>()
+                    .iter()
+                    .filter_map(|(handle, comp)| {
+                        if comp.texture_handle.raw() != 0 && comp.$texture_field.is_none() {
+                            Some((handle, comp.texture_handle))
+                        } else {
+                            None
+                        }
+                    })
+                    .collect();
 
-        // Phase 2: load assets and assign textures.
-        for (handle, asset_handle) in needs_resolve {
-            asset_manager.load_asset(&asset_handle, renderer);
-            if let Some(texture) = asset_manager.get_texture(&asset_handle) {
-                if let Ok(mut sprite) = self.world.get::<&mut SpriteRendererComponent>(handle) {
-                    sprite.texture = Some(texture);
+                for (handle, asset_handle) in needs {
+                    $asset_manager.load_asset(&asset_handle, $renderer);
+                    if let Some(texture) = $asset_manager.get_texture(&asset_handle) {
+                        if let Ok(mut comp) = $world.get::<&mut $Component>(handle) {
+                            comp.$texture_field = Some(texture);
+                        }
+                    }
                 }
-            }
+            }};
         }
 
-        // Phase 3: resolve tilemap textures.
-        let tilemap_needs: Vec<(hecs::Entity, crate::uuid::Uuid)> = self
-            .world
-            .query::<(hecs::Entity, &TilemapComponent)>()
-            .iter()
-            .filter_map(|(handle, tilemap)| {
-                if tilemap.texture_handle.raw() != 0 && tilemap.texture.is_none() {
-                    Some((handle, tilemap.texture_handle))
-                } else {
-                    None
-                }
-            })
-            .collect();
+        resolve_textures_sync!(
+            self.world,
+            asset_manager,
+            renderer,
+            SpriteRendererComponent,
+            texture
+        );
+        resolve_textures_sync!(
+            self.world,
+            asset_manager,
+            renderer,
+            TilemapComponent,
+            texture
+        );
 
-        for (handle, asset_handle) in tilemap_needs {
-            asset_manager.load_asset(&asset_handle, renderer);
-            if let Some(texture) = asset_manager.get_texture(&asset_handle) {
-                if let Ok(mut tilemap) = self.world.get::<&mut TilemapComponent>(handle) {
-                    tilemap.texture = Some(texture);
-                }
-            }
-        }
-
-        // Phase 4: resolve per-clip animator textures.
+        // Resolve per-clip animator textures.
         self.resolve_animator_clip_textures(asset_manager, Some(renderer));
     }
 
@@ -320,93 +313,85 @@ impl Scene {
         &mut self,
         asset_manager: &mut crate::asset::EditorAssetManager,
     ) {
+        // Skip scanning all entities when everything is already resolved.
+        if self.textures_all_resolved {
+            return;
+        }
         let _timer = crate::profiling::ProfileTimer::new("Scene::resolve_texture_handles_async");
 
-        // Phase 1: sprites.
-        let needs_resolve: Vec<(hecs::Entity, crate::uuid::Uuid)> = self
-            .world
-            .query::<(hecs::Entity, &SpriteRendererComponent)>()
-            .iter()
-            .filter_map(|(handle, sprite)| {
-                if sprite.texture_handle.raw() != 0 && sprite.texture.is_none() {
-                    Some((handle, sprite.texture_handle))
-                } else {
-                    None
-                }
-            })
-            .collect();
+        let mut found_unresolved = false;
 
-        for (handle, asset_handle) in needs_resolve {
-            if let Some(texture) = asset_manager.get_texture(&asset_handle) {
-                if let Ok(mut sprite) = self.world.get::<&mut SpriteRendererComponent>(handle) {
-                    sprite.texture = Some(texture);
+        /// Collect entities with an unresolved texture handle and assign or request load.
+        macro_rules! resolve_textures_async {
+            ($world:expr, $asset_manager:expr, $found:expr, $Component:ty, $texture_field:ident) => {{
+                let needs: Vec<(hecs::Entity, crate::uuid::Uuid)> = $world
+                    .query::<(hecs::Entity, &$Component)>()
+                    .iter()
+                    .filter_map(|(handle, comp)| {
+                        if comp.texture_handle.raw() != 0 && comp.$texture_field.is_none() {
+                            Some((handle, comp.texture_handle))
+                        } else {
+                            None
+                        }
+                    })
+                    .collect();
+
+                $found |= !needs.is_empty();
+                for (handle, asset_handle) in needs {
+                    if let Some(texture) = $asset_manager.get_texture(&asset_handle) {
+                        if let Ok(mut comp) = $world.get::<&mut $Component>(handle) {
+                            comp.$texture_field = Some(texture);
+                        }
+                    } else {
+                        $asset_manager.request_load(&asset_handle);
+                    }
                 }
-            } else {
-                asset_manager.request_load(&asset_handle);
-            }
+            }};
         }
 
-        // Phase 2: tilemaps.
-        let tilemap_needs: Vec<(hecs::Entity, crate::uuid::Uuid)> = self
-            .world
-            .query::<(hecs::Entity, &TilemapComponent)>()
-            .iter()
-            .filter_map(|(handle, tilemap)| {
-                if tilemap.texture_handle.raw() != 0 && tilemap.texture.is_none() {
-                    Some((handle, tilemap.texture_handle))
-                } else {
-                    None
-                }
-            })
-            .collect();
+        resolve_textures_async!(
+            self.world,
+            asset_manager,
+            found_unresolved,
+            SpriteRendererComponent,
+            texture
+        );
+        resolve_textures_async!(
+            self.world,
+            asset_manager,
+            found_unresolved,
+            TilemapComponent,
+            texture
+        );
+        resolve_textures_async!(
+            self.world,
+            asset_manager,
+            found_unresolved,
+            MeshRendererComponent,
+            texture
+        );
 
-        for (handle, asset_handle) in tilemap_needs {
-            if let Some(texture) = asset_manager.get_texture(&asset_handle) {
-                if let Ok(mut tilemap) = self.world.get::<&mut TilemapComponent>(handle) {
-                    tilemap.texture = Some(texture);
-                }
-            } else {
-                asset_manager.request_load(&asset_handle);
-            }
+        // Resolve per-clip animator textures.
+        found_unresolved |= self.resolve_animator_clip_textures(asset_manager, None);
+
+        if !found_unresolved {
+            self.textures_all_resolved = true;
         }
-
-        // Phase 3: mesh renderer textures.
-        let mesh_needs: Vec<(hecs::Entity, crate::uuid::Uuid)> = self
-            .world
-            .query::<(hecs::Entity, &MeshRendererComponent)>()
-            .iter()
-            .filter_map(|(handle, mesh)| {
-                if mesh.texture_handle.raw() != 0 && mesh.texture.is_none() {
-                    Some((handle, mesh.texture_handle))
-                } else {
-                    None
-                }
-            })
-            .collect();
-
-        for (handle, asset_handle) in mesh_needs {
-            if let Some(texture) = asset_manager.get_texture(&asset_handle) {
-                if let Ok(mut mesh) = self.world.get::<&mut MeshRendererComponent>(handle) {
-                    mesh.texture = Some(texture);
-                }
-            } else {
-                asset_manager.request_load(&asset_handle);
-            }
-        }
-
-        // Phase 4: resolve per-clip animator textures.
-        self.resolve_animator_clip_textures(asset_manager, None);
     }
 
     /// Resolve per-clip texture handles in all [`SpriteAnimatorComponent`]s.
     ///
     /// If `renderer` is `Some`, uses synchronous `load_asset`; otherwise
     /// uses `request_load` for async loading.
+    ///
+    /// Returns `true` if any clips had unresolved textures.
     fn resolve_animator_clip_textures(
         &mut self,
         asset_manager: &mut crate::asset::EditorAssetManager,
         renderer: Option<&Renderer>,
-    ) {
+    ) -> bool {
+        let mut had_unresolved = false;
+
         // Collect (entity, clip_index, handle) for SpriteAnimatorComponent clips.
         let needs: Vec<(hecs::Entity, usize, crate::uuid::Uuid)> = self
             .world
@@ -422,6 +407,7 @@ impl Scene {
             })
             .collect();
 
+        had_unresolved |= !needs.is_empty();
         for (entity, clip_idx, asset_handle) in needs {
             if let Some(r) = renderer {
                 asset_manager.load_asset(&asset_handle, r);
@@ -452,6 +438,7 @@ impl Scene {
             })
             .collect();
 
+        had_unresolved |= !instanced_needs.is_empty();
         for (entity, clip_idx, asset_handle) in instanced_needs {
             if let Some(r) = renderer {
                 asset_manager.load_asset(&asset_handle, r);
@@ -466,6 +453,7 @@ impl Scene {
                 asset_manager.request_load(&asset_handle);
             }
         }
+        had_unresolved
     }
 
     /// Async variant of [`load_fonts`](Self::load_fonts).
@@ -553,10 +541,7 @@ impl Scene {
     /// Resolve mesh asset references: assigns cached CPU mesh data from the
     /// asset manager to entities with [`MeshSource::Asset`] that don't have
     /// it yet. Also enqueues async loads for missing mesh assets.
-    pub fn resolve_mesh_assets(
-        &mut self,
-        asset_manager: &mut crate::asset::EditorAssetManager,
-    ) {
+    pub fn resolve_mesh_assets(&mut self, asset_manager: &mut crate::asset::EditorAssetManager) {
         let needs: Vec<(hecs::Entity, crate::uuid::Uuid)> = self
             .world
             .query::<(hecs::Entity, &MeshRendererComponent)>()
@@ -683,6 +668,13 @@ impl Scene {
         while self.va_graveyard.len() > MAX_FRAMES_IN_FLIGHT {
             self.va_graveyard.pop_front(); // Drop old VAs — GPU is done with them.
         }
+    }
+
+    /// Invalidate the texture resolution cache so the next call to
+    /// `resolve_texture_handles_async` re-scans all entities.
+    /// Call when a texture handle is changed (e.g. from the editor properties panel).
+    pub fn invalidate_texture_cache(&mut self) {
+        self.textures_all_resolved = false;
     }
 
     // -----------------------------------------------------------------
@@ -839,7 +831,9 @@ impl Scene {
             match kind {
                 0 => {
                     // Sprite
-                    let sprite = self.world.get::<&SpriteRendererComponent>(handle).unwrap();
+                    let Ok(sprite) = self.world.get::<&SpriteRendererComponent>(handle) else {
+                        continue;
+                    };
 
                     // GPU animation path: InstancedSpriteAnimator with active playback.
                     // The vertex shader computes UVs from animation params + u_time.
@@ -960,17 +954,23 @@ impl Scene {
                 }
                 1 => {
                     // Circle
-                    let circle = self.world.get::<&CircleRendererComponent>(handle).unwrap();
+                    let Ok(circle) = self.world.get::<&CircleRendererComponent>(handle) else {
+                        continue;
+                    };
                     renderer.draw_circle_component(&world_transform, &circle, handle.id() as i32);
                 }
                 2 => {
                     // Text
-                    let text = self.world.get::<&TextComponent>(handle).unwrap();
+                    let Ok(text) = self.world.get::<&TextComponent>(handle) else {
+                        continue;
+                    };
                     renderer.draw_text_component(&world_transform, &text, handle.id() as i32);
                 }
                 3 => {
                     // Tilemap — frustum culled + precomputed transforms.
-                    let tilemap = self.world.get::<&TilemapComponent>(handle).unwrap();
+                    let Ok(tilemap) = self.world.get::<&TilemapComponent>(handle) else {
+                        continue;
+                    };
                     let texture = match tilemap.texture.as_ref() {
                         Some(tex) => tex.clone(),
                         None => continue,

@@ -190,13 +190,15 @@ impl Scene {
     }
 
     /// Set audio volume for an entity (used by Lua scripts).
+    /// Accepts linear amplitude (0.0–1.0), converted to dB internally.
     pub fn set_entity_volume(&mut self, entity: Entity, volume: f32) {
         let uuid = match self.get_component::<IdComponent>(entity) {
             Some(id) => id.id.raw(),
             None => return,
         };
         if let Some(ref mut engine) = self.audio_engine {
-            engine.set_volume(uuid, volume);
+            let volume_db = super::audio::linear_to_db(volume);
+            engine.set_volume(uuid, volume_db);
         }
     }
 

@@ -384,10 +384,7 @@ impl EditorAssetManager {
         }
 
         if !validate_asset_path(&metadata.file_path) {
-            log::warn!(
-                "Rejected unsafe mesh asset path: '{}'",
-                metadata.file_path
-            );
+            log::warn!("Rejected unsafe mesh asset path: '{}'", metadata.file_path);
             return;
         }
 

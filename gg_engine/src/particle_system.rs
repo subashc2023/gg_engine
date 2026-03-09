@@ -193,8 +193,8 @@ impl ParticleSystem {
                 continue;
             }
 
-            // Velocity damping — particles slow down over time, feels organic.
-            particle.velocity *= 1.0 - 2.0 * dt_s;
+            // Velocity damping — exponential decay (frame-rate independent, safe for large dt).
+            particle.velocity *= (-2.0 * dt_s).exp();
             particle.position += particle.velocity * dt_s;
             particle.rotation += particle.rotation_speed * dt_s;
         }

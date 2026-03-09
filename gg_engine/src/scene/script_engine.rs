@@ -99,10 +99,9 @@ pub struct ScriptEngine {
     lua: Lua,
     /// Per-entity Lua environments keyed by entity UUID (u64).
     entity_envs: HashMap<u64, LuaRegistryKey>,
-    /// Consecutive error counts per (entity, callback) — used to auto-disable broken scripts.
-    /// Keyed by (entity UUID, callback name) so errors in one callback don't
-    /// reset the count for a different callback on the same entity.
-    error_counts: HashMap<(u64, String), u32>,
+    /// Consecutive error counts per entity per callback name — used to auto-disable broken scripts.
+    /// Two-level map so lookups can use `&str` (no per-frame String allocation).
+    error_counts: HashMap<u64, HashMap<String, u32>>,
     /// Active timers keyed by timer ID.
     pub(crate) timers: HashMap<usize, ScriptTimer>,
     /// Next timer ID (monotonically increasing to avoid reuse within a session).
@@ -349,10 +348,12 @@ impl ScriptEngine {
     /// exceed [`MAX_SCRIPT_ERRORS`] failures to prevent log spam.
     fn call_entity_function<A: IntoLuaMulti>(&mut self, uuid: u64, name: &str, args: A) -> bool {
         // Skip entities that have been auto-disabled for this callback.
-        let err_key = (uuid, name.to_string());
-        if let Some(&count) = self.error_counts.get(&err_key) {
-            if count >= MAX_SCRIPT_ERRORS {
-                return false;
+        // Uses &str lookup on inner HashMap to avoid String allocation.
+        if let Some(entity_errors) = self.error_counts.get(&uuid) {
+            if let Some(&count) = entity_errors.get(name) {
+                if count >= MAX_SCRIPT_ERRORS {
+                    return false;
+                }
             }
         }
 
@@ -386,7 +387,12 @@ impl ScriptEngine {
         self.lua.set_app_data(CurrentEntityUuid(uuid));
 
         if let Err(e) = func.call::<()>(args) {
-            let count = self.error_counts.entry(err_key).or_insert(0);
+            let count = self
+                .error_counts
+                .entry(uuid)
+                .or_default()
+                .entry(name.to_string())
+                .or_insert(0);
             *count += 1;
             if *count == MAX_SCRIPT_ERRORS {
                 log::error!(
@@ -414,7 +420,9 @@ impl ScriptEngine {
         self.lua.remove_app_data::<CurrentEntityUuid>();
 
         // Reset error count for this specific callback on success.
-        self.error_counts.remove(&err_key);
+        if let Some(entity_errors) = self.error_counts.get_mut(&uuid) {
+            entity_errors.remove(name);
+        }
         true
     }
 

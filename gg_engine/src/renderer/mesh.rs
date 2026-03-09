@@ -60,8 +60,9 @@ impl Mesh {
 
     /// Unit cube centered at origin (side length 1). 24 vertices, 36 indices.
     pub fn cube(color: [f32; 4]) -> Self {
+        type CubeFace = ([f32; 3], [[f32; 3]; 4], [[f32; 2]; 4]);
         #[rustfmt::skip]
-        let faces: [([f32; 3], [[f32; 3]; 4], [[f32; 2]; 4]); 6] = [
+        let faces: [CubeFace; 6] = [
             // normal,        positions (CCW from front),                          UVs
             // +Z (front in LH)
             ([0.0, 0.0, 1.0], [[-0.5, -0.5,  0.5], [ 0.5, -0.5,  0.5], [ 0.5,  0.5,  0.5], [-0.5,  0.5,  0.5]], [[0.0, 1.0], [1.0, 1.0], [1.0, 0.0], [0.0, 0.0]]),
@@ -185,7 +186,6 @@ impl Mesh {
             name: "Plane".into(),
         }
     }
-
 
     /// Compute the axis-aligned bounding box of the mesh vertices.
     ///

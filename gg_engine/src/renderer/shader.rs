@@ -67,7 +67,7 @@ impl Drop for Shader {
 // Helpers
 // ---------------------------------------------------------------------------
 
-fn create_shader_module(
+pub(crate) fn create_shader_module(
     device: &ash::Device,
     spv_bytes: &[u8],
 ) -> Result<vk::ShaderModule, vk::Result> {

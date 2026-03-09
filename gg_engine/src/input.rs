@@ -110,9 +110,13 @@ impl Input {
     }
 
     /// Clear all pressed state (call on window focus loss to avoid stuck keys).
+    /// Clears both current and previous frame sets to prevent spurious
+    /// "just released" events on the next frame.
     pub(crate) fn clear_all(&mut self) {
         self.keys_pressed.clear();
+        self.keys_prev.clear();
         self.mouse_buttons_pressed.clear();
+        self.mouse_buttons_prev.clear();
     }
 
     /// Snapshot current state so next frame can detect transitions.
@@ -196,6 +200,25 @@ mod tests {
 
         assert!(!input.is_mouse_button_just_pressed(MouseButton::Left));
         assert!(input.is_mouse_button_pressed(MouseButton::Left));
+    }
+
+    #[test]
+    fn clear_all_prevents_spurious_just_released() {
+        let mut input = Input::new();
+
+        // Frame 1: press A.
+        input.press_key(KeyCode::A);
+        input.press_mouse_button(MouseButton::Left);
+        input.end_frame();
+
+        // Simulate focus loss — should clear both current AND previous.
+        input.clear_all();
+
+        // Next frame: A should NOT be "just released" (both sets empty).
+        assert!(!input.is_key_just_released(KeyCode::A));
+        assert!(!input.is_key_pressed(KeyCode::A));
+        assert!(!input.is_mouse_button_just_pressed(MouseButton::Left));
+        assert!(!input.is_mouse_button_pressed(MouseButton::Left));
     }
 
     #[test]

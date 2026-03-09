@@ -101,8 +101,8 @@ void main() {
         return;
     }
 
-    // Velocity damping — particles slow down over time.
-    p.velocity *= 1.0 - 2.0 * dt;
+    // Velocity damping — exponential decay (frame-rate independent, safe for large dt).
+    p.velocity *= exp(-2.0 * dt);
     p.position += p.velocity * dt;
     p.rotation += p.rotation_speed * dt;
 

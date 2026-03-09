@@ -1,4 +1,4 @@
-use super::physics_3d::PhysicsWorld3D;
+use super::physics_3d::{PhysicsWorld3D, RaycastHit3D};
 use super::{
     BoxCollider3DComponent, CapsuleCollider3DComponent, Entity, IdComponent, RelationshipComponent,
     RigidBody3DComponent, Scene, SphereCollider3DComponent, TransformComponent,
@@ -439,15 +439,14 @@ impl Scene {
         }
     }
 
-    /// Cast a 3D ray and return the first hit:
-    /// `(entity_uuid, hit_x, hit_y, hit_z, normal_x, normal_y, normal_z, toi)`.
+    /// Cast a 3D ray and return the first hit.
     pub fn raycast_3d(
         &self,
         origin: glam::Vec3,
         direction: glam::Vec3,
         max_toi: f32,
         exclude_entity: Option<Entity>,
-    ) -> Option<(u64, f32, f32, f32, f32, f32, f32, f32)> {
+    ) -> Option<RaycastHit3D> {
         let exclude_uuid =
             exclude_entity.and_then(|e| self.get_component::<IdComponent>(e).map(|id| id.id.raw()));
         if let Some(ref physics) = self.physics_world_3d {

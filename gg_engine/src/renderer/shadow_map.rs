@@ -64,6 +64,7 @@ pub(crate) struct ShadowMapSystem {
 
 impl ShadowMapSystem {
     /// Create the shadow map system with the given depth format and resolution.
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         allocator: &Arc<Mutex<GpuAllocator>>,
         device: &ash::Device,

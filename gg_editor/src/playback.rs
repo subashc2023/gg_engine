@@ -121,9 +121,11 @@ impl GGEditor {
         self.playback.paused = false;
         self.playback.step_frames = 0;
 
-        // Finalize any in-progress gizmo drag so the undo system is clean.
+        // Discard any in-progress gizmo drag — the runtime scene is about to be
+        // replaced with the editor snapshot, so pushing an undo entry here would
+        // create an orphaned snapshot of the runtime scene.
         if self.gizmo_state.editing {
-            self.undo_system.end_edit();
+            self.undo_system.cancel_edit();
             self.gizmo_state.editing = false;
         }
         self.tilemap_paint.painting_in_progress = false;

@@ -31,13 +31,14 @@ pub use components::{
     BoxCollider3DComponent, CameraComponent, CapsuleCollider3DComponent, CircleCollider2DComponent,
     CircleRendererComponent, DirectionalLightComponent, IdComponent, MeshPrimitive,
     MeshRendererComponent, MeshSource, NativeScriptComponent, ParticleEmitterComponent,
-    PointLightComponent,
-    RelationshipComponent, RigidBody2DComponent, RigidBody2DType, RigidBody3DComponent,
-    RigidBody3DType, SphereCollider3DComponent, SpriteRendererComponent, TagComponent,
-    TextComponent, TilemapComponent, TransformComponent, TILE_FLIP_H, TILE_FLIP_V, TILE_ID_MASK,
+    PointLightComponent, RelationshipComponent, RigidBody2DComponent, RigidBody2DType,
+    RigidBody3DComponent, RigidBody3DType, SphereCollider3DComponent, SpriteRendererComponent,
+    TagComponent, TextComponent, TilemapComponent, TransformComponent, TILE_FLIP_H, TILE_FLIP_V,
+    TILE_ID_MASK,
 };
 pub use entity::Entity;
 pub use native_script::NativeScript;
+pub use physics_3d::RaycastHit3D;
 pub use scene_serializer::SceneSerializer;
 #[cfg(feature = "lua-scripting")]
 pub use script_engine::{ScriptEngine, ScriptFieldValue};
@@ -99,6 +100,10 @@ pub struct Scene {
     /// in [`rotate_va_graveyard`](Self::rotate_va_graveyard); entries survive at
     /// least `MAX_FRAMES_IN_FLIGHT` frames before being dropped.
     va_graveyard: VecDeque<Vec<VertexArray>>,
+    /// When `true`, all texture handles have been resolved and
+    /// `resolve_texture_handles_async` can skip scanning every entity.
+    /// Reset to `false` when entities are created or components change.
+    textures_all_resolved: bool,
 }
 
 /// Invokes `$callback!` with every cloneable component type.
@@ -203,6 +208,7 @@ impl Scene {
             spatial_grid: None,
             culling_stats: Cell::new(CullingStats::default()),
             va_graveyard: VecDeque::new(),
+            textures_all_resolved: false,
         }
     }
 
@@ -239,6 +245,7 @@ impl Scene {
             );
         }
         self.name_cache = None; // invalidate
+        self.textures_all_resolved = false; // new entity may need texture resolution
         Entity::new(handle)
     }
 

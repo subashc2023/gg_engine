@@ -1971,10 +1971,7 @@ impl Renderer {
                 frag_data[9] = mat.emissive_color.z.to_bits();
                 frag_data[10] = 0; // padding (.w of emissive_color vec4)
                 frag_data[11] = albedo_tex_index as u32;
-                let frag_bytes = std::slice::from_raw_parts(
-                    frag_data.as_ptr() as *const u8,
-                    48,
-                );
+                let frag_bytes = std::slice::from_raw_parts(frag_data.as_ptr() as *const u8, 48);
                 device.cmd_push_constants(
                     cmd,
                     pipeline.layout(),

@@ -202,14 +202,18 @@ impl Scene {
         }
 
         // -- Extract phase (sequential): copy component data into owned Vecs --
+        // Children UUIDs stored in a flat buffer (one allocation) rather than
+        // a Vec per entity (N allocations). Each entity stores a start/len range.
         struct EntityData {
             handle: hecs::Entity,
             local_transform: glam::Mat4,
             parent_uuid: Option<u64>,
-            children: Vec<u64>,
+            children_start: u32,
+            children_len: u32,
         }
 
         let mut data: Vec<EntityData> = Vec::with_capacity(entity_count);
+        let mut children_buf: Vec<u64> = Vec::new();
         let mut uuid_to_idx: HashMap<u64, usize> = HashMap::with_capacity(entity_count);
 
         for (handle, id, tc, rel) in self
@@ -224,11 +228,14 @@ impl Scene {
         {
             let idx = data.len();
             uuid_to_idx.insert(id.id.raw(), idx);
+            let children_start = children_buf.len() as u32;
+            children_buf.extend_from_slice(&rel.children);
             data.push(EntityData {
                 handle,
                 local_transform: tc.get_transform(),
                 parent_uuid: rel.parent,
-                children: rel.children.clone(),
+                children_start,
+                children_len: rel.children.len() as u32,
             });
         }
 
@@ -245,21 +252,25 @@ impl Scene {
             idx: usize,
             parent_world: glam::Mat4,
             data: &[EntityData],
+            children_buf: &[u64],
             uuid_to_idx: &HashMap<u64, usize>,
             results: &mut Vec<(hecs::Entity, glam::Mat4)>,
         ) {
             let entity = &data[idx];
             let world = parent_world * entity.local_transform;
             results.push((entity.handle, world));
-            for &child_uuid in &entity.children {
+            let start = entity.children_start as usize;
+            let end = start + entity.children_len as usize;
+            for &child_uuid in &children_buf[start..end] {
                 if let Some(&child_idx) = uuid_to_idx.get(&child_uuid) {
-                    compute_subtree(child_idx, world, data, uuid_to_idx, results);
+                    compute_subtree(child_idx, world, data, children_buf, uuid_to_idx, results);
                 }
             }
         }
 
         use rayon::prelude::*;
         let data_ref = &data;
+        let children_buf_ref = &children_buf;
         let uuid_to_idx_ref = &uuid_to_idx;
         let sub_results: Vec<Vec<(hecs::Entity, glam::Mat4)>> = crate::jobs::pool().install(|| {
             roots
@@ -270,6 +281,7 @@ impl Scene {
                         root_idx,
                         glam::Mat4::IDENTITY,
                         data_ref,
+                        children_buf_ref,
                         uuid_to_idx_ref,
                         &mut results,
                     );

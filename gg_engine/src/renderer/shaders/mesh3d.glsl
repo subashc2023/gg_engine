@@ -33,8 +33,9 @@ layout(location = 4) out flat int v_entity_id;
 void main() {
     vec4 world_pos = push.u_model * vec4(a_position, 1.0);
     v_world_position = world_pos.xyz;
-    // Transform normal to world space (using inverse-transpose for non-uniform scale).
-    v_normal = mat3(push.u_model) * a_normal;
+    // Transform normal to world space using the inverse-transpose of the
+    // upper-left 3x3 model matrix. This handles non-uniform scale correctly.
+    v_normal = transpose(inverse(mat3(push.u_model))) * a_normal;
     v_uv = a_uv;
     v_color = a_color;
 #ifdef OFFSCREEN
@@ -147,13 +148,16 @@ vec3 blinn_phong(vec3 light_dir, vec3 light_color, float light_intensity,
     float ndotl = max(dot(normal, light_dir), 0.0);
     vec3 diffuse = albedo * light_color * light_intensity * ndotl;
 
-    // Specular (Blinn-Phong)
-    vec3 half_dir = normalize(light_dir + view_dir);
-    float shininess = max(2.0 / (push.u_roughness * push.u_roughness + 0.001) - 2.0, 1.0);
-    float spec = pow(max(dot(normal, half_dir), 0.0), shininess);
-    // Metallic surfaces reflect the albedo color; dielectrics reflect white.
-    vec3 spec_color = mix(vec3(0.04), albedo, push.u_metallic);
-    vec3 specular = spec_color * light_color * light_intensity * spec;
+    // Specular (Blinn-Phong) — only when surface faces the light.
+    vec3 specular = vec3(0.0);
+    if (ndotl > 0.0) {
+        vec3 half_dir = normalize(light_dir + view_dir);
+        float shininess = max(2.0 / (push.u_roughness * push.u_roughness + 0.001) - 2.0, 1.0);
+        float spec = pow(max(dot(normal, half_dir), 0.0), shininess);
+        // Metallic surfaces reflect the albedo color; dielectrics reflect white.
+        vec3 spec_color = mix(vec3(0.04), albedo, push.u_metallic);
+        specular = spec_color * light_color * light_intensity * spec;
+    }
 
     return diffuse + specular;
 }

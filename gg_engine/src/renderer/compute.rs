@@ -119,19 +119,4 @@ pub(crate) fn create_compute_pipeline(
     })
 }
 
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-fn create_shader_module(
-    device: &ash::Device,
-    spv_bytes: &[u8],
-) -> Result<vk::ShaderModule, vk::Result> {
-    let spv_u32: Vec<u32> = spv_bytes
-        .chunks_exact(4)
-        .map(|c| u32::from_le_bytes([c[0], c[1], c[2], c[3]]))
-        .collect();
-
-    let info = vk::ShaderModuleCreateInfo::default().code(&spv_u32);
-    unsafe { device.create_shader_module(&info, None) }
-}
+use super::shader::create_shader_module;

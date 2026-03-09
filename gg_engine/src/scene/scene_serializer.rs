@@ -16,9 +16,8 @@ use crate::scene::{
     CameraComponent, CapsuleCollider3DComponent, CircleCollider2DComponent,
     CircleRendererComponent, DirectionalLightComponent, FloatOrdering, IdComponent,
     InstancedSpriteAnimator, MeshPrimitive, MeshRendererComponent, MeshSource,
-    ParticleEmitterComponent,
-    PointLightComponent, RelationshipComponent, RigidBody2DComponent, RigidBody2DType,
-    RigidBody3DComponent, RigidBody3DType, Scene, SphereCollider3DComponent,
+    ParticleEmitterComponent, PointLightComponent, RelationshipComponent, RigidBody2DComponent,
+    RigidBody2DType, RigidBody3DComponent, RigidBody3DType, Scene, SphereCollider3DComponent,
     SpriteAnimatorComponent, SpriteRendererComponent, TagComponent, TextComponent,
     TilemapComponent, TransformComponent, TransitionCondition,
 };
@@ -525,6 +524,20 @@ struct AnimationClipData {
     looping: bool,
     #[serde(rename = "TextureHandle", default, skip_serializing_if = "is_zero_u64")]
     texture_handle: u64,
+}
+
+fn convert_clips(clips: &[AnimationClip]) -> Vec<AnimationClipData> {
+    clips
+        .iter()
+        .map(|c| AnimationClipData {
+            name: c.name.clone(),
+            start_frame: c.start_frame,
+            end_frame: c.end_frame,
+            fps: c.fps,
+            looping: c.looping,
+            texture_handle: c.texture_handle.raw(),
+        })
+        .collect()
 }
 
 #[derive(Serialize, Deserialize)]
@@ -1280,18 +1293,7 @@ impl SceneSerializer {
                 .map(|sa| SpriteAnimatorData {
                     cell_size: sa.cell_size.into(),
                     columns: sa.columns,
-                    clips: sa
-                        .clips
-                        .iter()
-                        .map(|c| AnimationClipData {
-                            name: c.name.clone(),
-                            start_frame: c.start_frame,
-                            end_frame: c.end_frame,
-                            fps: c.fps,
-                            looping: c.looping,
-                            texture_handle: c.texture_handle.raw(),
-                        })
-                        .collect(),
+                    clips: convert_clips(&sa.clips),
                     default_clip: sa.default_clip.clone(),
                     speed_scale: sa.speed_scale,
                 });
@@ -1302,18 +1304,7 @@ impl SceneSerializer {
                 .map(|ia| InstancedSpriteAnimatorData {
                     cell_size: ia.cell_size.into(),
                     columns: ia.columns,
-                    clips: ia
-                        .clips
-                        .iter()
-                        .map(|c| AnimationClipData {
-                            name: c.name.clone(),
-                            start_frame: c.start_frame,
-                            end_frame: c.end_frame,
-                            fps: c.fps,
-                            looping: c.looping,
-                            texture_handle: c.texture_handle.raw(),
-                        })
-                        .collect(),
+                    clips: convert_clips(&ia.clips),
                     default_clip: ia.default_clip.clone(),
                     speed_scale: ia.speed_scale,
                 });

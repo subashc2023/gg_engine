@@ -7,6 +7,9 @@
 use mlua::prelude::*;
 
 use super::{Entity, Scene};
+
+/// Lua return type for 3D raycast: `(entity_uuid?, hx, hy, hz, nx, ny, nz, toi)`.
+type LuaRaycastHit3D = (Option<u64>, f32, f32, f32, f32, f32, f32, f32);
 use crate::events::{KeyCode, MouseButton};
 use crate::input::Input;
 
@@ -1220,7 +1223,6 @@ fn lua_set_angular_velocity_3d(
 /// `Engine.raycast_3d(ox, oy, oz, dx, dy, dz, max_distance, exclude_entity_id)`
 ///
 /// Returns `(hit_entity_id, hx, hy, hz, nx, ny, nz, distance)` or `nil` values on miss.
-#[allow(clippy::type_complexity)]
 fn lua_raycast_3d(
     lua: &Lua,
     (ox, oy, oz, dx, dy, dz, max_dist, exclude_id): (
@@ -1233,8 +1235,8 @@ fn lua_raycast_3d(
         f32,
         Option<u64>,
     ),
-) -> LuaResult<(Option<u64>, f32, f32, f32, f32, f32, f32, f32)> {
-    let zero = (None, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0);
+) -> LuaResult<LuaRaycastHit3D> {
+    let zero: LuaRaycastHit3D = (None, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0);
     let ctx = match lua.app_data_mut::<SceneScriptContext>() {
         Some(ctx) => ctx,
         None => return Ok(zero),
@@ -1248,7 +1250,18 @@ fn lua_raycast_3d(
             max_dist,
             exclude_entity,
         )
-        .map(|(uuid, hx, hy, hz, nx, ny, nz, toi)| (Some(uuid), hx, hy, hz, nx, ny, nz, toi))
+        .map(|h| {
+            (
+                Some(h.entity_uuid),
+                h.hit_x,
+                h.hit_y,
+                h.hit_z,
+                h.normal_x,
+                h.normal_y,
+                h.normal_z,
+                h.toi,
+            )
+        })
         .unwrap_or(zero))
 }
 

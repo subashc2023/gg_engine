@@ -471,40 +471,11 @@ impl Texture2D {
         // 1. Create staging buffer with pixel data.
         let (staging_buffer, _staging_alloc) = create_staging_buffer(allocator, device, pixels)?;
 
-        // 2. Create Vulkan image.
-        let mut usage = vk::ImageUsageFlags::TRANSFER_DST | vk::ImageUsageFlags::SAMPLED;
-        if mip_levels > 1 {
-            usage |= vk::ImageUsageFlags::TRANSFER_SRC;
-        }
-        let image_info = vk::ImageCreateInfo::default()
-            .image_type(vk::ImageType::TYPE_2D)
-            .extent(vk::Extent3D {
-                width,
-                height,
-                depth: 1,
-            })
-            .mip_levels(mip_levels)
-            .array_layers(1)
-            .format(vk_format)
-            .tiling(vk::ImageTiling::OPTIMAL)
-            .initial_layout(vk::ImageLayout::UNDEFINED)
-            .usage(usage)
-            .sharing_mode(vk::SharingMode::EXCLUSIVE)
-            .samples(vk::SampleCountFlags::TYPE_1);
+        // 2. Create Vulkan image + GPU memory.
+        let (image, allocation) =
+            create_texture_image(device, allocator, width, height, mip_levels, vk_format)?;
 
-        let image = unsafe { device.create_image(&image_info, None) }
-            .map_err(|e| format!("Failed to create texture image: {e}"))?;
-
-        // 3. Allocate and bind DEVICE_LOCAL memory via sub-allocator.
-        let allocation = GpuAllocator::allocate_for_image(
-            allocator,
-            device,
-            image,
-            "Texture2D",
-            MemoryLocation::GpuOnly,
-        )?;
-
-        // 4. One-shot command buffer: transition + copy + mipmap generation.
+        // 3. One-shot command buffer: transition + copy + mipmap generation.
         execute_one_shot(device, command_pool, graphics_queue, |cmd_buf| {
             transition_image_layout(
                 device,
@@ -559,88 +530,22 @@ impl Texture2D {
             }
         })?;
 
-        // 5. Staging buffer + allocation auto-freed when _staging_alloc drops.
+        // 4. Staging buffer + allocation auto-freed when _staging_alloc drops.
         unsafe {
             device.destroy_buffer(staging_buffer, None);
         }
         drop(_staging_alloc);
 
-        // 6. Create image view.
-        let view_info = vk::ImageViewCreateInfo::default()
-            .image(image)
-            .view_type(vk::ImageViewType::TYPE_2D)
-            .format(vk_format)
-            .subresource_range(vk::ImageSubresourceRange {
-                aspect_mask: vk::ImageAspectFlags::COLOR,
-                base_mip_level: 0,
-                level_count: mip_levels,
-                base_array_layer: 0,
-                layer_count: 1,
-            });
-
-        let image_view = unsafe { device.create_image_view(&view_info, None) }
-            .map_err(|e| format!("Failed to create texture image view: {e}"))?;
-
-        // 7. Create sampler.
-        // Use LINEAR mipmap interpolation when mipmaps are present to avoid
-        // visible popping between mip levels (even with NEAREST min/mag filter).
-        let mipmap_mode = if mip_levels > 1 {
-            vk::SamplerMipmapMode::LINEAR
-        } else {
-            match spec.filter {
-                vk::Filter::LINEAR => vk::SamplerMipmapMode::LINEAR,
-                _ => vk::SamplerMipmapMode::NEAREST,
-            }
-        };
-
-        let sampler_info = vk::SamplerCreateInfo::default()
-            .mag_filter(spec.filter)
-            .min_filter(spec.filter)
-            .address_mode_u(spec.address_mode)
-            .address_mode_v(spec.address_mode)
-            .address_mode_w(spec.address_mode)
-            .anisotropy_enable(spec.anisotropy)
-            .max_anisotropy(spec.max_anisotropy)
-            .border_color(vk::BorderColor::FLOAT_TRANSPARENT_BLACK)
-            .unnormalized_coordinates(false)
-            .compare_enable(false)
-            .mipmap_mode(mipmap_mode)
-            .mip_lod_bias(0.0)
-            .min_lod(0.0)
-            .max_lod(if mip_levels > 1 {
-                mip_levels as f32
-            } else {
-                0.0
-            });
-
-        let sampler = unsafe { device.create_sampler(&sampler_info, None) }
-            .map_err(|e| format!("Failed to create texture sampler: {e}"))?;
-
-        // 8. Allocate descriptor set and write combined image sampler.
-        let layouts = [descriptor_set_layout];
-        let ds_alloc_info = vk::DescriptorSetAllocateInfo::default()
-            .descriptor_pool(descriptor_pool)
-            .set_layouts(&layouts);
-
-        let ds_vec = unsafe { device.allocate_descriptor_sets(&ds_alloc_info) }
-            .map_err(|e| format!("Failed to allocate texture descriptor set: {e}"))?;
-        let descriptor_set = ds_vec[0];
-
-        let image_info_ds = vk::DescriptorImageInfo::default()
-            .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
-            .image_view(image_view)
-            .sampler(sampler);
-
-        let write = vk::WriteDescriptorSet::default()
-            .dst_set(descriptor_set)
-            .dst_binding(0)
-            .dst_array_element(0)
-            .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
-            .image_info(std::slice::from_ref(&image_info_ds));
-
-        unsafe {
-            device.update_descriptor_sets(&[write], &[]);
-        }
+        // 5. Create image view, sampler, and descriptor set.
+        let (image_view, sampler, descriptor_set) = create_texture_view_sampler_ds(
+            device,
+            image,
+            vk_format,
+            mip_levels,
+            spec,
+            descriptor_pool,
+            descriptor_set_layout,
+        )?;
 
         Ok(Self {
             image,
@@ -750,40 +655,11 @@ impl Texture2D {
         // 1. Create staging buffer with pixel data.
         let (staging_buffer, staging_alloc) = create_staging_buffer(allocator, device, pixels)?;
 
-        // 2. Create Vulkan image.
-        let mut usage = vk::ImageUsageFlags::TRANSFER_DST | vk::ImageUsageFlags::SAMPLED;
-        if mip_levels > 1 {
-            usage |= vk::ImageUsageFlags::TRANSFER_SRC;
-        }
-        let image_info = vk::ImageCreateInfo::default()
-            .image_type(vk::ImageType::TYPE_2D)
-            .extent(vk::Extent3D {
-                width,
-                height,
-                depth: 1,
-            })
-            .mip_levels(mip_levels)
-            .array_layers(1)
-            .format(vk_format)
-            .tiling(vk::ImageTiling::OPTIMAL)
-            .initial_layout(vk::ImageLayout::UNDEFINED)
-            .usage(usage)
-            .sharing_mode(vk::SharingMode::EXCLUSIVE)
-            .samples(vk::SampleCountFlags::TYPE_1);
+        // 2. Create Vulkan image + GPU memory.
+        let (image, allocation) =
+            create_texture_image(device, allocator, width, height, mip_levels, vk_format)?;
 
-        let image = unsafe { device.create_image(&image_info, None) }
-            .map_err(|e| format!("Failed to create texture image: {e}"))?;
-
-        // 3. Allocate and bind DEVICE_LOCAL memory via sub-allocator.
-        let allocation = GpuAllocator::allocate_for_image(
-            allocator,
-            device,
-            image,
-            "Texture2D",
-            MemoryLocation::GpuOnly,
-        )?;
-
-        // 4. Record the staging copy + layout transitions into the batch.
+        // 3. Record the staging copy + layout transitions into the batch.
         batch.record_image_upload(
             image,
             staging_buffer,
@@ -793,82 +669,16 @@ impl Texture2D {
             mip_levels,
         )?;
 
-        // 5. Create image view.
-        let view_info = vk::ImageViewCreateInfo::default()
-            .image(image)
-            .view_type(vk::ImageViewType::TYPE_2D)
-            .format(vk_format)
-            .subresource_range(vk::ImageSubresourceRange {
-                aspect_mask: vk::ImageAspectFlags::COLOR,
-                base_mip_level: 0,
-                level_count: mip_levels,
-                base_array_layer: 0,
-                layer_count: 1,
-            });
-
-        let image_view = unsafe { device.create_image_view(&view_info, None) }
-            .map_err(|e| format!("Failed to create texture image view: {e}"))?;
-
-        // 6. Create sampler.
-        // Use LINEAR mipmap interpolation when mipmaps are present to avoid
-        // visible popping between mip levels (even with NEAREST min/mag filter).
-        let mipmap_mode = if mip_levels > 1 {
-            vk::SamplerMipmapMode::LINEAR
-        } else {
-            match spec.filter {
-                vk::Filter::LINEAR => vk::SamplerMipmapMode::LINEAR,
-                _ => vk::SamplerMipmapMode::NEAREST,
-            }
-        };
-
-        let sampler_info = vk::SamplerCreateInfo::default()
-            .mag_filter(spec.filter)
-            .min_filter(spec.filter)
-            .address_mode_u(spec.address_mode)
-            .address_mode_v(spec.address_mode)
-            .address_mode_w(spec.address_mode)
-            .anisotropy_enable(spec.anisotropy)
-            .max_anisotropy(spec.max_anisotropy)
-            .border_color(vk::BorderColor::FLOAT_TRANSPARENT_BLACK)
-            .unnormalized_coordinates(false)
-            .compare_enable(false)
-            .mipmap_mode(mipmap_mode)
-            .mip_lod_bias(0.0)
-            .min_lod(0.0)
-            .max_lod(if mip_levels > 1 {
-                mip_levels as f32
-            } else {
-                0.0
-            });
-
-        let sampler = unsafe { device.create_sampler(&sampler_info, None) }
-            .map_err(|e| format!("Failed to create texture sampler: {e}"))?;
-
-        // 7. Allocate descriptor set and write combined image sampler.
-        let layouts = [descriptor_set_layout];
-        let ds_alloc_info = vk::DescriptorSetAllocateInfo::default()
-            .descriptor_pool(descriptor_pool)
-            .set_layouts(&layouts);
-
-        let ds_vec = unsafe { device.allocate_descriptor_sets(&ds_alloc_info) }
-            .map_err(|e| format!("Failed to allocate texture descriptor set: {e}"))?;
-        let descriptor_set = ds_vec[0];
-
-        let image_info_ds = vk::DescriptorImageInfo::default()
-            .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
-            .image_view(image_view)
-            .sampler(sampler);
-
-        let write = vk::WriteDescriptorSet::default()
-            .dst_set(descriptor_set)
-            .dst_binding(0)
-            .dst_array_element(0)
-            .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
-            .image_info(std::slice::from_ref(&image_info_ds));
-
-        unsafe {
-            device.update_descriptor_sets(&[write], &[]);
-        }
+        // 4. Create image view, sampler, and descriptor set.
+        let (image_view, sampler, descriptor_set) = create_texture_view_sampler_ds(
+            device,
+            image,
+            vk_format,
+            mip_levels,
+            spec,
+            descriptor_pool,
+            descriptor_set_layout,
+        )?;
 
         Ok(Self {
             image,
@@ -947,6 +757,138 @@ fn execute_one_shot(
         device.free_command_buffers(command_pool, &[cmd_buf]);
     }
     Ok(())
+}
+
+/// Create a Vulkan image with GPU-only memory for a 2D texture.
+fn create_texture_image(
+    device: &ash::Device,
+    allocator: &Arc<Mutex<GpuAllocator>>,
+    width: u32,
+    height: u32,
+    mip_levels: u32,
+    vk_format: vk::Format,
+) -> Result<(vk::Image, GpuAllocation), String> {
+    let mut usage = vk::ImageUsageFlags::TRANSFER_DST | vk::ImageUsageFlags::SAMPLED;
+    if mip_levels > 1 {
+        usage |= vk::ImageUsageFlags::TRANSFER_SRC;
+    }
+    let image_info = vk::ImageCreateInfo::default()
+        .image_type(vk::ImageType::TYPE_2D)
+        .extent(vk::Extent3D {
+            width,
+            height,
+            depth: 1,
+        })
+        .mip_levels(mip_levels)
+        .array_layers(1)
+        .format(vk_format)
+        .tiling(vk::ImageTiling::OPTIMAL)
+        .initial_layout(vk::ImageLayout::UNDEFINED)
+        .usage(usage)
+        .sharing_mode(vk::SharingMode::EXCLUSIVE)
+        .samples(vk::SampleCountFlags::TYPE_1);
+
+    let image = unsafe { device.create_image(&image_info, None) }
+        .map_err(|e| format!("Failed to create texture image: {e}"))?;
+
+    let allocation = GpuAllocator::allocate_for_image(
+        allocator,
+        device,
+        image,
+        "Texture2D",
+        MemoryLocation::GpuOnly,
+    )?;
+
+    Ok((image, allocation))
+}
+
+/// Create an image view, sampler, and descriptor set for a loaded texture image.
+fn create_texture_view_sampler_ds(
+    device: &ash::Device,
+    image: vk::Image,
+    vk_format: vk::Format,
+    mip_levels: u32,
+    spec: &TextureSpecification,
+    descriptor_pool: vk::DescriptorPool,
+    descriptor_set_layout: vk::DescriptorSetLayout,
+) -> Result<(vk::ImageView, vk::Sampler, vk::DescriptorSet), String> {
+    // Image view.
+    let view_info = vk::ImageViewCreateInfo::default()
+        .image(image)
+        .view_type(vk::ImageViewType::TYPE_2D)
+        .format(vk_format)
+        .subresource_range(vk::ImageSubresourceRange {
+            aspect_mask: vk::ImageAspectFlags::COLOR,
+            base_mip_level: 0,
+            level_count: mip_levels,
+            base_array_layer: 0,
+            layer_count: 1,
+        });
+
+    let image_view = unsafe { device.create_image_view(&view_info, None) }
+        .map_err(|e| format!("Failed to create texture image view: {e}"))?;
+
+    // Sampler — use LINEAR mipmap interpolation when mipmaps are present
+    // to avoid visible popping between mip levels.
+    let mipmap_mode = if mip_levels > 1 {
+        vk::SamplerMipmapMode::LINEAR
+    } else {
+        match spec.filter {
+            vk::Filter::LINEAR => vk::SamplerMipmapMode::LINEAR,
+            _ => vk::SamplerMipmapMode::NEAREST,
+        }
+    };
+
+    let sampler_info = vk::SamplerCreateInfo::default()
+        .mag_filter(spec.filter)
+        .min_filter(spec.filter)
+        .address_mode_u(spec.address_mode)
+        .address_mode_v(spec.address_mode)
+        .address_mode_w(spec.address_mode)
+        .anisotropy_enable(spec.anisotropy)
+        .max_anisotropy(spec.max_anisotropy)
+        .border_color(vk::BorderColor::FLOAT_TRANSPARENT_BLACK)
+        .unnormalized_coordinates(false)
+        .compare_enable(false)
+        .mipmap_mode(mipmap_mode)
+        .mip_lod_bias(0.0)
+        .min_lod(0.0)
+        .max_lod(if mip_levels > 1 {
+            mip_levels as f32
+        } else {
+            0.0
+        });
+
+    let sampler = unsafe { device.create_sampler(&sampler_info, None) }
+        .map_err(|e| format!("Failed to create texture sampler: {e}"))?;
+
+    // Descriptor set.
+    let layouts = [descriptor_set_layout];
+    let ds_alloc_info = vk::DescriptorSetAllocateInfo::default()
+        .descriptor_pool(descriptor_pool)
+        .set_layouts(&layouts);
+
+    let ds_vec = unsafe { device.allocate_descriptor_sets(&ds_alloc_info) }
+        .map_err(|e| format!("Failed to allocate texture descriptor set: {e}"))?;
+    let descriptor_set = ds_vec[0];
+
+    let image_info_ds = vk::DescriptorImageInfo::default()
+        .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
+        .image_view(image_view)
+        .sampler(sampler);
+
+    let write = vk::WriteDescriptorSet::default()
+        .dst_set(descriptor_set)
+        .dst_binding(0)
+        .dst_array_element(0)
+        .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+        .image_info(std::slice::from_ref(&image_info_ds));
+
+    unsafe {
+        device.update_descriptor_sets(&[write], &[]);
+    }
+
+    Ok((image_view, sampler, descriptor_set))
 }
 
 /// Calculate the number of mip levels for an image of the given dimensions.
