@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::Path;
 
@@ -15,6 +15,10 @@ pub struct AssetRegistry {
     assets: HashMap<AssetHandle, AssetMetadata>,
     /// Reverse index: normalized file path → asset handle for O(1) lookup.
     path_index: HashMap<String, AssetHandle>,
+    /// Forward dependency map: scene/prefab handle → set of asset handles it references.
+    dependencies: HashMap<AssetHandle, HashSet<AssetHandle>>,
+    /// Reverse dependency map: asset handle → set of scene/prefab handles that reference it.
+    dependents: HashMap<AssetHandle, HashSet<AssetHandle>>,
 }
 
 // -- Serde intermediate types ------------------------------------------------
@@ -42,6 +46,8 @@ impl AssetRegistry {
         Self {
             assets: HashMap::new(),
             path_index: HashMap::new(),
+            dependencies: HashMap::new(),
+            dependents: HashMap::new(),
         }
     }
 
@@ -65,6 +71,31 @@ impl AssetRegistry {
         if let Some(metadata) = self.assets.remove(handle) {
             let normalized_path = metadata.file_path.replace('\\', "/");
             self.path_index.remove(&normalized_path);
+
+            // Clean up forward dependencies (this asset as a source).
+            if let Some(deps) = self.dependencies.remove(handle) {
+                for dep in &deps {
+                    if let Some(rev) = self.dependents.get_mut(dep) {
+                        rev.remove(handle);
+                        if rev.is_empty() {
+                            self.dependents.remove(dep);
+                        }
+                    }
+                }
+            }
+
+            // Clean up reverse dependencies (this asset as a dependency).
+            if let Some(sources) = self.dependents.remove(handle) {
+                for src in &sources {
+                    if let Some(fwd) = self.dependencies.get_mut(src) {
+                        fwd.remove(handle);
+                        if fwd.is_empty() {
+                            self.dependencies.remove(src);
+                        }
+                    }
+                }
+            }
+
             Some(metadata)
         } else {
             None
@@ -92,6 +123,111 @@ impl AssetRegistry {
 
     pub fn is_empty(&self) -> bool {
         self.assets.is_empty()
+    }
+
+    // -- Dependency tracking --------------------------------------------------
+
+    /// Set the dependencies for a scene/prefab asset.
+    ///
+    /// Replaces any previous dependency set and updates the reverse index.
+    pub fn set_dependencies(&mut self, source: AssetHandle, deps: HashSet<AssetHandle>) {
+        // Remove old reverse entries.
+        if let Some(old_deps) = self.dependencies.remove(&source) {
+            for dep in &old_deps {
+                if let Some(rev) = self.dependents.get_mut(dep) {
+                    rev.remove(&source);
+                    if rev.is_empty() {
+                        self.dependents.remove(dep);
+                    }
+                }
+            }
+        }
+
+        // Insert new reverse entries.
+        for dep in &deps {
+            self.dependents.entry(*dep).or_default().insert(source);
+        }
+
+        if !deps.is_empty() {
+            self.dependencies.insert(source, deps);
+        }
+    }
+
+    /// Get assets that the given scene/prefab depends on.
+    pub fn get_dependencies(&self, source: &AssetHandle) -> Option<&HashSet<AssetHandle>> {
+        self.dependencies.get(source)
+    }
+
+    /// Get scenes/prefabs that reference the given asset.
+    pub fn get_dependents(&self, asset: &AssetHandle) -> Option<&HashSet<AssetHandle>> {
+        self.dependents.get(asset)
+    }
+
+    /// Scan a scene/prefab YAML string to extract referenced asset handles.
+    ///
+    /// Looks for `TextureHandle`, `AudioHandle`, `AlbedoTexture`, and `MeshAsset`
+    /// fields with non-zero u64 values.
+    pub fn scan_scene_dependencies(yaml: &str) -> HashSet<AssetHandle> {
+        let mut deps = HashSet::new();
+        for line in yaml.lines() {
+            let trimmed = line.trim();
+            let handle_raw = if let Some(rest) = trimmed.strip_prefix("TextureHandle:") {
+                rest.trim().parse::<u64>().ok()
+            } else if let Some(rest) = trimmed.strip_prefix("AudioHandle:") {
+                rest.trim().parse::<u64>().ok()
+            } else if let Some(rest) = trimmed.strip_prefix("AlbedoTexture:") {
+                rest.trim().parse::<u64>().ok()
+            } else if let Some(rest) = trimmed.strip_prefix("MeshAsset:") {
+                rest.trim().parse::<u64>().ok()
+            } else {
+                None
+            };
+            if let Some(raw) = handle_raw {
+                if raw != 0 {
+                    deps.insert(Uuid::from_raw(raw));
+                }
+            }
+        }
+        deps
+    }
+
+    /// Rebuild all dependency information by scanning scene/prefab files.
+    ///
+    /// Reads each registered scene and prefab from the given asset directory,
+    /// parses for asset references, and populates the dependency maps.
+    pub fn rebuild_dependencies(&mut self, asset_directory: &Path) {
+        self.dependencies.clear();
+        self.dependents.clear();
+
+        let scene_handles: Vec<(AssetHandle, String)> = self
+            .assets
+            .iter()
+            .filter(|(_, meta)| {
+                matches!(meta.asset_type, AssetType::Scene | AssetType::Prefab)
+            })
+            .map(|(h, meta)| (*h, meta.file_path.clone()))
+            .collect();
+
+        for (handle, file_path) in scene_handles {
+            let abs_path = asset_directory.join(&file_path);
+            if let Ok(yaml) = fs::read_to_string(&abs_path) {
+                let deps = Self::scan_scene_dependencies(&yaml);
+                if !deps.is_empty() {
+                    log::debug!(
+                        "Asset '{}' depends on {} assets",
+                        file_path,
+                        deps.len()
+                    );
+                    self.set_dependencies(handle, deps);
+                }
+            }
+        }
+
+        log::info!(
+            "Rebuilt asset dependencies: {} sources, {} referenced assets",
+            self.dependencies.len(),
+            self.dependents.len()
+        );
     }
 
     /// Load the registry from a `.ggregistry` YAML file.
@@ -367,5 +503,116 @@ mod tests {
         );
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn scan_scene_dependencies_extracts_handles() {
+        let yaml = r#"
+Version: 2
+Scene: test
+Entities:
+- Entity: 100
+  SpriteRendererComponent:
+    TextureHandle: 5001
+  AudioSourceComponent:
+    AudioHandle: 6001
+  MeshRendererComponent:
+    AlbedoTexture: 7001
+    MeshAsset: 8001
+"#;
+        let deps = AssetRegistry::scan_scene_dependencies(yaml);
+        assert_eq!(deps.len(), 4);
+        assert!(deps.contains(&Uuid::from_raw(5001)));
+        assert!(deps.contains(&Uuid::from_raw(6001)));
+        assert!(deps.contains(&Uuid::from_raw(7001)));
+        assert!(deps.contains(&Uuid::from_raw(8001)));
+    }
+
+    #[test]
+    fn scan_scene_dependencies_skips_zero_handles() {
+        let yaml = r#"
+SpriteRendererComponent:
+  TextureHandle: 0
+AudioSourceComponent:
+  AudioHandle: 0
+"#;
+        let deps = AssetRegistry::scan_scene_dependencies(yaml);
+        assert!(deps.is_empty());
+    }
+
+    #[test]
+    fn dependency_tracking_set_and_query() {
+        let mut reg = AssetRegistry::new();
+        let scene_h = Uuid::from_raw(100);
+        let tex_h = Uuid::from_raw(200);
+        let audio_h = Uuid::from_raw(300);
+
+        reg.insert(scene_h, make_metadata("scenes/test.ggscene", AssetType::Scene));
+        reg.insert(tex_h, make_metadata("textures/a.png", AssetType::Texture2D));
+        reg.insert(audio_h, make_metadata("audio/b.ogg", AssetType::Audio));
+
+        let mut deps = std::collections::HashSet::new();
+        deps.insert(tex_h);
+        deps.insert(audio_h);
+        reg.set_dependencies(scene_h, deps);
+
+        // Forward lookup.
+        let fwd = reg.get_dependencies(&scene_h).unwrap();
+        assert_eq!(fwd.len(), 2);
+        assert!(fwd.contains(&tex_h));
+        assert!(fwd.contains(&audio_h));
+
+        // Reverse lookup.
+        let rev_tex = reg.get_dependents(&tex_h).unwrap();
+        assert!(rev_tex.contains(&scene_h));
+        let rev_audio = reg.get_dependents(&audio_h).unwrap();
+        assert!(rev_audio.contains(&scene_h));
+    }
+
+    #[test]
+    fn dependency_cleanup_on_remove() {
+        let mut reg = AssetRegistry::new();
+        let scene_h = Uuid::from_raw(100);
+        let tex_h = Uuid::from_raw(200);
+
+        reg.insert(scene_h, make_metadata("scenes/test.ggscene", AssetType::Scene));
+        reg.insert(tex_h, make_metadata("textures/a.png", AssetType::Texture2D));
+
+        let mut deps = std::collections::HashSet::new();
+        deps.insert(tex_h);
+        reg.set_dependencies(scene_h, deps);
+
+        // Remove the scene — dependency entries should be cleaned up.
+        reg.remove(&scene_h);
+        assert!(reg.get_dependencies(&scene_h).is_none());
+        assert!(reg.get_dependents(&tex_h).is_none());
+    }
+
+    #[test]
+    fn dependency_replace_updates_reverse_index() {
+        let mut reg = AssetRegistry::new();
+        let scene_h = Uuid::from_raw(100);
+        let tex_a = Uuid::from_raw(200);
+        let tex_b = Uuid::from_raw(300);
+
+        reg.insert(scene_h, make_metadata("scenes/test.ggscene", AssetType::Scene));
+        reg.insert(tex_a, make_metadata("a.png", AssetType::Texture2D));
+        reg.insert(tex_b, make_metadata("b.png", AssetType::Texture2D));
+
+        // Initially depends on tex_a.
+        let mut deps1 = std::collections::HashSet::new();
+        deps1.insert(tex_a);
+        reg.set_dependencies(scene_h, deps1);
+        assert!(reg.get_dependents(&tex_a).is_some());
+
+        // Replace with tex_b only.
+        let mut deps2 = std::collections::HashSet::new();
+        deps2.insert(tex_b);
+        reg.set_dependencies(scene_h, deps2);
+
+        // tex_a should no longer have scene_h as dependent.
+        assert!(reg.get_dependents(&tex_a).is_none());
+        // tex_b should now have scene_h as dependent.
+        assert!(reg.get_dependents(&tex_b).unwrap().contains(&scene_h));
     }
 }

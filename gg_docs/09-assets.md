@@ -25,6 +25,8 @@ pub type AssetHandle = Uuid;  // 0 = null/no asset
 | `Texture2D` | `.png`, `.jpg`, `.jpeg` | Image texture |
 | `Audio` | `.wav`, `.ogg`, `.mp3`, `.flac` | Audio file |
 | `Prefab` | `.ggprefab` | Entity template (prefab) |
+| `Material` | `.ggmaterial` | Material definition |
+| `Mesh` | `.gltf`, `.glb` | 3D mesh (glTF) |
 
 Type detection is case-insensitive (`asset_type_from_extension`). Round-trip conversion via `as_str()` / `parse_str()`.
 
@@ -78,6 +80,25 @@ Paths are normalized to forward slashes on insert and lookup (`\` to `/`) for cr
 | `len` / `is_empty` | | Entry count |
 | `load` | `(&Path) -> Option<Self>` | Deserialize from `.ggregistry` YAML |
 | `save` | `(&Path) -> bool` | Serialize to `.ggregistry` YAML |
+
+### Dependency Tracking
+
+The registry maintains forward and reverse dependency maps between scenes/prefabs and the assets they reference.
+
+| Field | Type | Purpose |
+|-------|------|---------|
+| `dependencies` | `HashMap<AssetHandle, HashSet<AssetHandle>>` | Scene/prefab → assets it references |
+| `dependents` | `HashMap<AssetHandle, HashSet<AssetHandle>>` | Asset → scenes/prefabs that reference it |
+
+| Method | Signature | Description |
+|--------|-----------|-------------|
+| `set_dependencies` | `(source, HashSet<AssetHandle>)` | Set deps for a scene, updates reverse index |
+| `get_dependencies` | `(&handle) -> Option<&HashSet<AssetHandle>>` | Forward query: what does this scene use? |
+| `get_dependents` | `(&handle) -> Option<&HashSet<AssetHandle>>` | Reverse query: who uses this asset? |
+| `scan_scene_dependencies` | `(&str) -> HashSet<AssetHandle>` | Parse YAML for TextureHandle/AudioHandle/AlbedoTexture/MeshAsset |
+| `rebuild_dependencies` | `(&Path)` | Scan all scene/prefab files and populate both maps |
+
+Dependencies are rebuilt automatically on `EditorAssetManager::load_registry()`. When an asset is removed via `registry.remove()`, both forward and reverse entries are cleaned up.
 
 ### Persistence Format
 
@@ -154,20 +175,30 @@ The manager implements LRU (Least Recently Used) eviction for GPU textures to bo
 | `access_counter` | 0 | Monotonic counter, incremented on each access |
 | `access_times` | `HashMap<AssetHandle, u64>` | Last-access timestamp per loaded asset |
 | `max_cached_textures` | 256 | Maximum cached textures before eviction (0 = unlimited) |
+| `gpu_memory_budget` | 0 | GPU memory budget in bytes (0 = unlimited, count-based only) |
+| `asset_gpu_bytes` | `HashMap<AssetHandle, u64>` | Per-texture GPU memory size tracking |
+| `total_gpu_bytes` | 0 | Running total of tracked GPU memory usage |
+
+### GPU Memory Tracking
+
+Each loaded texture's GPU memory is tracked as `width × height × 4` bytes (RGBA8). The running total is maintained across all insert/remove operations. When a `gpu_memory_budget` is set (non-zero), `evict_lru()` evicts until both the count limit and byte limit are satisfied.
 
 ### Eviction Rules
 
-`evict_lru()` runs automatically after each `poll_loaded()` call. It only evicts textures where `Arc::strong_count == 1`, meaning the texture is held only by the cache and has no external references (no component is using it). Candidates are sorted by access time ascending (oldest first).
+`evict_lru()` runs automatically after each `poll_loaded()` call. It evicts when either the count limit or the byte budget is exceeded. It only evicts textures where `Arc::strong_count == 1`, meaning the texture is held only by the cache and has no external references (no component is using it). Candidates are sorted by access time ascending (oldest first).
 
 ### Cache Management Methods
 
 | Method | Signature | Description |
 |--------|-----------|-------------|
-| `evict_lru` | `()` | Evict oldest unreferenced textures until under limit |
+| `evict_lru` | `()` | Evict oldest unreferenced textures until under both count and byte limits |
 | `unload_asset` | `(&handle) -> bool` | Remove specific asset from cache |
 | `unload_unused` | `() -> usize` | Remove all assets with `strong_count == 1`, returns eviction count |
 | `unload_all` | `()` | Clear entire cache |
-| `set_max_cached_textures` | `(usize)` | Set limit (0 = unlimited) |
+| `set_max_cached_textures` | `(usize)` | Set count limit (0 = unlimited) |
+| `set_gpu_memory_budget` | `(u64)` | Set byte budget (0 = unlimited) |
+| `gpu_memory_usage` | `() -> u64` | Current total GPU memory in bytes |
+| `gpu_memory_budget` | `() -> u64` | Current budget setting |
 | `loaded_count` | `() -> usize` | Number of currently cached assets |
 
 ## Async Loading

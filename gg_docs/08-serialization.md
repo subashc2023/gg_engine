@@ -27,7 +27,7 @@ The in-memory variants (`serialize_to_string` / `deserialize_from_string`) enabl
 ## YAML Format
 
 ```yaml
-Version: 1
+Version: 2
 Scene: Untitled
 Entities:
 - Entity: 100                          # UUID as u64
@@ -120,7 +120,8 @@ Entities:
     CellSize: [16.0, 16.0]
     Spacing: [1.0, 1.0]               # default: [0,0], skipped if zero
     Margin: [2.0, 2.0]                # default: [0,0], skipped if zero
-    Tiles: [0, 1, 2, -1, 3, 4, ...]   # -1 = empty, supports TILE_FLIP_H/V flags
+    TilesB64: AAAAAAEAAAA...            # base64-encoded i32 LE bytes (v2+)
+    # Tiles: [0, 1, 2, -1, ...]        # legacy v1 format, still read if TilesB64 absent
 ```
 
 Optional components are omitted from YAML when not present (`skip_serializing_if = "Option::is_none"`). Missing components default to `None` on load (`default` attribute). `RelationshipComponent` uses a custom `has_no_relationships()` skip function — it is omitted when both parent is `None` and children is empty. `RestitutionThreshold` is a legacy field on colliders: deserialized (for backwards compat) but no longer serialized.
@@ -129,7 +130,7 @@ Optional components are omitted from YAML when not present (`skip_serializing_if
 
 | Struct | YAML Key | Fields |
 |--------|----------|--------|
-| `SceneData` | (root) | `version: u32` (default 1), `name` ("Untitled"), `entities: Vec<EntityData>` |
+| `SceneData` | (root) | `version: u32` (current: 2, default 1 for old files), `name` ("Untitled"), `entities: Vec<EntityData>` |
 | `EntityData` | `Entity: <uuid>` | UUID + all optional component data |
 | `TagData` | `TagComponent` | `tag: String` |
 | `TransformData` | `TransformComponent` | `translation: [f32;3]`, `rotation: [f32;3]`, `scale: [f32;3]` |
@@ -146,7 +147,7 @@ Optional components are omitted from YAML when not present (`skip_serializing_if
 | `SpriteAnimatorData` | `SpriteAnimatorComponent` | `cell_size: [f32;2]`, `columns: u32`, `clips: Vec<AnimationClipData>` |
 | `AnimationClipData` | (nested in Clips) | `name: String`, `start_frame: u32`, `end_frame: u32`, `fps: f32` (default 12.0), `looping: bool` (default true) |
 | `AudioSourceData` | `AudioSourceComponent` | `audio_handle: u64`, `volume: f32` (default 1.0), `pitch: f32` (default 1.0), `looping: bool`, `play_on_start: bool`, `streaming: bool`, `spatial: bool`, `min_distance: f32` (default 1.0), `max_distance: f32` (default 50.0) |
-| `TilemapData` | `TilemapComponent` | `width: u32`, `height: u32`, `tile_size: [f32;2]`, `texture_handle: u64`, `tileset_columns: u32` (default 1), `cell_size: [f32;2]`, `spacing: [f32;2]` (default [0,0]), `margin: [f32;2]` (default [0,0]), `tiles: Vec<i32>` |
+| `TilemapData` | `TilemapComponent` | `width: u32`, `height: u32`, `tile_size: [f32;2]`, `texture_handle: u64`, `tileset_columns: u32` (default 1), `cell_size: [f32;2]`, `spacing: [f32;2]` (default [0,0]), `margin: [f32;2]` (default [0,0]), `tiles_b64: String` (base64 LE i32, v2+), `tiles_legacy: Vec<i32>` (v1 fallback, skip_serializing) |
 
 All field names use PascalCase in YAML via `#[serde(rename)]`.
 
@@ -156,7 +157,7 @@ Several fields use custom default functions for backwards-compatible deserializa
 
 | Function | Returns | Used By |
 |----------|---------|---------|
-| `default_scene_version()` | `1` (u32) | `SceneData::version` |
+| `default_scene_version()` | `1` (u32) | `SceneData::version` (defaults to 1 for files without Version field) |
 | `default_tiling_factor()` | `1.0` (f32) | `SpriteData::tiling_factor` |
 | `default_thickness()` | `1.0` (f32) | `CircleData::thickness` |
 | `default_fade()` | `0.005` (f32) | `CircleData::fade` |
@@ -241,9 +242,39 @@ For each EntityData:
 
 Physics handles and Lua scripts are initialized later when entering play mode via `on_runtime_start()`. Texture handles (on SpriteRendererComponent, TilemapComponent) are resolved to GPU textures via `Scene::resolve_texture_handles(asset_manager, renderer)`. Audio handles are resolved to file paths at runtime start.
 
-## Version Field
+## Version Migration System
 
-The `SceneData` root includes a `Version` field (default `1`, constant `SCENE_VERSION`). On deserialization, if the file's version is higher than the current `SCENE_VERSION`, a warning is logged. This enables future format migrations.
+**Current version:** `SCENE_VERSION = 2`
+
+The `SceneData` root includes a `Version` field. On deserialization, the serializer peeks at the version using a lightweight `VersionPeek` struct before full parsing.
+
+### Migration Pipeline
+
+When a scene's version is older than `SCENE_VERSION`, `migrate_scene_yaml()` applies versioned transforms to the YAML string before full deserialization:
+
+| From → To | Changes |
+|-----------|---------|
+| v1 → v2 | Tilemap tiles: `Tiles` (YAML array) → `TilesB64` (base64 binary). No YAML-level transform needed — `TilemapData` deserializes both formats automatically. Version field updated in YAML. |
+
+When a scene's version is newer than `SCENE_VERSION`, a warning is logged and loading continues (best-effort forward compatibility — serde ignores unknown fields by default).
+
+### Adding New Migrations
+
+1. Increment `SCENE_VERSION`
+2. Add a migration step in `migrate_scene_yaml()` for the new version
+3. Ensure `TilemapData` (or other affected structs) can deserialize both old and new formats
+4. Add backward-compat `default`/`skip_serializing` attributes on any new fields
+
+### Tilemap Tile Data (v2+)
+
+v2 introduced compact base64-encoded tile storage:
+
+| Field | Format | Description |
+|-------|--------|-------------|
+| `TilesB64` | Base64 string | Little-endian `i32` bytes, ~3.5x smaller than YAML array |
+| `Tiles` | YAML array (legacy v1) | Still accepted on read, never written |
+
+`TilemapData::encode_tiles()` / `decode_tiles()` handle encoding and format detection (prefers `TilesB64`, falls back to `Tiles`).
 
 ## Scene Copy
 

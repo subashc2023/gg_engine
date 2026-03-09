@@ -5,6 +5,18 @@ use super::{
 };
 use rapier3d::na;
 
+/// Pack a rapier arena (index, generation) pair into a u64 for Lua/external use.
+fn joint_handle_to_u64(index: u32, generation: u32) -> u64 {
+    (generation as u64) << 32 | index as u64
+}
+
+/// Unpack a u64 into a rapier arena (index, generation) pair.
+fn u64_to_joint_handle(packed: u64) -> (u32, u32) {
+    let index = packed as u32;
+    let generation = (packed >> 32) as u32;
+    (index, generation)
+}
+
 /// Clamp a physics property to a minimum, logging a warning if it was invalid.
 fn validate_physics_value(value: f32, min: f32, name: &str, entity_uuid: u64) -> f32 {
     if value < min {
@@ -436,6 +448,225 @@ impl Scene {
             physics.get_gravity()
         } else {
             (0.0, -9.81, 0.0)
+        }
+    }
+
+    /// Change the body type of a 3D rigid body at runtime.
+    pub fn set_body_type_3d(&mut self, entity: Entity, body_type: super::RigidBody3DType) {
+        let body_handle = self
+            .get_component::<RigidBody3DComponent>(entity)
+            .and_then(|rb| rb.runtime_body);
+        if let (Some(handle), Some(ref mut physics)) = (body_handle, &mut self.physics_world_3d) {
+            if let Some(body) = physics.bodies.get_mut(handle) {
+                body.set_body_type(body_type.to_rapier(), true);
+            }
+        }
+        if let Ok(mut rb) = self.world.get::<&mut RigidBody3DComponent>(entity.handle()) {
+            rb.body_type = body_type;
+        }
+    }
+
+    /// Get the body type of a 3D rigid body.
+    pub fn get_body_type_3d(&self, entity: Entity) -> Option<super::RigidBody3DType> {
+        self.get_component::<RigidBody3DComponent>(entity)
+            .map(|rb| rb.body_type)
+    }
+
+    // -----------------------------------------------------------------
+    // 3D Shape overlap queries
+    // -----------------------------------------------------------------
+
+    /// Find all entities whose 3D colliders contain the given point.
+    pub fn point_query_3d(&self, point: glam::Vec3) -> Vec<u64> {
+        if let Some(ref physics) = self.physics_world_3d {
+            physics.point_query(na::Point3::new(point.x, point.y, point.z))
+        } else {
+            Vec::new()
+        }
+    }
+
+    /// Find all entities whose 3D collider AABBs overlap the given AABB.
+    pub fn aabb_query_3d(&self, min: glam::Vec3, max: glam::Vec3) -> Vec<u64> {
+        if let Some(ref physics) = self.physics_world_3d {
+            physics.aabb_query(
+                na::Point3::new(min.x, min.y, min.z),
+                na::Point3::new(max.x, max.y, max.z),
+            )
+        } else {
+            Vec::new()
+        }
+    }
+
+    /// Test if a sphere at a given position overlaps any 3D colliders.
+    pub fn overlap_sphere(
+        &self,
+        center: glam::Vec3,
+        radius: f32,
+        exclude_entity: Option<Entity>,
+    ) -> Vec<u64> {
+        let exclude_uuid =
+            exclude_entity.and_then(|e| self.get_component::<IdComponent>(e).map(|id| id.id.raw()));
+        if let Some(ref physics) = self.physics_world_3d {
+            let position =
+                na::Isometry3::translation(center.x, center.y, center.z);
+            let shape = rapier3d::parry::shape::Ball::new(radius);
+            physics.shape_overlap(&position, &shape, exclude_uuid)
+        } else {
+            Vec::new()
+        }
+    }
+
+    /// Test if an axis-aligned box at a given position overlaps any 3D colliders.
+    pub fn overlap_box_3d(
+        &self,
+        center: glam::Vec3,
+        half_extents: glam::Vec3,
+        exclude_entity: Option<Entity>,
+    ) -> Vec<u64> {
+        let exclude_uuid =
+            exclude_entity.and_then(|e| self.get_component::<IdComponent>(e).map(|id| id.id.raw()));
+        if let Some(ref physics) = self.physics_world_3d {
+            let position =
+                na::Isometry3::translation(center.x, center.y, center.z);
+            let shape = rapier3d::parry::shape::Cuboid::new(na::Vector3::new(
+                half_extents.x,
+                half_extents.y,
+                half_extents.z,
+            ));
+            physics.shape_overlap(&position, &shape, exclude_uuid)
+        } else {
+            Vec::new()
+        }
+    }
+
+    // -----------------------------------------------------------------
+    // 3D Joints
+    // -----------------------------------------------------------------
+
+    /// Create a revolute (hinge) joint between two 3D entities around a given axis.
+    pub fn create_revolute_joint_3d(
+        &mut self,
+        entity_a: Entity,
+        entity_b: Entity,
+        anchor_a: glam::Vec3,
+        anchor_b: glam::Vec3,
+        axis: glam::Vec3,
+    ) -> Option<u64> {
+        let body_a = self
+            .get_component::<RigidBody3DComponent>(entity_a)
+            .and_then(|rb| rb.runtime_body)?;
+        let body_b = self
+            .get_component::<RigidBody3DComponent>(entity_b)
+            .and_then(|rb| rb.runtime_body)?;
+        let physics = self.physics_world_3d.as_mut()?;
+        let unit_axis =
+            match na::UnitVector3::try_new(na::Vector3::new(axis.x, axis.y, axis.z), 1.0e-6) {
+                Some(a) => a,
+                None => {
+                    log::warn!("Revolute joint axis is near-zero, defaulting to Y axis");
+                    na::UnitVector3::new_normalize(na::Vector3::new(0.0, 1.0, 0.0))
+                }
+            };
+        let handle = physics.create_revolute_joint(
+            body_a,
+            body_b,
+            na::Point3::new(anchor_a.x, anchor_a.y, anchor_a.z),
+            na::Point3::new(anchor_b.x, anchor_b.y, anchor_b.z),
+            unit_axis,
+        );
+        let (idx, gen) = handle.0.into_raw_parts();
+        Some(joint_handle_to_u64(idx, gen))
+    }
+
+    /// Create a fixed joint between two 3D entities.
+    pub fn create_fixed_joint_3d(
+        &mut self,
+        entity_a: Entity,
+        entity_b: Entity,
+        anchor_a: glam::Vec3,
+        anchor_b: glam::Vec3,
+    ) -> Option<u64> {
+        let body_a = self
+            .get_component::<RigidBody3DComponent>(entity_a)
+            .and_then(|rb| rb.runtime_body)?;
+        let body_b = self
+            .get_component::<RigidBody3DComponent>(entity_b)
+            .and_then(|rb| rb.runtime_body)?;
+        let physics = self.physics_world_3d.as_mut()?;
+        let frame_a = na::Isometry3::translation(anchor_a.x, anchor_a.y, anchor_a.z);
+        let frame_b = na::Isometry3::translation(anchor_b.x, anchor_b.y, anchor_b.z);
+        let handle = physics.create_fixed_joint(body_a, body_b, frame_a, frame_b);
+        let (idx, gen) = handle.0.into_raw_parts();
+        Some(joint_handle_to_u64(idx, gen))
+    }
+
+    /// Create a ball (spherical) joint between two 3D entities.
+    pub fn create_ball_joint_3d(
+        &mut self,
+        entity_a: Entity,
+        entity_b: Entity,
+        anchor_a: glam::Vec3,
+        anchor_b: glam::Vec3,
+    ) -> Option<u64> {
+        let body_a = self
+            .get_component::<RigidBody3DComponent>(entity_a)
+            .and_then(|rb| rb.runtime_body)?;
+        let body_b = self
+            .get_component::<RigidBody3DComponent>(entity_b)
+            .and_then(|rb| rb.runtime_body)?;
+        let physics = self.physics_world_3d.as_mut()?;
+        let handle = physics.create_ball_joint(
+            body_a,
+            body_b,
+            na::Point3::new(anchor_a.x, anchor_a.y, anchor_a.z),
+            na::Point3::new(anchor_b.x, anchor_b.y, anchor_b.z),
+        );
+        let (idx, gen) = handle.0.into_raw_parts();
+        Some(joint_handle_to_u64(idx, gen))
+    }
+
+    /// Create a prismatic (slider) joint between two 3D entities along a given axis.
+    pub fn create_prismatic_joint_3d(
+        &mut self,
+        entity_a: Entity,
+        entity_b: Entity,
+        anchor_a: glam::Vec3,
+        anchor_b: glam::Vec3,
+        axis: glam::Vec3,
+    ) -> Option<u64> {
+        let body_a = self
+            .get_component::<RigidBody3DComponent>(entity_a)
+            .and_then(|rb| rb.runtime_body)?;
+        let body_b = self
+            .get_component::<RigidBody3DComponent>(entity_b)
+            .and_then(|rb| rb.runtime_body)?;
+        let physics = self.physics_world_3d.as_mut()?;
+        let unit_axis =
+            match na::UnitVector3::try_new(na::Vector3::new(axis.x, axis.y, axis.z), 1.0e-6) {
+                Some(a) => a,
+                None => {
+                    log::warn!("Prismatic joint axis is near-zero, defaulting to Y axis");
+                    na::UnitVector3::new_normalize(na::Vector3::new(0.0, 1.0, 0.0))
+                }
+            };
+        let handle = physics.create_prismatic_joint(
+            body_a,
+            body_b,
+            na::Point3::new(anchor_a.x, anchor_a.y, anchor_a.z),
+            na::Point3::new(anchor_b.x, anchor_b.y, anchor_b.z),
+            unit_axis,
+        );
+        let (idx, gen) = handle.0.into_raw_parts();
+        Some(joint_handle_to_u64(idx, gen))
+    }
+
+    /// Remove a 3D joint by its packed handle.
+    pub fn remove_joint_3d(&mut self, joint_id: u64) {
+        if let Some(ref mut physics) = self.physics_world_3d {
+            let (idx, gen) = u64_to_joint_handle(joint_id);
+            let index = rapier3d::data::Index::from_raw_parts(idx, gen);
+            let handle = rapier3d::dynamics::ImpulseJointHandle(index);
+            physics.remove_joint(handle);
         }
     }
 

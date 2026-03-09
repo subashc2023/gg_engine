@@ -5,6 +5,18 @@ use super::{
 };
 use rapier2d::na;
 
+/// Pack a rapier arena (index, generation) pair into a u64 for Lua/external use.
+fn joint_handle_to_u64(index: u32, generation: u32) -> u64 {
+    (generation as u64) << 32 | index as u64
+}
+
+/// Unpack a u64 into a rapier arena (index, generation) pair.
+fn u64_to_joint_handle(packed: u64) -> (u32, u32) {
+    let index = packed as u32;
+    let generation = (packed >> 32) as u32;
+    (index, generation)
+}
+
 /// Clamp a physics property to a minimum, logging a warning if it was invalid.
 fn validate_physics_value(value: f32, min: f32, name: &str, entity_uuid: u64) -> f32 {
     if value < min {
@@ -434,6 +446,200 @@ impl Scene {
             physics.get_gravity()
         } else {
             (0.0, -9.81)
+        }
+    }
+
+    /// Change the body type of a 2D rigid body at runtime.
+    ///
+    /// Also updates the component so it stays in sync.
+    pub fn set_body_type(&mut self, entity: Entity, body_type: super::RigidBody2DType) {
+        let body_handle = self
+            .get_component::<RigidBody2DComponent>(entity)
+            .and_then(|rb| rb.runtime_body);
+        if let (Some(handle), Some(ref mut physics)) = (body_handle, &mut self.physics_world) {
+            if let Some(body) = physics.bodies.get_mut(handle) {
+                body.set_body_type(body_type.to_rapier(), true);
+            }
+        }
+        // Update the component field to stay in sync.
+        if let Ok(mut rb) = self.world.get::<&mut RigidBody2DComponent>(entity.handle()) {
+            rb.body_type = body_type;
+        }
+    }
+
+    /// Get the body type of a 2D rigid body.
+    pub fn get_body_type(&self, entity: Entity) -> Option<super::RigidBody2DType> {
+        self.get_component::<RigidBody2DComponent>(entity)
+            .map(|rb| rb.body_type)
+    }
+
+    // -----------------------------------------------------------------
+    // Shape overlap queries
+    // -----------------------------------------------------------------
+
+    /// Find all entities whose 2D colliders contain the given point.
+    pub fn point_query(&self, point: glam::Vec2) -> Vec<u64> {
+        if let Some(ref physics) = self.physics_world {
+            physics.point_query(na::Point2::new(point.x, point.y))
+        } else {
+            Vec::new()
+        }
+    }
+
+    /// Find all entities whose 2D collider AABBs overlap the given AABB.
+    pub fn aabb_query(&self, min: glam::Vec2, max: glam::Vec2) -> Vec<u64> {
+        if let Some(ref physics) = self.physics_world {
+            physics.aabb_query(
+                na::Point2::new(min.x, min.y),
+                na::Point2::new(max.x, max.y),
+            )
+        } else {
+            Vec::new()
+        }
+    }
+
+    /// Test if a circle at a given position overlaps any 2D colliders.
+    /// Returns all overlapping entity UUIDs.
+    pub fn overlap_circle(
+        &self,
+        center: glam::Vec2,
+        radius: f32,
+        exclude_entity: Option<Entity>,
+    ) -> Vec<u64> {
+        let exclude_uuid =
+            exclude_entity.and_then(|e| self.get_component::<IdComponent>(e).map(|id| id.id.raw()));
+        if let Some(ref physics) = self.physics_world {
+            let position =
+                na::Isometry2::translation(center.x, center.y);
+            let shape = rapier2d::parry::shape::Ball::new(radius);
+            physics.shape_overlap(&position, &shape, exclude_uuid)
+        } else {
+            Vec::new()
+        }
+    }
+
+    /// Test if an axis-aligned box at a given position overlaps any 2D colliders.
+    /// Returns all overlapping entity UUIDs.
+    pub fn overlap_box(
+        &self,
+        center: glam::Vec2,
+        half_extents: glam::Vec2,
+        exclude_entity: Option<Entity>,
+    ) -> Vec<u64> {
+        let exclude_uuid =
+            exclude_entity.and_then(|e| self.get_component::<IdComponent>(e).map(|id| id.id.raw()));
+        if let Some(ref physics) = self.physics_world {
+            let position =
+                na::Isometry2::translation(center.x, center.y);
+            let shape = rapier2d::parry::shape::Cuboid::new(na::Vector2::new(
+                half_extents.x,
+                half_extents.y,
+            ));
+            physics.shape_overlap(&position, &shape, exclude_uuid)
+        } else {
+            Vec::new()
+        }
+    }
+
+    // -----------------------------------------------------------------
+    // 2D Joints
+    // -----------------------------------------------------------------
+
+    /// Create a revolute (hinge) joint between two entities.
+    ///
+    /// `anchor_a` and `anchor_b` are in local space of each body.
+    /// Returns the joint handle index, or `None` if either entity lacks a physics body.
+    pub fn create_revolute_joint(
+        &mut self,
+        entity_a: Entity,
+        entity_b: Entity,
+        anchor_a: glam::Vec2,
+        anchor_b: glam::Vec2,
+    ) -> Option<u64> {
+        let body_a = self
+            .get_component::<RigidBody2DComponent>(entity_a)
+            .and_then(|rb| rb.runtime_body)?;
+        let body_b = self
+            .get_component::<RigidBody2DComponent>(entity_b)
+            .and_then(|rb| rb.runtime_body)?;
+        let physics = self.physics_world.as_mut()?;
+        let handle = physics.create_revolute_joint(
+            body_a,
+            body_b,
+            na::Point2::new(anchor_a.x, anchor_a.y),
+            na::Point2::new(anchor_b.x, anchor_b.y),
+        );
+        let (idx, gen) = handle.0.into_raw_parts();
+        Some(joint_handle_to_u64(idx, gen))
+    }
+
+    /// Create a fixed joint between two entities (locks relative transform).
+    ///
+    /// Anchors are in local space of each body (position only, no rotation offset).
+    pub fn create_fixed_joint(
+        &mut self,
+        entity_a: Entity,
+        entity_b: Entity,
+        anchor_a: glam::Vec2,
+        anchor_b: glam::Vec2,
+    ) -> Option<u64> {
+        let body_a = self
+            .get_component::<RigidBody2DComponent>(entity_a)
+            .and_then(|rb| rb.runtime_body)?;
+        let body_b = self
+            .get_component::<RigidBody2DComponent>(entity_b)
+            .and_then(|rb| rb.runtime_body)?;
+        let physics = self.physics_world.as_mut()?;
+        let frame_a = na::Isometry2::translation(anchor_a.x, anchor_a.y);
+        let frame_b = na::Isometry2::translation(anchor_b.x, anchor_b.y);
+        let handle = physics.create_fixed_joint(body_a, body_b, frame_a, frame_b);
+        let (idx, gen) = handle.0.into_raw_parts();
+        Some(joint_handle_to_u64(idx, gen))
+    }
+
+    /// Create a prismatic (slider) joint between two entities.
+    ///
+    /// `axis` is the local-space sliding direction (normalized automatically).
+    pub fn create_prismatic_joint(
+        &mut self,
+        entity_a: Entity,
+        entity_b: Entity,
+        anchor_a: glam::Vec2,
+        anchor_b: glam::Vec2,
+        axis: glam::Vec2,
+    ) -> Option<u64> {
+        let body_a = self
+            .get_component::<RigidBody2DComponent>(entity_a)
+            .and_then(|rb| rb.runtime_body)?;
+        let body_b = self
+            .get_component::<RigidBody2DComponent>(entity_b)
+            .and_then(|rb| rb.runtime_body)?;
+        let physics = self.physics_world.as_mut()?;
+        let unit_axis = match na::UnitVector2::try_new(na::Vector2::new(axis.x, axis.y), 1.0e-6) {
+            Some(a) => a,
+            None => {
+                log::warn!("Prismatic joint axis is near-zero, defaulting to X axis");
+                na::UnitVector2::new_normalize(na::Vector2::new(1.0, 0.0))
+            }
+        };
+        let handle = physics.create_prismatic_joint(
+            body_a,
+            body_b,
+            na::Point2::new(anchor_a.x, anchor_a.y),
+            na::Point2::new(anchor_b.x, anchor_b.y),
+            unit_axis,
+        );
+        let (idx, gen) = handle.0.into_raw_parts();
+        Some(joint_handle_to_u64(idx, gen))
+    }
+
+    /// Remove a 2D joint by its packed handle.
+    pub fn remove_joint(&mut self, joint_id: u64) {
+        if let Some(ref mut physics) = self.physics_world {
+            let (idx, gen) = u64_to_joint_handle(joint_id);
+            let index = rapier2d::data::Index::from_raw_parts(idx, gen);
+            let handle = rapier2d::dynamics::ImpulseJointHandle(index);
+            physics.remove_joint(handle);
         }
     }
 

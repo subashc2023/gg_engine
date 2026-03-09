@@ -337,6 +337,80 @@ pub fn register_all(lua: &Lua) -> LuaResult<()> {
     engine.set("set_gravity_3d", lua.create_function(lua_set_gravity_3d)?)?;
     engine.set("get_gravity_3d", lua.create_function(lua_get_gravity_3d)?)?;
 
+    // Runtime body type changes
+    engine.set(
+        "set_body_type",
+        lua.create_function(lua_set_body_type)?,
+    )?;
+    engine.set(
+        "get_body_type",
+        lua.create_function(lua_get_body_type)?,
+    )?;
+    engine.set(
+        "set_body_type_3d",
+        lua.create_function(lua_set_body_type_3d)?,
+    )?;
+    engine.set(
+        "get_body_type_3d",
+        lua.create_function(lua_get_body_type_3d)?,
+    )?;
+
+    // Shape overlap queries
+    engine.set("point_query", lua.create_function(lua_point_query)?)?;
+    engine.set("aabb_query", lua.create_function(lua_aabb_query)?)?;
+    engine.set(
+        "overlap_circle",
+        lua.create_function(lua_overlap_circle)?,
+    )?;
+    engine.set("overlap_box", lua.create_function(lua_overlap_box)?)?;
+    engine.set("point_query_3d", lua.create_function(lua_point_query_3d)?)?;
+    engine.set("aabb_query_3d", lua.create_function(lua_aabb_query_3d)?)?;
+    engine.set(
+        "overlap_sphere",
+        lua.create_function(lua_overlap_sphere)?,
+    )?;
+    engine.set(
+        "overlap_box_3d",
+        lua.create_function(lua_overlap_box_3d)?,
+    )?;
+
+    // Joints (2D)
+    engine.set(
+        "create_revolute_joint",
+        lua.create_function(lua_create_revolute_joint)?,
+    )?;
+    engine.set(
+        "create_fixed_joint",
+        lua.create_function(lua_create_fixed_joint)?,
+    )?;
+    engine.set(
+        "create_prismatic_joint",
+        lua.create_function(lua_create_prismatic_joint)?,
+    )?;
+    engine.set("remove_joint", lua.create_function(lua_remove_joint)?)?;
+
+    // Joints (3D)
+    engine.set(
+        "create_revolute_joint_3d",
+        lua.create_function(lua_create_revolute_joint_3d)?,
+    )?;
+    engine.set(
+        "create_fixed_joint_3d",
+        lua.create_function(lua_create_fixed_joint_3d)?,
+    )?;
+    engine.set(
+        "create_ball_joint_3d",
+        lua.create_function(lua_create_ball_joint_3d)?,
+    )?;
+    engine.set(
+        "create_prismatic_joint_3d",
+        lua.create_function(lua_create_prismatic_joint_3d)?,
+    )?;
+    engine.set(
+        "remove_joint_3d",
+        lua.create_function(lua_remove_joint_3d)?,
+    )?;
+
     // Entity queries
     engine.set(
         "find_entities_with_component",
@@ -1475,6 +1549,406 @@ fn lua_get_gravity_3d(lua: &Lua, _: ()) -> LuaResult<(f32, f32, f32)> {
 }
 
 // ---------------------------------------------------------------------------
+// Runtime body type changes
+// ---------------------------------------------------------------------------
+
+/// `Engine.set_body_type(entity_id, type_str)` — change 2D body type at runtime.
+/// `type_str`: "static", "dynamic", or "kinematic".
+fn lua_set_body_type(lua: &Lua, (entity_id, type_str): (u64, String)) -> LuaResult<()> {
+    let body_type = match super::RigidBody2DType::from_str_loose(&type_str) {
+        Some(bt) => bt,
+        None => {
+            log::warn!("set_body_type: unknown body type '{}'", type_str);
+            return Ok(());
+        }
+    };
+    with_entity_mut(lua, entity_id, (), |scene, entity| {
+        scene.set_body_type(entity, body_type);
+    })
+}
+
+/// `Engine.get_body_type(entity_id)` — returns "static", "dynamic", or "kinematic".
+fn lua_get_body_type(lua: &Lua, entity_id: u64) -> LuaResult<Option<String>> {
+    with_entity(lua, entity_id, None, |scene, entity| {
+        scene.get_body_type(entity).map(|bt| bt.label().to_ascii_lowercase())
+    })
+}
+
+/// `Engine.set_body_type_3d(entity_id, type_str)` — change 3D body type at runtime.
+fn lua_set_body_type_3d(lua: &Lua, (entity_id, type_str): (u64, String)) -> LuaResult<()> {
+    let body_type = match super::RigidBody3DType::from_str_loose(&type_str) {
+        Some(bt) => bt,
+        None => {
+            log::warn!("set_body_type_3d: unknown body type '{}'", type_str);
+            return Ok(());
+        }
+    };
+    with_entity_mut(lua, entity_id, (), |scene, entity| {
+        scene.set_body_type_3d(entity, body_type);
+    })
+}
+
+/// `Engine.get_body_type_3d(entity_id)` — returns "static", "dynamic", or "kinematic".
+fn lua_get_body_type_3d(lua: &Lua, entity_id: u64) -> LuaResult<Option<String>> {
+    with_entity(lua, entity_id, None, |scene, entity| {
+        scene.get_body_type_3d(entity).map(|bt| bt.label().to_ascii_lowercase())
+    })
+}
+
+// ---------------------------------------------------------------------------
+// Shape overlap queries
+// ---------------------------------------------------------------------------
+
+/// Helper: turn a `Vec<u64>` of entity UUIDs into a Lua table of i64.
+fn uuid_vec_to_lua_table(lua: &Lua, uuids: Vec<u64>) -> LuaResult<LuaTable> {
+    let table = lua.create_table()?;
+    for (i, uuid) in uuids.into_iter().enumerate() {
+        table.set(i + 1, uuid as i64)?;
+    }
+    Ok(table)
+}
+
+/// `Engine.point_query(x, y)` — find all entities at a 2D point.
+fn lua_point_query(lua: &Lua, (x, y): (f32, f32)) -> LuaResult<LuaTable> {
+    let ctx = match lua.app_data_mut::<SceneScriptContext>() {
+        Some(ctx) => ctx,
+        None => return lua.create_table(),
+    };
+    let scene = unsafe { ctx.scene() };
+    let results = scene.point_query(glam::Vec2::new(x, y));
+    uuid_vec_to_lua_table(lua, results)
+}
+
+/// `Engine.aabb_query(min_x, min_y, max_x, max_y)` — find entities in a 2D AABB.
+fn lua_aabb_query(
+    lua: &Lua,
+    (min_x, min_y, max_x, max_y): (f32, f32, f32, f32),
+) -> LuaResult<LuaTable> {
+    let ctx = match lua.app_data_mut::<SceneScriptContext>() {
+        Some(ctx) => ctx,
+        None => return lua.create_table(),
+    };
+    let scene = unsafe { ctx.scene() };
+    let results = scene.aabb_query(
+        glam::Vec2::new(min_x, min_y),
+        glam::Vec2::new(max_x, max_y),
+    );
+    uuid_vec_to_lua_table(lua, results)
+}
+
+/// `Engine.overlap_circle(cx, cy, radius, exclude_entity_id)` — shape overlap test.
+fn lua_overlap_circle(
+    lua: &Lua,
+    (cx, cy, radius, exclude_id): (f32, f32, f32, Option<u64>),
+) -> LuaResult<LuaTable> {
+    let ctx = match lua.app_data_mut::<SceneScriptContext>() {
+        Some(ctx) => ctx,
+        None => return lua.create_table(),
+    };
+    let scene = unsafe { ctx.scene() };
+    let exclude = exclude_id.and_then(|uuid| scene.find_entity_by_uuid(uuid));
+    let results = scene.overlap_circle(glam::Vec2::new(cx, cy), radius, exclude);
+    uuid_vec_to_lua_table(lua, results)
+}
+
+/// `Engine.overlap_box(cx, cy, half_w, half_h, exclude_entity_id)` — box overlap test.
+fn lua_overlap_box(
+    lua: &Lua,
+    (cx, cy, half_w, half_h, exclude_id): (f32, f32, f32, f32, Option<u64>),
+) -> LuaResult<LuaTable> {
+    let ctx = match lua.app_data_mut::<SceneScriptContext>() {
+        Some(ctx) => ctx,
+        None => return lua.create_table(),
+    };
+    let scene = unsafe { ctx.scene() };
+    let exclude = exclude_id.and_then(|uuid| scene.find_entity_by_uuid(uuid));
+    let results =
+        scene.overlap_box(glam::Vec2::new(cx, cy), glam::Vec2::new(half_w, half_h), exclude);
+    uuid_vec_to_lua_table(lua, results)
+}
+
+/// `Engine.point_query_3d(x, y, z)` — find all entities at a 3D point.
+fn lua_point_query_3d(lua: &Lua, (x, y, z): (f32, f32, f32)) -> LuaResult<LuaTable> {
+    let ctx = match lua.app_data_mut::<SceneScriptContext>() {
+        Some(ctx) => ctx,
+        None => return lua.create_table(),
+    };
+    let scene = unsafe { ctx.scene() };
+    let results = scene.point_query_3d(glam::Vec3::new(x, y, z));
+    uuid_vec_to_lua_table(lua, results)
+}
+
+/// `Engine.aabb_query_3d(min_x, min_y, min_z, max_x, max_y, max_z)` — 3D AABB query.
+#[allow(clippy::too_many_arguments)]
+fn lua_aabb_query_3d(
+    lua: &Lua,
+    (min_x, min_y, min_z, max_x, max_y, max_z): (f32, f32, f32, f32, f32, f32),
+) -> LuaResult<LuaTable> {
+    let ctx = match lua.app_data_mut::<SceneScriptContext>() {
+        Some(ctx) => ctx,
+        None => return lua.create_table(),
+    };
+    let scene = unsafe { ctx.scene() };
+    let results = scene.aabb_query_3d(
+        glam::Vec3::new(min_x, min_y, min_z),
+        glam::Vec3::new(max_x, max_y, max_z),
+    );
+    uuid_vec_to_lua_table(lua, results)
+}
+
+/// `Engine.overlap_sphere(cx, cy, cz, radius, exclude_entity_id)` — sphere overlap test.
+fn lua_overlap_sphere(
+    lua: &Lua,
+    (cx, cy, cz, radius, exclude_id): (f32, f32, f32, f32, Option<u64>),
+) -> LuaResult<LuaTable> {
+    let ctx = match lua.app_data_mut::<SceneScriptContext>() {
+        Some(ctx) => ctx,
+        None => return lua.create_table(),
+    };
+    let scene = unsafe { ctx.scene() };
+    let exclude = exclude_id.and_then(|uuid| scene.find_entity_by_uuid(uuid));
+    let results = scene.overlap_sphere(glam::Vec3::new(cx, cy, cz), radius, exclude);
+    uuid_vec_to_lua_table(lua, results)
+}
+
+/// `Engine.overlap_box_3d(cx, cy, cz, hx, hy, hz, exclude_entity_id)` — 3D box overlap.
+#[allow(clippy::too_many_arguments)]
+fn lua_overlap_box_3d(
+    lua: &Lua,
+    (cx, cy, cz, hx, hy, hz, exclude_id): (f32, f32, f32, f32, f32, f32, Option<u64>),
+) -> LuaResult<LuaTable> {
+    let ctx = match lua.app_data_mut::<SceneScriptContext>() {
+        Some(ctx) => ctx,
+        None => return lua.create_table(),
+    };
+    let scene = unsafe { ctx.scene() };
+    let exclude = exclude_id.and_then(|uuid| scene.find_entity_by_uuid(uuid));
+    let results = scene.overlap_box_3d(
+        glam::Vec3::new(cx, cy, cz),
+        glam::Vec3::new(hx, hy, hz),
+        exclude,
+    );
+    uuid_vec_to_lua_table(lua, results)
+}
+
+// ---------------------------------------------------------------------------
+// Joints (2D)
+// ---------------------------------------------------------------------------
+
+/// `Engine.create_revolute_joint(entity_a, entity_b, ax, ay, bx, by)` — hinge joint.
+/// Returns joint_id or nil.
+fn lua_create_revolute_joint(
+    lua: &Lua,
+    (entity_a, entity_b, ax, ay, bx, by): (u64, u64, f32, f32, f32, f32),
+) -> LuaResult<Option<i64>> {
+    let mut ctx = match lua.app_data_mut::<SceneScriptContext>() {
+        Some(ctx) => ctx,
+        None => return Ok(None),
+    };
+    let scene = unsafe { ctx.scene_mut() };
+    let ea = match scene.find_entity_by_uuid(entity_a) {
+        Some(e) => e,
+        None => return Ok(None),
+    };
+    let eb = match scene.find_entity_by_uuid(entity_b) {
+        Some(e) => e,
+        None => return Ok(None),
+    };
+    Ok(scene
+        .create_revolute_joint(ea, eb, glam::Vec2::new(ax, ay), glam::Vec2::new(bx, by))
+        .map(|id| id as i64))
+}
+
+/// `Engine.create_fixed_joint(entity_a, entity_b, ax, ay, bx, by)` — fixed joint.
+fn lua_create_fixed_joint(
+    lua: &Lua,
+    (entity_a, entity_b, ax, ay, bx, by): (u64, u64, f32, f32, f32, f32),
+) -> LuaResult<Option<i64>> {
+    let mut ctx = match lua.app_data_mut::<SceneScriptContext>() {
+        Some(ctx) => ctx,
+        None => return Ok(None),
+    };
+    let scene = unsafe { ctx.scene_mut() };
+    let ea = match scene.find_entity_by_uuid(entity_a) {
+        Some(e) => e,
+        None => return Ok(None),
+    };
+    let eb = match scene.find_entity_by_uuid(entity_b) {
+        Some(e) => e,
+        None => return Ok(None),
+    };
+    Ok(scene
+        .create_fixed_joint(ea, eb, glam::Vec2::new(ax, ay), glam::Vec2::new(bx, by))
+        .map(|id| id as i64))
+}
+
+/// `Engine.create_prismatic_joint(entity_a, entity_b, ax, ay, bx, by, dir_x, dir_y)` — slider.
+#[allow(clippy::too_many_arguments)]
+fn lua_create_prismatic_joint(
+    lua: &Lua,
+    (entity_a, entity_b, ax, ay, bx, by, dx, dy): (u64, u64, f32, f32, f32, f32, f32, f32),
+) -> LuaResult<Option<i64>> {
+    let mut ctx = match lua.app_data_mut::<SceneScriptContext>() {
+        Some(ctx) => ctx,
+        None => return Ok(None),
+    };
+    let scene = unsafe { ctx.scene_mut() };
+    let ea = match scene.find_entity_by_uuid(entity_a) {
+        Some(e) => e,
+        None => return Ok(None),
+    };
+    let eb = match scene.find_entity_by_uuid(entity_b) {
+        Some(e) => e,
+        None => return Ok(None),
+    };
+    Ok(scene
+        .create_prismatic_joint(
+            ea,
+            eb,
+            glam::Vec2::new(ax, ay),
+            glam::Vec2::new(bx, by),
+            glam::Vec2::new(dx, dy),
+        )
+        .map(|id| id as i64))
+}
+
+/// `Engine.remove_joint(joint_id)` — remove a 2D joint.
+fn lua_remove_joint(lua: &Lua, joint_id: i64) -> LuaResult<()> {
+    with_scene_mut(lua, (), |scene| scene.remove_joint(joint_id as u64))
+}
+
+// ---------------------------------------------------------------------------
+// Joints (3D)
+// ---------------------------------------------------------------------------
+
+/// `Engine.create_revolute_joint_3d(ea, eb, ax, ay, az, bx, by, bz, axis_x, axis_y, axis_z)`
+#[allow(clippy::too_many_arguments)]
+fn lua_create_revolute_joint_3d(
+    lua: &Lua,
+    (ea_id, eb_id, ax, ay, az, bx, by, bz, dx, dy, dz): (
+        u64, u64, f32, f32, f32, f32, f32, f32, f32, f32, f32,
+    ),
+) -> LuaResult<Option<i64>> {
+    let mut ctx = match lua.app_data_mut::<SceneScriptContext>() {
+        Some(ctx) => ctx,
+        None => return Ok(None),
+    };
+    let scene = unsafe { ctx.scene_mut() };
+    let ea = match scene.find_entity_by_uuid(ea_id) {
+        Some(e) => e,
+        None => return Ok(None),
+    };
+    let eb = match scene.find_entity_by_uuid(eb_id) {
+        Some(e) => e,
+        None => return Ok(None),
+    };
+    Ok(scene
+        .create_revolute_joint_3d(
+            ea,
+            eb,
+            glam::Vec3::new(ax, ay, az),
+            glam::Vec3::new(bx, by, bz),
+            glam::Vec3::new(dx, dy, dz),
+        )
+        .map(|id| id as i64))
+}
+
+/// `Engine.create_fixed_joint_3d(ea, eb, ax, ay, az, bx, by, bz)`
+#[allow(clippy::too_many_arguments)]
+fn lua_create_fixed_joint_3d(
+    lua: &Lua,
+    (ea_id, eb_id, ax, ay, az, bx, by, bz): (u64, u64, f32, f32, f32, f32, f32, f32),
+) -> LuaResult<Option<i64>> {
+    let mut ctx = match lua.app_data_mut::<SceneScriptContext>() {
+        Some(ctx) => ctx,
+        None => return Ok(None),
+    };
+    let scene = unsafe { ctx.scene_mut() };
+    let ea = match scene.find_entity_by_uuid(ea_id) {
+        Some(e) => e,
+        None => return Ok(None),
+    };
+    let eb = match scene.find_entity_by_uuid(eb_id) {
+        Some(e) => e,
+        None => return Ok(None),
+    };
+    Ok(scene
+        .create_fixed_joint_3d(
+            ea,
+            eb,
+            glam::Vec3::new(ax, ay, az),
+            glam::Vec3::new(bx, by, bz),
+        )
+        .map(|id| id as i64))
+}
+
+/// `Engine.create_ball_joint_3d(ea, eb, ax, ay, az, bx, by, bz)`
+#[allow(clippy::too_many_arguments)]
+fn lua_create_ball_joint_3d(
+    lua: &Lua,
+    (ea_id, eb_id, ax, ay, az, bx, by, bz): (u64, u64, f32, f32, f32, f32, f32, f32),
+) -> LuaResult<Option<i64>> {
+    let mut ctx = match lua.app_data_mut::<SceneScriptContext>() {
+        Some(ctx) => ctx,
+        None => return Ok(None),
+    };
+    let scene = unsafe { ctx.scene_mut() };
+    let ea = match scene.find_entity_by_uuid(ea_id) {
+        Some(e) => e,
+        None => return Ok(None),
+    };
+    let eb = match scene.find_entity_by_uuid(eb_id) {
+        Some(e) => e,
+        None => return Ok(None),
+    };
+    Ok(scene
+        .create_ball_joint_3d(
+            ea,
+            eb,
+            glam::Vec3::new(ax, ay, az),
+            glam::Vec3::new(bx, by, bz),
+        )
+        .map(|id| id as i64))
+}
+
+/// `Engine.create_prismatic_joint_3d(ea, eb, ax, ay, az, bx, by, bz, dx, dy, dz)`
+#[allow(clippy::too_many_arguments)]
+fn lua_create_prismatic_joint_3d(
+    lua: &Lua,
+    (ea_id, eb_id, ax, ay, az, bx, by, bz, dx, dy, dz): (
+        u64, u64, f32, f32, f32, f32, f32, f32, f32, f32, f32,
+    ),
+) -> LuaResult<Option<i64>> {
+    let mut ctx = match lua.app_data_mut::<SceneScriptContext>() {
+        Some(ctx) => ctx,
+        None => return Ok(None),
+    };
+    let scene = unsafe { ctx.scene_mut() };
+    let ea = match scene.find_entity_by_uuid(ea_id) {
+        Some(e) => e,
+        None => return Ok(None),
+    };
+    let eb = match scene.find_entity_by_uuid(eb_id) {
+        Some(e) => e,
+        None => return Ok(None),
+    };
+    Ok(scene
+        .create_prismatic_joint_3d(
+            ea,
+            eb,
+            glam::Vec3::new(ax, ay, az),
+            glam::Vec3::new(bx, by, bz),
+            glam::Vec3::new(dx, dy, dz),
+        )
+        .map(|id| id as i64))
+}
+
+/// `Engine.remove_joint_3d(joint_id)` — remove a 3D joint.
+fn lua_remove_joint_3d(lua: &Lua, joint_id: i64) -> LuaResult<()> {
+    with_scene_mut(lua, (), |scene| scene.remove_joint_3d(joint_id as u64))
+}
+
+// ---------------------------------------------------------------------------
 // Existing Engine functions
 // ---------------------------------------------------------------------------
 
@@ -1878,6 +2352,31 @@ mod tests {
         assert!(engine.get::<LuaFunction>("set_linear_velocity").is_ok());
         assert!(engine.get::<LuaFunction>("get_angular_velocity").is_ok());
         assert!(engine.get::<LuaFunction>("set_angular_velocity").is_ok());
+        // Body type
+        assert!(engine.get::<LuaFunction>("set_body_type").is_ok());
+        assert!(engine.get::<LuaFunction>("get_body_type").is_ok());
+        assert!(engine.get::<LuaFunction>("set_body_type_3d").is_ok());
+        assert!(engine.get::<LuaFunction>("get_body_type_3d").is_ok());
+        // Shape overlap queries
+        assert!(engine.get::<LuaFunction>("point_query").is_ok());
+        assert!(engine.get::<LuaFunction>("aabb_query").is_ok());
+        assert!(engine.get::<LuaFunction>("overlap_circle").is_ok());
+        assert!(engine.get::<LuaFunction>("overlap_box").is_ok());
+        assert!(engine.get::<LuaFunction>("point_query_3d").is_ok());
+        assert!(engine.get::<LuaFunction>("aabb_query_3d").is_ok());
+        assert!(engine.get::<LuaFunction>("overlap_sphere").is_ok());
+        assert!(engine.get::<LuaFunction>("overlap_box_3d").is_ok());
+        // Joints (2D)
+        assert!(engine.get::<LuaFunction>("create_revolute_joint").is_ok());
+        assert!(engine.get::<LuaFunction>("create_fixed_joint").is_ok());
+        assert!(engine.get::<LuaFunction>("create_prismatic_joint").is_ok());
+        assert!(engine.get::<LuaFunction>("remove_joint").is_ok());
+        // Joints (3D)
+        assert!(engine.get::<LuaFunction>("create_revolute_joint_3d").is_ok());
+        assert!(engine.get::<LuaFunction>("create_fixed_joint_3d").is_ok());
+        assert!(engine.get::<LuaFunction>("create_ball_joint_3d").is_ok());
+        assert!(engine.get::<LuaFunction>("create_prismatic_joint_3d").is_ok());
+        assert!(engine.get::<LuaFunction>("remove_joint_3d").is_ok());
     }
 
     #[test]
@@ -2306,5 +2805,59 @@ mod tests {
             .unwrap();
         let result: LuaTable = lua.globals().get("result").unwrap();
         assert_eq!(result.len().unwrap(), 0);
+    }
+
+    #[test]
+    fn set_body_type_no_context_no_error() {
+        let lua = setup();
+        lua.load(r#"Engine.set_body_type(12345, "dynamic")"#)
+            .exec()
+            .expect("set_body_type should not error without context");
+    }
+
+    #[test]
+    fn get_body_type_no_context_returns_nil() {
+        let lua = setup();
+        lua.load("result = Engine.get_body_type(12345)")
+            .exec()
+            .unwrap();
+        let result: LuaValue = lua.globals().get("result").unwrap();
+        assert!(result.is_nil());
+    }
+
+    #[test]
+    fn point_query_no_context_returns_empty() {
+        let lua = setup();
+        lua.load("result = Engine.point_query(0, 0)")
+            .exec()
+            .unwrap();
+        let result: LuaTable = lua.globals().get("result").unwrap();
+        assert_eq!(result.len().unwrap(), 0);
+    }
+
+    #[test]
+    fn overlap_circle_no_context_returns_empty() {
+        let lua = setup();
+        lua.load("result = Engine.overlap_circle(0, 0, 1.0)")
+            .exec()
+            .unwrap();
+        let result: LuaTable = lua.globals().get("result").unwrap();
+        assert_eq!(result.len().unwrap(), 0);
+    }
+
+    #[test]
+    fn create_revolute_joint_no_context_returns_nil() {
+        let lua = setup();
+        lua.load("result = Engine.create_revolute_joint(111, 222, 0, 0, 0, 0)")
+            .exec()
+            .unwrap();
+        let result: LuaValue = lua.globals().get("result").unwrap();
+        assert!(result.is_nil());
+    }
+
+    #[test]
+    fn remove_joint_no_context_no_error() {
+        let lua = setup();
+        lua.load("Engine.remove_joint(12345)").exec().unwrap();
     }
 }

@@ -37,6 +37,12 @@ pub struct EditorAssetManager {
     /// Maximum number of cached textures before LRU eviction kicks in.
     /// 0 means unlimited.
     max_cached_textures: usize,
+    /// Per-asset GPU memory size in bytes.
+    asset_gpu_bytes: HashMap<AssetHandle, u64>,
+    /// Total tracked GPU memory usage in bytes.
+    total_gpu_bytes: u64,
+    /// GPU memory budget in bytes. 0 means unlimited (eviction by count only).
+    gpu_memory_budget: u64,
 }
 
 const REGISTRY_FILENAME: &str = "AssetRegistry.ggregistry";
@@ -55,6 +61,9 @@ impl EditorAssetManager {
             access_counter: 0,
             access_times: HashMap::new(),
             max_cached_textures: 256,
+            asset_gpu_bytes: HashMap::new(),
+            total_gpu_bytes: 0,
+            gpu_memory_budget: 0,
         }
     }
 
@@ -71,6 +80,7 @@ impl EditorAssetManager {
                 registry_path.display()
             );
         }
+        self.registry.rebuild_dependencies(&self.asset_directory);
     }
 
     /// Save the registry to the `AssetRegistry.ggregistry` file in the asset directory.
@@ -203,8 +213,10 @@ impl EditorAssetManager {
                 let abs_path = self.asset_directory.join(&metadata.file_path);
                 if abs_path.exists() {
                     if let Some(texture) = renderer.create_texture_from_file(&abs_path) {
+                        let bytes = texture.gpu_memory_bytes();
                         self.loaded_assets
                             .insert(*handle, AssetData::Texture(Ref::new(texture)));
+                        self.track_gpu_bytes(*handle, bytes);
                         true
                     } else {
                         log::warn!(
@@ -320,7 +332,24 @@ impl EditorAssetManager {
     /// Store the fallback texture for a handle that failed to load.
     fn store_fallback(&mut self, handle: AssetHandle, renderer: &Renderer) {
         let tex = self.get_fallback_texture(renderer);
+        let bytes = tex.gpu_memory_bytes();
         self.loaded_assets.insert(handle, AssetData::Texture(tex));
+        self.track_gpu_bytes(handle, bytes);
+    }
+
+    /// Record GPU memory usage for a loaded asset.
+    fn track_gpu_bytes(&mut self, handle: AssetHandle, bytes: u64) {
+        if let Some(old) = self.asset_gpu_bytes.insert(handle, bytes) {
+            self.total_gpu_bytes -= old;
+        }
+        self.total_gpu_bytes += bytes;
+    }
+
+    /// Remove GPU memory tracking for an asset.
+    fn untrack_gpu_bytes(&mut self, handle: &AssetHandle) {
+        if let Some(bytes) = self.asset_gpu_bytes.remove(handle) {
+            self.total_gpu_bytes -= bytes;
+        }
     }
 
     // -------------------------------------------------------------------
@@ -412,21 +441,19 @@ impl EditorAssetManager {
                     match data {
                         Ok(cpu_data) => match renderer.upload_texture(&cpu_data) {
                             Ok(tex) => {
+                                let bytes = tex.gpu_memory_bytes();
                                 self.loaded_assets
                                     .insert(handle, AssetData::Texture(Ref::new(tex)));
+                                self.track_gpu_bytes(handle, bytes);
                             }
                             Err(e) => {
                                 log::warn!("Texture GPU upload failed: {e}, using fallback");
-                                let fallback = self.get_fallback_texture(renderer);
-                                self.loaded_assets
-                                    .insert(handle, AssetData::Texture(fallback));
+                                self.store_fallback(handle, renderer);
                             }
                         },
                         Err(e) => {
                             log::warn!("Async texture load failed: {e}, using fallback");
-                            let fallback = self.get_fallback_texture(renderer);
-                            self.loaded_assets
-                                .insert(handle, AssetData::Texture(fallback));
+                            self.store_fallback(handle, renderer);
                         }
                     }
                 }
@@ -466,23 +493,31 @@ impl EditorAssetManager {
     /// Unload a specific asset from GPU memory.
     pub fn unload_asset(&mut self, handle: &AssetHandle) -> bool {
         self.access_times.remove(handle);
+        self.untrack_gpu_bytes(handle);
         self.loaded_assets.remove(handle).is_some()
     }
 
     /// Unload assets that are only held by the cache (Arc strong_count == 1).
     /// Returns the number of assets evicted.
     pub fn unload_unused(&mut self) -> usize {
-        let before = self.loaded_assets.len();
-        self.loaded_assets.retain(|handle, data| {
-            let keep = match data {
-                AssetData::Texture(tex) => std::sync::Arc::strong_count(tex) > 1,
-            };
-            if !keep {
-                self.access_times.remove(handle);
-            }
-            keep
-        });
-        before - self.loaded_assets.len()
+        let to_remove: Vec<AssetHandle> = self
+            .loaded_assets
+            .iter()
+            .filter_map(|(handle, data)| match data {
+                AssetData::Texture(tex) if std::sync::Arc::strong_count(tex) == 1 => {
+                    Some(*handle)
+                }
+                _ => None,
+            })
+            .collect();
+
+        let count = to_remove.len();
+        for handle in &to_remove {
+            self.loaded_assets.remove(handle);
+            self.access_times.remove(handle);
+            self.untrack_gpu_bytes(handle);
+        }
+        count
     }
 
     /// Unload all cached assets from GPU memory.
@@ -490,6 +525,8 @@ impl EditorAssetManager {
         self.loaded_assets.clear();
         self.loaded_meshes.clear();
         self.access_times.clear();
+        self.asset_gpu_bytes.clear();
+        self.total_gpu_bytes = 0;
     }
 
     /// Number of currently loaded assets.
@@ -502,14 +539,18 @@ impl EditorAssetManager {
         self.max_cached_textures = max;
     }
 
-    /// Evict least-recently-used textures until the cache is within `max_cached_textures`.
+    /// Evict least-recently-used textures until the cache is within both the
+    /// `max_cached_textures` count limit and the `gpu_memory_budget` byte limit.
     /// Only evicts textures that are not referenced elsewhere (Arc strong_count == 1).
     pub fn evict_lru(&mut self) {
-        if self.max_cached_textures == 0 || self.loaded_assets.len() <= self.max_cached_textures {
+        let over_count = self.max_cached_textures > 0
+            && self.loaded_assets.len() > self.max_cached_textures;
+        let over_budget =
+            self.gpu_memory_budget > 0 && self.total_gpu_bytes > self.gpu_memory_budget;
+
+        if !over_count && !over_budget {
             return;
         }
-
-        let to_evict = self.loaded_assets.len() - self.max_cached_textures;
 
         // Collect candidates: assets with Arc strong_count == 1 (only held by cache).
         let mut candidates: Vec<(AssetHandle, u64)> = self
@@ -527,14 +568,27 @@ impl EditorAssetManager {
         // Sort by access time ascending (oldest first).
         candidates.sort_by_key(|(_, time)| *time);
 
-        let evict_count = to_evict.min(candidates.len());
-        for (handle, _) in candidates.into_iter().take(evict_count) {
-            self.loaded_assets.remove(&handle);
-            self.access_times.remove(&handle);
+        let mut evict_count = 0;
+        for (handle, _) in &candidates {
+            let within_count = self.max_cached_textures == 0
+                || self.loaded_assets.len() <= self.max_cached_textures;
+            let within_budget =
+                self.gpu_memory_budget == 0 || self.total_gpu_bytes <= self.gpu_memory_budget;
+            if within_count && within_budget {
+                break;
+            }
+            self.untrack_gpu_bytes(handle);
+            self.loaded_assets.remove(handle);
+            self.access_times.remove(handle);
+            evict_count += 1;
         }
 
         if evict_count > 0 {
-            log::debug!("LRU cache eviction: removed {} textures", evict_count);
+            log::debug!(
+                "LRU cache eviction: removed {} textures (GPU mem: {:.1} MB)",
+                evict_count,
+                self.total_gpu_bytes as f64 / (1024.0 * 1024.0)
+            );
         }
     }
 
@@ -559,5 +613,20 @@ impl EditorAssetManager {
     /// Access the underlying asset loader (e.g., for font loading from editor).
     pub fn loader(&mut self) -> &mut AssetLoader {
         &mut self.loader
+    }
+
+    /// Total GPU memory used by cached textures, in bytes.
+    pub fn gpu_memory_usage(&self) -> u64 {
+        self.total_gpu_bytes
+    }
+
+    /// Set the GPU memory budget in bytes. 0 = unlimited (count-based eviction only).
+    pub fn set_gpu_memory_budget(&mut self, budget_bytes: u64) {
+        self.gpu_memory_budget = budget_bytes;
+    }
+
+    /// Get the current GPU memory budget in bytes (0 = unlimited).
+    pub fn gpu_memory_budget(&self) -> u64 {
+        self.gpu_memory_budget
     }
 }

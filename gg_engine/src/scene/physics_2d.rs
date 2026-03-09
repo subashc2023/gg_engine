@@ -254,6 +254,136 @@ impl PhysicsWorld2D {
         hits.sort_by(|a, b| a.5.partial_cmp(&b.5).unwrap_or(std::cmp::Ordering::Equal));
         hits
     }
+    // -----------------------------------------------------------------
+    // Shape overlap queries
+    // -----------------------------------------------------------------
+
+    /// Find all entities whose colliders contain the given point.
+    pub(crate) fn point_query(&self, point: na::Point2<f32>) -> Vec<u64> {
+        let mut results = Vec::new();
+        self.query_pipeline.intersections_with_point(
+            &self.bodies,
+            &self.colliders,
+            &point,
+            QueryFilter::default(),
+            |collider_handle| {
+                if let Some(&uuid) = self.collider_to_uuid.get(&collider_handle) {
+                    results.push(uuid);
+                }
+                true // continue iterating
+            },
+        );
+        results
+    }
+
+    /// Find all entities whose collider AABBs overlap the given axis-aligned bounding box.
+    pub(crate) fn aabb_query(&self, min: na::Point2<f32>, max: na::Point2<f32>) -> Vec<u64> {
+        let aabb = rapier2d::parry::bounding_volume::Aabb::new(
+            na::Point2::new(min.x, min.y),
+            na::Point2::new(max.x, max.y),
+        );
+        let mut results = Vec::new();
+        self.query_pipeline.colliders_with_aabb_intersecting_aabb(
+            &aabb,
+            |&collider_handle| {
+                if let Some(&uuid) = self.collider_to_uuid.get(&collider_handle) {
+                    results.push(uuid);
+                }
+                true // continue iterating
+            },
+        );
+        results
+    }
+
+    /// Test if a specific shape at a given position/rotation overlaps any colliders.
+    /// Returns all overlapping entity UUIDs.
+    pub(crate) fn shape_overlap(
+        &self,
+        position: &na::Isometry2<f32>,
+        shape: &dyn rapier2d::parry::shape::Shape,
+        exclude_uuid: Option<u64>,
+    ) -> Vec<u64> {
+        let predicate = |handle: ColliderHandle, _collider: &Collider| {
+            if let Some(exclude) = exclude_uuid {
+                if let Some(&uuid) = self.collider_to_uuid.get(&handle) {
+                    return uuid != exclude;
+                }
+            }
+            true
+        };
+        let filter = QueryFilter::default().predicate(&predicate);
+        let mut results = Vec::new();
+        self.query_pipeline.intersections_with_shape(
+            &self.bodies,
+            &self.colliders,
+            position,
+            shape,
+            filter,
+            |collider_handle| {
+                if let Some(&uuid) = self.collider_to_uuid.get(&collider_handle) {
+                    results.push(uuid);
+                }
+                true // continue iterating
+            },
+        );
+        results
+    }
+
+    // -----------------------------------------------------------------
+    // Joints
+    // -----------------------------------------------------------------
+
+    /// Create a revolute (hinge) joint between two bodies.
+    /// Returns the rapier joint handle.
+    pub(crate) fn create_revolute_joint(
+        &mut self,
+        body_a: RigidBodyHandle,
+        body_b: RigidBodyHandle,
+        anchor_a: na::Point2<f32>,
+        anchor_b: na::Point2<f32>,
+    ) -> ImpulseJointHandle {
+        let joint = rapier2d::dynamics::RevoluteJointBuilder::new()
+            .local_anchor1(anchor_a)
+            .local_anchor2(anchor_b)
+            .build();
+        self.impulse_joints.insert(body_a, body_b, joint, true)
+    }
+
+    /// Create a fixed joint between two bodies (locks relative transform).
+    pub(crate) fn create_fixed_joint(
+        &mut self,
+        body_a: RigidBodyHandle,
+        body_b: RigidBodyHandle,
+        anchor_a: na::Isometry2<f32>,
+        anchor_b: na::Isometry2<f32>,
+    ) -> ImpulseJointHandle {
+        let joint = rapier2d::dynamics::FixedJointBuilder::new()
+            .local_frame1(anchor_a)
+            .local_frame2(anchor_b)
+            .build();
+        self.impulse_joints.insert(body_a, body_b, joint, true)
+    }
+
+    /// Create a prismatic (slider) joint between two bodies.
+    pub(crate) fn create_prismatic_joint(
+        &mut self,
+        body_a: RigidBodyHandle,
+        body_b: RigidBodyHandle,
+        anchor_a: na::Point2<f32>,
+        anchor_b: na::Point2<f32>,
+        axis: na::UnitVector2<f32>,
+    ) -> ImpulseJointHandle {
+        let joint = rapier2d::dynamics::PrismaticJointBuilder::new(axis)
+            .local_anchor1(anchor_a)
+            .local_anchor2(anchor_b)
+            .build();
+        self.impulse_joints.insert(body_a, body_b, joint, true)
+    }
+
+    /// Remove a joint by handle.
+    pub(crate) fn remove_joint(&mut self, handle: ImpulseJointHandle) {
+        self.impulse_joints.remove(handle, true);
+    }
 }
 
 // ---------------------------------------------------------------------------

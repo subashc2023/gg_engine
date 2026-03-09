@@ -586,6 +586,11 @@ impl Texture2D {
         self._height
     }
 
+    /// Estimated GPU memory usage in bytes (RGBA8 = width * height * 4).
+    pub fn gpu_memory_bytes(&self) -> u64 {
+        self._width as u64 * self._height as u64 * 4
+    }
+
     /// Opaque handle for registering this texture with egui via
     /// [`Application::egui_user_textures`]. Returns the raw Vulkan
     /// descriptor set as a `u64`.

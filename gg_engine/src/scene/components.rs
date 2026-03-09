@@ -388,6 +388,25 @@ impl RigidBody2DType {
             Self::Kinematic => rapier2d::dynamics::RigidBodyType::KinematicPositionBased,
         }
     }
+
+    /// Parse a body type from a case-insensitive string (for Lua scripts).
+    pub fn from_str_loose(s: &str) -> Option<Self> {
+        match s.to_ascii_lowercase().as_str() {
+            "static" | "fixed" => Some(Self::Static),
+            "dynamic" => Some(Self::Dynamic),
+            "kinematic" => Some(Self::Kinematic),
+            _ => None,
+        }
+    }
+
+    /// Human-readable label.
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Static => "Static",
+            Self::Dynamic => "Dynamic",
+            Self::Kinematic => "Kinematic",
+        }
+    }
 }
 
 /// 2D rigid body attached to an entity for physics simulation.
@@ -578,6 +597,25 @@ impl RigidBody3DType {
             Self::Static => rapier3d::dynamics::RigidBodyType::Fixed,
             Self::Dynamic => rapier3d::dynamics::RigidBodyType::Dynamic,
             Self::Kinematic => rapier3d::dynamics::RigidBodyType::KinematicPositionBased,
+        }
+    }
+
+    /// Parse a body type from a case-insensitive string (for Lua scripts).
+    pub fn from_str_loose(s: &str) -> Option<Self> {
+        match s.to_ascii_lowercase().as_str() {
+            "static" | "fixed" => Some(Self::Static),
+            "dynamic" => Some(Self::Dynamic),
+            "kinematic" => Some(Self::Kinematic),
+            _ => None,
+        }
+    }
+
+    /// Human-readable label.
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Static => "Static",
+            Self::Dynamic => "Dynamic",
+            Self::Kinematic => "Kinematic",
         }
     }
 }

@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
 
+use base64::{Engine as Base64Engine, engine::general_purpose::STANDARD as BASE64};
 use glam::{Vec2, Vec3, Vec4};
 use serde::{Deserialize, Serialize};
 
@@ -33,10 +34,40 @@ use crate::uuid::Uuid;
 // Serialization data types (intermediate representation)
 // ---------------------------------------------------------------------------
 
-const SCENE_VERSION: u32 = 1;
+const SCENE_VERSION: u32 = 2;
 
 fn default_scene_version() -> u32 {
-    SCENE_VERSION
+    1
+}
+
+/// Apply version migrations to a scene YAML string, upgrading from `from_version` to `SCENE_VERSION`.
+///
+/// Each migration transforms the YAML string in place. Returns the (possibly modified) YAML.
+fn migrate_scene_yaml(mut yaml: String, from_version: u32) -> String {
+    if from_version >= SCENE_VERSION {
+        return yaml;
+    }
+
+    // v1 → v2: Tilemap tiles format changed from YAML array to base64.
+    // No YAML-level migration needed — TilemapData deserializes both formats.
+
+    // Update the version field in the YAML so re-serialization writes v2.
+    if from_version < 2 {
+        // Replace "Version: 1" at the start of the document.
+        if let Some(pos) = yaml.find("Version: 1") {
+            yaml.replace_range(pos..pos + "Version: 1".len(), "Version: 2");
+        }
+        log::info!("Migrated scene from v1 to v2");
+    }
+
+    yaml
+}
+
+/// Lightweight struct to peek at the version field without parsing the full scene.
+#[derive(Deserialize)]
+struct VersionPeek {
+    #[serde(rename = "Version", default = "default_scene_version")]
+    version: u32,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -690,12 +721,38 @@ struct TilemapData {
         skip_serializing_if = "is_zero_vec2"
     )]
     margin: [f32; 2],
-    #[serde(rename = "Tiles")]
-    tiles: Vec<i32>,
+    /// Legacy per-element tile array (v1 format). Kept for backward compatibility.
+    #[serde(rename = "Tiles", default, skip_serializing)]
+    tiles_legacy: Vec<i32>,
+    /// Compact base64-encoded tile data (v2+). Little-endian i32 bytes.
+    #[serde(rename = "TilesB64", default, skip_serializing_if = "String::is_empty")]
+    tiles_b64: String,
     #[serde(rename = "SortingLayer", default)]
     sorting_layer: i32,
     #[serde(rename = "OrderInLayer", default)]
     order_in_layer: i32,
+}
+
+impl TilemapData {
+    /// Encode tiles as base64 (little-endian i32 bytes).
+    fn encode_tiles(tiles: &[i32]) -> String {
+        let bytes: Vec<u8> = tiles.iter().flat_map(|t| t.to_le_bytes()).collect();
+        BASE64.encode(&bytes)
+    }
+
+    /// Decode tiles, preferring base64 (v2+) and falling back to legacy Vec (v1).
+    fn decode_tiles(&self) -> Vec<i32> {
+        if !self.tiles_b64.is_empty() {
+            if let Ok(bytes) = BASE64.decode(&self.tiles_b64) {
+                return bytes
+                    .chunks_exact(4)
+                    .map(|c| i32::from_le_bytes([c[0], c[1], c[2], c[3]]))
+                    .collect();
+            }
+            log::warn!("Failed to decode TilesB64, falling back to legacy Tiles");
+        }
+        self.tiles_legacy.clone()
+    }
 }
 
 #[derive(Serialize, Deserialize)]
@@ -932,14 +989,28 @@ impl SceneSerializer {
     /// a fresh scene if a clean load is desired.
     pub fn deserialize(scene: &mut Scene, file_path: &str) -> EngineResult<()> {
         let contents = fs::read_to_string(file_path)?;
-        let scene_data: SceneData = serde_yaml_ng::from_str(&contents)?;
 
-        if scene_data.version > SCENE_VERSION {
+        // Peek at version for migration.
+        let peek: VersionPeek = serde_yaml_ng::from_str(&contents)
+            .unwrap_or(VersionPeek { version: 1 });
+
+        let contents = if peek.version < SCENE_VERSION {
+            log::info!(
+                "Scene '{}' is version {} (current: {}), applying migrations",
+                file_path, peek.version, SCENE_VERSION
+            );
+            migrate_scene_yaml(contents, peek.version)
+        } else if peek.version > SCENE_VERSION {
             log::warn!(
                 "Scene '{}' was saved with version {} (current: {}). Some data may not load correctly.",
-                file_path, scene_data.version, SCENE_VERSION
+                file_path, peek.version, SCENE_VERSION
             );
-        }
+            contents
+        } else {
+            contents
+        };
+
+        let scene_data: SceneData = serde_yaml_ng::from_str(&contents)?;
 
         log::info!(
             "Deserializing scene '{}' (version {}, {} entities)",
@@ -1411,7 +1482,8 @@ impl SceneSerializer {
                 cell_size: tm.cell_size.into(),
                 spacing: tm.spacing.into(),
                 margin: tm.margin.into(),
-                tiles: tm.tiles.clone(),
+                tiles_legacy: Vec::new(),
+                tiles_b64: TilemapData::encode_tiles(&tm.tiles),
                 sorting_layer: tm.sorting_layer,
                 order_in_layer: tm.order_in_layer,
             });
@@ -1904,7 +1976,7 @@ impl SceneSerializer {
                     cell_size: Vec2::from(td.cell_size),
                     spacing: Vec2::from(td.spacing),
                     margin: Vec2::from(td.margin),
-                    tiles: td.tiles.clone(),
+                    tiles: td.decode_tiles(),
                     sorting_layer: td.sorting_layer,
                     order_in_layer: td.order_in_layer,
                 },
@@ -2348,5 +2420,153 @@ mod tests {
 
         // Clean up.
         let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn tilemap_b64_encode_decode_round_trip() {
+        let tiles = vec![0, 1, -1, 3, -1, 2, 100, i32::MAX, i32::MIN];
+        let encoded = TilemapData::encode_tiles(&tiles);
+        assert!(!encoded.is_empty());
+
+        let data = TilemapData {
+            width: 3,
+            height: 3,
+            tile_size: [1.0, 1.0],
+            texture_handle: 0,
+            tileset_columns: 1,
+            cell_size: [16.0, 16.0],
+            spacing: [0.0, 0.0],
+            margin: [0.0, 0.0],
+            tiles_legacy: Vec::new(),
+            tiles_b64: encoded,
+            sorting_layer: 0,
+            order_in_layer: 0,
+        };
+
+        assert_eq!(data.decode_tiles(), tiles);
+    }
+
+    #[test]
+    fn tilemap_legacy_fallback_when_no_b64() {
+        let legacy = vec![5, 10, -1, 3];
+        let data = TilemapData {
+            width: 2,
+            height: 2,
+            tile_size: [1.0, 1.0],
+            texture_handle: 0,
+            tileset_columns: 1,
+            cell_size: [16.0, 16.0],
+            spacing: [0.0, 0.0],
+            margin: [0.0, 0.0],
+            tiles_legacy: legacy.clone(),
+            tiles_b64: String::new(),
+            sorting_layer: 0,
+            order_in_layer: 0,
+        };
+
+        assert_eq!(data.decode_tiles(), legacy);
+    }
+
+    #[test]
+    fn tilemap_b64_preferred_over_legacy() {
+        let tiles = vec![42, 99];
+        let encoded = TilemapData::encode_tiles(&tiles);
+
+        let data = TilemapData {
+            width: 1,
+            height: 2,
+            tile_size: [1.0, 1.0],
+            texture_handle: 0,
+            tileset_columns: 1,
+            cell_size: [16.0, 16.0],
+            spacing: [0.0, 0.0],
+            margin: [0.0, 0.0],
+            tiles_legacy: vec![0, 0], // different from b64 data
+            tiles_b64: encoded,
+            sorting_layer: 0,
+            order_in_layer: 0,
+        };
+
+        // b64 should take priority.
+        assert_eq!(data.decode_tiles(), tiles);
+    }
+
+    #[test]
+    fn tilemap_v1_scene_backward_compat() {
+        // Simulate a v1 scene with plain Tiles: array.
+        let yaml = r#"
+Version: 1
+Scene: compat_test
+Entities:
+- Entity: 100
+  TagComponent:
+    Tag: TileMap
+  TransformComponent:
+    Translation: [0.0, 0.0, 0.0]
+    Rotation: [0.0, 0.0, 0.0]
+    Scale: [1.0, 1.0, 1.0]
+  TilemapComponent:
+    Width: 2
+    Height: 2
+    TileSize: [1.0, 1.0]
+    TilesetColumns: 4
+    CellSize: [16.0, 16.0]
+    Tiles:
+    - 5
+    - 10
+    - -1
+    - 3
+"#;
+        let mut scene = Scene::new();
+        SceneSerializer::deserialize_from_string(&mut scene, yaml)
+            .expect("Failed to deserialize v1 tilemap scene");
+
+        let entities = scene.each_entity_with_tag();
+        let (ent, _) = entities.iter().find(|(_, n)| n == "TileMap").unwrap();
+        let tm = scene
+            .get_component::<crate::scene::TilemapComponent>(*ent)
+            .unwrap();
+        assert_eq!(tm.tiles, vec![5, 10, -1, 3]);
+    }
+
+    #[test]
+    fn tilemap_serializes_as_b64() {
+        let mut scene = Scene::new();
+        let e = scene.create_entity_with_tag("TM");
+        scene.add_component(
+            e,
+            crate::scene::TilemapComponent {
+                width: 2,
+                height: 2,
+                tile_size: Vec2::ONE,
+                tileset_columns: 1,
+                cell_size: Vec2::new(16.0, 16.0),
+                tiles: vec![1, 2, 3, 4],
+                ..Default::default()
+            },
+        );
+
+        let yaml = SceneSerializer::serialize_to_string(&scene).unwrap();
+        // New format should have TilesB64 and NOT have Tiles:
+        assert!(yaml.contains("TilesB64:"), "Should contain TilesB64");
+        assert!(!yaml.contains("\n    Tiles:"), "Should NOT contain legacy Tiles array");
+
+        // Verify it round-trips correctly.
+        let mut loaded = Scene::new();
+        SceneSerializer::deserialize_from_string(&mut loaded, &yaml).unwrap();
+        let entities = loaded.each_entity_with_tag();
+        let (ent, _) = entities.iter().find(|(_, n)| n == "TM").unwrap();
+        let tm = loaded
+            .get_component::<crate::scene::TilemapComponent>(*ent)
+            .unwrap();
+        assert_eq!(tm.tiles, vec![1, 2, 3, 4]);
+    }
+
+    #[test]
+    fn scene_version_is_v2() {
+        let mut scene = Scene::new();
+        scene.create_entity_with_tag("Test");
+        let yaml = SceneSerializer::serialize_to_string(&scene).unwrap();
+        assert!(yaml.contains("Version: 2"));
     }
 }

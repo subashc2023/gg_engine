@@ -375,3 +375,120 @@ All physics components are serialized to `.ggscene` files:
 - `CircleCollider2DComponent`: offset, radius, density, friction, restitution
 
 Runtime handles (`runtime_body`, `runtime_fixture`) are **never** serialized.
+
+## Runtime Body Type Changes
+
+Body type can be changed at runtime via Scene methods or Lua scripts.
+
+**Scene API:**
+
+| Method | Description |
+|--------|-------------|
+| `set_body_type(entity, body_type)` | Change 2D body type (updates both rapier body and component) |
+| `get_body_type(entity) -> Option<RigidBody2DType>` | Read current 2D body type |
+| `set_body_type_3d(entity, body_type)` | Change 3D body type |
+| `get_body_type_3d(entity) -> Option<RigidBody3DType>` | Read current 3D body type |
+
+**Lua API:**
+
+| Function | Description |
+|----------|-------------|
+| `Engine.set_body_type(entity_id, type_str)` | Set 2D body type: `"static"`, `"dynamic"`, `"kinematic"` |
+| `Engine.get_body_type(entity_id) -> string\|nil` | Get current 2D body type |
+| `Engine.set_body_type_3d(entity_id, type_str)` | Set 3D body type |
+| `Engine.get_body_type_3d(entity_id) -> string\|nil` | Get current 3D body type |
+
+Both `from_str_loose()` parsers accept `"fixed"` as an alias for `"static"` (matching rapier's terminology).
+
+## Shape Overlap Queries
+
+Query the physics world for colliders at a point, within an AABB, or overlapping a shape.
+
+**Scene API (2D):**
+
+| Method | Description |
+|--------|-------------|
+| `point_query(point) -> Vec<u64>` | Find entities whose colliders contain a point |
+| `aabb_query(min, max) -> Vec<u64>` | Find entities whose collider AABBs overlap a box |
+| `overlap_circle(center, radius, exclude) -> Vec<u64>` | Circle shape overlap test |
+| `overlap_box(center, half_extents, exclude) -> Vec<u64>` | Box shape overlap test |
+
+**Scene API (3D):**
+
+| Method | Description |
+|--------|-------------|
+| `point_query_3d(point) -> Vec<u64>` | Find entities at a 3D point |
+| `aabb_query_3d(min, max) -> Vec<u64>` | Find entities in a 3D AABB |
+| `overlap_sphere(center, radius, exclude) -> Vec<u64>` | Sphere shape overlap test |
+| `overlap_box_3d(center, half_extents, exclude) -> Vec<u64>` | 3D box shape overlap test |
+
+**Lua API:**
+
+| Function | Returns |
+|----------|---------|
+| `Engine.point_query(x, y)` | Table of entity IDs |
+| `Engine.aabb_query(min_x, min_y, max_x, max_y)` | Table of entity IDs |
+| `Engine.overlap_circle(cx, cy, radius, exclude_id?)` | Table of entity IDs |
+| `Engine.overlap_box(cx, cy, half_w, half_h, exclude_id?)` | Table of entity IDs |
+| `Engine.point_query_3d(x, y, z)` | Table of entity IDs |
+| `Engine.aabb_query_3d(min_x, min_y, min_z, max_x, max_y, max_z)` | Table of entity IDs |
+| `Engine.overlap_sphere(cx, cy, cz, radius, exclude_id?)` | Table of entity IDs |
+| `Engine.overlap_box_3d(cx, cy, cz, hx, hy, hz, exclude_id?)` | Table of entity IDs |
+
+Uses rapier's `QueryPipeline` methods: `intersections_with_point`, `colliders_with_aabb_intersecting_aabb`, and `intersections_with_shape`.
+
+## Joints API
+
+Create joints between entities at runtime. Joints connect two rigid bodies with a constraint.
+
+**Joint types (2D):**
+
+| Joint | Description |
+|-------|-------------|
+| Revolute | Hinge — bodies rotate around anchor points |
+| Fixed | Locks relative position and rotation |
+| Prismatic | Slider — bodies translate along an axis |
+
+**Joint types (3D):**
+
+| Joint | Description |
+|-------|-------------|
+| Revolute | Hinge around a given axis |
+| Fixed | Locks relative transform |
+| Ball (Spherical) | Point-to-point — free rotation around anchors |
+| Prismatic | Slider along a given axis |
+
+**Scene API (2D):**
+
+| Method | Returns |
+|--------|---------|
+| `create_revolute_joint(entity_a, entity_b, anchor_a, anchor_b) -> Option<u64>` | Joint ID |
+| `create_fixed_joint(entity_a, entity_b, anchor_a, anchor_b) -> Option<u64>` | Joint ID |
+| `create_prismatic_joint(entity_a, entity_b, anchor_a, anchor_b, axis) -> Option<u64>` | Joint ID |
+| `remove_joint(joint_id)` | — |
+
+**Scene API (3D):**
+
+| Method | Returns |
+|--------|---------|
+| `create_revolute_joint_3d(ea, eb, anchor_a, anchor_b, axis) -> Option<u64>` | Joint ID |
+| `create_fixed_joint_3d(ea, eb, anchor_a, anchor_b) -> Option<u64>` | Joint ID |
+| `create_ball_joint_3d(ea, eb, anchor_a, anchor_b) -> Option<u64>` | Joint ID |
+| `create_prismatic_joint_3d(ea, eb, anchor_a, anchor_b, axis) -> Option<u64>` | Joint ID |
+| `remove_joint_3d(joint_id)` | — |
+
+**Lua API:**
+
+| Function | Returns |
+|----------|---------|
+| `Engine.create_revolute_joint(ea, eb, ax, ay, bx, by)` | joint_id or nil |
+| `Engine.create_fixed_joint(ea, eb, ax, ay, bx, by)` | joint_id or nil |
+| `Engine.create_prismatic_joint(ea, eb, ax, ay, bx, by, dx, dy)` | joint_id or nil |
+| `Engine.remove_joint(joint_id)` | — |
+| `Engine.create_revolute_joint_3d(ea, eb, ax, ay, az, bx, by, bz, dx, dy, dz)` | joint_id or nil |
+| `Engine.create_fixed_joint_3d(ea, eb, ax, ay, az, bx, by, bz)` | joint_id or nil |
+| `Engine.create_ball_joint_3d(ea, eb, ax, ay, az, bx, by, bz)` | joint_id or nil |
+| `Engine.create_prismatic_joint_3d(ea, eb, ax, ay, az, bx, by, bz, dx, dy, dz)` | joint_id or nil |
+| `Engine.remove_joint_3d(joint_id)` | — |
+
+**Joint handle encoding:** Rapier arena `(index, generation)` packed into u64 as `(generation << 32) | index`. Anchors are in local space of each body. Axis vectors are auto-normalized (near-zero falls back to a default axis with a warning).

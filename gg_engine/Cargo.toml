@@ -34,3 +34,4 @@ gpu-allocator.workspace = true
 kira.workspace = true
 rayon.workspace = true
 thiserror.workspace = true
+base64.workspace = true
