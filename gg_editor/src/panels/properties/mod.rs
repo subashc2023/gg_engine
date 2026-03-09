@@ -462,7 +462,7 @@ fn draw_components(
                 {
                     let mesh_prim = scene
                         .get_component::<MeshRendererComponent>(entity)
-                        .map(|m| m.primitive);
+                        .and_then(|m| m.primitive());
 
                     // Box Collider 3D
                     if !scene.has_component::<BoxCollider3DComponent>(entity)

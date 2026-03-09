@@ -108,7 +108,10 @@ float calculate_shadow(vec3 world_pos, vec3 normal) {
     if (lighting.counts.z == 0) return 1.0; // No shadow mapping active
 
     // Offset along surface normal to reduce shadow acne on curved geometry.
-    float normal_bias = 0.005;
+    // Scale bias by surface angle to light — grazing angles need more offset.
+    vec3 light_dir = normalize(-lighting.dir_direction.xyz);
+    float cos_theta = clamp(dot(normal, light_dir), 0.0, 1.0);
+    float normal_bias = mix(0.05, 0.005, cos_theta);
     vec3 biased_pos = world_pos + normal * normal_bias;
     vec4 light_space_pos = lighting.shadow_light_vp * vec4(biased_pos, 1.0);
     vec3 proj_coords = light_space_pos.xyz / light_space_pos.w;

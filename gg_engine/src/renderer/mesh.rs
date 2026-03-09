@@ -185,6 +185,46 @@ impl Mesh {
             name: "Plane".into(),
         }
     }
+
+
+    /// Compute the axis-aligned bounding box of the mesh vertices.
+    ///
+    /// Returns `(min, max)` in local space. Returns zeros for empty meshes.
+    pub fn compute_bounds(&self) -> (glam::Vec3, glam::Vec3) {
+        if self.vertices.is_empty() {
+            return (glam::Vec3::ZERO, glam::Vec3::ZERO);
+        }
+        let mut min = glam::Vec3::splat(f32::MAX);
+        let mut max = glam::Vec3::splat(f32::NEG_INFINITY);
+        for v in &self.vertices {
+            let p = glam::Vec3::from(v.position);
+            min = min.min(p);
+            max = max.max(p);
+        }
+        (min, max)
+    }
+
+    /// Merge multiple meshes into a single mesh, concatenating vertices and
+    /// adjusting indices. Used to combine all primitives from a glTF file.
+    pub fn merge(meshes: Vec<Mesh>, name: String) -> Self {
+        let total_verts: usize = meshes.iter().map(|m| m.vertices.len()).sum();
+        let total_idx: usize = meshes.iter().map(|m| m.indices.len()).sum();
+
+        let mut vertices = Vec::with_capacity(total_verts);
+        let mut indices = Vec::with_capacity(total_idx);
+
+        for mesh in meshes {
+            let base = vertices.len() as u32;
+            vertices.extend(mesh.vertices);
+            indices.extend(mesh.indices.iter().map(|&i| i + base));
+        }
+
+        Self {
+            vertices,
+            indices,
+            name,
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -233,9 +273,22 @@ pub fn load_gltf(path: &Path) -> Result<Vec<Mesh>, String> {
                 })
                 .collect();
 
+            // glTF uses CCW winding; our pipeline (with Vulkan Y-flip)
+            // expects CW in model space. Swap each triangle's winding.
             let indices: Vec<u32> = reader
                 .read_indices()
-                .map(|idx| idx.into_u32().collect())
+                .map(|idx| {
+                    let raw: Vec<u32> = idx.into_u32().collect();
+                    let mut flipped = Vec::with_capacity(raw.len());
+                    for tri in raw.chunks(3) {
+                        if tri.len() == 3 {
+                            flipped.push(tri[0]);
+                            flipped.push(tri[2]);
+                            flipped.push(tri[1]);
+                        }
+                    }
+                    flipped
+                })
                 .unwrap_or_else(|| (0..vertices.len() as u32).collect());
 
             let name = mesh
@@ -258,4 +311,80 @@ pub fn load_gltf(path: &Path) -> Result<Vec<Mesh>, String> {
     log::info!("Loaded {} mesh(es) from '{}'", meshes.len(), path.display());
 
     Ok(meshes)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn load_gltf_triangle() {
+        let path = Path::new("../assets/meshes/triangle.gltf");
+        if !path.exists() {
+            return; // Skip if assets not available (e.g. CI).
+        }
+        let meshes = load_gltf(path).expect("Failed to load triangle.gltf");
+        assert_eq!(meshes.len(), 1);
+        let mesh = &meshes[0];
+        assert_eq!(mesh.vertices.len(), 3);
+        assert_eq!(mesh.indices.len(), 3);
+        // Vertex colors should be present (red, green, blue).
+        assert!(mesh.vertices[0].color[0] > 0.9); // red
+        assert!(mesh.vertices[1].color[1] > 0.9); // green
+        assert!(mesh.vertices[2].color[2] > 0.9); // blue
+    }
+
+    #[test]
+    fn load_gltf_quad() {
+        let path = Path::new("../assets/meshes/quad.gltf");
+        if !path.exists() {
+            return;
+        }
+        let meshes = load_gltf(path).expect("Failed to load quad.gltf");
+        assert_eq!(meshes.len(), 1);
+        let mesh = &meshes[0];
+        assert_eq!(mesh.vertices.len(), 4);
+        assert_eq!(mesh.indices.len(), 6);
+        // Normals should point up (0, 1, 0).
+        for v in &mesh.vertices {
+            assert!((v.normal[1] - 1.0).abs() < 0.01);
+        }
+    }
+
+    #[test]
+    fn load_gltf_icosphere() {
+        let path = Path::new("../assets/meshes/suzanne_low.gltf");
+        if !path.exists() {
+            return;
+        }
+        let meshes = load_gltf(path).expect("Failed to load suzanne_low.gltf");
+        assert_eq!(meshes.len(), 1);
+        let mesh = &meshes[0];
+        assert_eq!(mesh.vertices.len(), 12); // icosahedron
+        assert_eq!(mesh.indices.len(), 60); // 20 faces × 3
+    }
+
+    #[test]
+    fn mesh_merge() {
+        let a = Mesh::cube([1.0; 4]);
+        let b = Mesh::plane([1.0; 4]);
+        let a_verts = a.vertices.len();
+        let a_idx = a.indices.len();
+        let b_verts = b.vertices.len();
+        let b_idx = b.indices.len();
+        let merged = Mesh::merge(vec![a, b], "merged".into());
+        assert_eq!(merged.vertices.len(), a_verts + b_verts);
+        assert_eq!(merged.indices.len(), a_idx + b_idx);
+        assert_eq!(merged.name, "merged");
+    }
+
+    #[test]
+    fn mesh_compute_bounds() {
+        let cube = Mesh::cube([1.0; 4]);
+        let (min, max) = cube.compute_bounds();
+        assert!((min.x - (-0.5)).abs() < 0.01);
+        assert!((max.x - 0.5).abs() < 0.01);
+        assert!((min.y - (-0.5)).abs() < 0.01);
+        assert!((max.y - 0.5).abs() < 0.01);
+    }
 }

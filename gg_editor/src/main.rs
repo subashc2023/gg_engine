@@ -1018,6 +1018,7 @@ impl Application for GGEditor {
             self.scene.resolve_texture_handles_async(am);
             self.scene.resolve_audio_handles(am);
             self.scene.load_fonts_async(am);
+            self.scene.resolve_mesh_assets(am);
         }
         self.scene.resolve_meshes(renderer);
 
@@ -1637,7 +1638,13 @@ impl GGEditor {
 
             // 3D meshes — bounding box outlines.
             if let Some(mesh) = self.scene.get_component::<MeshRendererComponent>(*entity) {
-                let bounds = mesh.primitive.local_bounds();
+                let bounds = if let Some(b) = mesh.local_bounds {
+                    b
+                } else if let MeshSource::Primitive(p) = &mesh.mesh_source {
+                    p.local_bounds()
+                } else {
+                    continue;
+                };
                 let world = self.scene.get_world_transform(*entity);
                 renderer.draw_box_outline(&world, bounds.0, bounds.1, wire_color, -1);
             }
@@ -1913,8 +1920,14 @@ impl GGEditor {
             if let Some(transform) = self.scene.get_component::<TransformComponent>(selected) {
                 let outline_color = Vec4::new(1.0, 0.5, 0.0, 1.0);
                 if let Some(mesh) = self.scene.get_component::<MeshRendererComponent>(selected) {
-                    // 3D mesh: wireframe box outline matching primitive bounds.
-                    let (bmin, bmax) = mesh.primitive.local_bounds();
+                    // 3D mesh: wireframe box outline matching mesh bounds.
+                    let (bmin, bmax) = if let Some(b) = mesh.local_bounds {
+                        b
+                    } else if let MeshSource::Primitive(p) = &mesh.mesh_source {
+                        p.local_bounds()
+                    } else {
+                        (Vec3::splat(-0.5), Vec3::splat(0.5))
+                    };
                     let world = self.scene.get_world_transform(selected);
                     renderer.draw_box_outline(&world, bmin, bmax, outline_color, -1);
                 } else {

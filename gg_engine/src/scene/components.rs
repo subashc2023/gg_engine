@@ -1071,14 +1071,29 @@ impl MeshPrimitive {
     }
 }
 
+/// Where the mesh geometry comes from: a built-in primitive or a glTF asset.
+#[derive(Debug, Clone, PartialEq)]
+pub enum MeshSource {
+    /// Use a built-in primitive (Cube, Sphere, Plane).
+    Primitive(MeshPrimitive),
+    /// Use a mesh loaded from a glTF/GLB asset file (the UUID is the asset handle).
+    Asset(Uuid),
+}
+
+impl Default for MeshSource {
+    fn default() -> Self {
+        MeshSource::Primitive(MeshPrimitive::Cube)
+    }
+}
+
 /// 3D mesh renderer attached to an entity.
 ///
 /// Uses the entity's [`TransformComponent`] as the model matrix.
-/// Currently supports built-in primitives (cube, sphere, plane).
+/// Supports built-in primitives (cube, sphere, plane) or glTF/GLB mesh assets.
 /// The mesh is uploaded to the GPU lazily on first render.
 pub struct MeshRendererComponent {
-    /// Which built-in primitive to render.
-    pub primitive: MeshPrimitive,
+    /// Where the mesh geometry comes from.
+    pub mesh_source: MeshSource,
     /// Vertex color / tint (multiplied with albedo in shader).
     pub color: Vec4,
     /// 0.0 = dielectric (plastic, wood), 1.0 = metal (gold, steel).
@@ -1094,6 +1109,10 @@ pub struct MeshRendererComponent {
     /// Asset handle referencing an albedo texture in the asset registry.
     /// 0 = no texture assigned.
     pub texture_handle: Uuid,
+    /// Runtime-only CPU mesh data loaded from a glTF asset. Not serialized.
+    pub loaded_mesh: Option<Ref<crate::renderer::Mesh>>,
+    /// Local-space AABB computed from loaded mesh vertices. Not serialized.
+    pub local_bounds: Option<(Vec3, Vec3)>,
     /// Runtime-only uploaded vertex array. Not serialized.
     pub(crate) vertex_array: Option<crate::renderer::VertexArray>,
 }
@@ -1101,7 +1120,7 @@ pub struct MeshRendererComponent {
 impl Clone for MeshRendererComponent {
     fn clone(&self) -> Self {
         Self {
-            primitive: self.primitive,
+            mesh_source: self.mesh_source.clone(),
             color: self.color,
             metallic: self.metallic,
             roughness: self.roughness,
@@ -1109,6 +1128,8 @@ impl Clone for MeshRendererComponent {
             emissive_strength: self.emissive_strength,
             texture: self.texture.clone(),
             texture_handle: self.texture_handle,
+            loaded_mesh: self.loaded_mesh.clone(), // Arc clone (refcount bump).
+            local_bounds: self.local_bounds,
             vertex_array: None, // Runtime-only, not copied.
         }
     }
@@ -1117,7 +1138,7 @@ impl Clone for MeshRendererComponent {
 impl MeshRendererComponent {
     pub fn new(primitive: MeshPrimitive, color: Vec4) -> Self {
         Self {
-            primitive,
+            mesh_source: MeshSource::Primitive(primitive),
             color,
             metallic: 0.0,
             roughness: 0.5,
@@ -1125,7 +1146,25 @@ impl MeshRendererComponent {
             emissive_strength: 1.0,
             texture: None,
             texture_handle: Uuid::from_raw(0),
+            loaded_mesh: None,
+            local_bounds: None,
             vertex_array: None,
+        }
+    }
+
+    /// Convenience: returns the primitive variant if this is a primitive mesh.
+    pub fn primitive(&self) -> Option<MeshPrimitive> {
+        match self.mesh_source {
+            MeshSource::Primitive(p) => Some(p),
+            MeshSource::Asset(_) => None,
+        }
+    }
+
+    /// Convenience: returns the mesh asset handle if this is an asset mesh.
+    pub fn mesh_asset_handle(&self) -> Option<Uuid> {
+        match self.mesh_source {
+            MeshSource::Asset(uuid) => Some(uuid),
+            MeshSource::Primitive(_) => None,
         }
     }
 }
@@ -1133,7 +1172,7 @@ impl MeshRendererComponent {
 impl Default for MeshRendererComponent {
     fn default() -> Self {
         Self {
-            primitive: MeshPrimitive::Cube,
+            mesh_source: MeshSource::default(),
             color: Vec4::ONE,
             metallic: 0.0,
             roughness: 0.5,
@@ -1141,6 +1180,8 @@ impl Default for MeshRendererComponent {
             emissive_strength: 1.0,
             texture: None,
             texture_handle: Uuid::from_raw(0),
+            loaded_mesh: None,
+            local_bounds: None,
             vertex_array: None,
         }
     }

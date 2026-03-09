@@ -299,6 +299,7 @@ impl Application for GGPlayer {
                 self.scene.resolve_audio_handles(am);
                 self.scene.resolve_texture_handles_async(am);
                 self.scene.load_fonts_async(am);
+                self.scene.resolve_mesh_assets(am);
             }
             self.loading_started = true;
         }
@@ -314,6 +315,7 @@ impl Application for GGPlayer {
         if let Some(ref mut am) = self.asset_manager {
             self.scene.resolve_texture_handles_async(am);
             self.scene.load_fonts_async(am);
+            self.scene.resolve_mesh_assets(am);
         }
         self.scene.resolve_meshes(renderer);
 

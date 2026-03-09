@@ -1,9 +1,10 @@
 use super::{
     AmbientLightComponent, AnimationControllerComponent, CircleRendererComponent,
     DirectionalLightComponent, Entity, IdComponent, InstancedSpriteAnimator, MeshPrimitive,
-    MeshRendererComponent, ParticleEmitterComponent, PointLightComponent, RigidBody3DComponent,
-    RigidBody3DType, Scene, SpriteAnimatorComponent, SpriteRendererComponent, TextComponent,
-    TilemapComponent, TransformComponent, TILE_FLIP_H, TILE_FLIP_V, TILE_ID_MASK,
+    MeshRendererComponent, MeshSource, ParticleEmitterComponent, PointLightComponent,
+    RigidBody3DComponent, RigidBody3DType, Scene, SpriteAnimatorComponent,
+    SpriteRendererComponent, TextComponent, TilemapComponent, TransformComponent, TILE_FLIP_H,
+    TILE_FLIP_V, TILE_ID_MASK,
 };
 use crate::renderer::shadow_map::compute_directional_light_vp;
 use crate::renderer::{Font, LightEnvironment, Mesh, Renderer, SubTexture2D};
@@ -549,32 +550,97 @@ impl Scene {
     // Mesh uploading
     // -----------------------------------------------------------------
 
+    /// Resolve mesh asset references: assigns cached CPU mesh data from the
+    /// asset manager to entities with [`MeshSource::Asset`] that don't have
+    /// it yet. Also enqueues async loads for missing mesh assets.
+    pub fn resolve_mesh_assets(
+        &mut self,
+        asset_manager: &mut crate::asset::EditorAssetManager,
+    ) {
+        let needs: Vec<(hecs::Entity, crate::uuid::Uuid)> = self
+            .world
+            .query::<(hecs::Entity, &MeshRendererComponent)>()
+            .iter()
+            .filter_map(|(handle, mc)| {
+                if let MeshSource::Asset(mesh_handle) = &mc.mesh_source {
+                    if mesh_handle.raw() != 0 && mc.loaded_mesh.is_none() {
+                        return Some((handle, *mesh_handle));
+                    }
+                }
+                None
+            })
+            .collect();
+
+        for (handle, mesh_handle) in needs {
+            if let Some(mesh_ref) = asset_manager.get_mesh(&mesh_handle) {
+                if let Ok(mut mc) = self.world.get::<&mut MeshRendererComponent>(handle) {
+                    mc.loaded_mesh = Some(mesh_ref);
+                }
+            } else {
+                asset_manager.request_mesh_load(&mesh_handle);
+            }
+        }
+    }
+
     /// Upload vertex arrays for any [`MeshRendererComponent`] that doesn't
-    /// have one yet. Call before rendering (similar to `resolve_texture_handles`).
+    /// have one yet. Handles both primitive and asset mesh sources.
     pub fn resolve_meshes(&mut self, renderer: &mut Renderer) {
-        let needs: Vec<(hecs::Entity, MeshPrimitive, [f32; 4])> = self
+        use crate::scene::components::MeshSource;
+
+        let needs: Vec<(hecs::Entity, MeshSource, [f32; 4])> = self
             .world
             .query::<(hecs::Entity, &MeshRendererComponent)>()
             .iter()
             .filter_map(|(handle, mesh_comp)| {
                 if mesh_comp.vertex_array.is_none() {
-                    Some((handle, mesh_comp.primitive, mesh_comp.color.into()))
+                    // For asset meshes, only proceed if CPU data is loaded.
+                    if let MeshSource::Asset(_) = &mesh_comp.mesh_source {
+                        mesh_comp.loaded_mesh.as_ref()?;
+                    }
+                    Some((
+                        handle,
+                        mesh_comp.mesh_source.clone(),
+                        mesh_comp.color.into(),
+                    ))
                 } else {
                     None
                 }
             })
             .collect();
 
-        for (handle, primitive, color) in needs {
-            let mesh = match primitive {
-                MeshPrimitive::Cube => Mesh::cube(color),
-                MeshPrimitive::Sphere => Mesh::sphere(32, 16, color),
-                MeshPrimitive::Plane => Mesh::plane(color),
+        for (handle, source, color) in needs {
+            let (mesh_to_upload, bounds) = match &source {
+                MeshSource::Primitive(primitive) => {
+                    let m = match primitive {
+                        MeshPrimitive::Cube => Mesh::cube(color),
+                        MeshPrimitive::Sphere => Mesh::sphere(32, 16, color),
+                        MeshPrimitive::Plane => Mesh::plane(color),
+                    };
+                    (m, None)
+                }
+                MeshSource::Asset(_) => {
+                    // loaded_mesh is guaranteed Some by the filter above.
+                    let mc = self.world.get::<&MeshRendererComponent>(handle).unwrap();
+                    let mesh_ref = mc.loaded_mesh.as_ref().unwrap().clone();
+                    drop(mc); // Release borrow.
+                    let bounds = mesh_ref.compute_bounds();
+                    // Clone CPU data for upload — the Ref<Mesh> stays cached.
+                    let m = Mesh {
+                        vertices: mesh_ref.vertices.clone(),
+                        indices: mesh_ref.indices.clone(),
+                        name: mesh_ref.name.clone(),
+                    };
+                    (m, Some(bounds))
+                }
             };
-            match mesh.upload(renderer) {
+
+            match mesh_to_upload.upload(renderer) {
                 Ok(va) => {
                     if let Ok(mut comp) = self.world.get::<&mut MeshRendererComponent>(handle) {
                         comp.vertex_array = Some(va);
+                        if let Some(b) = bounds {
+                            comp.local_bounds = Some(b);
+                        }
                     }
                 }
                 Err(e) => {
@@ -584,16 +650,19 @@ impl Scene {
         }
     }
 
-    /// Re-upload the vertex array for a mesh component when its primitive or
-    /// color changes. Clears the existing VA so the next `resolve_meshes`
-    /// call picks it up. The old VA is moved to a deferred-destroy queue
-    /// to avoid destroying GPU buffers still referenced by in-flight command
-    /// buffers.
+    /// Re-upload the vertex array for a mesh component when its source,
+    /// primitive, or color changes. Clears the existing VA so the next
+    /// `resolve_meshes` call picks it up. The old VA is moved to a
+    /// deferred-destroy queue to avoid destroying GPU buffers still
+    /// referenced by in-flight command buffers.
     pub fn invalidate_mesh(&mut self, entity: super::Entity) {
         if let Ok(mut comp) = self
             .world
             .get::<&mut MeshRendererComponent>(entity.handle())
         {
+            // Clear loaded mesh CPU data so it gets re-resolved.
+            comp.loaded_mesh = None;
+            comp.local_bounds = None;
             if let Some(old_va) = comp.vertex_array.take() {
                 // Defer destruction: the old buffers may still be in use by
                 // a previously submitted command buffer.
@@ -1177,16 +1246,32 @@ impl Scene {
         max: &mut glam::Vec3,
     ) {
         let mesh_comp = self.world.get::<&MeshRendererComponent>(handle).unwrap();
-        let half = match mesh_comp.primitive {
-            MeshPrimitive::Cube => glam::Vec3::splat(0.5),
-            MeshPrimitive::Sphere => glam::Vec3::splat(0.5),
-            MeshPrimitive::Plane => glam::Vec3::new(0.5, 0.0, 0.5),
+
+        let (local_min, local_max) = if let Some(bounds) = mesh_comp.local_bounds {
+            // Asset mesh — use precomputed bounds.
+            bounds
+        } else {
+            // Primitive mesh — use analytical bounds.
+            match mesh_comp.mesh_source {
+                MeshSource::Primitive(prim) => {
+                    let (pmin, pmax) = prim.local_bounds();
+                    (pmin, pmax)
+                }
+                MeshSource::Asset(_) => {
+                    // Bounds not yet computed (mesh still loading).
+                    return;
+                }
+            }
         };
 
-        for &sx in &[-1.0_f32, 1.0] {
-            for &sy in &[-1.0_f32, 1.0] {
-                for &sz in &[-1.0_f32, 1.0] {
-                    let local = glam::Vec3::new(sx * half.x, sy * half.y, sz * half.z);
+        for &sx in &[0.0_f32, 1.0] {
+            for &sy in &[0.0_f32, 1.0] {
+                for &sz in &[0.0_f32, 1.0] {
+                    let local = glam::Vec3::new(
+                        if sx == 0.0 { local_min.x } else { local_max.x },
+                        if sy == 0.0 { local_min.y } else { local_max.y },
+                        if sz == 0.0 { local_min.z } else { local_max.z },
+                    );
                     let world = world_transform.transform_point3(local);
                     *min = min.min(world);
                     *max = max.max(world);

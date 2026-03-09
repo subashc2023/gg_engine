@@ -23,7 +23,7 @@ pub(crate) fn draw_mesh_renderer_component(
         entity,
         |ui| {
             let (
-                mut primitive,
+                mesh_source,
                 mut color_arr,
                 mut metallic,
                 mut roughness,
@@ -35,7 +35,7 @@ pub(crate) fn draw_mesh_renderer_component(
                     .get_component::<MeshRendererComponent>(entity)
                     .unwrap();
                 (
-                    mc.primitive,
+                    mc.mesh_source.clone(),
                     <[f32; 4]>::from(mc.color),
                     mc.metallic,
                     mc.roughness,
@@ -46,36 +46,158 @@ pub(crate) fn draw_mesh_renderer_component(
             };
 
             let mut changed = false;
+            let mut source_changed = false;
 
-            // Primitive selector.
-            let prim_labels = ["Cube", "Sphere", "Plane"];
-            let current_label = match primitive {
-                MeshPrimitive::Cube => prim_labels[0],
-                MeshPrimitive::Sphere => prim_labels[1],
-                MeshPrimitive::Plane => prim_labels[2],
+            // Mesh source selector: Primitive or Asset.
+            let is_primitive = matches!(mesh_source, MeshSource::Primitive(_));
+            let source_labels = ["Primitive", "Mesh Asset"];
+            let current_source = if is_primitive {
+                source_labels[0]
+            } else {
+                source_labels[1]
             };
-            egui::ComboBox::from_label("Primitive")
-                .selected_text(current_label)
+            let mut source_idx: usize = if is_primitive { 0 } else { 1 };
+            egui::ComboBox::from_label("Mesh Source")
+                .selected_text(current_source)
                 .show_ui(ui, |ui| {
-                    if ui
-                        .selectable_value(&mut primitive, MeshPrimitive::Cube, prim_labels[0])
-                        .changed()
-                    {
-                        changed = true;
+                    if ui.selectable_value(&mut source_idx, 0, source_labels[0]).changed() {
+                        source_changed = true;
                     }
-                    if ui
-                        .selectable_value(&mut primitive, MeshPrimitive::Sphere, prim_labels[1])
-                        .changed()
-                    {
-                        changed = true;
-                    }
-                    if ui
-                        .selectable_value(&mut primitive, MeshPrimitive::Plane, prim_labels[2])
-                        .changed()
-                    {
-                        changed = true;
+                    if ui.selectable_value(&mut source_idx, 1, source_labels[1]).changed() {
+                        source_changed = true;
                     }
                 });
+
+            // Handle source type change.
+            if source_changed {
+                if source_idx == 0 && !is_primitive {
+                    // Switch to primitive.
+                    if let Some(mut mc) =
+                        scene.get_component_mut::<MeshRendererComponent>(entity)
+                    {
+                        mc.mesh_source = MeshSource::Primitive(MeshPrimitive::Cube);
+                    }
+                    scene.invalidate_mesh(entity);
+                    *scene_dirty = true;
+                } else if source_idx == 1 && is_primitive {
+                    // Switch to asset (no asset selected yet).
+                    if let Some(mut mc) =
+                        scene.get_component_mut::<MeshRendererComponent>(entity)
+                    {
+                        mc.mesh_source = MeshSource::Asset(Uuid::from_raw(0));
+                    }
+                    scene.invalidate_mesh(entity);
+                    *scene_dirty = true;
+                }
+            }
+
+            // Re-read current state after possible change.
+            let current_source = scene
+                .get_component::<MeshRendererComponent>(entity)
+                .unwrap()
+                .mesh_source
+                .clone();
+
+            let mut primitive = match &current_source {
+                MeshSource::Primitive(p) => *p,
+                _ => MeshPrimitive::Cube,
+            };
+
+            match &current_source {
+                MeshSource::Primitive(_) => {
+                    // Primitive selector.
+                    let prim_labels = ["Cube", "Sphere", "Plane"];
+                    let current_label = match primitive {
+                        MeshPrimitive::Cube => prim_labels[0],
+                        MeshPrimitive::Sphere => prim_labels[1],
+                        MeshPrimitive::Plane => prim_labels[2],
+                    };
+                    egui::ComboBox::from_label("Primitive")
+                        .selected_text(current_label)
+                        .show_ui(ui, |ui| {
+                            if ui
+                                .selectable_value(
+                                    &mut primitive,
+                                    MeshPrimitive::Cube,
+                                    prim_labels[0],
+                                )
+                                .changed()
+                            {
+                                changed = true;
+                            }
+                            if ui
+                                .selectable_value(
+                                    &mut primitive,
+                                    MeshPrimitive::Sphere,
+                                    prim_labels[1],
+                                )
+                                .changed()
+                            {
+                                changed = true;
+                            }
+                            if ui
+                                .selectable_value(
+                                    &mut primitive,
+                                    MeshPrimitive::Plane,
+                                    prim_labels[2],
+                                )
+                                .changed()
+                            {
+                                changed = true;
+                            }
+                        });
+                }
+                MeshSource::Asset(mesh_handle) => {
+                    // Mesh asset picker.
+                    ui.horizontal(|ui| {
+                        ui.label("Mesh File");
+                        match super::asset_handle_picker(
+                            ui,
+                            mesh_handle.raw(),
+                            asset_manager,
+                            assets_root,
+                            "meshes",
+                            "glTF files",
+                            &["gltf", "glb"],
+                        ) {
+                            super::AssetPickerAction::Selected(handle) => {
+                                if let Some(mut mc) =
+                                    scene.get_component_mut::<MeshRendererComponent>(entity)
+                                {
+                                    mc.mesh_source = MeshSource::Asset(handle);
+                                }
+                                scene.invalidate_mesh(entity);
+                                *scene_dirty = true;
+                            }
+                            super::AssetPickerAction::Cleared => {
+                                if let Some(mut mc) =
+                                    scene.get_component_mut::<MeshRendererComponent>(entity)
+                                {
+                                    mc.mesh_source = MeshSource::Asset(Uuid::from_raw(0));
+                                }
+                                scene.invalidate_mesh(entity);
+                                *scene_dirty = true;
+                            }
+                            super::AssetPickerAction::None => {}
+                        }
+                    });
+
+                    // Show mesh info if loaded.
+                    let mc = scene
+                        .get_component::<MeshRendererComponent>(entity)
+                        .unwrap();
+                    if let Some(ref mesh) = mc.loaded_mesh {
+                        ui.label(format!(
+                            "{}: {} verts, {} tris",
+                            mesh.name,
+                            mesh.vertices.len(),
+                            mesh.indices.len() / 3
+                        ));
+                    } else if mc.mesh_asset_handle().is_some_and(|h| h.raw() != 0) {
+                        ui.label("Loading...");
+                    }
+                }
+            }
 
             // Color picker.
             if super::color_picker_rgba(ui, "Color", &mut color_arr) {
@@ -153,10 +275,16 @@ pub(crate) fn draw_mesh_renderer_component(
                     let mc = scene
                         .get_component::<MeshRendererComponent>(entity)
                         .unwrap();
-                    mc.primitive != primitive || <[f32; 4]>::from(mc.color) != color_arr
+                    let prim_changed = match &mc.mesh_source {
+                        MeshSource::Primitive(p) => *p != primitive,
+                        _ => false,
+                    };
+                    prim_changed || <[f32; 4]>::from(mc.color) != color_arr
                 };
                 if let Some(mut mc) = scene.get_component_mut::<MeshRendererComponent>(entity) {
-                    mc.primitive = primitive;
+                    if let MeshSource::Primitive(_) = &mc.mesh_source {
+                        mc.mesh_source = MeshSource::Primitive(primitive);
+                    }
                     mc.color = Vec4::from(color_arr);
                     mc.metallic = metallic;
                     mc.roughness = roughness;

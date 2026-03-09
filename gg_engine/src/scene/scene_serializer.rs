@@ -15,7 +15,8 @@ use crate::scene::{
     AudioListenerComponent, AudioSourceComponent, BoxCollider2DComponent, BoxCollider3DComponent,
     CameraComponent, CapsuleCollider3DComponent, CircleCollider2DComponent,
     CircleRendererComponent, DirectionalLightComponent, FloatOrdering, IdComponent,
-    InstancedSpriteAnimator, MeshPrimitive, MeshRendererComponent, ParticleEmitterComponent,
+    InstancedSpriteAnimator, MeshPrimitive, MeshRendererComponent, MeshSource,
+    ParticleEmitterComponent,
     PointLightComponent, RelationshipComponent, RigidBody2DComponent, RigidBody2DType,
     RigidBody3DComponent, RigidBody3DType, Scene, SphereCollider3DComponent,
     SpriteAnimatorComponent, SpriteRendererComponent, TagComponent, TextComponent,
@@ -792,6 +793,9 @@ struct MeshRendererData {
     emissive_strength: f32,
     #[serde(rename = "AlbedoTexture", default)]
     albedo_texture: u64,
+    /// Mesh asset handle (glTF/GLB). 0 = no asset, use primitive instead.
+    #[serde(rename = "MeshAsset", default)]
+    mesh_asset: u64,
 }
 
 fn default_roughness() -> f32 {
@@ -1452,19 +1456,26 @@ impl SceneSerializer {
             mesh_renderer: scene
                 .get_component::<MeshRendererComponent>(entity)
                 .map(|mc| {
-                    let prim_str = match mc.primitive {
-                        MeshPrimitive::Cube => "Cube",
-                        MeshPrimitive::Sphere => "Sphere",
-                        MeshPrimitive::Plane => "Plane",
+                    let (prim_str, mesh_asset) = match &mc.mesh_source {
+                        MeshSource::Primitive(p) => {
+                            let s = match p {
+                                MeshPrimitive::Cube => "Cube",
+                                MeshPrimitive::Sphere => "Sphere",
+                                MeshPrimitive::Plane => "Plane",
+                            };
+                            (s.to_string(), 0)
+                        }
+                        MeshSource::Asset(uuid) => (String::new(), uuid.raw()),
                     };
                     MeshRendererData {
-                        primitive: prim_str.to_string(),
+                        primitive: prim_str,
                         color: mc.color.into(),
                         metallic: mc.metallic,
                         roughness: mc.roughness,
                         emissive_color: mc.emissive_color.into(),
                         emissive_strength: mc.emissive_strength,
                         albedo_texture: mc.texture_handle.raw(),
+                        mesh_asset,
                     }
                 }),
             directional_light: scene
@@ -1919,15 +1930,20 @@ impl SceneSerializer {
 
         // MeshRendererComponent
         if let Some(ref mrd) = entity_data.mesh_renderer {
-            let primitive = match mrd.primitive.as_str() {
-                "Sphere" => MeshPrimitive::Sphere,
-                "Plane" => MeshPrimitive::Plane,
-                _ => MeshPrimitive::Cube,
+            let mesh_source = if mrd.mesh_asset != 0 {
+                MeshSource::Asset(Uuid::from_raw(mrd.mesh_asset))
+            } else {
+                let primitive = match mrd.primitive.as_str() {
+                    "Sphere" => MeshPrimitive::Sphere,
+                    "Plane" => MeshPrimitive::Plane,
+                    _ => MeshPrimitive::Cube,
+                };
+                MeshSource::Primitive(primitive)
             };
             scene.add_component(
                 entity,
                 MeshRendererComponent {
-                    primitive,
+                    mesh_source,
                     color: Vec4::from(mrd.color),
                     metallic: mrd.metallic,
                     roughness: mrd.roughness,
@@ -1935,6 +1951,8 @@ impl SceneSerializer {
                     emissive_strength: mrd.emissive_strength,
                     texture: None,
                     texture_handle: Uuid::from_raw(mrd.albedo_texture),
+                    loaded_mesh: None,
+                    local_bounds: None,
                     vertex_array: None,
                 },
             );

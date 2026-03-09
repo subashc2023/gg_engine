@@ -6,7 +6,7 @@ use super::{
     asset_type_from_extension, validate_asset_path, AssetHandle, AssetMetadata, AssetRegistry,
     AssetType,
 };
-use crate::renderer::{Font, Renderer, Texture2D, TextureSpecification};
+use crate::renderer::{Font, Mesh, Renderer, Texture2D, TextureSpecification};
 use crate::uuid::Uuid;
 use crate::Ref;
 
@@ -25,6 +25,9 @@ pub struct EditorAssetManager {
     loader: AssetLoader,
     /// Cached fonts keyed by file path (shared across entities via Arc).
     loaded_fonts: HashMap<PathBuf, Ref<Font>>,
+    /// Loaded mesh CPU data keyed by asset handle. Shared via `Ref<Mesh>` so
+    /// multiple entities referencing the same glTF file share one copy.
+    loaded_meshes: HashMap<AssetHandle, Ref<Mesh>>,
     /// Lazily-created magenta/black checkerboard texture used for missing assets.
     fallback_texture: Option<Ref<Texture2D>>,
     /// Monotonic counter bumped on each asset access, used for LRU eviction.
@@ -47,6 +50,7 @@ impl EditorAssetManager {
             asset_directory: asset_directory.into(),
             loader: AssetLoader::new(),
             loaded_fonts: HashMap::new(),
+            loaded_meshes: HashMap::new(),
             fallback_texture: None,
             access_counter: 0,
             access_times: HashMap::new(),
@@ -242,6 +246,10 @@ impl EditorAssetManager {
                 // Materials are managed by MaterialLibrary, not the asset manager cache.
                 true
             }
+            AssetType::Mesh => {
+                // Mesh CPU data is loaded async and cached separately.
+                true
+            }
             AssetType::None => false,
         }
     }
@@ -354,6 +362,44 @@ impl EditorAssetManager {
             .request_texture(*handle, abs_path, TextureSpecification::default());
     }
 
+    /// Get loaded mesh CPU data by asset handle.
+    pub fn get_mesh(&self, handle: &AssetHandle) -> Option<Ref<Mesh>> {
+        self.loaded_meshes.get(handle).cloned()
+    }
+
+    /// Request async mesh loading for an asset handle.
+    /// Looks up the path from the registry and enqueues the work.
+    pub fn request_mesh_load(&mut self, handle: &AssetHandle) {
+        if self.loaded_meshes.contains_key(handle) {
+            return;
+        }
+
+        let metadata = match self.registry.get(handle) {
+            Some(m) => m.clone(),
+            None => return,
+        };
+
+        if metadata.asset_type != AssetType::Mesh {
+            return;
+        }
+
+        if !validate_asset_path(&metadata.file_path) {
+            log::warn!(
+                "Rejected unsafe mesh asset path: '{}'",
+                metadata.file_path
+            );
+            return;
+        }
+
+        let abs_path = self.asset_directory.join(&metadata.file_path);
+        if !abs_path.exists() {
+            log::warn!("Mesh file not found: {}", abs_path.display());
+            return;
+        }
+
+        self.loader.request_mesh(*handle, abs_path);
+    }
+
     /// Poll completed async loads and perform GPU uploads.
     ///
     /// Textures are stored in `loaded_assets`; fonts are cached in
@@ -388,6 +434,20 @@ impl EditorAssetManager {
                         }
                     }
                 }
+                LoadResult::Mesh { handle, data } => match data {
+                    Ok(mesh) => {
+                        log::info!(
+                            "Loaded mesh '{}' ({} verts, {} indices)",
+                            mesh.name,
+                            mesh.vertices.len(),
+                            mesh.indices.len()
+                        );
+                        self.loaded_meshes.insert(handle, Ref::new(mesh));
+                    }
+                    Err(e) => {
+                        log::warn!("Async mesh load failed: {e}");
+                    }
+                },
                 LoadResult::Font { font_key, data } => match data {
                     Ok(cpu_data) => match renderer.upload_font(cpu_data) {
                         Ok(font) => {
@@ -432,6 +492,7 @@ impl EditorAssetManager {
     /// Unload all cached assets from GPU memory.
     pub fn unload_all(&mut self) {
         self.loaded_assets.clear();
+        self.loaded_meshes.clear();
         self.access_times.clear();
     }
 

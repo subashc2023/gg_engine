@@ -594,8 +594,8 @@ pub(crate) fn create_shadow_pipeline(
         .front_face(vk::FrontFace::COUNTER_CLOCKWISE)
         .line_width(1.0)
         .depth_bias_enable(true)
-        .depth_bias_constant_factor(1.25)
-        .depth_bias_slope_factor(1.75);
+        .depth_bias_constant_factor(2.0)
+        .depth_bias_slope_factor(3.0);
 
     let multisampling = vk::PipelineMultisampleStateCreateInfo::default()
         .rasterization_samples(vk::SampleCountFlags::TYPE_1);

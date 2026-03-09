@@ -798,6 +798,7 @@ fn paint_asset_type_icon(painter: &egui::Painter, rect: egui::Rect, asset_type: 
         AssetType::Audio => paint_audio_icon(painter, rect),
         AssetType::Prefab => paint_prefab_icon(painter, rect),
         AssetType::Material => paint_file_icon(painter, rect),
+        AssetType::Mesh => paint_mesh_icon(painter, rect),
         AssetType::None => paint_file_icon(painter, rect),
     }
 }
@@ -946,6 +947,36 @@ fn paint_file_icon(painter: &egui::Painter, rect: egui::Rect) {
             egui::Stroke::new(1.5, line_color),
         );
     }
+}
+
+/// Paint a 3D mesh icon (wireframe cube) inside `rect`.
+fn paint_mesh_icon(painter: &egui::Painter, rect: egui::Rect) {
+    let color = egui::Color32::from_rgb(0xD4, 0x8A, 0x40);
+    let cx = rect.center().x;
+    let cy = rect.center().y;
+    let s = rect.width() * 0.22;
+
+    // Simple isometric wireframe cube.
+    let stroke = egui::Stroke::new(1.5, color);
+    // Front face.
+    let fl = egui::pos2(cx - s, cy);
+    let ft = egui::pos2(cx, cy - s * 0.6);
+    let fr = egui::pos2(cx + s, cy);
+    let fb = egui::pos2(cx, cy + s * 0.6);
+    painter.line_segment([fl, ft], stroke);
+    painter.line_segment([ft, fr], stroke);
+    painter.line_segment([fr, fb], stroke);
+    painter.line_segment([fb, fl], stroke);
+
+    // Top face.
+    let tl = egui::pos2(cx - s, cy - s * 0.8);
+    let tt = egui::pos2(cx, cy - s * 1.4);
+    let tr = egui::pos2(cx + s, cy - s * 0.8);
+    painter.line_segment([fl, tl], stroke);
+    painter.line_segment([tl, tt], stroke);
+    painter.line_segment([tt, tr], stroke);
+    painter.line_segment([tr, fr], stroke);
+    painter.line_segment([ft, tt], stroke);
 }
 
 /// Paint a left-pointing back arrow inside `rect`.

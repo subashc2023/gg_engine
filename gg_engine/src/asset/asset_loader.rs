@@ -23,6 +23,10 @@ pub(crate) enum LoadRequest {
         font_key: PathBuf,
         path: PathBuf,
     },
+    Mesh {
+        handle: Uuid,
+        path: PathBuf,
+    },
     Shutdown,
 }
 
@@ -34,6 +38,10 @@ pub enum LoadResult {
     Font {
         font_key: PathBuf,
         data: Result<FontCpuData, String>,
+    },
+    Mesh {
+        handle: Uuid,
+        data: Result<crate::renderer::Mesh, String>,
     },
 }
 
@@ -54,6 +62,7 @@ pub struct AssetLoader {
     inner: Option<LoaderInner>,
     pending_textures: HashSet<Uuid>,
     pending_fonts: HashSet<PathBuf>,
+    pending_meshes: HashSet<Uuid>,
 }
 
 impl AssetLoader {
@@ -62,6 +71,7 @@ impl AssetLoader {
             inner: None,
             pending_textures: HashSet::new(),
             pending_fonts: HashSet::new(),
+            pending_meshes: HashSet::new(),
         }
     }
 
@@ -122,6 +132,16 @@ impl AssetLoader {
         true
     }
 
+    /// Request async mesh loading. Returns false if already pending.
+    pub fn request_mesh(&mut self, handle: Uuid, path: PathBuf) -> bool {
+        if !self.pending_meshes.insert(handle) {
+            return false;
+        }
+        let inner = self.ensure_started();
+        let _ = inner.request_tx.send(LoadRequest::Mesh { handle, path });
+        true
+    }
+
     /// Non-blocking drain of completed results. Clears pending tracking for
     /// completed items. Returns empty vec if workers were never started.
     pub fn poll_results(&mut self) -> Vec<LoadResult> {
@@ -139,6 +159,9 @@ impl AssetLoader {
                 LoadResult::Font { font_key, .. } => {
                     self.pending_fonts.remove(font_key);
                 }
+                LoadResult::Mesh { handle, .. } => {
+                    self.pending_meshes.remove(handle);
+                }
             }
             results.push(result);
         }
@@ -153,9 +176,13 @@ impl AssetLoader {
         self.pending_fonts.contains(font_key)
     }
 
-    /// Number of pending (in-flight) load requests (textures + fonts).
+    pub fn is_mesh_pending(&self, handle: &Uuid) -> bool {
+        self.pending_meshes.contains(handle)
+    }
+
+    /// Number of pending (in-flight) load requests (textures + fonts + meshes).
     pub fn pending_count(&self) -> usize {
-        self.pending_textures.len() + self.pending_fonts.len()
+        self.pending_textures.len() + self.pending_fonts.len() + self.pending_meshes.len()
     }
 }
 
@@ -211,6 +238,31 @@ fn worker_thread_fn(rx: Arc<Mutex<Receiver<LoadRequest>>>, tx: Sender<LoadResult
                 };
                 let _ = tx.send(LoadResult::Font { font_key, data });
             }
+            Ok(LoadRequest::Mesh { handle, path }) => {
+                let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    load_gltf_merged(&path)
+                }));
+                let data = match result {
+                    Ok(data) => data,
+                    Err(_) => Err(format!("Panic while loading mesh: {}", path.display())),
+                };
+                let _ = tx.send(LoadResult::Mesh { handle, data });
+            }
         }
     }
+}
+
+/// Load a glTF/GLB file and merge all primitives into a single [`Mesh`].
+fn load_gltf_merged(path: &std::path::Path) -> Result<crate::renderer::Mesh, String> {
+    let meshes = crate::renderer::load_gltf(path)?;
+    if meshes.len() == 1 {
+        // Common case: avoid merge overhead.
+        return Ok(meshes.into_iter().next().unwrap());
+    }
+    let name = path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("mesh")
+        .to_string();
+    Ok(crate::renderer::Mesh::merge(meshes, name))
 }
