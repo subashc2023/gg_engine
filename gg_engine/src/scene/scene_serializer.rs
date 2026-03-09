@@ -12,7 +12,8 @@ use crate::scene::entity::Entity;
 use crate::scene::LuaScriptComponent;
 use crate::scene::{
     AmbientLightComponent, AnimationClip, AnimationControllerComponent, AnimationTransition,
-    AudioListenerComponent, AudioSourceComponent, BoxCollider2DComponent, BoxCollider3DComponent,
+    AudioCategory, AudioListenerComponent, AudioSourceComponent, BoxCollider2DComponent,
+    BoxCollider3DComponent,
     CameraComponent, CapsuleCollider3DComponent, CircleCollider2DComponent,
     CircleRendererComponent, DirectionalLightComponent, FloatOrdering, IdComponent,
     InstancedSpriteAnimator, MeshPrimitive, MeshRendererComponent, MeshSource,
@@ -725,6 +726,12 @@ struct AudioSourceData {
         skip_serializing_if = "is_default_max_distance"
     )]
     max_distance: f32,
+    #[serde(
+        rename = "Category",
+        default,
+        skip_serializing_if = "is_default_audio_category"
+    )]
+    category: String,
 }
 
 fn default_max_distance() -> f32 {
@@ -733,6 +740,10 @@ fn default_max_distance() -> f32 {
 
 fn is_default_max_distance(v: &f32) -> bool {
     (*v - 50.0).abs() < f32::EPSILON
+}
+
+fn is_default_audio_category(v: &str) -> bool {
+    v.is_empty() || v == "SFX"
 }
 
 #[derive(Serialize, Deserialize)]
@@ -1379,6 +1390,10 @@ impl SceneSerializer {
                 spatial: asc.spatial,
                 min_distance: asc.min_distance,
                 max_distance: asc.max_distance,
+                category: match asc.category {
+                    AudioCategory::SFX => String::new(),
+                    other => other.label().to_string(),
+                },
             });
 
         let audio_listener_data = scene
@@ -1868,6 +1883,8 @@ impl SceneSerializer {
                     spatial: asd.spatial,
                     min_distance: asd.min_distance,
                     max_distance: asd.max_distance,
+                    category: AudioCategory::from_str_loose(&asd.category)
+                        .unwrap_or_default(),
                     resolved_path: None,
                 },
             );
@@ -2115,6 +2132,7 @@ mod tests {
             spatial: true,
             min_distance: 2.0,
             max_distance: 30.0,
+            category: crate::scene::AudioCategory::Music,
             resolved_path: None,
         };
         scene.add_component(e, audio);
@@ -2138,6 +2156,7 @@ mod tests {
         assert!(ac.spatial);
         assert!((ac.min_distance - 2.0).abs() < 0.001);
         assert!((ac.max_distance - 30.0).abs() < 0.001);
+        assert_eq!(ac.category, crate::scene::AudioCategory::Music);
         assert!(ac.resolved_path.is_none());
     }
 

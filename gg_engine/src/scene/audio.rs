@@ -1,4 +1,5 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
+use std::time::Duration;
 
 use kira::sound::static_sound::{StaticSoundData, StaticSoundHandle, StaticSoundSettings};
 use kira::sound::streaming::{StreamingSoundData, StreamingSoundHandle};
@@ -68,6 +69,19 @@ pub(crate) fn linear_to_db(volume: f32) -> f32 {
     }
 }
 
+/// Create a kira `Tween` with the given fade duration in seconds.
+/// If `duration_secs <= 0`, returns an instant (default) tween.
+fn fade_tween(duration_secs: f32) -> Tween {
+    if duration_secs <= 0.0 {
+        Tween::default()
+    } else {
+        Tween {
+            duration: Duration::from_secs_f32(duration_secs),
+            ..Default::default()
+        }
+    }
+}
+
 /// Wrapper around kira's AudioManager, providing entity-keyed playback.
 ///
 /// Supports multiple simultaneous sounds per entity (e.g. footsteps + breathing),
@@ -82,6 +96,9 @@ pub(crate) struct AudioEngine {
     sound_cache: HashMap<String, StaticSoundData>,
     /// LRU order for sound cache eviction. Most recently used at back.
     cache_order: Vec<String>,
+    /// UUIDs for which the sound completion callback should be suppressed
+    /// (stop was user-initiated via stop/fade_out, not natural completion).
+    suppress_callback: HashSet<u64>,
 }
 
 impl AudioEngine {
@@ -92,6 +109,7 @@ impl AudioEngine {
                 active_sounds: HashMap::new(),
                 sound_cache: HashMap::new(),
                 cache_order: Vec::new(),
+                suppress_callback: HashSet::new(),
             }),
             Err(e) => {
                 log::error!("Failed to create AudioManager: {}", e);
@@ -102,11 +120,13 @@ impl AudioEngine {
 
     /// Play a sound for the given entity. Multiple sounds can overlap.
     /// Finished sounds are automatically pruned.
+    ///
+    /// `effective_volume` is the combined linear volume (entity * category * master).
     pub fn play_sound(
         &mut self,
         entity_uuid: u64,
         path: &str,
-        volume: f32,
+        effective_volume: f32,
         pitch: f32,
         looping: bool,
         streaming: bool,
@@ -117,9 +137,36 @@ impl AudioEngine {
         }
 
         if streaming {
-            self.play_streaming(entity_uuid, path, volume, pitch, looping);
+            self.play_streaming(entity_uuid, path, effective_volume, pitch, looping);
         } else {
-            self.play_static(entity_uuid, path, volume, pitch, looping);
+            self.play_static(entity_uuid, path, effective_volume, pitch, looping);
+        }
+    }
+
+    /// Play a sound with a fade-in from silence to the effective volume.
+    #[allow(clippy::too_many_arguments)]
+    pub fn play_sound_fade(
+        &mut self,
+        entity_uuid: u64,
+        path: &str,
+        effective_volume: f32,
+        pitch: f32,
+        looping: bool,
+        streaming: bool,
+        fade_secs: f32,
+    ) {
+        // Play at silence.
+        self.play_sound(entity_uuid, path, 0.0, pitch, looping, streaming);
+
+        // Immediately tween to target volume.
+        if let Some(handles) = self.active_sounds.get_mut(&entity_uuid) {
+            let tween = fade_tween(fade_secs);
+            let target = Decibels(linear_to_db(effective_volume));
+            for handle in handles.iter_mut() {
+                if handle.state() == PlaybackState::Playing {
+                    handle.set_volume(target, tween);
+                }
+            }
         }
     }
 
@@ -244,8 +291,54 @@ impl AudioEngine {
         }
     }
 
+    /// Fade in: resume paused sounds with a smooth volume ramp, or play if not active.
+    /// Returns `true` if active sounds were found and faded in.
+    pub fn fade_in(&mut self, entity_uuid: u64, target_volume_db: f32, duration_secs: f32) -> bool {
+        let tween = fade_tween(duration_secs);
+        if let Some(handles) = self.active_sounds.get_mut(&entity_uuid) {
+            let has_active = handles
+                .iter()
+                .any(|h| matches!(h.state(), PlaybackState::Playing | PlaybackState::Paused));
+            if has_active {
+                for handle in handles.iter_mut() {
+                    if handle.state() == PlaybackState::Paused {
+                        // Set to silence first, then resume with fade.
+                        handle.set_volume(Decibels(-80.0), Tween::default());
+                        handle.resume(Tween::default());
+                    }
+                    handle.set_volume(Decibels(target_volume_db), tween);
+                }
+                return true;
+            }
+        }
+        false
+    }
+
+    /// Fade out and stop all sounds on an entity.
+    pub fn fade_out_stop(&mut self, entity_uuid: u64, duration_secs: f32) {
+        self.suppress_callback.insert(entity_uuid);
+        if let Some(handles) = self.active_sounds.get_mut(&entity_uuid) {
+            let tween = fade_tween(duration_secs);
+            for handle in handles.iter_mut() {
+                handle.stop(tween);
+            }
+        }
+    }
+
+    /// Fade volume to a specific level over time.
+    pub fn fade_to(&mut self, entity_uuid: u64, target_volume_db: f32, duration_secs: f32) {
+        if let Some(handles) = self.active_sounds.get_mut(&entity_uuid) {
+            let tween = fade_tween(duration_secs);
+            let target = Decibels(target_volume_db);
+            for handle in handles.iter_mut() {
+                handle.set_volume(target, tween);
+            }
+        }
+    }
+
     /// Stop all sounds for the given entity.
     pub fn stop_sound(&mut self, entity_uuid: u64) {
+        self.suppress_callback.insert(entity_uuid);
         if let Some(handles) = self.active_sounds.remove(&entity_uuid) {
             for mut handle in handles {
                 handle.stop(Tween::default());
@@ -282,5 +375,26 @@ impl AudioEngine {
                 handle.stop(Tween::default());
             }
         }
+    }
+
+    /// Drain entity UUIDs whose sounds have all finished (naturally, not explicitly stopped).
+    /// Call once per frame to detect sound completion for callbacks.
+    pub fn drain_completed(&mut self) -> Vec<u64> {
+        let mut completed = Vec::new();
+        self.active_sounds.retain(|uuid, handles| {
+            handles.retain(|h| h.state() != PlaybackState::Stopped);
+            if handles.is_empty() {
+                if !self.suppress_callback.remove(uuid) {
+                    completed.push(*uuid);
+                }
+                false
+            } else {
+                true
+            }
+        });
+        // Clean remaining suppress entries for UUIDs no longer tracked.
+        self.suppress_callback
+            .retain(|uuid| self.active_sounds.contains_key(uuid));
+        completed
     }
 }

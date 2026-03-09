@@ -44,7 +44,9 @@ impl GpuAllocator {
     ) -> Result<GpuAllocation, String> {
         let mem_req = unsafe { device.get_buffer_memory_requirements(buffer) };
         let allocation = {
-            let mut alloc = allocator.lock().unwrap();
+            let mut alloc = allocator
+                .lock()
+                .map_err(|_| format!("GPU allocator mutex poisoned (buffer '{name}')"))?;
             alloc
                 .inner
                 .allocate(&gpu_allocator::vulkan::AllocationCreateDesc {
@@ -79,7 +81,9 @@ impl GpuAllocator {
     ) -> Result<GpuAllocation, String> {
         let mem_req = unsafe { device.get_image_memory_requirements(image) };
         let allocation = {
-            let mut alloc = allocator.lock().unwrap();
+            let mut alloc = allocator
+                .lock()
+                .map_err(|_| format!("GPU allocator mutex poisoned (image '{name}')"))?;
             alloc
                 .inner
                 .allocate(&gpu_allocator::vulkan::AllocationCreateDesc {
@@ -151,7 +155,12 @@ impl GpuAllocation {
 impl Drop for GpuAllocation {
     fn drop(&mut self) {
         if let Some(allocation) = self.allocation.take() {
-            let mut allocator = self.allocator.lock().unwrap();
+            // Use unwrap_or_else to recover from poison — we must still free GPU
+            // memory even if another thread panicked while holding the lock.
+            let mut allocator = self
+                .allocator
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
             if let Err(e) = allocator.inner.free(allocation) {
                 log::error!(target: "gg_engine", "Failed to free GPU allocation: {e}");
             }

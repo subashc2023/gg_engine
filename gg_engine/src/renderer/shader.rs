@@ -71,7 +71,12 @@ pub(crate) fn create_shader_module(
     device: &ash::Device,
     spv_bytes: &[u8],
 ) -> Result<vk::ShaderModule, vk::Result> {
-    // SPIR-V is a stream of u32 words. ash requires &[u32].
+    // SPIR-V is a stream of u32 words — length must be 4-byte aligned.
+    assert!(
+        spv_bytes.len().is_multiple_of(4),
+        "SPIR-V byte length {} is not a multiple of 4",
+        spv_bytes.len()
+    );
     let spv_u32: Vec<u32> = spv_bytes
         .chunks_exact(4)
         .map(|c| u32::from_le_bytes([c[0], c[1], c[2], c[3]]))

@@ -46,6 +46,7 @@ use crate::TilemapPaintState;
 pub(crate) fn reset_all_panel_state() {
     content_browser::invalidate_dir_cache();
     content_browser::reset_dialog_state();
+    scene_hierarchy::reset_hierarchy_state();
     project::invalidate_scene_cache();
     animation_timeline::reset_animation_timeline_state();
     #[cfg(feature = "lua-scripting")]

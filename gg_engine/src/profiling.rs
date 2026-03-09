@@ -73,7 +73,10 @@ mod inner {
     /// to visualize the timeline. Only one session can be active at a time; calling
     /// this while a session is already active will end the previous session first.
     pub fn begin_session(name: &str, filepath: &str) {
-        let mut guard = INSTRUMENTOR.lock().unwrap();
+        let mut guard = match INSTRUMENTOR.lock() {
+            Ok(g) => g,
+            Err(poisoned) => poisoned.into_inner(),
+        };
 
         // End any existing session before starting a new one.
         if let Some(mut prev) = guard.take() {
@@ -128,7 +131,10 @@ mod inner {
     /// End the current profiling session and flush the JSON file.
     pub fn end_session() {
         SESSION_ACTIVE.store(false, Ordering::Release);
-        let mut guard = INSTRUMENTOR.lock().unwrap();
+        let mut guard = match INSTRUMENTOR.lock() {
+            Ok(g) => g,
+            Err(poisoned) => poisoned.into_inner(),
+        };
         if let Some(mut session) = guard.take() {
             if let Err(e) = write!(session.writer, "]}}") {
                 log::warn!(target: "gg_engine", "Failed to write profiling footer: {e}");
@@ -148,7 +154,10 @@ mod inner {
 
         let tid = THREAD_ID.with(|id| *id);
 
-        let mut guard = INSTRUMENTOR.lock().unwrap();
+        let mut guard = match INSTRUMENTOR.lock() {
+            Ok(g) => g,
+            Err(poisoned) => poisoned.into_inner(),
+        };
         if let Some(session) = guard.as_mut() {
             let start_us = start.saturating_duration_since(session.start).as_micros() as u64;
             let dur_us = duration.as_micros() as u64;

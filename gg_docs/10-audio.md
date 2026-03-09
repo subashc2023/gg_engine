@@ -5,8 +5,8 @@ The engine integrates [kira](https://docs.rs/kira/0.12) 0.12 for audio playback.
 **Files:**
 - `gg_engine/src/scene/audio.rs` — `AudioEngine` struct, kira wrapper
 - `gg_engine/src/scene/components.rs` — `AudioSourceComponent` definition
-- `gg_engine/src/scene/mod.rs` — Scene audio lifecycle (`on_audio_start`, `on_audio_stop`, `resolve_audio_handles`, `play_entity_sound`, `stop_entity_sound`, `set_entity_volume`, `set_entity_panning`, `update_spatial_audio`)
-- `gg_engine/src/scene/script_glue.rs` — Lua bindings (`play_sound`, `stop_sound`, `set_volume`, `set_panning`)
+- `gg_engine/src/scene/audio_ops.rs` — Scene audio lifecycle (`on_audio_start`, `on_audio_stop`, `resolve_audio_handles`, `play_entity_sound`, `stop_entity_sound`, `set_entity_volume`, `set_entity_panning`, `fade_in_entity_sound`, `fade_out_entity_sound`, `fade_to_entity_volume`, `set_master_volume`, `set_category_volume`, `update_spatial_audio`, `dispatch_sound_finished_events`)
+- `gg_engine/src/scene/script_glue.rs` — Lua bindings (`play_sound`, `stop_sound`, `set_volume`, `set_panning`, `fade_in`, `fade_out`, `fade_to`, `set_master_volume`, `get_master_volume`, `set_category_volume`, `get_category_volume`)
 - `gg_editor/src/panels/properties/audio.rs` — Editor UI for audio source properties
 
 ## AudioEngine
@@ -92,6 +92,7 @@ pub struct AudioSourceComponent {
 | `spatial` | `false` | Enable spatial audio (panning and distance attenuation based on entity position relative to camera) |
 | `min_distance` | `1.0` | Distance from the listener at which attenuation begins (no attenuation within this radius) |
 | `max_distance` | `50.0` | Distance at which the sound is fully attenuated (-60 dB) |
+| `category` | `SFX` | Sound category for volume mixing (`SFX`, `Music`, `Ambient`, `Voice`). Effective volume = entity × category × master |
 | `resolved_path` | `None` | Absolute file path resolved at runtime from asset manager. Not serialized |
 
 **Supported formats:** WAV, OGG, MP3, FLAC (via kira's built-in decoders).
@@ -187,7 +188,14 @@ These methods are used by Lua scripts (via script glue) to control audio at runt
 | `stop_entity_sound(entity)` | Looks up the entity's UUID, calls `AudioEngine::stop_sound()` |
 | `set_entity_volume(entity, volume)` | Looks up the entity's UUID, calls `AudioEngine::set_volume()` |
 | `set_entity_panning(entity, panning)` | Looks up the entity's UUID, calls `AudioEngine::set_panning()` |
-| `update_spatial_audio()` | Updates panning and volume for all spatial audio sources based on camera-relative position |
+| `fade_in_entity_sound(entity, secs)` | Fade in from silence (resumes paused sounds or plays new) |
+| `fade_out_entity_sound(entity, secs)` | Fade to silence and stop |
+| `fade_to_entity_volume(entity, vol, secs)` | Fade to target volume over time |
+| `set_master_volume(volume)` | Set global master volume (0.0–1.0) |
+| `get_master_volume()` | Get global master volume |
+| `set_category_volume(cat, volume)` | Set per-category volume (0.0–1.0) |
+| `get_category_volume(cat)` | Get per-category volume |
+| `update_spatial_audio()` | Updates panning and volume for all spatial audio sources based on listener position; also drains completed sounds for `on_sound_finished` callbacks |
 
 All methods are no-ops if the entity lacks the required components, has no resolved path, or the audio engine is `None`.
 
@@ -197,12 +205,21 @@ All methods are no-ops if the entity lacks the required components, has no resol
 
 Registered on the `Engine` global table:
 
-| Lua Function | Rust Binding | Signature | Description |
-|-------------|--------------|-----------|-------------|
-| `Engine.play_sound(entity_id)` | `lua_play_sound` | `(u64) -> ()` | Play the entity's audio source |
-| `Engine.stop_sound(entity_id)` | `lua_stop_sound` | `(u64) -> ()` | Stop the entity's audio playback |
-| `Engine.set_volume(entity_id, volume)` | `lua_set_volume` | `(u64, f32) -> ()` | Adjust volume at runtime |
-| `Engine.set_panning(entity_id, panning)` | `lua_set_panning` | `(u64, f32) -> ()` | Set stereo panning (-1.0 = left, 0.0 = center, 1.0 = right) |
+| Lua Function | Signature | Description |
+|-------------|-----------|-------------|
+| `Engine.play_sound(entity_id)` | `(u64) -> ()` | Play the entity's audio source |
+| `Engine.stop_sound(entity_id)` | `(u64) -> ()` | Stop the entity's audio playback |
+| `Engine.pause_sound(entity_id)` | `(u64) -> ()` | Pause the entity's audio (resumable) |
+| `Engine.resume_sound(entity_id)` | `(u64) -> ()` | Resume paused audio |
+| `Engine.set_volume(entity_id, volume)` | `(u64, f32) -> ()` | Adjust volume at runtime (linear 0.0–1.0) |
+| `Engine.set_panning(entity_id, panning)` | `(u64, f32) -> ()` | Set stereo panning (-1.0 = left, 0.0 = center, 1.0 = right) |
+| `Engine.fade_in(entity_id, secs)` | `(u64, f32) -> ()` | Fade in from silence (play or resume) |
+| `Engine.fade_out(entity_id, secs)` | `(u64, f32) -> ()` | Fade to silence and stop |
+| `Engine.fade_to(entity_id, vol, secs)` | `(u64, f32, f32) -> ()` | Fade to target volume |
+| `Engine.set_master_volume(volume)` | `(f32) -> ()` | Set global master volume (0.0–1.0) |
+| `Engine.get_master_volume()` | `() -> f32` | Get global master volume |
+| `Engine.set_category_volume(cat, vol)` | `(string, f32) -> ()` | Set category volume ("sfx"/"music"/"ambient"/"voice") |
+| `Engine.get_category_volume(cat)` | `(string) -> f32` | Get category volume |
 
 All bindings access the scene through `SceneScriptContext` (the standard take-modify-replace pattern). Entity is looked up by UUID via `scene.find_entity_by_uuid()`. No-op if context is unavailable or entity not found.
 
@@ -225,6 +242,47 @@ function on_update(dt)
     Engine.set_volume(self_id, 0.5)
     Engine.set_panning(self_id, -0.5)  -- slightly to the left
 end
+```
+
+### Sound Completion Callback
+
+When all sounds on an entity finish playing naturally, the `on_sound_finished()` callback is invoked on the entity's Lua script. This does **not** fire when sounds are explicitly stopped via `Engine.stop_sound()` or `Engine.fade_out()`.
+
+```lua
+function on_sound_finished()
+    -- Play next track or transition
+    Engine.play_sound(Engine.get_uuid())
+end
+```
+
+### Volume Mixing
+
+Effective volume = `entity_volume × category_volume × master_volume` (all linear 0.0–1.0).
+
+```lua
+function on_create()
+    -- Set up volume levels
+    Engine.set_master_volume(0.8)
+    Engine.set_category_volume("music", 0.6)
+    Engine.set_category_volume("sfx", 1.0)
+end
+```
+
+### Fade Examples
+
+```lua
+-- Fade in music over 2 seconds
+Engine.fade_in(music_entity_id, 2.0)
+
+-- Fade out and stop over 1.5 seconds
+Engine.fade_out(music_entity_id, 1.5)
+
+-- Crossfade: fade out old, fade in new
+Engine.fade_out(old_music_id, 2.0)
+Engine.fade_in(new_music_id, 2.0)
+
+-- Fade volume to 50% over 1 second
+Engine.fade_to(entity_id, 0.5, 1.0)
 ```
 
 ## Editor UI

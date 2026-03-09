@@ -27,7 +27,8 @@ pub use animation::{
 #[cfg(feature = "lua-scripting")]
 pub use components::LuaScriptComponent;
 pub use components::{
-    AmbientLightComponent, AudioListenerComponent, AudioSourceComponent, BoxCollider2DComponent,
+    AmbientLightComponent, AudioCategory, AudioListenerComponent, AudioSourceComponent,
+    BoxCollider2DComponent,
     BoxCollider3DComponent, CameraComponent, CapsuleCollider3DComponent, CircleCollider2DComponent,
     CircleRendererComponent, DirectionalLightComponent, IdComponent, MeshPrimitive,
     MeshRendererComponent, MeshSource, NativeScriptComponent, ParticleEmitterComponent,
@@ -107,6 +108,10 @@ pub struct Scene {
     /// `resolve_texture_handles_async` can skip scanning every entity.
     /// Reset to `false` when entities are created or components change.
     textures_all_resolved: bool,
+    /// Global master volume (0.0–1.0). Multiplied into all sound playback.
+    master_volume: f32,
+    /// Per-category volume multipliers (0.0–1.0), indexed by [`AudioCategory`].
+    category_volumes: [f32; AudioCategory::COUNT],
 }
 
 /// Invokes `$callback!` with every cloneable component type.
@@ -213,6 +218,8 @@ impl Scene {
             culling_stats: Cell::new(CullingStats::default()),
             va_graveyard: VecDeque::new(),
             textures_all_resolved: false,
+            master_volume: 1.0,
+            category_volumes: [1.0; AudioCategory::COUNT],
         }
     }
 
@@ -456,6 +463,10 @@ impl Scene {
         // LuaScriptComponent — Clone-able, copy via helper.
         #[cfg(feature = "lua-scripting")]
         copy_component_if_has::<LuaScriptComponent>(&source.world, &mut new_scene, &entity_map);
+
+        // Copy audio volume settings.
+        new_scene.master_volume = source.master_volume;
+        new_scene.category_volumes = source.category_volumes;
 
         new_scene
     }

@@ -232,6 +232,25 @@ pub fn register_all(lua: &Lua) -> LuaResult<()> {
     engine.set("resume_sound", lua.create_function(lua_resume_sound)?)?;
     engine.set("set_volume", lua.create_function(lua_set_volume)?)?;
     engine.set("set_panning", lua.create_function(lua_set_panning)?)?;
+    engine.set("fade_in", lua.create_function(lua_fade_in)?)?;
+    engine.set("fade_out", lua.create_function(lua_fade_out)?)?;
+    engine.set("fade_to", lua.create_function(lua_fade_to)?)?;
+    engine.set(
+        "set_master_volume",
+        lua.create_function(lua_set_master_volume)?,
+    )?;
+    engine.set(
+        "get_master_volume",
+        lua.create_function(lua_get_master_volume)?,
+    )?;
+    engine.set(
+        "set_category_volume",
+        lua.create_function(lua_set_category_volume)?,
+    )?;
+    engine.set(
+        "get_category_volume",
+        lua.create_function(lua_get_category_volume)?,
+    )?;
 
     // Tilemap
     engine.set("set_tile", lua.create_function(lua_set_tile)?)?;
@@ -1041,6 +1060,63 @@ fn lua_set_panning(lua: &Lua, (entity_id, panning): (u64, f32)) -> LuaResult<()>
     })
 }
 
+/// `Engine.fade_in(entity_id, duration_secs)` — play (or resume) with fade from silence.
+fn lua_fade_in(lua: &Lua, (entity_id, duration): (u64, f32)) -> LuaResult<()> {
+    with_entity_mut(lua, entity_id, (), |scene, entity| {
+        scene.fade_in_entity_sound(entity, duration);
+    })
+}
+
+/// `Engine.fade_out(entity_id, duration_secs)` — fade to silence and stop.
+fn lua_fade_out(lua: &Lua, (entity_id, duration): (u64, f32)) -> LuaResult<()> {
+    with_entity_mut(lua, entity_id, (), |scene, entity| {
+        scene.fade_out_entity_sound(entity, duration);
+    })
+}
+
+/// `Engine.fade_to(entity_id, volume, duration_secs)` — fade to target volume.
+fn lua_fade_to(lua: &Lua, (entity_id, volume, duration): (u64, f32, f32)) -> LuaResult<()> {
+    with_entity_mut(lua, entity_id, (), |scene, entity| {
+        scene.fade_to_entity_volume(entity, volume, duration);
+    })
+}
+
+/// `Engine.set_master_volume(volume)` — set global master volume (0.0–1.0).
+fn lua_set_master_volume(lua: &Lua, volume: f32) -> LuaResult<()> {
+    with_scene_mut(lua, (), |scene| {
+        scene.set_master_volume(volume);
+    })
+}
+
+/// `Engine.get_master_volume()` — get global master volume.
+fn lua_get_master_volume(lua: &Lua, _: ()) -> LuaResult<f32> {
+    with_scene_mut(lua, 1.0, |scene| scene.get_master_volume())
+}
+
+/// `Engine.set_category_volume(category, volume)` — set volume for a sound category.
+/// Category: "sfx", "music", "ambient", "voice" (case-insensitive).
+fn lua_set_category_volume(lua: &Lua, (cat_str, volume): (String, f32)) -> LuaResult<()> {
+    with_scene_mut(lua, (), |scene| {
+        if let Some(cat) = super::AudioCategory::from_str_loose(&cat_str) {
+            scene.set_category_volume(cat, volume);
+        } else {
+            log::warn!("Unknown audio category '{cat_str}'. Use: sfx, music, ambient, voice.");
+        }
+    })
+}
+
+/// `Engine.get_category_volume(category)` — get volume for a sound category.
+fn lua_get_category_volume(lua: &Lua, cat_str: String) -> LuaResult<f32> {
+    with_scene_mut(lua, 1.0, |scene| {
+        if let Some(cat) = super::AudioCategory::from_str_loose(&cat_str) {
+            scene.get_category_volume(cat)
+        } else {
+            log::warn!("Unknown audio category '{cat_str}'. Use: sfx, music, ambient, voice.");
+            1.0
+        }
+    })
+}
+
 // ---------------------------------------------------------------------------
 // Tilemap bindings
 // ---------------------------------------------------------------------------
@@ -1787,6 +1863,13 @@ mod tests {
         assert!(engine.get::<LuaFunction>("stop_sound").is_ok());
         assert!(engine.get::<LuaFunction>("set_volume").is_ok());
         assert!(engine.get::<LuaFunction>("set_panning").is_ok());
+        assert!(engine.get::<LuaFunction>("fade_in").is_ok());
+        assert!(engine.get::<LuaFunction>("fade_out").is_ok());
+        assert!(engine.get::<LuaFunction>("fade_to").is_ok());
+        assert!(engine.get::<LuaFunction>("set_master_volume").is_ok());
+        assert!(engine.get::<LuaFunction>("get_master_volume").is_ok());
+        assert!(engine.get::<LuaFunction>("set_category_volume").is_ok());
+        assert!(engine.get::<LuaFunction>("get_category_volume").is_ok());
         // Physics
         assert!(engine.get::<LuaFunction>("apply_impulse").is_ok());
         assert!(engine.get::<LuaFunction>("apply_impulse_at_point").is_ok());
@@ -2149,6 +2232,44 @@ mod tests {
         lua.load("Engine.set_panning(12345, -0.5)")
             .exec()
             .expect("set_panning should not error without context");
+    }
+
+    #[test]
+    fn fade_in_no_context_no_error() {
+        let lua = setup();
+        lua.load("Engine.fade_in(12345, 1.0)")
+            .exec()
+            .expect("fade_in should not error without context");
+    }
+
+    #[test]
+    fn fade_out_no_context_no_error() {
+        let lua = setup();
+        lua.load("Engine.fade_out(12345, 1.0)")
+            .exec()
+            .expect("fade_out should not error without context");
+    }
+
+    #[test]
+    fn master_volume_no_context_no_error() {
+        let lua = setup();
+        lua.load("Engine.set_master_volume(0.5)")
+            .exec()
+            .expect("set_master_volume should not error without context");
+        lua.load("result = Engine.get_master_volume()")
+            .exec()
+            .expect("get_master_volume should not error without context");
+    }
+
+    #[test]
+    fn category_volume_no_context_no_error() {
+        let lua = setup();
+        lua.load("Engine.set_category_volume('music', 0.5)")
+            .exec()
+            .expect("set_category_volume should not error without context");
+        lua.load("result = Engine.get_category_volume('sfx')")
+            .exec()
+            .expect("get_category_volume should not error without context");
     }
 
     #[test]

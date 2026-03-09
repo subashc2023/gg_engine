@@ -308,8 +308,7 @@ impl EditorAssetManager {
         let texture = match renderer.create_texture_from_rgba8(4, 4, &pixels) {
             Ok(t) => t,
             Err(e) => {
-                log::error!("Failed to create fallback texture: {e}");
-                return self.fallback_texture.clone().unwrap();
+                panic!("Failed to create fallback texture (GPU texture creation unavailable): {e}");
             }
         };
         let tex_ref = Ref::new(texture);

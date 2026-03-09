@@ -934,17 +934,60 @@ pub(crate) fn draw_animation_controller(
                     .collect();
                 drop(ctrl);
 
+                let mut remove_bool: Option<String> = None;
+                let mut remove_float: Option<String> = None;
                 for (name, val) in &bools {
                     ui.horizontal(|ui| {
                         ui.label(format!("{name} (bool)"));
-                        ui.label(if *val { "true" } else { "false" });
+                        let mut v = *val;
+                        if ui.checkbox(&mut v, "").changed() {
+                            if let Some(mut ctrl) =
+                                scene.get_component_mut::<AnimationControllerComponent>(entity)
+                            {
+                                ctrl.bool_params.insert(name.clone(), v);
+                            }
+                            *scene_dirty = true;
+                        }
+                        if ui.small_button("X").clicked() {
+                            remove_bool = Some(name.clone());
+                        }
                     });
                 }
                 for (name, val) in &floats {
                     ui.horizontal(|ui| {
                         ui.label(format!("{name} (float)"));
-                        ui.label(format!("{val:.2}"));
+                        let mut v = *val;
+                        if ui
+                            .add(egui::DragValue::new(&mut v).speed(0.1).max_decimals(2))
+                            .changed()
+                        {
+                            if let Some(mut ctrl) =
+                                scene.get_component_mut::<AnimationControllerComponent>(entity)
+                            {
+                                ctrl.float_params.insert(name.clone(), v);
+                            }
+                            *scene_dirty = true;
+                        }
+                        if ui.small_button("X").clicked() {
+                            remove_float = Some(name.clone());
+                        }
                     });
+                }
+                if let Some(key) = remove_bool {
+                    if let Some(mut ctrl) =
+                        scene.get_component_mut::<AnimationControllerComponent>(entity)
+                    {
+                        ctrl.bool_params.remove(&key);
+                    }
+                    *scene_dirty = true;
+                }
+                if let Some(key) = remove_float {
+                    if let Some(mut ctrl) =
+                        scene.get_component_mut::<AnimationControllerComponent>(entity)
+                    {
+                        ctrl.float_params.remove(&key);
+                    }
+                    *scene_dirty = true;
                 }
             }
 

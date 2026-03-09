@@ -32,6 +32,7 @@ pub(crate) fn draw_audio_source_component(
                 mut spatial,
                 mut min_distance,
                 mut max_distance,
+                category,
             ) = {
                 let ac = scene.get_component::<AudioSourceComponent>(entity).unwrap();
                 (
@@ -44,6 +45,7 @@ pub(crate) fn draw_audio_source_component(
                     ac.spatial,
                     ac.min_distance,
                     ac.max_distance,
+                    ac.category,
                 )
             };
 
@@ -105,6 +107,27 @@ pub(crate) fn draw_audio_source_component(
                     }
                     *scene_dirty = true;
                 }
+            });
+
+            // Category combo.
+            ui.horizontal(|ui| {
+                ui.label("Category");
+                let mut cat_index = category as usize;
+                egui::ComboBox::from_id_salt("audio_category")
+                    .selected_text(category.label())
+                    .show_ui(ui, |ui| {
+                        for i in 0..AudioCategory::COUNT {
+                            let cat = AudioCategory::from_index(i).unwrap();
+                            if ui.selectable_value(&mut cat_index, i, cat.label()).changed() {
+                                if let Some(mut ac) =
+                                    scene.get_component_mut::<AudioSourceComponent>(entity)
+                                {
+                                    ac.category = cat;
+                                }
+                                *scene_dirty = true;
+                            }
+                        }
+                    });
             });
 
             // Looping checkbox.

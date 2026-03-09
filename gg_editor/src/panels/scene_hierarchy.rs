@@ -1,3 +1,4 @@
+use std::cell::RefCell;
 use std::path::PathBuf;
 
 use gg_engine::egui;
@@ -15,6 +16,28 @@ struct HierarchyDragPayload {
 }
 
 // ---------------------------------------------------------------------------
+// Persistent UI state (thread-local to survive across frames)
+// ---------------------------------------------------------------------------
+
+// Entity pending delete confirmation: (entity_handle, display_name).
+thread_local! {
+    static DELETE_ENTITY_CONFIRM: RefCell<Option<(Entity, String)>> =
+        const { RefCell::new(None) };
+}
+
+// Inline rename state: (entity_uuid, edit_text, first_frame).
+thread_local! {
+    static HIERARCHY_RENAME: RefCell<Option<(u64, String, bool)>> =
+        const { RefCell::new(None) };
+}
+
+/// Clear dialog/rename state (call on scene load or project switch).
+pub(crate) fn reset_hierarchy_state() {
+    DELETE_ENTITY_CONFIRM.with(|d| *d.borrow_mut() = None);
+    HIERARCHY_RENAME.with(|s| *s.borrow_mut() = None);
+}
+
+// ---------------------------------------------------------------------------
 // Deferred actions — collected during UI iteration, applied afterwards
 // ---------------------------------------------------------------------------
 
@@ -29,6 +52,10 @@ enum DeferredHierarchyAction {
     ReorderSibling {
         child_uuid: u64,
         new_index: usize,
+    },
+    RenameEntity {
+        entity_uuid: u64,
+        new_name: String,
     },
     InstantiatePrefab {
         path: PathBuf,
@@ -148,10 +175,12 @@ pub(crate) fn scene_hierarchy_ui(
     if let Some(action) = deferred_action {
         match action {
             DeferredHierarchyAction::DeleteEntity(entity) => {
-                undo_system.record(scene, "Delete entity");
-                selection.remove(entity);
-                let _ = scene.destroy_entity(entity);
-                *scene_dirty = true;
+                // Show confirmation dialog instead of deleting immediately.
+                let name = scene
+                    .get_component::<TagComponent>(entity)
+                    .map(|t| t.tag.clone())
+                    .unwrap_or_else(|| "Entity".into());
+                DELETE_ENTITY_CONFIRM.with(|d| *d.borrow_mut() = Some((entity, name)));
             }
             DeferredHierarchyAction::CreateChild(parent) => {
                 undo_system.record(scene, "Create child entity");
@@ -180,11 +209,75 @@ pub(crate) fn scene_hierarchy_ui(
                 scene.reorder_child(child_uuid, new_index);
                 *scene_dirty = true;
             }
+            DeferredHierarchyAction::RenameEntity {
+                entity_uuid,
+                new_name,
+            } => {
+                if let Some(ent) = scene.find_entity_by_uuid(entity_uuid) {
+                    undo_system.record(scene, "Rename entity");
+                    if let Some(mut tc) = scene.get_component_mut::<TagComponent>(ent) {
+                        tc.tag = new_name;
+                    }
+                    *scene_dirty = true;
+                }
+                HIERARCHY_RENAME.with(|s| *s.borrow_mut() = None);
+            }
             DeferredHierarchyAction::InstantiatePrefab { path, parent } => {
                 external_action = Some(HierarchyExternalAction::InstantiatePrefab { path, parent });
             }
         }
     }
+
+    // --- Delete entity confirmation dialog ---
+    let pending = DELETE_ENTITY_CONFIRM.with(|d| d.borrow().clone());
+    if let Some((entity, name)) = pending {
+        let mut open = true;
+        egui::Window::new("Confirm Delete")
+            .collapsible(false)
+            .resizable(false)
+            .open(&mut open)
+            .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+            .show(ui.ctx(), |ui| {
+                ui.label(format!("Delete \"{}\"?", name));
+                let child_count = scene.get_children(entity).len();
+                if child_count > 0 {
+                    ui.label(format!(
+                        "This will also delete {} child entit{}.",
+                        child_count,
+                        if child_count == 1 { "y" } else { "ies" }
+                    ));
+                }
+                ui.add_space(8.0);
+                ui.horizontal(|ui| {
+                    if ui.button("Delete").clicked() {
+                        undo_system.record(scene, "Delete entity");
+                        selection.remove(entity);
+                        let _ = scene.destroy_entity(entity);
+                        *scene_dirty = true;
+                        DELETE_ENTITY_CONFIRM.with(|d| *d.borrow_mut() = None);
+                    }
+                    if ui.button("Cancel").clicked() {
+                        DELETE_ENTITY_CONFIRM.with(|d| *d.borrow_mut() = None);
+                    }
+                });
+            });
+        if !open {
+            DELETE_ENTITY_CONFIRM.with(|d| *d.borrow_mut() = None);
+        }
+    }
+
+    // --- Process inline rename commit ---
+    let rename_commit = HIERARCHY_RENAME.with(|s| {
+        let state = s.borrow();
+        if let Some((uuid, ref text, _)) = *state {
+            // Check if Enter was pressed to commit (handled in render_inline_rename)
+            // The commit is signalled via deferred_action already set above.
+            let _ = (uuid, text);
+        }
+        None::<()>
+    });
+    let _ = rename_commit;
+
     external_action
 }
 
@@ -207,20 +300,41 @@ fn draw_entity_node(
     let has_parent = scene.get_parent(entity).is_some();
     let selected = selection.contains(entity);
 
+    let entity_uuid = scene
+        .get_component::<IdComponent>(entity)
+        .map(|id| id.id.raw())
+        .unwrap_or(0);
+    let is_renaming = HIERARCHY_RENAME.with(|s| {
+        s.borrow()
+            .as_ref()
+            .is_some_and(|(uuid, _, _)| *uuid == entity_uuid)
+    });
+
     if children.is_empty() {
-        // Leaf node — simple selectable label.
-        let response = ui.selectable_label(selected, tag);
-        if response.clicked() {
-            let ctrl = ui.input(|i| i.modifiers.ctrl || i.modifiers.command);
-            if ctrl {
-                selection.toggle(entity);
-            } else {
-                selection.set(entity);
+        // Leaf node — selectable label or inline rename text field.
+        let response = if is_renaming {
+            render_inline_rename(ui, entity_uuid, deferred_action)
+        } else {
+            let r = ui.selectable_label(selected, tag);
+            if r.clicked() {
+                let ctrl = ui.input(|i| i.modifiers.ctrl || i.modifiers.command);
+                if ctrl {
+                    selection.toggle(entity);
+                } else {
+                    selection.set(entity);
+                }
             }
-        }
+            // F2 to rename selected entity.
+            if selected && ui.input(|i| i.key_pressed(egui::Key::F2)) {
+                start_rename(entity_uuid, tag);
+            }
+            r
+        };
         entity_context_menu(
             &response,
             entity,
+            entity_uuid,
+            tag,
             deferred_action,
             external_action,
             scene_dirty,
@@ -235,18 +349,28 @@ fn draw_entity_node(
             egui::collapsing_header::CollapsingState::load_with_default_open(ui.ctx(), id, true);
         let (_collapse_resp, header_ir, _body_ir) = header
             .show_header(ui, |ui| {
-                let r = ui.selectable_label(selected, tag);
-                if r.clicked() {
-                    let ctrl = ui.input(|i| i.modifiers.ctrl || i.modifiers.command);
-                    if ctrl {
-                        selection.toggle(entity);
-                    } else {
-                        selection.set(entity);
+                let r = if is_renaming {
+                    render_inline_rename(ui, entity_uuid, deferred_action)
+                } else {
+                    let r = ui.selectable_label(selected, tag);
+                    if r.clicked() {
+                        let ctrl = ui.input(|i| i.modifiers.ctrl || i.modifiers.command);
+                        if ctrl {
+                            selection.toggle(entity);
+                        } else {
+                            selection.set(entity);
+                        }
                     }
-                }
+                    if selected && ui.input(|i| i.key_pressed(egui::Key::F2)) {
+                        start_rename(entity_uuid, tag);
+                    }
+                    r
+                };
                 entity_context_menu(
                     &r,
                     entity,
+                    entity_uuid,
+                    tag,
                     deferred_action,
                     external_action,
                     scene_dirty,
@@ -463,9 +587,12 @@ fn compute_reorder_action(
 // Context menu
 // ---------------------------------------------------------------------------
 
+#[allow(clippy::too_many_arguments)]
 fn entity_context_menu(
     response: &egui::Response,
     entity: Entity,
+    entity_uuid: u64,
+    tag: &str,
     deferred_action: &mut Option<DeferredHierarchyAction>,
     external_action: &mut Option<HierarchyExternalAction>,
     scene_dirty: &mut bool,
@@ -484,6 +611,11 @@ fn entity_context_menu(
             ui.close();
         }
 
+        if ui.button("Rename").clicked() {
+            start_rename(entity_uuid, tag);
+            ui.close();
+        }
+
         ui.separator();
 
         if ui.button("Save as Prefab...").clicked() {
@@ -499,6 +631,59 @@ fn entity_context_menu(
             ui.close();
         }
     });
+}
+
+// ---------------------------------------------------------------------------
+// Inline rename helpers
+// ---------------------------------------------------------------------------
+
+fn start_rename(entity_uuid: u64, current_name: &str) {
+    HIERARCHY_RENAME.with(|s| {
+        *s.borrow_mut() = Some((entity_uuid, current_name.to_string(), true));
+    });
+}
+
+/// Renders an inline text field for rename. Returns an [`egui::Response`] that
+/// can be used for context menus and drag/drop (same as a normal label would).
+fn render_inline_rename(
+    ui: &mut egui::Ui,
+    entity_uuid: u64,
+    deferred_action: &mut Option<DeferredHierarchyAction>,
+) -> egui::Response {
+    HIERARCHY_RENAME.with(|state| {
+        let mut s = state.borrow_mut();
+        let Some((ref uuid, ref mut edit_text, ref mut first_frame)) = *s else {
+            // Should not happen — caller checks is_renaming.
+            return ui.label("");
+        };
+        debug_assert_eq!(*uuid, entity_uuid);
+
+        let te = egui::TextEdit::singleline(edit_text)
+            .desired_width(ui.available_width().min(160.0));
+        let response = ui.add(te);
+
+        if *first_frame {
+            response.request_focus();
+            *first_frame = false;
+        }
+
+        if response.lost_focus() {
+            let enter_pressed = ui.input(|i| i.key_pressed(egui::Key::Enter));
+            if enter_pressed && !edit_text.is_empty() {
+                *deferred_action = Some(DeferredHierarchyAction::RenameEntity {
+                    entity_uuid,
+                    new_name: edit_text.clone(),
+                });
+            } else {
+                // Cancel on Escape or click-away.
+                drop(s);
+                state.borrow_mut().take();
+            }
+            return response;
+        }
+
+        response
+    })
 }
 
 // ---------------------------------------------------------------------------

@@ -806,6 +806,54 @@ impl Default for CapsuleCollider3DComponent {
 // Audio Source Component
 // ---------------------------------------------------------------------------
 
+/// Sound category for volume mixing. Each category has an independent volume
+/// multiplier, applied on top of the per-entity volume and master volume.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Default, Debug)]
+pub enum AudioCategory {
+    #[default]
+    SFX = 0,
+    Music = 1,
+    Ambient = 2,
+    Voice = 3,
+}
+
+impl AudioCategory {
+    /// Number of distinct categories (used for fixed-size arrays).
+    pub const COUNT: usize = 4;
+
+    /// Convert from array index.
+    pub fn from_index(i: usize) -> Option<Self> {
+        match i {
+            0 => Some(Self::SFX),
+            1 => Some(Self::Music),
+            2 => Some(Self::Ambient),
+            3 => Some(Self::Voice),
+            _ => None,
+        }
+    }
+
+    /// Display name for UI.
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::SFX => "SFX",
+            Self::Music => "Music",
+            Self::Ambient => "Ambient",
+            Self::Voice => "Voice",
+        }
+    }
+
+    /// Parse from string (case-insensitive). Used by Lua bindings.
+    pub fn from_str_loose(s: &str) -> Option<Self> {
+        match s.to_ascii_lowercase().as_str() {
+            "sfx" => Some(Self::SFX),
+            "music" => Some(Self::Music),
+            "ambient" => Some(Self::Ambient),
+            "voice" => Some(Self::Voice),
+            _ => None,
+        }
+    }
+}
+
 /// Audio source attached to an entity for sound playback.
 ///
 /// The `audio_handle` references an audio asset (wav/ogg/mp3/flac) in the
@@ -834,6 +882,8 @@ pub struct AudioSourceComponent {
     pub min_distance: f32,
     /// Distance above which spatial volume is zero (default 50.0).
     pub max_distance: f32,
+    /// Sound category for volume mixing (SFX, Music, Ambient, Voice).
+    pub category: AudioCategory,
     /// Runtime-only: resolved file path from asset manager. Not serialized.
     pub(crate) resolved_path: Option<String>,
 }
@@ -850,6 +900,7 @@ impl Default for AudioSourceComponent {
             spatial: false,
             min_distance: 1.0,
             max_distance: 50.0,
+            category: AudioCategory::default(),
             resolved_path: None,
         }
     }

@@ -1,6 +1,6 @@
 use super::{
-    AudioListenerComponent, AudioSourceComponent, CameraComponent, Entity, IdComponent, Scene,
-    TagComponent, TransformComponent,
+    AudioCategory, AudioListenerComponent, AudioSourceComponent, CameraComponent, Entity,
+    IdComponent, Scene, TagComponent, TransformComponent,
 };
 
 impl Scene {
@@ -18,7 +18,7 @@ impl Scene {
         self.audio_engine = Some(engine);
 
         // Collect entities that should auto-play.
-        let auto_play: Vec<(u64, String, f32, f32, bool, bool)> = self
+        let auto_play: Vec<(u64, String, f32, f32, bool, bool, AudioCategory)> = self
             .world
             .query::<(hecs::Entity, &IdComponent, &AudioSourceComponent)>()
             .iter()
@@ -31,13 +31,17 @@ impl Scene {
                     asc.pitch,
                     asc.looping,
                     asc.streaming,
+                    asc.category,
                 )
             })
             .collect();
 
         if let Some(ref mut engine) = self.audio_engine {
-            for (uuid, path, volume, pitch, looping, streaming) in auto_play {
-                engine.play_sound(uuid, &path, volume, pitch, looping, streaming);
+            for (uuid, path, volume, pitch, looping, streaming, category) in auto_play {
+                let effective = volume
+                    * self.category_volumes[category as usize]
+                    * self.master_volume;
+                engine.play_sound(uuid, &path, effective, pitch, looping, streaming);
             }
         }
     }
@@ -134,9 +138,18 @@ impl Scene {
         refs
     }
 
+    // -----------------------------------------------------------------
+    // Playback control
+    // -----------------------------------------------------------------
+
+    /// Compute effective volume combining entity, category, and master volumes.
+    fn effective_volume(&self, entity_volume: f32, category: AudioCategory) -> f32 {
+        entity_volume * self.category_volumes[category as usize] * self.master_volume
+    }
+
     /// Play audio for an entity (used by Lua scripts).
     pub fn play_entity_sound(&mut self, entity: Entity) {
-        let (uuid, path, volume, pitch, looping, streaming) = {
+        let (uuid, path, effective_vol, pitch, looping, streaming) = {
             let id = match self.get_component::<IdComponent>(entity) {
                 Some(id) => id.id.raw(),
                 None => return,
@@ -149,10 +162,11 @@ impl Scene {
                 Some(p) => p.clone(),
                 None => return,
             };
-            (id, path, asc.volume, asc.pitch, asc.looping, asc.streaming)
+            let vol = self.effective_volume(asc.volume, asc.category);
+            (id, path, vol, asc.pitch, asc.looping, asc.streaming)
         };
         if let Some(ref mut engine) = self.audio_engine {
-            engine.play_sound(uuid, &path, volume, pitch, looping, streaming);
+            engine.play_sound(uuid, &path, effective_vol, pitch, looping, streaming);
         }
     }
 
@@ -214,6 +228,161 @@ impl Scene {
         }
     }
 
+    // -----------------------------------------------------------------
+    // Fade in/out
+    // -----------------------------------------------------------------
+
+    /// Fade in an entity's audio from silence.
+    /// If the entity has paused sounds, resumes them with a fade.
+    /// If no sounds are active, plays the entity's audio with a fade from silence.
+    pub fn fade_in_entity_sound(&mut self, entity: Entity, duration_secs: f32) {
+        let (uuid, effective_vol, maybe_play) = {
+            let id = match self.get_component::<IdComponent>(entity) {
+                Some(id) => id.id.raw(),
+                None => return,
+            };
+            let asc = match self.get_component::<AudioSourceComponent>(entity) {
+                Some(a) => a,
+                None => return,
+            };
+            let vol = self.effective_volume(asc.volume, asc.category);
+            let play_info = asc.resolved_path.as_ref().map(|p| {
+                (p.clone(), asc.pitch, asc.looping, asc.streaming)
+            });
+            (id, vol, play_info)
+        };
+
+        let target_db = super::audio::linear_to_db(effective_vol);
+
+        if let Some(ref mut engine) = self.audio_engine {
+            // Try to fade in existing sounds first.
+            let handled = engine.fade_in(uuid, target_db, duration_secs);
+
+            // If no active sounds exist, play with fade from silence.
+            if !handled {
+                if let Some((path, pitch, looping, streaming)) = maybe_play {
+                    engine.play_sound_fade(
+                        uuid,
+                        &path,
+                        effective_vol,
+                        pitch,
+                        looping,
+                        streaming,
+                        duration_secs,
+                    );
+                }
+            }
+        }
+    }
+
+    /// Fade out and stop an entity's audio.
+    pub fn fade_out_entity_sound(&mut self, entity: Entity, duration_secs: f32) {
+        let uuid = match self.get_component::<IdComponent>(entity) {
+            Some(id) => id.id.raw(),
+            None => return,
+        };
+        if let Some(ref mut engine) = self.audio_engine {
+            engine.fade_out_stop(uuid, duration_secs);
+        }
+    }
+
+    /// Fade an entity's volume to a target level over time.
+    /// `target_volume` is linear (0.0–1.0).
+    pub fn fade_to_entity_volume(
+        &mut self,
+        entity: Entity,
+        target_volume: f32,
+        duration_secs: f32,
+    ) {
+        let uuid = match self.get_component::<IdComponent>(entity) {
+            Some(id) => id.id.raw(),
+            None => return,
+        };
+        let target_db = super::audio::linear_to_db(target_volume);
+        if let Some(ref mut engine) = self.audio_engine {
+            engine.fade_to(uuid, target_db, duration_secs);
+        }
+    }
+
+    // -----------------------------------------------------------------
+    // Master / category volume
+    // -----------------------------------------------------------------
+
+    /// Set the global master volume (0.0–1.0).
+    pub fn set_master_volume(&mut self, volume: f32) {
+        self.master_volume = volume.clamp(0.0, 1.0);
+    }
+
+    /// Get the global master volume.
+    pub fn get_master_volume(&self) -> f32 {
+        self.master_volume
+    }
+
+    /// Set volume for a sound category (0.0–1.0).
+    pub fn set_category_volume(&mut self, category: AudioCategory, volume: f32) {
+        self.category_volumes[category as usize] = volume.clamp(0.0, 1.0);
+    }
+
+    /// Get volume for a sound category.
+    pub fn get_category_volume(&self, category: AudioCategory) -> f32 {
+        self.category_volumes[category as usize]
+    }
+
+    // -----------------------------------------------------------------
+    // Sound completion detection
+    // -----------------------------------------------------------------
+
+    /// Drain entities whose sounds have finished naturally and dispatch
+    /// `on_sound_finished()` Lua callbacks.
+    #[cfg(feature = "lua-scripting")]
+    pub(super) fn dispatch_sound_finished_events(&mut self) {
+        use super::script_glue::SceneScriptContext;
+
+        let completed: Vec<u64> = match self.audio_engine.as_mut() {
+            Some(engine) => engine.drain_completed(),
+            None => return,
+        };
+
+        if completed.is_empty() {
+            return;
+        }
+
+        let mut engine = match self.script_engine.take() {
+            Some(e) => e,
+            None => return,
+        };
+
+        let scene_ptr: *mut Scene = self;
+
+        let ctx = SceneScriptContext {
+            scene: scene_ptr,
+            input: std::ptr::null(),
+        };
+        engine.lua().set_app_data(ctx);
+
+        for uuid in &completed {
+            engine.call_entity_on_sound_finished(*uuid);
+        }
+
+        engine.lua().remove_app_data::<SceneScriptContext>();
+
+        unsafe {
+            (*scene_ptr).script_engine = Some(engine);
+        }
+    }
+
+    /// Drain completed sounds without Lua dispatch (when lua-scripting is disabled).
+    #[cfg(not(feature = "lua-scripting"))]
+    pub(super) fn dispatch_sound_finished_events(&mut self) {
+        if let Some(ref mut engine) = self.audio_engine {
+            engine.drain_completed();
+        }
+    }
+
+    // -----------------------------------------------------------------
+    // Spatial audio
+    // -----------------------------------------------------------------
+
     /// Update spatial audio: compute panning and distance attenuation for
     /// all spatial audio sources based on the listener position.
     ///
@@ -223,6 +392,9 @@ impl Scene {
         if self.audio_engine.is_none() {
             return;
         }
+
+        // Also drain completed sounds (fires on_sound_finished callbacks).
+        self.dispatch_sound_finished_events();
 
         // Prefer explicit AudioListenerComponent, fall back to primary camera.
         let active_listeners: Vec<glam::Vec2> = self
@@ -252,6 +424,10 @@ impl Scene {
             })
             .unwrap_or(glam::Vec2::ZERO);
 
+        // Read master + category volumes for effective volume computation.
+        let master = self.master_volume;
+        let cat_vols = self.category_volumes;
+
         // Collect spatial updates (uuid, panning, effective_volume).
         let updates: Vec<(u64, f32, f32)> = self
             .world
@@ -274,12 +450,10 @@ impl Scene {
                     let t = (dist - asc.min_distance) / (asc.max_distance - asc.min_distance);
                     -60.0 * t
                 };
-                // Convert component volume (linear amplitude) to dB, then combine.
-                let volume_db = if asc.volume <= 0.0 {
-                    -60.0
-                } else {
-                    20.0 * asc.volume.log10()
-                };
+                // Combine entity volume × category × master, then convert to dB.
+                let effective_linear =
+                    asc.volume * cat_vols[asc.category as usize] * master;
+                let volume_db = super::audio::linear_to_db(effective_linear);
                 let effective_volume = volume_db + atten_db;
                 (id.id.raw(), panning, effective_volume)
             })

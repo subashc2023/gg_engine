@@ -23,14 +23,18 @@ static LOG_BUFFER: OnceLock<Mutex<VecDeque<LogEntry>>> = OnceLock::new();
 /// Read captured log entries. The closure receives a slice of all buffered entries.
 pub fn with_log_buffer<R>(f: impl FnOnce(&VecDeque<LogEntry>) -> R) -> R {
     let buf = LOG_BUFFER.get_or_init(|| Mutex::new(VecDeque::new()));
-    let guard = buf.lock().unwrap();
-    f(&guard)
+    match buf.lock() {
+        Ok(guard) => f(&guard),
+        Err(poisoned) => f(&poisoned.into_inner()),
+    }
 }
 
 /// Clear all captured log entries.
 pub fn clear_log_buffer() {
     if let Some(buf) = LOG_BUFFER.get() {
-        buf.lock().unwrap().clear();
+        if let Ok(mut guard) = buf.lock() {
+            guard.clear();
+        }
     }
 }
 

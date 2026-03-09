@@ -301,6 +301,11 @@ impl ScriptEngine {
         self.call_entity_function(uuid, "on_destroy", ())
     }
 
+    /// Call `on_sound_finished()` in an entity's environment.
+    pub fn call_entity_on_sound_finished(&mut self, uuid: u64) -> bool {
+        self.call_entity_function(uuid, "on_sound_finished", ())
+    }
+
     /// Call a collision callback (e.g. `on_collision_enter` / `on_collision_exit`)
     /// in an entity's environment, passing the other entity's UUID.
     pub fn call_entity_collision(

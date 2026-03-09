@@ -54,15 +54,16 @@ pub use renderer::{
 pub use scene::{Aabb2D, CullingStats, SpatialGrid};
 pub use scene::{
     AmbientLightComponent, AnimationClip, AnimationControllerComponent, AnimationTransition,
-    AudioListenerComponent, AudioSourceComponent, BoxCollider2DComponent, BoxCollider3DComponent,
-    CameraComponent, CapsuleCollider3DComponent, CircleCollider2DComponent,
-    CircleRendererComponent, DirectionalLightComponent, Entity, FloatOrdering, IdComponent,
-    InstancedSpriteAnimator, MeshPrimitive, MeshRendererComponent, MeshSource, NativeScript,
-    NativeScriptComponent, ParticleEmitterComponent, PointLightComponent, RelationshipComponent,
-    RigidBody2DComponent, RigidBody2DType, RigidBody3DComponent, RigidBody3DType, Scene,
-    SceneSerializer, SphereCollider3DComponent, SpriteAnimatorComponent, SpriteRendererComponent,
-    TagComponent, TextComponent, TilemapComponent, TransformComponent, TransitionCondition,
-    TILE_FLIP_H, TILE_FLIP_V, TILE_ID_MASK,
+    AudioCategory, AudioListenerComponent, AudioSourceComponent, BoxCollider2DComponent,
+    BoxCollider3DComponent, CameraComponent, CapsuleCollider3DComponent,
+    CircleCollider2DComponent, CircleRendererComponent, DirectionalLightComponent, Entity,
+    FloatOrdering, IdComponent, InstancedSpriteAnimator, MeshPrimitive, MeshRendererComponent,
+    MeshSource, NativeScript, NativeScriptComponent, ParticleEmitterComponent,
+    PointLightComponent, RelationshipComponent, RigidBody2DComponent, RigidBody2DType,
+    RigidBody3DComponent, RigidBody3DType, Scene, SceneSerializer, SphereCollider3DComponent,
+    SpriteAnimatorComponent, SpriteRendererComponent, TagComponent, TextComponent,
+    TilemapComponent, TransformComponent, TransitionCondition, TILE_FLIP_H, TILE_FLIP_V,
+    TILE_ID_MASK,
 };
 #[cfg(feature = "lua-scripting")]
 pub use scene::{LuaScriptComponent, ScriptEngine, ScriptFieldValue};
@@ -102,7 +103,7 @@ pub mod prelude {
     pub use crate::scene::{Aabb2D, SpatialGrid};
     pub use crate::scene::{
         AmbientLightComponent, AnimationClip, AnimationControllerComponent, AnimationTransition,
-        AudioListenerComponent, AudioSourceComponent, BoxCollider2DComponent,
+        AudioCategory, AudioListenerComponent, AudioSourceComponent, BoxCollider2DComponent,
         BoxCollider3DComponent, CameraComponent, CapsuleCollider3DComponent,
         CircleCollider2DComponent, CircleRendererComponent, DirectionalLightComponent, Entity,
         FloatOrdering, IdComponent, InstancedSpriteAnimator, MeshPrimitive, MeshRendererComponent,
