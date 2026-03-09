@@ -8,6 +8,18 @@ use super::{
 use crate::renderer::shadow_map::compute_directional_light_vp;
 use crate::renderer::{Font, LightEnvironment, Mesh, Renderer, SubTexture2D};
 
+/// Sort key for 2D renderable ordering. Sorted by layer, then sub-order,
+/// then Z depth. `kind` discriminates the renderable type for batch flushing.
+#[derive(Clone, Copy)]
+struct RenderSortKey {
+    sorting_layer: i32,
+    order_in_layer: i32,
+    z: f32,
+    /// 0 = Sprite, 1 = Circle, 2 = Text, 3 = Tilemap
+    kind: u8,
+    entity: hecs::Entity,
+}
+
 impl Scene {
     // -----------------------------------------------------------------
     // Animation
@@ -690,7 +702,11 @@ impl Scene {
         let _timer = crate::profiling::ProfileTimer::new("Scene::render_scene");
 
         // Write scene time to the camera UBO for GPU-computed animation.
-        renderer.set_scene_time(self.global_time as f32);
+        // Both u_time and per-instance start_time are rebased by the same
+        // epoch (largest whole hour ≤ global_time) before f64→f32 cast,
+        // preserving sub-ms precision even after many hours of runtime.
+        let gpu_time_epoch = (self.global_time / 3600.0).floor() * 3600.0;
+        renderer.set_scene_time((self.global_time - gpu_time_epoch) as f32);
 
         // Pre-compute world transforms for all entities once.
         let wt_cache = {
@@ -719,8 +735,11 @@ impl Scene {
             .collect();
         total_cullable += sprites.len() as u32;
 
-        let sprite_renderables: Vec<(i32, i32, f32, u8, hecs::Entity)> = {
+        let sprite_renderables: Vec<RenderSortKey> = {
             use crate::jobs::parallel::PAR_THRESHOLD;
+            let make_key = |handle: hecs::Entity, sorting_layer: i32, order_in_layer: i32, wt: &glam::Mat4| {
+                RenderSortKey { sorting_layer, order_in_layer, z: wt.w_axis.z, kind: 0, entity: handle }
+            };
             if sprites.len() >= PAR_THRESHOLD {
                 use rayon::prelude::*;
                 crate::jobs::pool().install(|| {
@@ -732,7 +751,7 @@ impl Scene {
                             if !frustum.contains_aabb(&aabb) {
                                 return None;
                             }
-                            Some((sorting_layer, order_in_layer, wt.w_axis.z, 0u8, handle))
+                            Some(make_key(handle, sorting_layer, order_in_layer, wt))
                         })
                         .collect()
                 })
@@ -745,7 +764,7 @@ impl Scene {
                         if !frustum.contains_aabb(&aabb) {
                             return None;
                         }
-                        Some((sorting_layer, order_in_layer, wt.w_axis.z, 0u8, handle))
+                        Some(make_key(handle, sorting_layer, order_in_layer, wt))
                     })
                     .collect()
             }
@@ -753,7 +772,7 @@ impl Scene {
         culled += sprites.len() as u32 - sprite_renderables.len() as u32;
 
         // --- Circles (usually few, keep sequential) ---
-        let mut circle_renderables: Vec<(i32, i32, f32, u8, hecs::Entity)> = Vec::new();
+        let mut circle_renderables: Vec<RenderSortKey> = Vec::new();
         for (handle, circle) in self
             .world
             .query::<(hecs::Entity, &CircleRendererComponent)>()
@@ -768,13 +787,13 @@ impl Scene {
                 culled += 1;
                 continue;
             }
-            circle_renderables.push((
-                circle.sorting_layer,
-                circle.order_in_layer,
-                wt.w_axis.z,
-                1,
-                handle,
-            ));
+            circle_renderables.push(RenderSortKey {
+                sorting_layer: circle.sorting_layer,
+                order_in_layer: circle.order_in_layer,
+                z: wt.w_axis.z,
+                kind: 1,
+                entity: handle,
+            });
         }
 
         self.culling_stats.set(super::CullingStats {
@@ -789,7 +808,13 @@ impl Scene {
 
         for (handle, text) in self.world.query::<(hecs::Entity, &TextComponent)>().iter() {
             let z = wt_cache.get(&handle).map(|m| m.w_axis.z).unwrap_or(0.0);
-            renderables.push((text.sorting_layer, text.order_in_layer, z, 2, handle));
+            renderables.push(RenderSortKey {
+                sorting_layer: text.sorting_layer,
+                order_in_layer: text.order_in_layer,
+                z,
+                kind: 2,
+                entity: handle,
+            });
         }
 
         for (handle, tilemap) in self
@@ -798,15 +823,21 @@ impl Scene {
             .iter()
         {
             let z = wt_cache.get(&handle).map(|m| m.w_axis.z).unwrap_or(0.0);
-            renderables.push((tilemap.sorting_layer, tilemap.order_in_layer, z, 3, handle));
+            renderables.push(RenderSortKey {
+                sorting_layer: tilemap.sorting_layer,
+                order_in_layer: tilemap.order_in_layer,
+                z,
+                kind: 3,
+                entity: handle,
+            });
         }
 
         // --- Parallel sort ---
-        let sort_cmp = |a: &(i32, i32, f32, u8, hecs::Entity),
-                        b: &(i32, i32, f32, u8, hecs::Entity)| {
-            a.0.cmp(&b.0)
-                .then(a.1.cmp(&b.1))
-                .then(a.2.partial_cmp(&b.2).unwrap_or(std::cmp::Ordering::Equal))
+        let sort_cmp = |a: &RenderSortKey, b: &RenderSortKey| {
+            a.sorting_layer
+                .cmp(&b.sorting_layer)
+                .then(a.order_in_layer.cmp(&b.order_in_layer))
+                .then(a.z.partial_cmp(&b.z).unwrap_or(std::cmp::Ordering::Equal))
         };
         if renderables.len() >= crate::jobs::parallel::PAR_THRESHOLD {
             use rayon::prelude::*;
@@ -819,7 +850,7 @@ impl Scene {
         // Flush all pending batches when the renderable type changes so that
         // cross-type draw ordering (e.g. text behind a sprite) is respected.
         let mut prev_kind: u8 = u8::MAX;
-        for &(_, _, _, kind, handle) in &renderables {
+        for &RenderSortKey { kind, entity: handle, .. } in &renderables {
             if kind != prev_kind {
                 renderer.flush_all_batches();
                 prev_kind = kind;
@@ -850,7 +881,7 @@ impl Scene {
                             let th = texture.height() as f32;
                             Some((
                                 tex_idx,
-                                anim.start_time as f32,
+                                (anim.start_time - gpu_time_epoch) as f32,
                                 anim.effective_fps() as f32,
                                 anim.start_frame as f32,
                                 anim.frame_count as f32,

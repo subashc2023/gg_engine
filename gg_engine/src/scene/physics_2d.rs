@@ -206,6 +206,54 @@ impl PhysicsWorld2D {
         }
         None
     }
+
+    /// Cast a ray and return **all** hits up to `max_toi`, sorted by distance.
+    ///
+    /// Each hit is `(entity_uuid, hit_x, hit_y, normal_x, normal_y, toi)`.
+    pub(crate) fn raycast_all(
+        &self,
+        origin: na::Point2<f32>,
+        direction: na::Vector2<f32>,
+        max_toi: f32,
+        exclude_uuid: Option<u64>,
+    ) -> Vec<(u64, f32, f32, f32, f32, f32)> {
+        let ray = rapier2d::geometry::Ray::new(origin, direction);
+        let predicate = |handle: ColliderHandle, _collider: &Collider| {
+            if let Some(exclude) = exclude_uuid {
+                if let Some(&uuid) = self.collider_to_uuid.get(&handle) {
+                    return uuid != exclude;
+                }
+            }
+            true
+        };
+        let filter = QueryFilter::default().predicate(&predicate);
+
+        let mut hits = Vec::new();
+        self.query_pipeline.intersections_with_ray(
+            &self.bodies,
+            &self.colliders,
+            &ray,
+            max_toi,
+            true,
+            filter,
+            |collider_handle, intersection| {
+                if let Some(&uuid) = self.collider_to_uuid.get(&collider_handle) {
+                    let hit_point = ray.point_at(intersection.time_of_impact);
+                    hits.push((
+                        uuid,
+                        hit_point.x,
+                        hit_point.y,
+                        intersection.normal.x,
+                        intersection.normal.y,
+                        intersection.time_of_impact,
+                    ));
+                }
+                true // continue iterating
+            },
+        );
+        hits.sort_by(|a, b| a.5.partial_cmp(&b.5).unwrap_or(std::cmp::Ordering::Equal));
+        hits
+    }
 }
 
 // ---------------------------------------------------------------------------

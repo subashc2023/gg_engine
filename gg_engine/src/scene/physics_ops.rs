@@ -278,6 +278,35 @@ impl Scene {
         }
     }
 
+    /// Apply a torque impulse (angular impulse) to the entity's 2D rigid body.
+    ///
+    /// Positive values rotate counter-clockwise.
+    pub fn apply_torque_impulse(&mut self, entity: Entity, torque: f32) {
+        let body_handle = self
+            .get_component::<RigidBody2DComponent>(entity)
+            .and_then(|rb| rb.runtime_body);
+        if let (Some(handle), Some(ref mut physics)) = (body_handle, &mut self.physics_world) {
+            if let Some(body) = physics.bodies.get_mut(handle) {
+                body.apply_torque_impulse(torque, true);
+            }
+        }
+    }
+
+    /// Apply a continuous torque to the entity's 2D rigid body.
+    ///
+    /// Unlike torque impulses, torques are accumulated and applied during the
+    /// next physics step. Call every frame for sustained angular acceleration.
+    pub fn apply_torque(&mut self, entity: Entity, torque: f32) {
+        let body_handle = self
+            .get_component::<RigidBody2DComponent>(entity)
+            .and_then(|rb| rb.runtime_body);
+        if let (Some(handle), Some(ref mut physics)) = (body_handle, &mut self.physics_world) {
+            if let Some(body) = physics.bodies.get_mut(handle) {
+                body.add_torque(torque, true);
+            }
+        }
+    }
+
     /// Apply a continuous force to the entity's rigid body.
     ///
     /// Unlike impulses, forces are accumulated and applied during the next
@@ -365,6 +394,33 @@ impl Scene {
         }
     }
 
+    /// Set the gravity scale for a specific entity's rigid body at runtime.
+    ///
+    /// `1.0` = normal gravity, `0.0` = no gravity, negative = inverted.
+    pub fn set_gravity_scale(&mut self, entity: Entity, scale: f32) {
+        let body_handle = self
+            .get_component::<RigidBody2DComponent>(entity)
+            .and_then(|rb| rb.runtime_body);
+        if let (Some(handle), Some(ref mut physics)) = (body_handle, &mut self.physics_world) {
+            if let Some(body) = physics.bodies.get_mut(handle) {
+                body.set_gravity_scale(scale, true);
+            }
+        }
+    }
+
+    /// Get the gravity scale for a specific entity's rigid body.
+    pub fn get_gravity_scale(&self, entity: Entity) -> Option<f32> {
+        let body_handle = self
+            .get_component::<RigidBody2DComponent>(entity)
+            .and_then(|rb| rb.runtime_body);
+        if let (Some(handle), Some(ref physics)) = (body_handle, &self.physics_world) {
+            if let Some(body) = physics.bodies.get(handle) {
+                return Some(body.gravity_scale());
+            }
+        }
+        None
+    }
+
     /// Set the global gravity vector for the physics world.
     pub fn set_gravity(&mut self, x: f32, y: f32) {
         if let Some(ref mut physics) = self.physics_world {
@@ -403,6 +459,32 @@ impl Scene {
             )
         } else {
             None
+        }
+    }
+
+    /// Cast a ray and return **all** hits sorted by distance.
+    ///
+    /// Each hit is `(entity_uuid, hit_x, hit_y, normal_x, normal_y, toi)`.
+    /// `exclude_entity` optionally filters out a specific entity.
+    pub fn raycast_all(
+        &self,
+        origin: glam::Vec2,
+        direction: glam::Vec2,
+        max_toi: f32,
+        exclude_entity: Option<Entity>,
+    ) -> Vec<(u64, f32, f32, f32, f32, f32)> {
+        use rapier2d::na;
+        let exclude_uuid =
+            exclude_entity.and_then(|e| self.get_component::<IdComponent>(e).map(|id| id.id.raw()));
+        if let Some(ref physics) = self.physics_world {
+            physics.raycast_all(
+                na::Point2::new(origin.x, origin.y),
+                na::Vector2::new(direction.x, direction.y),
+                max_toi,
+                exclude_uuid,
+            )
+        } else {
+            Vec::new()
         }
     }
 }

@@ -301,7 +301,7 @@ fn default_one_f32() -> f32 {
 }
 
 fn is_one_vec2(v: &[f32; 2]) -> bool {
-    v[0] == 1.0 && v[1] == 1.0
+    (v[0] - 1.0).abs() < f32::EPSILON && (v[1] - 1.0).abs() < f32::EPSILON
 }
 
 fn default_one_vec2() -> [f32; 2] {
@@ -640,7 +640,7 @@ fn is_false(v: &bool) -> bool {
 }
 
 fn is_zero_f32(v: &f32) -> bool {
-    *v == 0.0
+    v.abs() < f32::EPSILON
 }
 
 fn is_one_f32(v: &f32) -> bool {
@@ -660,7 +660,7 @@ fn default_zero_vec2() -> [f32; 2] {
 }
 
 fn is_zero_vec2(v: &[f32; 2]) -> bool {
-    v[0] == 0.0 && v[1] == 0.0
+    v[0].abs() < f32::EPSILON && v[1].abs() < f32::EPSILON
 }
 
 #[derive(Serialize, Deserialize)]

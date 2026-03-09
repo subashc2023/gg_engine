@@ -153,7 +153,7 @@ impl OrthographicCameraController {
 
     /// Convert screen-space pixel coordinates to world-space coordinates.
     ///
-    /// Accounts for camera position and zoom but **not** camera rotation.
+    /// Accounts for camera position, zoom, and rotation.
     pub fn screen_to_world(
         &self,
         screen_x: f64,
@@ -162,8 +162,13 @@ impl OrthographicCameraController {
         window_height: u32,
     ) -> glam::Vec2 {
         let (bw, bh) = self.bounds_size();
-        let x = (screen_x as f32 / window_width as f32 - 0.5) * bw + self.camera_position.x;
-        let y = (0.5 - screen_y as f32 / window_height as f32) * bh + self.camera_position.y;
+        // Position in camera-local space (centered on camera).
+        let local_x = (screen_x as f32 / window_width as f32 - 0.5) * bw;
+        let local_y = (0.5 - screen_y as f32 / window_height as f32) * bh;
+        // Rotate by camera rotation to get world-space offset.
+        let (sin, cos) = self.camera_rotation.sin_cos();
+        let x = cos * local_x - sin * local_y + self.camera_position.x;
+        let y = sin * local_x + cos * local_y + self.camera_position.y;
         glam::Vec2::new(x, y)
     }
 

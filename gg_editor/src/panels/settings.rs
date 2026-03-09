@@ -22,6 +22,7 @@ pub(crate) fn settings_ui(
     msaa_samples: &mut MsaaSamples,
     max_msaa_samples: MsaaSamples,
     msaa_changed: &mut bool,
+    show_physics_colliders: &mut bool,
 ) {
     ui.heading("Renderer");
     ui.separator();
@@ -96,6 +97,13 @@ pub(crate) fn settings_ui(
     ui.checkbox(show_grid, "X-Y Grid");
     ui.checkbox(show_xz_grid, "X-Z Grid");
     ui.checkbox(snap_to_grid, "Snap to Grid");
+
+    ui.add_space(8.0);
+    ui.heading("Physics");
+    ui.separator();
+
+    ui.checkbox(show_physics_colliders, "Show Colliders")
+        .on_hover_text("Visualize 2D physics colliders and velocity arrows in the viewport.");
 
     egui::ComboBox::from_label("Grid Size")
         .selected_text(format!("{}", grid_size))

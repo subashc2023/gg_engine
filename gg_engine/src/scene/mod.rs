@@ -80,6 +80,9 @@ pub struct Scene {
     audio_engine: Option<audio::AudioEngine>,
     /// O(1) UUID → hecs::Entity lookup cache, maintained on create/destroy.
     uuid_cache: HashMap<u64, hecs::Entity>,
+    /// O(1) entity-ID → hecs::Entity lookup cache, maintained on create/destroy.
+    /// Used by mouse picking (pixel readback returns raw entity ID).
+    id_cache: HashMap<u32, hecs::Entity>,
     /// Lazy name → UUID cache for `find_entity_by_name`. Built on first call,
     /// invalidated on entity create/destroy. Only stores first match per name.
     name_cache: Option<HashMap<String, u64>>,
@@ -201,6 +204,7 @@ impl Scene {
             script_engine: None,
             audio_engine: None,
             uuid_cache: HashMap::new(),
+            id_cache: HashMap::new(),
             name_cache: None,
             pending_destroy: Vec::new(),
             global_time: 0.0,
@@ -244,6 +248,7 @@ impl Scene {
                 uuid.raw()
             );
         }
+        self.id_cache.insert(handle.id(), handle);
         self.name_cache = None; // invalidate
         self.textures_all_resolved = false; // new entity may need texture resolution
         Entity::new(handle)
@@ -284,11 +289,12 @@ impl Scene {
             }
         }
 
-        // Remove from UUID cache and invalidate name cache.
+        // Remove from caches and invalidate name cache.
         if let Some(u) = uuid {
             self.uuid_cache.remove(&u);
             self.name_cache = None;
         }
+        self.id_cache.remove(&entity.handle().id());
 
         // Despawn self.
         self.world.despawn(entity.handle())?;
@@ -609,14 +615,10 @@ impl Scene {
 
     /// Find an entity by its raw integer ID (e.g. from pixel readback).
     ///
+    /// O(1) lookup via internal cache maintained on entity create/destroy.
     /// Returns `None` if no living entity has the given ID.
     pub fn find_entity_by_id(&self, id: u32) -> Option<Entity> {
-        for handle in self.world.query::<hecs::Entity>().iter() {
-            if handle.id() == id {
-                return Some(Entity::new(handle));
-            }
-        }
-        None
+        self.id_cache.get(&id).copied().map(Entity::new)
     }
 
     /// Find the first entity whose [`TagComponent`] name matches `name`.

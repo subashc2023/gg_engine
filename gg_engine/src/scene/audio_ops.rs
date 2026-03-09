@@ -225,12 +225,22 @@ impl Scene {
         }
 
         // Prefer explicit AudioListenerComponent, fall back to primary camera.
-        let listener_pos = self
+        let active_listeners: Vec<glam::Vec2> = self
             .world
             .query::<(&AudioListenerComponent, &TransformComponent)>()
             .iter()
             .filter(|(al, _)| al.active)
             .map(|(_, tf)| tf.translation.truncate())
+            .collect();
+        if active_listeners.len() > 1 {
+            log::warn!(
+                "Multiple active AudioListenerComponents ({}) — using last found. \
+                 Disable extras to ensure deterministic behavior.",
+                active_listeners.len()
+            );
+        }
+        let listener_pos = active_listeners
+            .into_iter()
             .last()
             .or_else(|| {
                 self.world

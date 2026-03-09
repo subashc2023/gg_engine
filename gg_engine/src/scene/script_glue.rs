@@ -6,7 +6,7 @@
 
 use mlua::prelude::*;
 
-use super::{Entity, Scene};
+use super::{CameraComponent, Entity, Scene, TransformComponent};
 
 /// Lua return type for 3D raycast: `(entity_uuid?, hx, hy, hz, nx, ny, nz, toi)`.
 type LuaRaycastHit3D = (Option<u64>, f32, f32, f32, f32, f32, f32, f32);
@@ -264,6 +264,24 @@ pub fn register_all(lua: &Lua) -> LuaResult<()> {
         lua.create_function(lua_set_angular_velocity)?,
     )?;
     engine.set("raycast", lua.create_function(lua_raycast)?)?;
+    engine.set("raycast_all", lua.create_function(lua_raycast_all)?)?;
+    engine.set(
+        "apply_torque_impulse",
+        lua.create_function(lua_apply_torque_impulse)?,
+    )?;
+    engine.set("apply_torque", lua.create_function(lua_apply_torque)?)?;
+    engine.set(
+        "set_gravity_scale",
+        lua.create_function(lua_set_gravity_scale)?,
+    )?;
+    engine.set(
+        "get_gravity_scale",
+        lua.create_function(lua_get_gravity_scale)?,
+    )?;
+    engine.set(
+        "screen_to_world",
+        lua.create_function(lua_screen_to_world)?,
+    )?;
 
     // 3D Physics
     engine.set(
@@ -1131,6 +1149,106 @@ fn lua_raycast(
         .unwrap_or(zero))
 }
 
+/// `Engine.raycast_all(origin_x, origin_y, dir_x, dir_y, max_distance, exclude_entity_id)`
+///
+/// Returns a Lua table of hits, each `{entity_id, x, y, normal_x, normal_y, distance}`,
+/// sorted by distance. `exclude_entity_id` is optional.
+fn lua_raycast_all(
+    lua: &Lua,
+    (ox, oy, dx, dy, max_dist, exclude_id): (f32, f32, f32, f32, f32, Option<u64>),
+) -> LuaResult<LuaTable> {
+    let ctx = match lua.app_data_mut::<SceneScriptContext>() {
+        Some(ctx) => ctx,
+        None => return lua.create_table(),
+    };
+    let scene = unsafe { ctx.scene() };
+    let exclude_entity = exclude_id.and_then(|uuid| scene.find_entity_by_uuid(uuid));
+    let hits = scene.raycast_all(
+        glam::Vec2::new(ox, oy),
+        glam::Vec2::new(dx, dy),
+        max_dist,
+        exclude_entity,
+    );
+    let result = lua.create_table()?;
+    for (i, (uuid, hx, hy, nx, ny, toi)) in hits.into_iter().enumerate() {
+        let hit = lua.create_table()?;
+        hit.set("entity_id", uuid as i64)?;
+        hit.set("x", hx)?;
+        hit.set("y", hy)?;
+        hit.set("normal_x", nx)?;
+        hit.set("normal_y", ny)?;
+        hit.set("distance", toi)?;
+        result.set(i + 1, hit)?;
+    }
+    Ok(result)
+}
+
+/// `Engine.apply_torque_impulse(entity_id, torque)`
+fn lua_apply_torque_impulse(lua: &Lua, (entity_id, torque): (u64, f32)) -> LuaResult<()> {
+    with_entity_mut(lua, entity_id, (), |scene, entity| {
+        scene.apply_torque_impulse(entity, torque);
+    })
+}
+
+/// `Engine.apply_torque(entity_id, torque)`
+fn lua_apply_torque(lua: &Lua, (entity_id, torque): (u64, f32)) -> LuaResult<()> {
+    with_entity_mut(lua, entity_id, (), |scene, entity| {
+        scene.apply_torque(entity, torque);
+    })
+}
+
+/// `Engine.set_gravity_scale(entity_id, scale)`
+fn lua_set_gravity_scale(lua: &Lua, (entity_id, scale): (u64, f32)) -> LuaResult<()> {
+    with_entity_mut(lua, entity_id, (), |scene, entity| {
+        scene.set_gravity_scale(entity, scale);
+    })
+}
+
+/// `Engine.get_gravity_scale(entity_id)` — returns the current gravity scale, or 1.0.
+fn lua_get_gravity_scale(lua: &Lua, entity_id: u64) -> LuaResult<f32> {
+    with_entity(lua, entity_id, 1.0, |scene, entity| {
+        scene.get_gravity_scale(entity).unwrap_or(1.0)
+    })
+}
+
+/// `Engine.screen_to_world(screen_x, screen_y)` — convert screen pixels to world coords.
+///
+/// Uses the primary camera's position, zoom, and rotation. Returns `(world_x, world_y)`.
+fn lua_screen_to_world(lua: &Lua, (sx, sy): (f64, f64)) -> LuaResult<(f32, f32)> {
+    let ctx = match lua.app_data_mut::<SceneScriptContext>() {
+        Some(ctx) => ctx,
+        None => return Ok((0.0, 0.0)),
+    };
+    let scene = unsafe { ctx.scene() };
+    let vw = scene.viewport_width;
+    let vh = scene.viewport_height;
+    if vw == 0 || vh == 0 {
+        return Ok((0.0, 0.0));
+    }
+    // Find the primary camera's transform + camera component.
+    let result = scene
+        .get_primary_camera_entity()
+        .and_then(|cam_entity| {
+            let cam = scene.get_component::<CameraComponent>(cam_entity)?;
+            let tf = scene.get_component::<TransformComponent>(cam_entity)?;
+            let aspect = vw as f32 / vh as f32;
+            let ortho_size = cam.camera.orthographic_size(); // full height
+            let half_h = ortho_size * 0.5;
+            let half_w = half_h * aspect;
+            // Camera-local space (centered on camera).
+            let local_x = (sx as f32 / vw as f32 - 0.5) * half_w * 2.0;
+            let local_y = (0.5 - sy as f32 / vh as f32) * half_h * 2.0;
+            // Rotate by camera Z rotation.
+            let euler_z = tf.rotation.to_euler(glam::EulerRot::XYZ).2;
+            let (sin, cos) = euler_z.sin_cos();
+            let wx = cos * local_x - sin * local_y + tf.translation.x;
+            let wy = sin * local_x + cos * local_y + tf.translation.y;
+            Some((wx, wy))
+        })
+        .unwrap_or((0.0, 0.0));
+    Ok(result)
+}
+
 // ---------------------------------------------------------------------------
 // 3D Physics bindings
 // ---------------------------------------------------------------------------
@@ -1452,7 +1570,7 @@ fn lua_find_entities_with_component(lua: &Lua, name: String) -> LuaResult<LuaTab
     }
 
     for (i, uuid) in results.iter().enumerate() {
-        table.set(i + 1, *uuid as f64)?;
+        table.set(i + 1, *uuid as i64)?;
     }
     Ok(table)
 }

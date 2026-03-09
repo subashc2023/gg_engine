@@ -19,7 +19,7 @@ pub(crate) struct UndoEntry {
 ///    (drag values, text input) are both covered without per-widget undo calls.
 pub(crate) struct UndoSystem {
     undo_stack: VecDeque<UndoEntry>,
-    redo_stack: Vec<UndoEntry>,
+    redo_stack: VecDeque<UndoEntry>,
     max_entries: usize,
     /// Pending "before" entry for gesture coalescing.
     pending_entry: Option<UndoEntry>,
@@ -33,7 +33,7 @@ impl UndoSystem {
     pub fn new() -> Self {
         Self {
             undo_stack: VecDeque::new(),
-            redo_stack: Vec::new(),
+            redo_stack: VecDeque::new(),
             max_entries: 100,
             pending_entry: None,
             editing_in_progress: false,
@@ -131,19 +131,22 @@ impl UndoSystem {
     /// Pop the undo stack, push current state to redo, return restored scene.
     pub fn undo(&mut self, current_scene: &Scene) -> Option<Scene> {
         let entry = self.undo_stack.pop_back()?;
-        // Push current state to redo.
+        // Push current state to redo (with cap enforcement).
         if let Ok(current_yaml) = SceneSerializer::serialize_to_string(current_scene) {
-            self.redo_stack.push(UndoEntry {
+            self.redo_stack.push_back(UndoEntry {
                 description: entry.description.clone(),
                 snapshot: current_yaml,
             });
+            if self.redo_stack.len() > self.max_entries {
+                self.redo_stack.pop_front();
+            }
         }
         self.restore_from_yaml(&entry.snapshot)
     }
 
     /// Pop the redo stack, push current state to undo, return restored scene.
     pub fn redo(&mut self, current_scene: &Scene) -> Option<Scene> {
-        let entry = self.redo_stack.pop()?;
+        let entry = self.redo_stack.pop_back()?;
         // Push current state to undo (with cap enforcement).
         if let Ok(current_yaml) = SceneSerializer::serialize_to_string(current_scene) {
             self.undo_stack.push_back(UndoEntry {
@@ -186,7 +189,7 @@ impl UndoSystem {
 
     /// Peek at the description of the next redo operation.
     pub fn redo_description(&self) -> Option<&str> {
-        self.redo_stack.last().map(|e| e.description.as_str())
+        self.redo_stack.back().map(|e| e.description.as_str())
     }
 
     // -- Internal helpers --

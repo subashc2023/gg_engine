@@ -176,6 +176,7 @@ pub(crate) struct EditorTabViewer<'a> {
     pub(crate) grid_size: &'a mut f32,
     pub(crate) theme: &'a mut EditorTheme,
     pub(crate) reload_shaders_requested: &'a mut bool,
+    pub(crate) show_physics_colliders: &'a mut bool,
     pub(crate) msaa_samples: &'a mut gg_engine::MsaaSamples,
     pub(crate) max_msaa_samples: MsaaSamples,
     pub(crate) msaa_changed: &'a mut bool,
@@ -311,6 +312,7 @@ impl egui_dock::TabViewer for EditorTabViewer<'_> {
                     self.msaa_samples,
                     self.max_msaa_samples,
                     self.msaa_changed,
+                    self.show_physics_colliders,
                 );
             }
 

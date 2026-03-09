@@ -1326,6 +1326,7 @@ impl Application for GGEditor {
                 grid_size: &mut self.editor_settings.grid_size,
                 theme: &mut self.editor_settings.theme,
                 reload_shaders_requested: &mut self.ui.reload_shaders_requested,
+                show_physics_colliders: &mut self.editor_settings.show_physics_colliders,
                 msaa_samples: &mut self.editor_settings.msaa_samples,
                 max_msaa_samples: self.max_msaa_samples,
                 msaa_changed: &mut self.ui.msaa_changed,
