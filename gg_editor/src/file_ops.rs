@@ -183,6 +183,13 @@ impl GGEditor {
                 self.toggle_game_viewport();
                 ui.close();
             }
+            if ui
+                .checkbox(&mut self.postprocess_settings.enabled, "Post-Processing")
+                .on_hover_text("Apply bloom, tone mapping, and color grading to the editor viewport")
+                .clicked()
+            {
+                ui.close();
+            }
             ui.separator();
             if ui.button("Reset Layout").clicked() {
                 self.ui.dock_state = Self::default_dock_layout();

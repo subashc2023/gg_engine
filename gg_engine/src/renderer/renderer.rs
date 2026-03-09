@@ -21,6 +21,8 @@ use super::renderer_2d::{
 };
 use super::renderer_api::{RendererAPI, VulkanRendererAPI};
 use super::shader::Shader;
+use super::gpu_profiling::GpuProfiler;
+use super::postprocess::PostProcessPipeline;
 use super::shadow_map::{self, ShadowMapSystem};
 use super::sub_texture::SubTexture2D;
 use super::texture::TextureCpuData;
@@ -147,6 +149,12 @@ pub struct Renderer {
     // Shadow mapping system (lazily initialized).
     shadow_map: Option<ShadowMapSystem>,
     shadow_pipeline: Option<Arc<Pipeline>>,
+
+    // GPU timestamp profiler.
+    gpu_profiler: Option<GpuProfiler>,
+
+    // Post-processing pipeline (lazily initialized when scene framebuffer is available).
+    postprocess: Option<PostProcessPipeline>,
 }
 
 impl Renderer {
@@ -265,6 +273,8 @@ impl Renderer {
             offscreen_sample_count: vk::SampleCountFlags::TYPE_1,
             shadow_map: Some(shadow_map),
             shadow_pipeline: None,
+            gpu_profiler: None,
+            postprocess: None,
         })
     }
 
@@ -863,6 +873,83 @@ impl Renderer {
         if let Some(data) = &mut self.renderer_2d {
             data.set_wireframe(wireframe);
         }
+    }
+
+    // -- GPU Profiling -----------------------------------------------------------
+
+    /// Initialize the GPU timestamp profiler.
+    pub fn init_gpu_profiler(&mut self, timestamp_period_ns: f32) {
+        match GpuProfiler::new(&self.device, timestamp_period_ns) {
+            Ok(profiler) => {
+                self.gpu_profiler = Some(profiler);
+                log::info!(target: "gg_engine", "GPU profiler initialized");
+            }
+            Err(e) => log::warn!(target: "gg_engine", "Failed to create GPU profiler: {e}"),
+        }
+    }
+
+    /// Access the GPU profiler (immutable).
+    pub fn gpu_profiler(&self) -> Option<&GpuProfiler> {
+        self.gpu_profiler.as_ref()
+    }
+
+    /// Access the GPU profiler (mutable).
+    pub fn gpu_profiler_mut(&mut self) -> Option<&mut GpuProfiler> {
+        self.gpu_profiler.as_mut()
+    }
+
+    // -- Post-Processing --------------------------------------------------------
+
+    /// Create or recreate the post-processing pipeline for a scene framebuffer.
+    pub fn init_postprocess(
+        &mut self,
+        scene_color_view: vk::ImageView,
+        width: u32,
+        height: u32,
+    ) -> Result<(), String> {
+        self.postprocess = Some(PostProcessPipeline::new(
+            &self.device,
+            &self.allocator,
+            self.descriptor_pool,
+            self.texture_descriptor_set_layout,
+            scene_color_view,
+            self.pipeline_cache,
+            width,
+            height,
+        )?);
+        log::info!(target: "gg_engine", "Post-processing pipeline created ({width}x{height})");
+        Ok(())
+    }
+
+    /// Resize the post-processing pipeline to match a new viewport size.
+    pub fn resize_postprocess(
+        &mut self,
+        scene_color_view: vk::ImageView,
+        width: u32,
+        height: u32,
+    ) -> Result<(), String> {
+        if let Some(pp) = &mut self.postprocess {
+            pp.resize(
+                &self.allocator,
+                self.descriptor_pool,
+                self.texture_descriptor_set_layout,
+                scene_color_view,
+                width,
+                height,
+            )
+        } else {
+            self.init_postprocess(scene_color_view, width, height)
+        }
+    }
+
+    /// Access the post-processing pipeline (immutable).
+    pub fn postprocess(&self) -> Option<&PostProcessPipeline> {
+        self.postprocess.as_ref()
+    }
+
+    /// Access the post-processing pipeline (mutable).
+    pub fn postprocess_mut(&mut self) -> Option<&mut PostProcessPipeline> {
+        self.postprocess.as_mut()
     }
 
     /// Hot-reload all shaders from the given source directory.
@@ -2226,6 +2313,10 @@ impl Drop for Renderer {
         drop(self.renderer_2d.take());
         // Drop GPU particle system (owns its own descriptor pool/layout).
         drop(self.gpu_particles.take());
+        // Drop post-processing pipeline (owns its own descriptor pool/images).
+        drop(self.postprocess.take());
+        // Drop GPU profiler (owns query pools).
+        drop(self.gpu_profiler.take());
         // Drop shadow pipeline before shadow map (pipeline references render pass).
         drop(self.shadow_pipeline.take());
         // Drop shadow map system (owns descriptor set layouts, render pass, image).

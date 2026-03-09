@@ -14,6 +14,8 @@ use gg_engine::egui;
 use gg_engine::prelude::*;
 use gg_engine::ui_theme::EditorTheme;
 
+use crate::{GpuTimingSnapshot, PostProcessSettings};
+
 /// Strip the `\\?\` UNC prefix that Windows canonicalization adds,
 /// so that `strip_prefix` works when comparing paths from different sources
 /// (e.g. file dialogs return `C:\...` but canonicalized paths have `\\?\C:\...`).
@@ -185,6 +187,8 @@ pub(crate) struct EditorTabViewer<'a> {
     pub(crate) game_viewport: GameViewportState<'a>,
     pub(crate) project: ProjectContext<'a>,
     pub(crate) hierarchy_action: &'a mut Option<scene_hierarchy::HierarchyExternalAction>,
+    pub(crate) postprocess_settings: &'a mut PostProcessSettings,
+    pub(crate) gpu_timing: &'a mut GpuTimingSnapshot,
 }
 
 impl EditorTabViewer<'_> {
@@ -314,6 +318,8 @@ impl egui_dock::TabViewer for EditorTabViewer<'_> {
                     self.max_msaa_samples,
                     self.msaa_changed,
                     self.show_physics_colliders,
+                    self.postprocess_settings,
+                    self.gpu_timing,
                 );
             }
 

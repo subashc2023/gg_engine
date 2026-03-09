@@ -647,6 +647,11 @@ impl Framebuffer {
         self.color_attachments[0].image
     }
 
+    /// Returns the first color attachment image view (for post-processing input).
+    pub fn color_image_view(&self) -> vk::ImageView {
+        self.color_attachments[0].view
+    }
+
     /// Build the correct clear value array for this framebuffer's attachments.
     /// Color attachments use the supplied clear color; RedInteger clears to -1;
     /// depth clears to 1.0/0.

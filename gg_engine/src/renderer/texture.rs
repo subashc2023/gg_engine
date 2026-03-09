@@ -259,14 +259,72 @@ pub enum ImageFormat {
     Rgba8Srgb,
     /// 8-bit RGBA, linear/UNORM (used for SDF font atlases, data textures).
     Rgba8Unorm,
+    // -- Compressed formats (require pre-compressed data, no CPU decoding) --
+    /// BC1 / DXT1, sRGB (4×4 block, 8 bytes). RGB, 1-bit alpha.
+    Bc1Srgb,
+    /// BC3 / DXT5, sRGB (4×4 block, 16 bytes). RGB + full alpha.
+    Bc3Srgb,
+    /// BC5, unsigned UNORM (4×4 block, 16 bytes). Two-channel (normal maps).
+    Bc5Unorm,
+    /// BC7, sRGB (4×4 block, 16 bytes). High quality RGBA.
+    Bc7Srgb,
+    /// ASTC 4×4, sRGB (4×4 block, 16 bytes).
+    Astc4x4Srgb,
+    /// ASTC 6×6, sRGB (6×6 block, 16 bytes).
+    Astc6x6Srgb,
+    /// ASTC 8×8, sRGB (8×8 block, 16 bytes).
+    Astc8x8Srgb,
 }
 
 impl ImageFormat {
-    fn to_vk(self) -> vk::Format {
+    pub(crate) fn to_vk(self) -> vk::Format {
         match self {
             ImageFormat::Rgba8Srgb => vk::Format::R8G8B8A8_SRGB,
             ImageFormat::Rgba8Unorm => vk::Format::R8G8B8A8_UNORM,
+            ImageFormat::Bc1Srgb => vk::Format::BC1_RGBA_SRGB_BLOCK,
+            ImageFormat::Bc3Srgb => vk::Format::BC3_SRGB_BLOCK,
+            ImageFormat::Bc5Unorm => vk::Format::BC5_UNORM_BLOCK,
+            ImageFormat::Bc7Srgb => vk::Format::BC7_SRGB_BLOCK,
+            ImageFormat::Astc4x4Srgb => vk::Format::ASTC_4X4_SRGB_BLOCK,
+            ImageFormat::Astc6x6Srgb => vk::Format::ASTC_6X6_SRGB_BLOCK,
+            ImageFormat::Astc8x8Srgb => vk::Format::ASTC_8X8_SRGB_BLOCK,
         }
+    }
+
+    /// Whether this format uses block compression (BC/ASTC).
+    pub fn is_compressed(self) -> bool {
+        !matches!(self, ImageFormat::Rgba8Srgb | ImageFormat::Rgba8Unorm)
+    }
+
+    /// Block dimensions (width, height) for compressed formats. Returns (1, 1) for uncompressed.
+    pub fn block_dimensions(self) -> (u32, u32) {
+        match self {
+            ImageFormat::Rgba8Srgb | ImageFormat::Rgba8Unorm => (1, 1),
+            ImageFormat::Bc1Srgb
+            | ImageFormat::Bc3Srgb
+            | ImageFormat::Bc5Unorm
+            | ImageFormat::Bc7Srgb
+            | ImageFormat::Astc4x4Srgb => (4, 4),
+            ImageFormat::Astc6x6Srgb => (6, 6),
+            ImageFormat::Astc8x8Srgb => (8, 8),
+        }
+    }
+
+    /// Bytes per block for compressed formats, or bytes per pixel (4) for uncompressed.
+    pub fn block_bytes(self) -> u32 {
+        match self {
+            ImageFormat::Rgba8Srgb | ImageFormat::Rgba8Unorm => 4,
+            ImageFormat::Bc1Srgb => 8,
+            _ => 16, // BC3, BC5, BC7, all ASTC variants
+        }
+    }
+
+    /// Calculate the expected data size in bytes for a texture of the given dimensions.
+    pub fn data_size(self, width: u32, height: u32) -> u64 {
+        let (bw, bh) = self.block_dimensions();
+        let blocks_x = width.div_ceil(bw);
+        let blocks_y = height.div_ceil(bh);
+        blocks_x as u64 * blocks_y as u64 * self.block_bytes() as u64
     }
 }
 
@@ -692,6 +750,164 @@ impl Texture2D {
             sampler,
             descriptor_set,
             descriptor_pool,
+            bindless_index: 0,
+            _width: width,
+            _height: height,
+            device: device.clone(),
+        })
+    }
+
+    /// Create a texture from pre-compressed data (BC/ASTC formats).
+    ///
+    /// The `data` must contain correctly formatted compressed blocks for the
+    /// specified `format`. No GPU-side mipmap generation is performed (compressed
+    /// formats are not blittable); provide pre-computed mipmaps in the data or
+    /// use single-level.
+    ///
+    /// Returns an error if the format is not compressed or the data size is wrong.
+    #[allow(dead_code)] // API reserved for future compressed texture loading
+    pub(crate) fn from_compressed(
+        res: &RendererResources<'_>,
+        allocator: &Arc<Mutex<GpuAllocator>>,
+        width: u32,
+        height: u32,
+        data: &[u8],
+        format: ImageFormat,
+        spec: &TextureSpecification,
+    ) -> Result<Self, String> {
+        if !format.is_compressed() {
+            return Err("from_compressed requires a compressed ImageFormat".to_string());
+        }
+
+        let expected_size = format.data_size(width, height);
+        if data.len() as u64 != expected_size {
+            return Err(format!(
+                "Compressed data size mismatch: expected {} bytes, got {}",
+                expected_size,
+                data.len()
+            ));
+        }
+
+        let device = res.device;
+        let vk_format = format.to_vk();
+
+        // Staging buffer.
+        let (staging_buffer, _staging_alloc) =
+            super::buffer::create_staging_buffer(allocator, device, data)?;
+
+        // Image (no TRANSFER_SRC — cannot blit compressed formats).
+        let image_info = vk::ImageCreateInfo::default()
+            .image_type(vk::ImageType::TYPE_2D)
+            .extent(vk::Extent3D {
+                width,
+                height,
+                depth: 1,
+            })
+            .mip_levels(1)
+            .array_layers(1)
+            .format(vk_format)
+            .tiling(vk::ImageTiling::OPTIMAL)
+            .initial_layout(vk::ImageLayout::UNDEFINED)
+            .usage(vk::ImageUsageFlags::TRANSFER_DST | vk::ImageUsageFlags::SAMPLED)
+            .sharing_mode(vk::SharingMode::EXCLUSIVE)
+            .samples(vk::SampleCountFlags::TYPE_1);
+
+        let image = unsafe { device.create_image(&image_info, None) }
+            .map_err(|e| format!("Failed to create compressed texture image: {e}"))?;
+
+        let allocation = GpuAllocator::allocate_for_image(
+            allocator,
+            device,
+            image,
+            "CompressedTexture2D",
+            MemoryLocation::GpuOnly,
+        )?;
+
+        // Upload.
+        execute_one_shot(
+            device,
+            res.command_pool,
+            res.graphics_queue,
+            |cmd_buf| {
+                transition_image_layout(
+                    device,
+                    cmd_buf,
+                    image,
+                    vk::ImageLayout::UNDEFINED,
+                    vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+                    0,
+                    1,
+                );
+
+                let region = vk::BufferImageCopy {
+                    buffer_offset: 0,
+                    buffer_row_length: 0,
+                    buffer_image_height: 0,
+                    image_subresource: vk::ImageSubresourceLayers {
+                        aspect_mask: vk::ImageAspectFlags::COLOR,
+                        mip_level: 0,
+                        base_array_layer: 0,
+                        layer_count: 1,
+                    },
+                    image_offset: vk::Offset3D { x: 0, y: 0, z: 0 },
+                    image_extent: vk::Extent3D {
+                        width,
+                        height,
+                        depth: 1,
+                    },
+                };
+
+                unsafe {
+                    device.cmd_copy_buffer_to_image(
+                        cmd_buf,
+                        staging_buffer,
+                        image,
+                        vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+                        &[region],
+                    );
+                }
+
+                transition_image_layout(
+                    device,
+                    cmd_buf,
+                    image,
+                    vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+                    vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
+                    0,
+                    1,
+                );
+            },
+        )?;
+
+        unsafe {
+            device.destroy_buffer(staging_buffer, None);
+        }
+        drop(_staging_alloc);
+
+        // Compressed textures don't support mipmaps via GPU blit.
+        let actual_spec = TextureSpecification {
+            format,
+            generate_mipmaps: false,
+            ..spec.clone()
+        };
+
+        let (image_view, sampler, descriptor_set) = create_texture_view_sampler_ds(
+            device,
+            image,
+            vk_format,
+            1,
+            &actual_spec,
+            res.descriptor_pool,
+            res.texture_ds_layout,
+        )?;
+
+        Ok(Self {
+            image,
+            _allocation: allocation,
+            image_view,
+            sampler,
+            descriptor_set,
+            descriptor_pool: res.descriptor_pool,
             bindless_index: 0,
             _width: width,
             _height: height,

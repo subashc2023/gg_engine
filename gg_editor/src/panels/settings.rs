@@ -2,6 +2,8 @@ use gg_engine::egui;
 use gg_engine::prelude::*;
 use gg_engine::ui_theme::EditorTheme;
 
+use crate::{GpuTimingSnapshot, PostProcessSettings};
+
 const GRID_SIZE_OPTIONS: &[f32] = &[0.1, 0.25, 0.5, 1.0, 2.0, 5.0, 10.0];
 
 #[allow(clippy::too_many_arguments)]
@@ -23,6 +25,8 @@ pub(crate) fn settings_ui(
     max_msaa_samples: MsaaSamples,
     msaa_changed: &mut bool,
     show_physics_colliders: &mut bool,
+    pp_settings: &mut PostProcessSettings,
+    gpu_timing: &mut GpuTimingSnapshot,
 ) {
     ui.heading("Renderer");
     ui.separator();
@@ -135,6 +139,17 @@ pub(crate) fn settings_ui(
     ui.heading("Profiling");
     ui.separator();
 
+    // GPU timestamp profiling.
+    ui.checkbox(&mut gpu_timing.enabled, "GPU Timestamps");
+    if gpu_timing.enabled && gpu_timing.total_frame_ms > 0.0 {
+        ui.label(format!("GPU frame: {:.2} ms", gpu_timing.total_frame_ms));
+        for (name, time_ms) in &gpu_timing.results {
+            ui.label(format!("  {}: {:.3} ms", name, time_ms));
+        }
+    }
+
+    ui.add_space(4.0);
+
     // On-demand Chrome Tracing capture for gg_tools analysis.
     let recording = gg_engine::profiling::is_session_active();
     let label = if recording {
@@ -155,6 +170,36 @@ pub(crate) fn settings_ui(
                 .color(egui::Color32::from_rgb(0xFF, 0x44, 0x44))
                 .strong(),
         );
+    }
+
+    // -- Post-Processing --
+    ui.add_space(8.0);
+    ui.heading("Post-Processing");
+    ui.separator();
+
+    let pp = pp_settings;
+    ui.checkbox(&mut pp.enabled, "Enable");
+    if pp.enabled {
+        ui.add_space(4.0);
+        ui.checkbox(&mut pp.bloom_enabled, "Bloom");
+        if pp.bloom_enabled {
+            ui.add(egui::Slider::new(&mut pp.bloom_threshold, 0.0..=3.0).text("Threshold"));
+            ui.add(egui::Slider::new(&mut pp.bloom_intensity, 0.0..=2.0).text("Intensity"));
+            ui.add(egui::Slider::new(&mut pp.bloom_filter_radius, 0.1..=5.0).text("Radius"));
+        }
+
+        ui.add_space(4.0);
+        egui::ComboBox::from_label("Tonemapping")
+            .selected_text(format!("{}", pp.tonemapping))
+            .show_ui(ui, |ui| {
+                for &mode in TonemappingMode::ALL {
+                    ui.selectable_value(&mut pp.tonemapping, mode, format!("{mode}"));
+                }
+            });
+
+        ui.add(egui::Slider::new(&mut pp.exposure, -5.0..=5.0).text("Exposure"));
+        ui.add(egui::Slider::new(&mut pp.contrast, 0.0..=3.0).text("Contrast"));
+        ui.add(egui::Slider::new(&mut pp.saturation, 0.0..=3.0).text("Saturation"));
     }
 
     if !scene_warnings.is_empty() {

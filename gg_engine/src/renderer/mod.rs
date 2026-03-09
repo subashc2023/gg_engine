@@ -7,12 +7,14 @@ mod font;
 mod framebuffer;
 pub(crate) mod gpu_allocation;
 mod gpu_particle_system;
+mod gpu_profiling;
 mod lighting;
 mod material;
 mod mesh;
 mod msdf;
 mod orthographic_camera;
 mod pipeline;
+mod postprocess;
 mod render_command;
 #[allow(clippy::module_inception)]
 mod renderer;
@@ -42,12 +44,14 @@ pub(crate) use framebuffer::ClearValues;
 pub use framebuffer::{
     Framebuffer, FramebufferSpec, FramebufferTextureFormat, FramebufferTextureSpec, MsaaSamples,
 };
+pub use gpu_profiling::{GpuProfiler, GpuTimingResult};
 pub(crate) use gpu_allocation::GpuAllocator;
 pub use lighting::{LightEnvironment, LightGpuData, MAX_POINT_LIGHTS};
 pub use material::{BlendMode, Material, MaterialGpuData, MaterialHandle, MaterialLibrary};
 pub use mesh::{load_gltf, Mesh, MeshVertex};
 pub use orthographic_camera::OrthographicCamera;
 pub use pipeline::{CullMode, DepthConfig, Pipeline};
+pub use postprocess::{PostProcessPipeline, TonemappingMode};
 pub use renderer::{Renderer, WireframeMode};
 pub use renderer_2d::Renderer2DStats;
 pub use scene_camera::{ProjectionType, SceneCamera};

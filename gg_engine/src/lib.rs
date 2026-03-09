@@ -46,11 +46,11 @@ pub use renderer::shaders;
 pub use renderer::{
     as_bytes, load_gltf, BlendMode, BufferElement, BufferLayout, CullMode, DepthConfig,
     EditorCamera, Font, Framebuffer, FramebufferSpec, FramebufferTextureFormat,
-    FramebufferTextureSpec, IndexBuffer, Material, MaterialGpuData, MaterialHandle,
-    MaterialLibrary, Mesh, MeshVertex, MsaaSamples, OrthographicCamera, Pipeline, PresentMode,
-    ProjectionType, Renderer, Renderer2DStats, RendererBackend, SceneCamera, Shader,
-    ShaderDataType, ShaderLibrary, SubTexture2D, Texture2D, TextureSpecification, VertexArray,
-    VertexBuffer, WireframeMode,
+    FramebufferTextureSpec, GpuProfiler, GpuTimingResult, IndexBuffer, Material, MaterialGpuData,
+    MaterialHandle, MaterialLibrary, Mesh, MeshVertex, MsaaSamples, OrthographicCamera, Pipeline,
+    PostProcessPipeline, PresentMode, ProjectionType, Renderer, Renderer2DStats, RendererBackend,
+    SceneCamera, Shader, ShaderDataType, ShaderLibrary, SubTexture2D, Texture2D,
+    TextureSpecification, TonemappingMode, VertexArray, VertexBuffer, WireframeMode,
 };
 pub use scene::{Aabb2D, Aabb3D, CullingStats, Frustum3D, SpatialGrid, SpatialGrid3D};
 pub use scene::{
@@ -99,7 +99,7 @@ pub mod prelude {
         MaterialGpuData, MaterialHandle, MaterialLibrary, Mesh, MeshVertex, MsaaSamples,
         OrthographicCamera, Pipeline, PresentMode, ProjectionType, Renderer, Renderer2DStats,
         RendererBackend, SceneCamera, Shader, ShaderDataType, ShaderLibrary, SubTexture2D,
-        Texture2D, TextureSpecification, VertexArray, VertexBuffer, WireframeMode,
+        Texture2D, TextureSpecification, TonemappingMode, VertexArray, VertexBuffer, WireframeMode,
         MAX_POINT_LIGHTS,
     };
     pub use crate::scene::{Aabb2D, Aabb3D, Frustum3D, SpatialGrid, SpatialGrid3D};

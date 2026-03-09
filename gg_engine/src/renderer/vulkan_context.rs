@@ -288,6 +288,24 @@ impl VulkanContext {
         &self.physical_device_properties
     }
 
+    /// The GPU timestamp period in nanoseconds (for interpreting timestamp query results).
+    pub fn timestamp_period_ns(&self) -> f32 {
+        self.physical_device_properties.limits.timestamp_period
+    }
+
+    /// Query whether a Vulkan format supports the given feature flags on this GPU.
+    pub fn is_format_supported(
+        &self,
+        instance: &ash::Instance,
+        format: vk::Format,
+        features: vk::FormatFeatureFlags,
+    ) -> bool {
+        let props = unsafe {
+            instance.get_physical_device_format_properties(self.physical_device, format)
+        };
+        props.optimal_tiling_features.contains(features)
+    }
+
     /// Return the highest MSAA sample count supported by both color and depth
     /// framebuffer attachments on this device.
     pub fn max_msaa_samples(&self) -> vk::SampleCountFlags {

@@ -96,6 +96,57 @@ impl TilemapPaintState {
 }
 
 // ---------------------------------------------------------------------------
+// Post-processing & GPU timing state (synced with Renderer each frame)
+// ---------------------------------------------------------------------------
+
+/// Editor-side mirror of post-processing settings.
+/// Synced to/from `PostProcessPipeline` in `on_render_viewport`.
+pub(crate) struct PostProcessSettings {
+    pub enabled: bool,
+    pub bloom_enabled: bool,
+    pub bloom_threshold: f32,
+    pub bloom_intensity: f32,
+    pub bloom_filter_radius: f32,
+    pub tonemapping: TonemappingMode,
+    pub exposure: f32,
+    pub contrast: f32,
+    pub saturation: f32,
+}
+
+impl Default for PostProcessSettings {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            bloom_enabled: true,
+            bloom_threshold: 0.8,
+            bloom_intensity: 0.3,
+            bloom_filter_radius: 1.0,
+            tonemapping: TonemappingMode::ACES,
+            exposure: 0.0,
+            contrast: 1.0,
+            saturation: 1.0,
+        }
+    }
+}
+
+/// Snapshot of GPU timestamp profiling results for UI display.
+pub(crate) struct GpuTimingSnapshot {
+    pub enabled: bool,
+    pub total_frame_ms: f32,
+    pub results: Vec<(String, f32)>,
+}
+
+impl Default for GpuTimingSnapshot {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            total_frame_ms: 0.0,
+            results: Vec::new(),
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Sub-state structs (decomposed from GGEditor to reduce god-object coupling)
 // ---------------------------------------------------------------------------
 
@@ -174,6 +225,8 @@ struct UiState {
     msaa_changed: bool,
     /// Current wireframe rendering mode (Off / WireOnly / Overlay).
     wireframe_mode: WireframeMode,
+    /// Post-processing output texture registered with egui.
+    pp_output_egui_tex_id: Option<egui::TextureId>,
 }
 
 // ---------------------------------------------------------------------------
@@ -199,6 +252,12 @@ struct GGEditor {
     should_exit: bool,
     /// Maximum MSAA supported by the GPU (stored as highest MsaaSamples variant).
     max_msaa_samples: MsaaSamples,
+    /// Post-processing settings (synced with Renderer each frame).
+    postprocess_settings: PostProcessSettings,
+    /// GPU timestamp profiling snapshot for UI display.
+    gpu_timing: GpuTimingSnapshot,
+    /// Post-processing output descriptor set handle (for egui texture registration).
+    pp_output_handle: u64,
     /// File watcher that monitors `assets/scripts/` for `.lua` changes.
     /// Kept alive so the OS keeps notifying us; the actual data flows
     /// through `script_reload_pending`.
@@ -368,6 +427,7 @@ impl Application for GGEditor {
                 create_game_fb: false,
                 msaa_changed: false,
                 wireframe_mode: WireframeMode::Off,
+                pp_output_egui_tex_id: None,
             },
             viewport: ViewportInfo {
                 scene_fb: None,
@@ -411,6 +471,9 @@ impl Application for GGEditor {
             undo_system: undo::UndoSystem::new(),
             should_exit: false,
             max_msaa_samples: MsaaSamples::S1, // Updated in on_attach
+            postprocess_settings: PostProcessSettings::default(),
+            gpu_timing: GpuTimingSnapshot::default(),
+            pp_output_handle: 0,
             #[cfg(feature = "lua-scripting")]
             _script_watcher,
             #[cfg(feature = "lua-scripting")]
@@ -450,7 +513,17 @@ impl Application for GGEditor {
             ],
             samples: msaa_samples.to_vk(),
         }) {
-            Ok(fb) => self.viewport.scene_fb = Some(fb),
+            Ok(fb) => {
+                // Initialize post-processing pipeline with the scene framebuffer.
+                if let Err(e) =
+                    renderer.init_postprocess(fb.color_image_view(), fb.width(), fb.height())
+                {
+                    warn!("Failed to create post-processing pipeline: {e}");
+                } else if let Some(pp) = renderer.postprocess() {
+                    self.pp_output_handle = pp.output_egui_handle();
+                }
+                self.viewport.scene_fb = Some(fb);
+            }
             Err(e) => warn!("Failed to create scene framebuffer: {e}"),
         }
         // Game viewport FB created lazily when enabled via View menu.
@@ -534,6 +607,43 @@ impl Application for GGEditor {
     }
 
     fn on_render_viewport(&mut self, renderer: &mut Renderer, viewport_index: usize) {
+        // Sync post-processing settings from editor UI to the renderer pipeline.
+        if viewport_index == 0 {
+            if let Some(pp) = renderer.postprocess_mut() {
+                let s = &self.postprocess_settings;
+                pp.enabled = s.enabled;
+                pp.bloom_enabled = s.bloom_enabled;
+                pp.bloom_threshold = s.bloom_threshold;
+                pp.bloom_intensity = s.bloom_intensity;
+                pp.bloom_filter_radius = s.bloom_filter_radius;
+                pp.tonemapping = s.tonemapping;
+                pp.exposure = s.exposure;
+                pp.contrast = s.contrast;
+                pp.saturation = s.saturation;
+            }
+
+            // Update post-process output handle (may change on resize).
+            if let Some(pp) = renderer.postprocess() {
+                self.pp_output_handle = pp.output_egui_handle();
+            }
+
+            // Sync GPU profiler enabled state.
+            if let Some(profiler) = renderer.gpu_profiler_mut() {
+                profiler.set_enabled(self.gpu_timing.enabled);
+            }
+
+            // Read back GPU timing results for UI display.
+            if let Some(profiler) = renderer.gpu_profiler() {
+                self.gpu_timing.total_frame_ms = profiler.total_frame_ms();
+                self.gpu_timing.results.clear();
+                for result in profiler.results() {
+                    self.gpu_timing
+                        .results
+                        .push((result.name.to_string(), result.time_ms));
+                }
+            }
+        }
+
         match viewport_index {
             0 => {
                 // Editor viewport — full render + overlays (existing on_render logic)
@@ -921,7 +1031,16 @@ impl Application for GGEditor {
                 attachments: attachments.clone(),
                 samples,
             }) {
-                Ok(fb) => self.viewport.scene_fb = Some(fb),
+                Ok(fb) => {
+                    if let Err(e) = renderer
+                        .resize_postprocess(fb.color_image_view(), fb.width(), fb.height())
+                    {
+                        error!("Failed to resize postprocess for MSAA: {e}");
+                    } else if let Some(pp) = renderer.postprocess() {
+                        self.pp_output_handle = pp.output_egui_handle();
+                    }
+                    self.viewport.scene_fb = Some(fb);
+                }
                 Err(e) => error!("Failed to recreate scene FB for MSAA: {e}"),
             }
 
@@ -1226,11 +1345,16 @@ impl Application for GGEditor {
             self.toolbar_ui(ctx);
         }
 
-        let fb_tex_id = self
-            .viewport
-            .scene_fb
-            .as_ref()
-            .and_then(|fb| fb.egui_texture_id());
+        // If post-processing is active, use its output texture; otherwise use the raw scene FB.
+        let fb_tex_id = if self.postprocess_settings.enabled {
+            self.ui
+                .pp_output_egui_tex_id
+        } else {
+            self.viewport
+                .scene_fb
+                .as_ref()
+                .and_then(|fb| fb.egui_texture_id())
+        };
 
         let game_fb_tex_id = self
             .viewport
@@ -1361,6 +1485,8 @@ impl Application for GGEditor {
                     egui_texture_map: &self.ui.egui_texture_map,
                 },
                 hierarchy_action: &mut hierarchy_action,
+                postprocess_settings: &mut self.postprocess_settings,
+                gpu_timing: &mut self.gpu_timing,
             };
 
             egui_dock::DockArea::new(&mut self.ui.dock_state)
@@ -1453,11 +1579,22 @@ impl Application for GGEditor {
             handles.extend(am.loaded_texture_egui_handles());
         }
 
+        // Register post-processing output for viewport display.
+        if self.pp_output_handle != 0 {
+            handles.push(self.pp_output_handle);
+        }
+
         handles
     }
 
     fn receive_egui_user_textures(&mut self, map: &HashMap<u64, egui::TextureId>) {
         self.ui.egui_texture_map = map.clone();
+        // Capture the post-processing output's egui texture ID for viewport display.
+        self.ui.pp_output_egui_tex_id = if self.pp_output_handle != 0 {
+            map.get(&self.pp_output_handle).copied()
+        } else {
+            None
+        };
     }
 }
 

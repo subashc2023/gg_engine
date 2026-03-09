@@ -423,6 +423,13 @@ impl<T: Application> ApplicationHandler for EngineRunner<T> {
                                             }
                                         }
 
+                                        // Initialize GPU timestamp profiler.
+                                        if let (Some(renderer), Some(vk_ctx)) =
+                                            (&mut self.renderer, &self.vulkan_context)
+                                        {
+                                            renderer.init_gpu_profiler(vk_ctx.timestamp_period_ns());
+                                        }
+
                                         // Notify the application that the renderer is ready.
                                         if let Some(renderer) = &mut self.renderer {
                                             self.app.on_attach(renderer);
@@ -762,6 +769,14 @@ impl<T: Application> ApplicationHandler for EngineRunner<T> {
                             }
                             if let Err(e) = fb.resize(w, h) {
                                 log::error!(target: "gg_engine", "Framebuffer[{vi}] resize failed: {e}");
+                            } else if vi == 0 {
+                                // Resize post-processing pipeline to match.
+                                let color_view = fb.color_image_view();
+                                if let Err(e) =
+                                    renderer.resize_postprocess(color_view, w, h)
+                                {
+                                    log::error!(target: "gg_engine", "Post-process resize failed: {e}");
+                                }
                             }
                         }
                     }
@@ -972,6 +987,7 @@ fn render_frame<T: Application>(
     }
 
     let cmd_buf = swapchain.command_buffer(swapchain.current_frame());
+    let current_frame = swapchain.current_frame();
 
     let _record = ProfileTimer::new("render_frame::record_commands");
 
@@ -984,11 +1000,32 @@ fn render_frame<T: Application>(
             .expect("Failed to begin command buffer");
     }
 
+    // GPU profiler: read back previous results and reset for new recording.
+    // Must be called AFTER begin_command_buffer (cmd_reset_query_pool requires an active buffer).
+    if let Some(profiler) = renderer.gpu_profiler_mut() {
+        profiler.begin_frame(cmd_buf, current_frame);
+    }
+
+    // GPU timestamp: frame start.
+    if let Some(profiler) = renderer.gpu_profiler_mut() {
+        profiler.timestamp(cmd_buf, current_frame, "Particles");
+    }
+
     // Dispatch GPU particle compute (before any render pass).
-    renderer.dispatch_particle_compute(cmd_buf, swapchain.current_frame(), dt_seconds);
+    renderer.dispatch_particle_compute(cmd_buf, current_frame, dt_seconds);
+
+    // GPU timestamp: after particles.
+    if let Some(profiler) = renderer.gpu_profiler_mut() {
+        profiler.timestamp(cmd_buf, current_frame, "Shadows");
+    }
 
     // Shadow pass (before any render pass — uses its own depth-only render pass).
-    app.on_render_shadows(renderer, cmd_buf, swapchain.current_frame());
+    app.on_render_shadows(renderer, cmd_buf, current_frame);
+
+    // GPU timestamp: after shadows, before scene.
+    if let Some(profiler) = renderer.gpu_profiler_mut() {
+        profiler.timestamp(cmd_buf, current_frame, "Scene");
+    }
 
     if !viewport_infos.is_empty() {
         // --- Multi-viewport dual-pass path: N offscreen scene passes + swapchain egui ---
@@ -1155,6 +1192,23 @@ fn render_frame<T: Application>(
             }
         }
 
+        // GPU timestamp: after scene, before post-processing.
+        if let Some(profiler) = renderer.gpu_profiler_mut() {
+            profiler.timestamp(cmd_buf, current_frame, "PostProcess");
+        }
+
+        // Post-processing: bloom + tone mapping + color grading.
+        if let Some(pp) = renderer.postprocess() {
+            if pp.enabled {
+                pp.execute(cmd_buf);
+            }
+        }
+
+        // GPU timestamp: after post-processing, before egui.
+        if let Some(profiler) = renderer.gpu_profiler_mut() {
+            profiler.timestamp(cmd_buf, current_frame, "Egui");
+        }
+
         // Swapchain render pass (egui only, dark background).
         let egui_clear = [
             vk::ClearValue {
@@ -1189,6 +1243,11 @@ fn render_frame<T: Application>(
 
         unsafe {
             device.cmd_end_render_pass(cmd_buf);
+        }
+
+        // GPU timestamp: frame end.
+        if let Some(profiler) = renderer.gpu_profiler_mut() {
+            profiler.timestamp(cmd_buf, current_frame, "End");
         }
     } else {
         // --- Single-pass path (backward compatible) ---
@@ -1238,6 +1297,11 @@ fn render_frame<T: Application>(
 
         unsafe {
             device.cmd_end_render_pass(cmd_buf);
+        }
+
+        // GPU timestamp: frame end.
+        if let Some(profiler) = renderer.gpu_profiler_mut() {
+            profiler.timestamp(cmd_buf, current_frame, "End");
         }
     }
 
