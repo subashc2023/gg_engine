@@ -4,6 +4,7 @@ use ash::vk;
 use glam::{Mat4, Vec3};
 
 use super::gpu_allocation::{GpuAllocation, GpuAllocator, MemoryLocation};
+use super::lighting::NUM_SHADOW_CASCADES;
 use super::uniform_buffer::UniformBuffer;
 use super::{MAX_FRAMES_IN_FLIGHT, MAX_VIEWPORTS};
 
@@ -11,8 +12,8 @@ use super::{MAX_FRAMES_IN_FLIGHT, MAX_VIEWPORTS};
 // Constants
 // ---------------------------------------------------------------------------
 
-/// Default shadow map resolution (width and height in texels).
-pub const DEFAULT_SHADOW_MAP_SIZE: u32 = 4096;
+/// Default shadow map resolution (width and height in texels per cascade).
+pub const DEFAULT_SHADOW_MAP_SIZE: u32 = 6144;
 
 // ---------------------------------------------------------------------------
 // ShadowMapSystem — depth-only shadow pass infrastructure
@@ -26,25 +27,29 @@ pub const DEFAULT_SHADOW_MAP_SIZE: u32 = 4096;
 ///
 /// Follows the same slot pattern as LightingSystem / CameraSystem.
 pub(crate) struct ShadowMapSystem {
-    // Depth image + view
+    // Depth image (2-layer array for cascades) + views
     depth_image: vk::Image,
     #[allow(dead_code)] // Owned for memory lifetime; freed on drop.
     depth_allocation: GpuAllocation,
-    depth_view: vk::ImageView,
+    /// Per-layer views (TYPE_2D) for framebuffer attachments.
+    depth_layer_views: [vk::ImageView; NUM_SHADOW_CASCADES],
+    /// Full-array view (TYPE_2D_ARRAY) for sampling in the main pass.
+    depth_array_view: vk::ImageView,
 
     // Comparison sampler for hardware PCF
     sampler: vk::Sampler,
 
-    // Depth-only render pass + framebuffer
+    // Depth-only render pass + per-cascade framebuffers
     render_pass: vk::RenderPass,
-    framebuffer: vk::Framebuffer,
+    framebuffers: [vk::Framebuffer; NUM_SHADOW_CASCADES],
 
     // Resolution
     width: u32,
     height: u32,
 
-    // Light VP UBO (one per frame × viewport slot) — used by the shadow
-    // pass vertex shader (set 0) to transform geometry into light space.
+    // Light VP UBO — retained for descriptor pool accounting but no longer
+    // written per-frame (push constants replaced it for cascade correctness).
+    #[allow(dead_code)]
     light_vp_ubo: UniformBuffer,
 
     // Descriptor set layout for the main pass (set 4):
@@ -53,8 +58,9 @@ pub(crate) struct ShadowMapSystem {
     shadow_descriptor_sets: Vec<vk::DescriptorSet>,
 
     // Descriptor set layout for the shadow pass itself (set 0):
-    //   binding 0 = UBO (light VP matrix)
+    //   binding 0 = UBO (light VP matrix) — retained for descriptor pool sizing.
     shadow_camera_ds_layout: vk::DescriptorSetLayout,
+    #[allow(dead_code)]
     shadow_camera_descriptor_sets: Vec<vk::DescriptorSet>,
 
     device: ash::Device,
@@ -75,11 +81,11 @@ impl ShadowMapSystem {
         command_pool: vk::CommandPool,
         graphics_queue: vk::Queue,
     ) -> Result<Self, String> {
-        // --- Depth image ---
-        let (depth_image, depth_allocation, depth_view) =
+        // --- Depth image (2-layer array for cascades) ---
+        let (depth_image, depth_allocation, depth_layer_views, depth_array_view) =
             Self::create_depth_resources(allocator, device, depth_format, width, height)?;
 
-        // Transition depth image from UNDEFINED to DEPTH_STENCIL_READ_ONLY_OPTIMAL
+        // Transition all layers from UNDEFINED to DEPTH_STENCIL_READ_ONLY_OPTIMAL
         // so it's valid for sampling in the main pass even before any shadow pass runs.
         Self::transition_depth_initial(device, command_pool, graphics_queue, depth_image)?;
 
@@ -102,8 +108,12 @@ impl ShadowMapSystem {
         // --- Depth-only render pass ---
         let render_pass = Self::create_render_pass(device, depth_format)?;
 
-        // --- Framebuffer ---
-        let framebuffer = Self::create_framebuffer(device, render_pass, depth_view, width, height)?;
+        // --- Per-cascade framebuffers ---
+        let mut framebuffers = [vk::Framebuffer::null(); NUM_SHADOW_CASCADES];
+        for i in 0..NUM_SHADOW_CASCADES {
+            framebuffers[i] =
+                Self::create_framebuffer(device, render_pass, depth_layer_views[i], width, height)?;
+        }
 
         // --- Light VP UBO (64 bytes = mat4) ---
         let light_vp_ubo = UniformBuffer::new(allocator, device, std::mem::size_of::<[f32; 16]>())?;
@@ -173,11 +183,11 @@ impl ShadowMapSystem {
             unsafe { device.allocate_descriptor_sets(&sampler_alloc_info) }
                 .map_err(|e| format!("Failed to allocate shadow map descriptor sets: {e}"))?;
 
-        // Write shadow map image to each descriptor set
+        // Write shadow map array image to each descriptor set
         for &ds in &shadow_descriptor_sets {
             let image_info = vk::DescriptorImageInfo::default()
                 .sampler(sampler)
-                .image_view(depth_view)
+                .image_view(depth_array_view)
                 .image_layout(vk::ImageLayout::DEPTH_STENCIL_READ_ONLY_OPTIMAL);
             let write = vk::WriteDescriptorSet::default()
                 .dst_set(ds)
@@ -192,10 +202,11 @@ impl ShadowMapSystem {
         Ok(Self {
             depth_image,
             depth_allocation,
-            depth_view,
+            depth_layer_views,
+            depth_array_view,
             sampler,
             render_pass,
-            framebuffer,
+            framebuffers,
             width,
             height,
             light_vp_ubo,
@@ -226,6 +237,9 @@ impl ShadowMapSystem {
     }
 
     /// Shadow camera descriptor set (set 0 in shadow pass).
+    /// Retained for API completeness; no longer used since push constants
+    /// replaced the UBO for per-cascade light VP.
+    #[allow(dead_code)]
     pub fn camera_descriptor_set(
         &self,
         current_frame: usize,
@@ -239,9 +253,9 @@ impl ShadowMapSystem {
         self.render_pass
     }
 
-    /// The shadow framebuffer.
-    pub fn framebuffer(&self) -> vk::Framebuffer {
-        self.framebuffer
+    /// The shadow framebuffer for a specific cascade.
+    pub fn framebuffer(&self, cascade: usize) -> vk::Framebuffer {
+        self.framebuffers[cascade]
     }
 
     /// Shadow map width in texels.
@@ -255,6 +269,9 @@ impl ShadowMapSystem {
     }
 
     /// Write the light-space VP matrix to the UBO for the given slot.
+    /// Retained for API completeness; no longer called since push constants
+    /// replaced the UBO for per-cascade light VP.
+    #[allow(dead_code)]
     pub fn write_light_vp(&self, light_vp: &Mat4, current_frame: usize, viewport_index: usize) {
         let slot = UniformBuffer::slot(current_frame, viewport_index);
         let bytes = unsafe {
@@ -274,7 +291,15 @@ impl ShadowMapSystem {
         depth_format: vk::Format,
         width: u32,
         height: u32,
-    ) -> Result<(vk::Image, GpuAllocation, vk::ImageView), String> {
+    ) -> Result<
+        (
+            vk::Image,
+            GpuAllocation,
+            [vk::ImageView; NUM_SHADOW_CASCADES],
+            vk::ImageView,
+        ),
+        String,
+    > {
         let image_info = vk::ImageCreateInfo::default()
             .image_type(vk::ImageType::TYPE_2D)
             .format(depth_format)
@@ -284,7 +309,7 @@ impl ShadowMapSystem {
                 depth: 1,
             })
             .mip_levels(1)
-            .array_layers(1)
+            .array_layers(NUM_SHADOW_CASCADES as u32)
             .samples(vk::SampleCountFlags::TYPE_1)
             .tiling(vk::ImageTiling::OPTIMAL)
             .usage(vk::ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT | vk::ImageUsageFlags::SAMPLED)
@@ -302,22 +327,40 @@ impl ShadowMapSystem {
             MemoryLocation::GpuOnly,
         )?;
 
-        let view_info = vk::ImageViewCreateInfo::default()
+        // Per-layer views (TYPE_2D) — used as framebuffer attachments.
+        let mut layer_views = [vk::ImageView::null(); NUM_SHADOW_CASCADES];
+        for i in 0..NUM_SHADOW_CASCADES {
+            let view_info = vk::ImageViewCreateInfo::default()
+                .image(depth_image)
+                .view_type(vk::ImageViewType::TYPE_2D)
+                .format(depth_format)
+                .subresource_range(vk::ImageSubresourceRange {
+                    aspect_mask: vk::ImageAspectFlags::DEPTH,
+                    base_mip_level: 0,
+                    level_count: 1,
+                    base_array_layer: i as u32,
+                    layer_count: 1,
+                });
+            layer_views[i] = unsafe { device.create_image_view(&view_info, None) }
+                .map_err(|e| format!("Failed to create shadow layer {i} image view: {e}"))?;
+        }
+
+        // Full-array view (TYPE_2D_ARRAY) — used for sampling in the main pass.
+        let array_view_info = vk::ImageViewCreateInfo::default()
             .image(depth_image)
-            .view_type(vk::ImageViewType::TYPE_2D)
+            .view_type(vk::ImageViewType::TYPE_2D_ARRAY)
             .format(depth_format)
             .subresource_range(vk::ImageSubresourceRange {
                 aspect_mask: vk::ImageAspectFlags::DEPTH,
                 base_mip_level: 0,
                 level_count: 1,
                 base_array_layer: 0,
-                layer_count: 1,
+                layer_count: NUM_SHADOW_CASCADES as u32,
             });
+        let array_view = unsafe { device.create_image_view(&array_view_info, None) }
+            .map_err(|e| format!("Failed to create shadow array image view: {e}"))?;
 
-        let depth_view = unsafe { device.create_image_view(&view_info, None) }
-            .map_err(|e| format!("Failed to create shadow depth image view: {e}"))?;
-
-        Ok((depth_image, depth_allocation, depth_view))
+        Ok((depth_image, depth_allocation, layer_views, array_view))
     }
 
     /// One-shot layout transition: UNDEFINED → DEPTH_STENCIL_READ_ONLY_OPTIMAL.
@@ -357,7 +400,7 @@ impl ShadowMapSystem {
                     base_mip_level: 0,
                     level_count: 1,
                     base_array_layer: 0,
-                    layer_count: 1,
+                    layer_count: NUM_SHADOW_CASCADES as u32,
                 })
                 .src_access_mask(vk::AccessFlags::empty())
                 .dst_access_mask(vk::AccessFlags::SHADER_READ);
@@ -454,10 +497,15 @@ impl ShadowMapSystem {
 impl Drop for ShadowMapSystem {
     fn drop(&mut self) {
         unsafe {
-            self.device.destroy_framebuffer(self.framebuffer, None);
+            for fb in &self.framebuffers {
+                self.device.destroy_framebuffer(*fb, None);
+            }
             self.device.destroy_render_pass(self.render_pass, None);
             self.device.destroy_sampler(self.sampler, None);
-            self.device.destroy_image_view(self.depth_view, None);
+            self.device.destroy_image_view(self.depth_array_view, None);
+            for view in &self.depth_layer_views {
+                self.device.destroy_image_view(*view, None);
+            }
             self.device.destroy_image(self.depth_image, None);
             self.device
                 .destroy_descriptor_set_layout(self.shadow_ds_layout, None);
@@ -544,12 +592,14 @@ use super::shader::Shader;
 /// Create a depth-only pipeline for the shadow pass.
 ///
 /// Front-face culling to reduce peter-panning. No color attachments.
-/// Push constant: model matrix (64 bytes, vertex stage).
+/// Push constants: light VP matrix (64 bytes) + model matrix (64 bytes) = 128 bytes, vertex stage.
+/// The light VP is passed via push constants (not UBO) so that per-cascade values
+/// are correctly recorded into the command buffer instead of racing on a shared buffer.
 pub(crate) fn create_shadow_pipeline(
     device: &ash::Device,
     shader: &Shader,
     render_pass: vk::RenderPass,
-    shadow_camera_ds_layout: vk::DescriptorSetLayout,
+    _shadow_camera_ds_layout: vk::DescriptorSetLayout,
     pipeline_cache: vk::PipelineCache,
 ) -> Result<Pipeline, String> {
     let entry_point = c"main";
@@ -595,8 +645,8 @@ pub(crate) fn create_shadow_pipeline(
         .front_face(vk::FrontFace::COUNTER_CLOCKWISE)
         .line_width(1.0)
         .depth_bias_enable(true)
-        .depth_bias_constant_factor(2.0)
-        .depth_bias_slope_factor(3.0);
+        .depth_bias_constant_factor(0.75)
+        .depth_bias_slope_factor(1.0);
 
     let multisampling = vk::PipelineMultisampleStateCreateInfo::default()
         .rasterization_samples(vk::SampleCountFlags::TYPE_1);
@@ -611,16 +661,14 @@ pub(crate) fn create_shadow_pipeline(
     // No color attachments.
     let color_blending = vk::PipelineColorBlendStateCreateInfo::default();
 
-    // Push constant: model matrix (mat4 = 64 bytes), vertex stage.
+    // Push constants: light VP (64 bytes) + model matrix (64 bytes) = 128 bytes, vertex stage.
     let push_constant_range = vk::PushConstantRange {
         stage_flags: vk::ShaderStageFlags::VERTEX,
         offset: 0,
-        size: std::mem::size_of::<[f32; 16]>() as u32,
+        size: (std::mem::size_of::<[f32; 16]>() * 2) as u32, // 128 bytes
     };
 
-    let set_layouts = [shadow_camera_ds_layout];
     let layout_info = vk::PipelineLayoutCreateInfo::default()
-        .set_layouts(&set_layouts)
         .push_constant_ranges(std::slice::from_ref(&push_constant_range));
     let pipeline_layout = unsafe { device.create_pipeline_layout(&layout_info, None) }
         .map_err(|e| format!("Failed to create shadow pipeline layout: {e}"))?;

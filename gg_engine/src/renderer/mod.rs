@@ -46,7 +46,7 @@ pub use framebuffer::{
 };
 pub use gpu_profiling::{GpuProfiler, GpuTimingResult};
 pub(crate) use gpu_allocation::GpuAllocator;
-pub use lighting::{LightEnvironment, LightGpuData, MAX_POINT_LIGHTS};
+pub use lighting::{LightEnvironment, LightGpuData, MAX_POINT_LIGHTS, NUM_SHADOW_CASCADES};
 pub use material::{BlendMode, Material, MaterialGpuData, MaterialHandle, MaterialLibrary};
 pub use mesh::{load_gltf, Mesh, MeshVertex};
 pub use orthographic_camera::OrthographicCamera;

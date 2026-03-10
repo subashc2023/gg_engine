@@ -32,7 +32,8 @@ pub struct Sandbox3D {
 
     // Shadow mapping.
     shadows_enabled: bool,
-    shadow_light_vp: Option<Mat4>,
+    shadow_cascade_vps: Option<[Mat4; 2]>,
+    shadow_split_depth: f32,
 }
 
 impl Sandbox3D {
@@ -55,7 +56,8 @@ impl Sandbox3D {
             last_dt: 0.0,
             elapsed: 0.0,
             shadows_enabled: true,
-            shadow_light_vp: None,
+            shadow_cascade_vps: None,
+            shadow_split_depth: 0.0,
         }
     }
 
@@ -139,7 +141,7 @@ impl Sandbox3D {
         current_frame: usize,
     ) {
         if !self.shadows_enabled {
-            self.shadow_light_vp = None;
+            self.shadow_cascade_vps = None;
             return;
         }
 
@@ -147,45 +149,42 @@ impl Sandbox3D {
         if !renderer.has_shadow_pipeline() {
             if let Err(e) = renderer.init_shadow_pipeline() {
                 gg_engine::log::error!("Failed to create shadow pipeline: {e}");
-                self.shadow_light_vp = None;
+                self.shadow_cascade_vps = None;
                 return;
             }
         }
 
         let light_dir = Vec3::new(-0.3, -1.0, -0.5).normalize();
 
-        // Scene AABB (conservative, covering all objects).
-        let scene_min = Vec3::new(-4.0, -1.0, -4.0);
-        let scene_max = Vec3::new(4.0, 2.0, 4.0);
+        // Scene AABB covering the sandbox geometry.
+        let scene_min = Vec3::new(-3.0, -1.0, -3.0);
+        let scene_max = Vec3::new(3.5, 2.0, 3.0);
+        let vp = compute_directional_light_vp(light_dir, scene_min, scene_max);
+        let cascade_vps = [vp, vp];
+        self.shadow_cascade_vps = Some(cascade_vps);
+        self.shadow_split_depth = 0.5;
 
-        let light_vp = compute_directional_light_vp(light_dir, scene_min, scene_max);
-        self.shadow_light_vp = Some(light_vp);
+        // Mesh transforms for shadow submission.
+        let mesh_models: Vec<Mat4> = vec![
+            Mat4::from_scale_rotation_translation(Vec3::new(6.0, 1.0, 6.0), Quat::IDENTITY, Vec3::new(0.0, -0.5, 0.0)),
+            Mat4::from_translation(Vec3::ZERO),
+            Mat4::from_scale_rotation_translation(Vec3::splat(1.5), Quat::IDENTITY, Vec3::new(2.0, 0.25, 0.0)),
+        ];
+        let mesh_vas: Vec<Option<&VertexArray>> = vec![
+            self.plane_va.as_ref(),
+            self.cube_va.as_ref(),
+            self.sphere_va.as_ref(),
+        ];
 
-        renderer.begin_shadow_pass(&light_vp, cmd_buf, current_frame, 0);
-
-        // Submit all meshes to the shadow pass.
-        if let Some(va) = &self.plane_va {
-            let model = Mat4::from_scale_rotation_translation(
-                Vec3::new(6.0, 1.0, 6.0),
-                Quat::IDENTITY,
-                Vec3::new(0.0, -0.5, 0.0),
-            );
-            renderer.submit_shadow(va, &model, cmd_buf);
+        for cascade in 0..2 {
+            renderer.begin_shadow_pass(&cascade_vps[cascade], cascade, cmd_buf, current_frame, 0);
+            for (va_opt, model) in mesh_vas.iter().zip(&mesh_models) {
+                if let Some(va) = va_opt {
+                    renderer.submit_shadow(va, model, cmd_buf);
+                }
+            }
+            renderer.end_shadow_pass(cmd_buf);
         }
-        if let Some(va) = &self.cube_va {
-            let model = Mat4::from_translation(Vec3::new(0.0, 0.0, 0.0));
-            renderer.submit_shadow(va, &model, cmd_buf);
-        }
-        if let Some(va) = &self.sphere_va {
-            let model = Mat4::from_scale_rotation_translation(
-                Vec3::splat(1.5),
-                Quat::IDENTITY,
-                Vec3::new(2.0, 0.25, 0.0),
-            );
-            renderer.submit_shadow(va, &model, cmd_buf);
-        }
-
-        renderer.end_shadow_pass(cmd_buf);
     }
 
     pub fn on_render(&mut self, renderer: &mut Renderer) {
@@ -225,7 +224,8 @@ impl Sandbox3D {
             ambient_color: Vec3::new(0.05, 0.05, 0.08),
             ambient_intensity: 1.0,
             camera_position: eye,
-            shadow_light_vp: self.shadow_light_vp,
+            shadow_cascade_vps: self.shadow_cascade_vps,
+            cascade_split_depth: self.shadow_split_depth,
         };
         renderer.upload_lights(&light_env);
 

@@ -155,6 +155,16 @@ impl EditorCamera {
         &self.view_matrix
     }
 
+    /// Near clip plane distance.
+    pub fn near_clip(&self) -> f32 {
+        self.near_clip
+    }
+
+    /// Far clip plane distance.
+    pub fn far_clip(&self) -> f32 {
+        self.far_clip
+    }
+
     /// Camera position in world space.
     pub fn position(&self) -> Vec3 {
         self.focal_point - self.forward() * self.distance

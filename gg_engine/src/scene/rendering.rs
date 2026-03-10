@@ -1164,7 +1164,7 @@ impl Scene {
         cmd_buf: ash::vk::CommandBuffer,
         current_frame: usize,
         viewport_index: usize,
-    ) -> Option<glam::Mat4> {
+    ) {
         // Find the first directional light with shadows enabled.
         let shadow_light = self
             .world
@@ -1173,7 +1173,10 @@ impl Scene {
             .find(|(_, dl)| dl.cast_shadows)
             .map(|(handle, _dl)| handle);
 
-        let handle = shadow_light?;
+        let handle = match shadow_light {
+            Some(h) => h,
+            None => return,
+        };
 
         // Compute the light direction from the entity's world rotation.
         let world = self.get_world_transform(super::Entity::new(handle));
@@ -1196,36 +1199,49 @@ impl Scene {
             .collect();
 
         if meshes.is_empty() {
-            return None;
+            return;
         }
-
-        // Compute scene AABB from mesh transforms.
-        let (scene_min, scene_max) = self.compute_mesh_scene_bounds(&meshes);
-
-        // Compute the light-space VP matrix.
-        let light_vp = compute_directional_light_vp(direction, scene_min, scene_max);
 
         // Initialize shadow pipeline if needed.
         if !renderer.has_shadow_pipeline() {
             if let Err(e) = renderer.init_shadow_pipeline() {
                 log::error!("Failed to create shadow pipeline: {e}");
-                return None;
+                return;
             }
         }
 
-        // Render shadow pass.
-        renderer.begin_shadow_pass(&light_vp, cmd_buf, current_frame, viewport_index);
+        // Use scene-AABB fitted VP for both cascades. This gives stable shadow
+        // coverage regardless of camera angle — essential for an orbit camera.
+        let (cascade_vps, split_depth) = {
+            let (scene_min, scene_max) = self.compute_mesh_scene_bounds(&meshes);
+            let vp = compute_directional_light_vp(direction, scene_min, scene_max);
+            ([vp, vp], 0.5)
+        };
 
-        for (handle, world_transform) in &meshes {
-            let mesh_comp = self.world.get::<&MeshRendererComponent>(*handle).unwrap();
-            if let Some(ref va) = mesh_comp.vertex_array {
-                renderer.submit_shadow(va, world_transform, cmd_buf);
+        // Render each cascade.
+        for cascade in 0..crate::renderer::NUM_SHADOW_CASCADES {
+            renderer.begin_shadow_pass(
+                &cascade_vps[cascade],
+                cascade,
+                cmd_buf,
+                current_frame,
+                viewport_index,
+            );
+
+            for (handle, world_transform) in &meshes {
+                let mesh_comp = self.world.get::<&MeshRendererComponent>(*handle).unwrap();
+                if let Some(ref va) = mesh_comp.vertex_array {
+                    renderer.submit_shadow(va, world_transform, cmd_buf);
+                }
             }
+
+            renderer.end_shadow_pass(cmd_buf);
         }
 
-        renderer.end_shadow_pass(cmd_buf);
-
-        Some(light_vp)
+        // Stash cascade data for the main pass lighting upload.
+        self.shadow_cascade_cache
+            .borrow_mut()
+            .replace((cascade_vps, split_depth));
     }
 
     /// Compute a conservative AABB for shadow frustum fitting.
@@ -1335,24 +1351,25 @@ impl Scene {
         let mut light_env = self.collect_lights();
         light_env.camera_position = renderer.camera_position();
 
-        // Check for shadow VP stashed by a prior render_shadow_pass call.
-        // The shadow VP is also set by collect_lights_with_shadows if the
-        // directional light has cast_shadows enabled.
-        if light_env.shadow_light_vp.is_none() {
-            // Check if any directional light has cast_shadows.
-            if let Some((handle, _dl)) = self
+        // Check for cascade VP data stashed by a prior render_shadow_pass call.
+        if light_env.shadow_cascade_vps.is_none() {
+            if let Some((vps, split)) = self.shadow_cascade_cache.borrow_mut().take() {
+                light_env.shadow_cascade_vps = Some(vps);
+                light_env.cascade_split_depth = split;
+            } else if let Some((handle, _dl)) = self
                 .world
                 .query::<(hecs::Entity, &DirectionalLightComponent)>()
                 .iter()
                 .find(|(_, dl)| dl.cast_shadows)
             {
+                // Fallback: compute scene-AABB-based VP (both cascades use same VP).
                 let world = self.get_world_transform(super::Entity::new(handle));
                 let (_, world_rot, _) = world.to_scale_rotation_translation();
                 let direction = DirectionalLightComponent::direction(world_rot);
                 let (scene_min, scene_max) = self.compute_mesh_scene_bounds(&meshes);
-                light_env.shadow_light_vp = Some(compute_directional_light_vp(
-                    direction, scene_min, scene_max,
-                ));
+                let vp = compute_directional_light_vp(direction, scene_min, scene_max);
+                light_env.shadow_cascade_vps = Some([vp, vp]);
+                light_env.cascade_split_depth = 0.5;
             }
         }
 

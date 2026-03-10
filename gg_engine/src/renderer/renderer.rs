@@ -710,14 +710,15 @@ impl Renderer {
         self.shadow_pipeline.is_some()
     }
 
-    /// Begin the shadow depth-only render pass. Must be called OUTSIDE the
-    /// main render pass (before `begin_scene`). Records into `cmd_buf`.
+    /// Begin the shadow depth-only render pass for a specific cascade.
+    /// Must be called OUTSIDE the main render pass (before `begin_scene`).
     pub fn begin_shadow_pass(
         &self,
         light_vp: &Mat4,
+        cascade: usize,
         cmd_buf: vk::CommandBuffer,
-        current_frame: usize,
-        viewport_index: usize,
+        _current_frame: usize,
+        _viewport_index: usize,
     ) {
         let sm = self
             .shadow_map
@@ -727,9 +728,6 @@ impl Renderer {
             .shadow_pipeline
             .as_ref()
             .expect("Shadow pipeline not initialized");
-
-        // Write the light VP to the shadow camera UBO.
-        sm.write_light_vp(light_vp, current_frame, viewport_index);
 
         let extent = vk::Extent2D {
             width: sm.width(),
@@ -745,7 +743,7 @@ impl Renderer {
 
         let rp_info = vk::RenderPassBeginInfo::default()
             .render_pass(sm.render_pass())
-            .framebuffer(sm.framebuffer())
+            .framebuffer(sm.framebuffer(cascade))
             .render_area(vk::Rect2D {
                 offset: vk::Offset2D { x: 0, y: 0 },
                 extent,
@@ -785,15 +783,19 @@ impl Renderer {
                 pipeline.pipeline(),
             );
 
-            // Bind shadow camera descriptor set (set 0 = light VP UBO).
-            let camera_ds = sm.camera_descriptor_set(current_frame, viewport_index);
-            self.device.cmd_bind_descriptor_sets(
+            // Push light VP matrix (bytes [0..64]) via push constants.
+            // This is recorded into the command buffer, so each cascade gets
+            // its own VP even though they share the same command buffer.
+            let vp_bytes = std::slice::from_raw_parts(
+                light_vp as *const Mat4 as *const u8,
+                std::mem::size_of::<Mat4>(),
+            );
+            self.device.cmd_push_constants(
                 cmd_buf,
-                vk::PipelineBindPoint::GRAPHICS,
                 pipeline.layout(),
+                vk::ShaderStageFlags::VERTEX,
                 0,
-                &[camera_ds],
-                &[],
+                vp_bytes,
             );
         }
     }
@@ -812,6 +814,7 @@ impl Renderer {
             .expect("Shadow pipeline not initialized");
 
         unsafe {
+            // Push model matrix at offset 64 (after the light VP at offset 0).
             let transform_bytes = std::slice::from_raw_parts(
                 transform as *const Mat4 as *const u8,
                 std::mem::size_of::<Mat4>(),
@@ -820,7 +823,7 @@ impl Renderer {
                 cmd_buf,
                 pipeline.layout(),
                 vk::ShaderStageFlags::VERTEX,
-                0,
+                64, // offset: light VP is [0..64], model is [64..128]
                 transform_bytes,
             );
         }

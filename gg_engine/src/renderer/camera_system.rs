@@ -29,12 +29,13 @@ impl CameraSystem {
         device: &ash::Device,
         descriptor_pool: vk::DescriptorPool,
     ) -> Result<Self, String> {
-        // Descriptor set layout: binding 0, UNIFORM_BUFFER, vertex stage.
+        // Descriptor set layout: binding 0, UNIFORM_BUFFER, vertex + fragment stages.
+        // Fragment stage needed for cascade shadow map depth comparison (camera VP).
         let ubo_binding = vk::DescriptorSetLayoutBinding::default()
             .binding(0)
             .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
             .descriptor_count(1)
-            .stage_flags(vk::ShaderStageFlags::VERTEX);
+            .stage_flags(vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT);
         let ubo_layout_info = vk::DescriptorSetLayoutCreateInfo::default()
             .bindings(std::slice::from_ref(&ubo_binding));
         let ds_layout = unsafe { device.create_descriptor_set_layout(&ubo_layout_info, None) }

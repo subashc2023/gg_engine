@@ -84,12 +84,13 @@ layout(set = 3, binding = 0) uniform LightingUBO {
     vec4 camera_position;  // xyz = eye position, w = unused
     ivec4 counts;          // x = num_point_lights, y = has_directional, z = has_shadow, w = unused
 
-    // Shadow mapping
-    mat4 shadow_light_vp;  // light-space VP matrix
+    // Cascaded shadow mapping (2 cascades)
+    mat4 shadow_light_vp[2];    // per-cascade light-space VP matrices
+    vec4 cascade_split_depth;   // x = split depth (NDC [0,1]), y-w = unused
 } lighting;
 
-// Shadow map (set 4) — depth comparison sampler.
-layout(set = 4, binding = 0) uniform sampler2DShadow u_shadow_map;
+// Shadow map (set 4) — 2-layer depth comparison sampler array.
+layout(set = 4, binding = 0) uniform sampler2DArrayShadow u_shadow_map;
 
 layout(location = 0) in vec4 v_color;
 layout(location = 1) in vec3 v_normal;
@@ -104,39 +105,71 @@ layout(location = 0) out vec4 out_color;
 layout(location = 1) out int out_entity_id;
 #endif
 
+// Interleaved gradient noise (Jimenez 2014) — deterministic per-pixel hash.
+float interleavedGradientNoise(vec2 pos) {
+    return fract(52.9829189 * fract(0.06711056 * pos.x + 0.00583715 * pos.y));
+}
+
 // Calculate shadow factor for directional light (1.0 = fully lit, 0.0 = fully shadowed).
+// Uses 2-cascade CSM with per-pixel rotated PCF.
 float calculate_shadow(vec3 world_pos, vec3 normal) {
     if (lighting.counts.z == 0) return 1.0; // No shadow mapping active
 
+    // Select cascade based on fragment depth in NDC.
+    vec4 clip_pos = camera.u_view_projection * vec4(world_pos, 1.0);
+    float depth_ndc = clip_pos.z / clip_pos.w; // [0,1] in Vulkan
+    int cascade = (depth_ndc > lighting.cascade_split_depth.x) ? 1 : 0;
+
     // Offset along surface normal to reduce shadow acne on curved geometry.
     // Scale bias by surface angle to light — grazing angles need more offset.
+    // Near cascade (0) has higher texel density so needs less bias.
     vec3 light_dir = normalize(-lighting.dir_direction.xyz);
     float cos_theta = clamp(dot(normal, light_dir), 0.0, 1.0);
-    float normal_bias = mix(0.05, 0.005, cos_theta);
+    float bias_scale = (cascade == 0) ? 0.5 : 1.0;
+    float normal_bias = mix(0.01, 0.0005, cos_theta) * bias_scale;
     vec3 biased_pos = world_pos + normal * normal_bias;
-    vec4 light_space_pos = lighting.shadow_light_vp * vec4(biased_pos, 1.0);
+    vec4 light_space_pos = lighting.shadow_light_vp[cascade] * vec4(biased_pos, 1.0);
     vec3 proj_coords = light_space_pos.xyz / light_space_pos.w;
 
     // Vulkan NDC: x,y in [-1, 1], z in [0, 1].
     proj_coords.xy = proj_coords.xy * 0.5 + 0.5;
 
+    // Smooth fade at shadow map edges to avoid hard rectangular cutoff.
+    float fade_margin = 0.10;
+    float fade = smoothstep(0.0, fade_margin, proj_coords.x)
+               * smoothstep(1.0, 1.0 - fade_margin, proj_coords.x)
+               * smoothstep(0.0, fade_margin, proj_coords.y)
+               * smoothstep(1.0, 1.0 - fade_margin, proj_coords.y);
+
     // Outside shadow map frustum = not in shadow.
-    if (proj_coords.x < 0.0 || proj_coords.x > 1.0 ||
-        proj_coords.y < 0.0 || proj_coords.y > 1.0 ||
-        proj_coords.z > 1.0) {
+    if (fade <= 0.0 || proj_coords.z > 1.0 || proj_coords.z < 0.0) {
         return 1.0;
     }
 
-    // 5x5 PCF (percentage-closer filtering).
+    // Vogel disk PCF — golden-angle spiral with per-pixel rotation.
+    // Adaptive radius ensures ≥16 screen pixels of penumbra at any zoom.
+    const int SHADOW_SAMPLES = 32;
+    const float GOLDEN_ANGLE = 2.399963; // pi * (3 - sqrt(5))
+    float noise = interleavedGradientNoise(gl_FragCoord.xy);
     float shadow = 0.0;
-    vec2 texel_size = 1.0 / textureSize(u_shadow_map, 0);
-    for (int x = -2; x <= 2; ++x) {
-        for (int y = -2; y <= 2; ++y) {
-            vec2 offset = vec2(x, y) * texel_size;
-            shadow += texture(u_shadow_map, vec3(proj_coords.xy + offset, proj_coords.z));
-        }
+    vec2 texel_size = 1.0 / textureSize(u_shadow_map, 0).xy;
+    // screen_scale = texels-per-screen-pixel (via shadow UV derivatives).
+    // radius = 8/screen_scale ensures 2*radius/screen_scale ≥ 16 screen pixels.
+    float screen_scale = length(fwidth(proj_coords.xy)) / length(texel_size);
+    float radius = clamp(8.0 / max(screen_scale, 0.5), 3.0, 16.0);
+    for (int i = 0; i < SHADOW_SAMPLES; i++) {
+        float r = sqrt((float(i) + 0.5) / float(SHADOW_SAMPLES));
+        float theta = float(i) * GOLDEN_ANGLE + noise * 6.283185;
+        vec2 offset = vec2(cos(theta), sin(theta)) * r * radius * texel_size;
+        shadow += texture(u_shadow_map, vec4(proj_coords.xy + offset, float(cascade), proj_coords.z));
     }
-    shadow /= 25.0;
+    shadow /= float(SHADOW_SAMPLES);
+
+    // Apply edge fade. Blend toward fully-lit at shadow map boundaries.
+    shadow = mix(1.0, shadow, fade);
+
+    // Minimum shadow prevents pitch-black shadows (some scattered light always reaches).
+    shadow = max(shadow, 0.08);
 
     return shadow;
 }
