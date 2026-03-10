@@ -931,8 +931,6 @@ impl Renderer {
         if let Some(pp) = &mut self.postprocess {
             pp.resize(
                 &self.allocator,
-                self.descriptor_pool,
-                self.texture_descriptor_set_layout,
                 scene_color_view,
                 width,
                 height,

@@ -370,12 +370,16 @@ impl<T: Application> ApplicationHandler for EngineRunner<T> {
                                 );
 
                                 // Initialize egui Vulkan renderer.
+                                // sRGB framebuffer flag tells egui-ash-renderer to output
+                                // linear values (no manual gamma). This is correct for both
+                                // sRGB framebuffers (hardware does linear→sRGB) and scRGB
+                                // HDR (compositor expects linear values directly).
                                 let is_srgb = matches!(
                                     sc.format().format,
                                     vk::Format::B8G8R8A8_SRGB
                                         | vk::Format::R8G8B8A8_SRGB
                                         | vk::Format::A8B8G8R8_SRGB_PACK32
-                                );
+                                ) || sc.is_hdr();
 
                                 match egui_ash_renderer::Renderer::with_default_allocator(
                                     ctx.instance(),

@@ -100,6 +100,8 @@ impl std::fmt::Display for MsaaSamples {
 pub enum FramebufferTextureFormat {
     /// Standard RGBA color — maps to swapchain color format (B8G8R8A8_SRGB).
     RGBA8,
+    /// 16-bit float RGBA — for HDR scene rendering (R16G16B16A16_SFLOAT).
+    RGBA16F,
     /// Signed 32-bit integer — for entity ID / picking buffer.
     RedInteger,
     /// Depth-only — maps to engine depth format (D32_SFLOAT).
@@ -130,6 +132,7 @@ fn resolve_vk_format(
 ) -> vk::Format {
     match format {
         FramebufferTextureFormat::RGBA8 => color_format,
+        FramebufferTextureFormat::RGBA16F => vk::Format::R16G16B16A16_SFLOAT,
         FramebufferTextureFormat::RedInteger => vk::Format::R32_SINT,
         FramebufferTextureFormat::Depth => depth_format,
     }

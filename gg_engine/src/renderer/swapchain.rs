@@ -122,11 +122,18 @@ impl Swapchain {
         }
         .map_err(SwapchainError::SurfaceFormats)?;
 
+        // Prefer HDR scRGB (16-bit float linear) if available, else fall back to sRGB.
         let format = formats
             .iter()
             .find(|f| {
-                f.format == vk::Format::B8G8R8A8_SRGB
-                    && f.color_space == vk::ColorSpaceKHR::SRGB_NONLINEAR
+                f.format == vk::Format::R16G16B16A16_SFLOAT
+                    && f.color_space == vk::ColorSpaceKHR::EXTENDED_SRGB_LINEAR_EXT
+            })
+            .or_else(|| {
+                formats.iter().find(|f| {
+                    f.format == vk::Format::B8G8R8A8_SRGB
+                        && f.color_space == vk::ColorSpaceKHR::SRGB_NONLINEAR
+                })
             })
             .copied()
             .unwrap_or(formats[0]);
@@ -199,10 +206,15 @@ impl Swapchain {
             })
             .collect::<Result<Vec<_>, _>>()?;
 
+        let hdr_label = if format.color_space == vk::ColorSpaceKHR::EXTENDED_SRGB_LINEAR_EXT {
+            " (HDR scRGB)"
+        } else {
+            ""
+        };
         log::info!(
             target: "gg_engine",
-            "Swapchain created: {}x{}, {} images, format {:?}, present mode {:?}",
-            extent.width, extent.height, images.len(), format.format, present_mode
+            "Swapchain created: {}x{}, {} images, format {:?}{}, present mode {:?}",
+            extent.width, extent.height, images.len(), format.format, hdr_label, present_mode
         );
 
         // Find a supported depth format.
@@ -510,6 +522,11 @@ impl Swapchain {
 
     pub fn present_mode(&self) -> vk::PresentModeKHR {
         self.present_mode
+    }
+
+    /// Whether the swapchain is using an HDR format (scRGB linear float).
+    pub fn is_hdr(&self) -> bool {
+        self.format.color_space == vk::ColorSpaceKHR::EXTENDED_SRGB_LINEAR_EXT
     }
 
     pub fn advance_frame(&mut self) {

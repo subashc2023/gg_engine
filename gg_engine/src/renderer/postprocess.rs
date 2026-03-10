@@ -100,6 +100,11 @@ struct PostProcessImage {
 /// Number of bloom mip levels (each half the previous resolution).
 const BLOOM_MIP_LEVELS: usize = 4;
 
+/// Internal image format for all post-processing render targets.
+/// 16-bit float preserves HDR range through bloom and tone mapping,
+/// eliminating 8-bit color banding on smooth gradients.
+const PP_FORMAT: vk::Format = vk::Format::R16G16B16A16_SFLOAT;
+
 /// Post-processing pipeline: bloom, tone mapping, and color grading.
 ///
 /// Created lazily when enabled. Operates on the scene's offscreen framebuffer
@@ -165,8 +170,9 @@ impl PostProcessPipeline {
     ) -> Result<Self, String> {
         let _timer = ProfileTimer::new("PostProcessPipeline::new");
 
-        // Use UNORM for all internal images (linear space, no sRGB conversion).
-        let pp_format = vk::Format::R8G8B8A8_UNORM;
+        // Use 16-bit float for all internal images — preserves HDR range through
+        // bloom and tone mapping, eliminating 8-bit color banding on smooth gradients.
+        let pp_format = PP_FORMAT;
 
         // --- Render passes ---
         let store_pass = create_render_pass(device, pp_format, vk::AttachmentLoadOp::DONT_CARE)?;
@@ -348,8 +354,6 @@ impl PostProcessPipeline {
     pub fn resize(
         &mut self,
         allocator: &Arc<Mutex<GpuAllocator>>,
-        descriptor_pool: vk::DescriptorPool,
-        texture_ds_layout: vk::DescriptorSetLayout,
         scene_color_view: vk::ImageView,
         width: u32,
         height: u32,
@@ -363,7 +367,7 @@ impl PostProcessPipeline {
             let _ = self.device.device_wait_idle();
         }
 
-        let pp_format = vk::Format::R8G8B8A8_UNORM;
+        let pp_format = PP_FORMAT;
 
         // --- Destroy old resources (free DS back to pools, destroy Vulkan objects) ---
 
@@ -387,11 +391,11 @@ impl PostProcessPipeline {
                 .free_descriptor_sets(self.ds_pool, &[self.scene_ds]);
         }
 
-        // Destroy old output Vulkan objects. Its DS is from the main renderer pool.
+        // Destroy old output Vulkan objects. Keep the descriptor set alive so
+        // that egui primitives tessellated this frame still reference a valid
+        // handle — we update it in-place to point to the new image below.
+        let old_output_ds = self.output.descriptor_set;
         unsafe {
-            let _ = self
-                .device
-                .free_descriptor_sets(descriptor_pool, &[self.output.descriptor_set]);
             self.device
                 .destroy_framebuffer(self.output.framebuffer, None);
             self.device
@@ -422,12 +426,12 @@ impl PostProcessPipeline {
             mip_h /= 2;
         }
 
-        // Recreate output.
-        self.output = create_pp_image(
+        // Recreate output image/view/framebuffer, reusing the existing
+        // descriptor set so the raw handle stays stable for egui.
+        self.output = create_pp_image_reuse_ds(
             &self.device,
             allocator,
-            descriptor_pool,
-            texture_ds_layout,
+            old_output_ds,
             self.linear_sampler,
             self.store_pass,
             pp_format,
@@ -1023,6 +1027,109 @@ fn create_pp_image(
         width,
         height,
     })
+}
+
+/// Like [`create_pp_image`] but reuses an existing descriptor set instead of
+/// allocating a new one. This keeps the raw `VkDescriptorSet` handle stable
+/// so that external references (e.g. egui texture IDs) remain valid across
+/// resize operations.
+fn create_pp_image_reuse_ds(
+    device: &ash::Device,
+    allocator: &Arc<Mutex<GpuAllocator>>,
+    existing_ds: vk::DescriptorSet,
+    sampler: vk::Sampler,
+    render_pass: vk::RenderPass,
+    format: vk::Format,
+    width: u32,
+    height: u32,
+) -> Result<PostProcessImage, String> {
+    let image_info = vk::ImageCreateInfo::default()
+        .image_type(vk::ImageType::TYPE_2D)
+        .extent(vk::Extent3D {
+            width,
+            height,
+            depth: 1,
+        })
+        .mip_levels(1)
+        .array_layers(1)
+        .format(format)
+        .tiling(vk::ImageTiling::OPTIMAL)
+        .initial_layout(vk::ImageLayout::UNDEFINED)
+        .usage(vk::ImageUsageFlags::COLOR_ATTACHMENT | vk::ImageUsageFlags::SAMPLED)
+        .sharing_mode(vk::SharingMode::EXCLUSIVE)
+        .samples(vk::SampleCountFlags::TYPE_1);
+
+    let image = unsafe { device.create_image(&image_info, None) }
+        .map_err(|e| format!("Failed to create PP image: {e}"))?;
+
+    let allocation = GpuAllocator::allocate_for_image(
+        allocator,
+        device,
+        image,
+        "PostProcess",
+        MemoryLocation::GpuOnly,
+    )?;
+
+    let view_info = vk::ImageViewCreateInfo::default()
+        .image(image)
+        .view_type(vk::ImageViewType::TYPE_2D)
+        .format(format)
+        .subresource_range(vk::ImageSubresourceRange {
+            aspect_mask: vk::ImageAspectFlags::COLOR,
+            base_mip_level: 0,
+            level_count: 1,
+            base_array_layer: 0,
+            layer_count: 1,
+        });
+
+    let image_view = unsafe { device.create_image_view(&view_info, None) }
+        .map_err(|e| format!("Failed to create PP image view: {e}"))?;
+
+    let fb_info = vk::FramebufferCreateInfo::default()
+        .render_pass(render_pass)
+        .attachments(std::slice::from_ref(&image_view))
+        .width(width)
+        .height(height)
+        .layers(1);
+
+    let framebuffer = unsafe { device.create_framebuffer(&fb_info, None) }
+        .map_err(|e| format!("Failed to create PP framebuffer: {e}"))?;
+
+    // Update the existing descriptor set to point to the new image view.
+    update_ds(device, existing_ds, sampler, image_view);
+
+    Ok(PostProcessImage {
+        image,
+        _allocation: allocation,
+        image_view,
+        framebuffer,
+        descriptor_set: existing_ds,
+        width,
+        height,
+    })
+}
+
+/// Update an existing descriptor set's binding 0 to a new combined image sampler.
+fn update_ds(
+    device: &ash::Device,
+    ds: vk::DescriptorSet,
+    sampler: vk::Sampler,
+    image_view: vk::ImageView,
+) {
+    let image_info = vk::DescriptorImageInfo::default()
+        .sampler(sampler)
+        .image_view(image_view)
+        .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL);
+
+    let write = vk::WriteDescriptorSet::default()
+        .dst_set(ds)
+        .dst_binding(0)
+        .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+        .image_info(std::slice::from_ref(&image_info));
+
+    unsafe {
+        device.update_descriptor_sets(&[write], &[]);
+    }
 }
 
 /// Allocate a descriptor set and write a combined image sampler to binding 0.

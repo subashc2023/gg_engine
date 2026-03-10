@@ -507,7 +507,7 @@ impl Application for GGEditor {
             width: 800,
             height: 600,
             attachments: vec![
-                FramebufferTextureFormat::RGBA8.into(),
+                FramebufferTextureFormat::RGBA16F.into(),
                 FramebufferTextureFormat::RedInteger.into(),
                 FramebufferTextureFormat::Depth.into(),
             ],
@@ -1018,7 +1018,7 @@ impl Application for GGEditor {
                 .clamp_to_device(self.max_msaa_samples.to_vk());
             let samples = msaa.to_vk();
             let attachments = vec![
-                FramebufferTextureFormat::RGBA8.into(),
+                FramebufferTextureFormat::RGBA16F.into(),
                 FramebufferTextureFormat::RedInteger.into(),
                 FramebufferTextureFormat::Depth.into(),
             ];

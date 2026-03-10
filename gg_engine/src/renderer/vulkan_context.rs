@@ -105,6 +105,17 @@ impl VulkanContext {
             required_extensions.push(vk::KHR_PORTABILITY_ENUMERATION_NAME.as_ptr());
         }
 
+        // Enable HDR swapchain color spaces (EXTENDED_SRGB_LINEAR, etc.) if available.
+        let available_instance_extensions =
+            unsafe { entry.enumerate_instance_extension_properties(None) }.unwrap_or_default();
+        let has_swapchain_colorspace = available_instance_extensions.iter().any(|ext| {
+            let name = unsafe { CStr::from_ptr(ext.extension_name.as_ptr()) };
+            name == ash::ext::swapchain_colorspace::NAME
+        });
+        if has_swapchain_colorspace {
+            required_extensions.push(ash::ext::swapchain_colorspace::NAME.as_ptr());
+        }
+
         // Step 3: Validation layers (debug only)
         #[cfg(debug_assertions)]
         let layer_names = [c"VK_LAYER_KHRONOS_validation"];
