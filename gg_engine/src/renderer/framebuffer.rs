@@ -104,6 +104,8 @@ pub enum FramebufferTextureFormat {
     RGBA16F,
     /// Signed 32-bit integer — for entity ID / picking buffer.
     RedInteger,
+    /// 16-bit float RGBA for world-space normals (R16G16B16A16_SFLOAT).
+    NormalMap,
     /// Depth-only — maps to engine depth format (D32_SFLOAT).
     Depth,
 }
@@ -134,6 +136,7 @@ fn resolve_vk_format(
         FramebufferTextureFormat::RGBA8 => color_format,
         FramebufferTextureFormat::RGBA16F => vk::Format::R16G16B16A16_SFLOAT,
         FramebufferTextureFormat::RedInteger => vk::Format::R32_SINT,
+        FramebufferTextureFormat::NormalMap => vk::Format::R16G16B16A16_SFLOAT,
         FramebufferTextureFormat::Depth => depth_format,
     }
 }
@@ -655,6 +658,49 @@ impl Framebuffer {
         self.color_attachments[0].view
     }
 
+    /// Returns the 1x depth attachment image view (for post-processing depth sampling).
+    /// Returns `None` if no depth attachment exists or if MSAA is enabled.
+    pub fn depth_image_view(&self) -> Option<vk::ImageView> {
+        self.depth_attachment.as_ref().map(|da| da.view)
+    }
+
+    /// Returns the MSAA depth attachment image view (for post-processing depth resolve).
+    /// Returns `None` if MSAA is not enabled or no depth attachment exists.
+    pub fn msaa_depth_image_view(&self) -> Option<vk::ImageView> {
+        self.msaa_depth_attachment.as_ref().map(|da| da.view)
+    }
+
+    /// Returns the normal map image view (color attachment at index 2).
+    /// Returns `None` if the framebuffer has fewer than 3 color attachments.
+    pub fn normal_image_view(&self) -> Option<vk::ImageView> {
+        self.color_attachments.get(2).map(|ca| ca.view)
+    }
+
+    /// Returns the raw depth `vk::Image` handle (either 1x or MSAA, whichever exists).
+    /// Used for pipeline barriers that need to flush depth writes before shader reads.
+    pub fn depth_image(&self) -> Option<vk::Image> {
+        self.msaa_depth_attachment
+            .as_ref()
+            .or(self.depth_attachment.as_ref())
+            .map(|da| da.image)
+    }
+
+    /// Whether MSAA is active on this framebuffer.
+    pub fn is_msaa(&self) -> bool {
+        self.sample_count != vk::SampleCountFlags::TYPE_1
+    }
+
+    /// Returns the MSAA sample count as a u32 (1 = no MSAA).
+    pub fn sample_count_u32(&self) -> u32 {
+        match self.sample_count {
+            vk::SampleCountFlags::TYPE_1 => 1,
+            vk::SampleCountFlags::TYPE_2 => 2,
+            vk::SampleCountFlags::TYPE_4 => 4,
+            vk::SampleCountFlags::TYPE_8 => 8,
+            _ => 1,
+        }
+    }
+
     /// Build the correct clear value array for this framebuffer's attachments.
     /// Color attachments use the supplied clear color; RedInteger clears to -1;
     /// depth clears to 1.0/0.
@@ -678,6 +724,13 @@ impl Framebuffer {
                             },
                         });
                     }
+                    FramebufferTextureFormat::NormalMap => {
+                        values.push(vk::ClearValue {
+                            color: vk::ClearColorValue {
+                                float32: [0.0, 0.0, 0.0, 0.0],
+                            },
+                        });
+                    }
                     _ => {
                         values.push(vk::ClearValue {
                             color: vk::ClearColorValue {
@@ -692,11 +745,11 @@ impl Framebuffer {
         if msaa {
             // MSAA color attachments (rendered to, then auto-resolved).
             push_color_clears(&mut values, &self.color_attachment_specs);
-            // MSAA depth.
+            // MSAA depth (reverse-Z: clear to 0.0 = far plane).
             if self.msaa_depth_attachment.is_some() {
                 values.push(vk::ClearValue {
                     depth_stencil: vk::ClearDepthStencilValue {
-                        depth: 1.0,
+                        depth: 0.0,
                         stencil: 0,
                     },
                 });
@@ -706,10 +759,11 @@ impl Framebuffer {
         } else {
             // Non-MSAA: colors then depth.
             push_color_clears(&mut values, &self.color_attachment_specs);
+            // Reverse-Z: clear to 0.0 = far plane.
             if self.depth_attachment.is_some() {
                 values.push(vk::ClearValue {
                     depth_stencil: vk::ClearDepthStencilValue {
-                        depth: 1.0,
+                        depth: 0.0,
                         stencil: 0,
                     },
                 });
@@ -847,6 +901,7 @@ fn create_offscreen_render_pass(
         }
 
         // MSAA depth attachment (if present).
+        // STORE depth so post-processing (contact shadows) can resolve and sample it.
         let depth_attachment_ref = depth_spec.map(|ds| {
             let vk_fmt = resolve_vk_format(ds.format, color_format, depth_format);
             attachment_descriptions.push(
@@ -854,11 +909,11 @@ fn create_offscreen_render_pass(
                     .format(vk_fmt)
                     .samples(sample_count)
                     .load_op(vk::AttachmentLoadOp::CLEAR)
-                    .store_op(vk::AttachmentStoreOp::DONT_CARE)
+                    .store_op(vk::AttachmentStoreOp::STORE)
                     .stencil_load_op(vk::AttachmentLoadOp::DONT_CARE)
                     .stencil_store_op(vk::AttachmentStoreOp::DONT_CARE)
                     .initial_layout(vk::ImageLayout::UNDEFINED)
-                    .final_layout(vk::ImageLayout::DEPTH_STENCIL_ATTACHMENT_OPTIMAL),
+                    .final_layout(vk::ImageLayout::DEPTH_STENCIL_READ_ONLY_OPTIMAL),
             );
             vk::AttachmentReference {
                 attachment: color_specs.len() as u32,
@@ -948,11 +1003,13 @@ fn create_offscreen_render_pass(
                     .format(vk_fmt)
                     .samples(vk::SampleCountFlags::TYPE_1)
                     .load_op(vk::AttachmentLoadOp::CLEAR)
-                    .store_op(vk::AttachmentStoreOp::DONT_CARE)
+                    // STORE depth so post-processing (contact shadows) can sample it.
+                    .store_op(vk::AttachmentStoreOp::STORE)
                     .stencil_load_op(vk::AttachmentLoadOp::DONT_CARE)
                     .stencil_store_op(vk::AttachmentStoreOp::DONT_CARE)
                     .initial_layout(vk::ImageLayout::UNDEFINED)
-                    .final_layout(vk::ImageLayout::DEPTH_STENCIL_ATTACHMENT_OPTIMAL),
+                    // Transition to read-only for post-processing depth sampling.
+                    .final_layout(vk::ImageLayout::DEPTH_STENCIL_READ_ONLY_OPTIMAL),
             );
             vk::AttachmentReference {
                 attachment: color_specs.len() as u32,
@@ -1072,11 +1129,8 @@ fn create_depth_attachment(
     let is_msaa = samples != vk::SampleCountFlags::TYPE_1;
     let label = if is_msaa { "FB_MSAA_Depth" } else { "FB_Depth" };
 
-    let usage = if is_msaa {
-        vk::ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT | vk::ImageUsageFlags::TRANSIENT_ATTACHMENT
-    } else {
-        vk::ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT
-    };
+    // SAMPLED allows post-processing passes (e.g. contact shadows) to read the depth buffer.
+    let usage = vk::ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT | vk::ImageUsageFlags::SAMPLED;
 
     let image_info = vk::ImageCreateInfo::default()
         .image_type(vk::ImageType::TYPE_2D)

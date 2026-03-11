@@ -1375,6 +1375,20 @@ impl Scene {
 
         renderer.upload_lights(&light_env);
 
+        // Provide contact shadow data to the post-processing pipeline.
+        {
+            let vp = renderer.view_projection();
+            let (near, far) = renderer.camera_clip_planes();
+            if let Some(pp) = renderer.postprocess_mut() {
+                if let Some((dir, _, _)) = light_env.directional {
+                    let inv_vp = vp.inverse();
+                    pp.set_contact_shadow_data(inv_vp, vp, -dir, near, far);
+                } else {
+                    pp.clear_contact_shadow_data();
+                }
+            }
+        }
+
         let pipeline = match renderer.mesh3d_pipeline() {
             Ok(p) => p,
             Err(e) => {

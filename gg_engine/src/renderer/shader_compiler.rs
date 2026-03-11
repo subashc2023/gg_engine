@@ -13,7 +13,6 @@ pub(crate) struct CompiledShader {
 }
 
 /// Compiled SPIR-V bytecode for a compute shader.
-#[allow(dead_code)]
 pub(crate) struct CompiledComputeShader {
     pub comp_spv: Vec<u8>,
 }
@@ -58,7 +57,6 @@ pub(crate) fn compile_glsl(path: &Path) -> Result<CompiledShader, String> {
 /// Compile a `.glsl` compute shader source file into SPIR-V bytecode.
 ///
 /// The source must contain a `#type compute` marker.
-#[allow(dead_code)]
 pub(crate) fn compile_compute_glsl(path: &Path) -> Result<CompiledComputeShader, String> {
     let source = std::fs::read_to_string(path)
         .map_err(|e| format!("Cannot read '{}': {e}", path.display()))?;

@@ -111,6 +111,12 @@ pub(crate) struct PostProcessSettings {
     pub exposure: f32,
     pub contrast: f32,
     pub saturation: f32,
+    pub contact_shadows_enabled: bool,
+    pub contact_shadows_max_distance: f32,
+    pub contact_shadows_thickness: f32,
+    pub contact_shadows_intensity: f32,
+    pub contact_shadows_step_count: i32,
+    pub contact_shadows_debug: i32,
 }
 
 impl Default for PostProcessSettings {
@@ -125,6 +131,12 @@ impl Default for PostProcessSettings {
             exposure: 0.0,
             contrast: 1.0,
             saturation: 1.0,
+            contact_shadows_enabled: false,
+            contact_shadows_max_distance: 0.15,
+            contact_shadows_thickness: 0.02,
+            contact_shadows_intensity: 0.6,
+            contact_shadows_step_count: 64,
+            contact_shadows_debug: 0,
         }
     }
 }
@@ -163,6 +175,9 @@ struct ViewportInfo {
     game_size: (u32, u32),
     game_hovered: bool,
     game_viewport_enabled: bool,
+    /// Old framebuffers kept alive until the GPU is done with them.
+    /// Drained on the next frame after `device_wait_idle`.
+    pending_drop_fbs: Vec<Framebuffer>,
 }
 
 /// Transform gizmo tool configuration and drag state.
@@ -440,6 +455,7 @@ impl Application for GGEditor {
                 game_size: (0, 0),
                 game_hovered: false,
                 game_viewport_enabled: false,
+                pending_drop_fbs: Vec::new(),
             },
             playback: PlaybackState {
                 scene_state: SceneState::Edit,
@@ -509,6 +525,7 @@ impl Application for GGEditor {
             attachments: vec![
                 FramebufferTextureFormat::RGBA16F.into(),
                 FramebufferTextureFormat::RedInteger.into(),
+                FramebufferTextureFormat::NormalMap.into(),
                 FramebufferTextureFormat::Depth.into(),
             ],
             samples: msaa_samples.to_vk(),
@@ -516,7 +533,7 @@ impl Application for GGEditor {
             Ok(fb) => {
                 // Initialize post-processing pipeline with the scene framebuffer.
                 if let Err(e) =
-                    renderer.init_postprocess(fb.color_image_view(), fb.width(), fb.height())
+                    renderer.init_postprocess(fb.color_image_view(), fb.depth_image_view(), fb.msaa_depth_image_view(), fb.normal_image_view(), fb.width(), fb.height())
                 {
                     warn!("Failed to create post-processing pipeline: {e}");
                 } else if let Some(pp) = renderer.postprocess() {
@@ -620,6 +637,12 @@ impl Application for GGEditor {
                 pp.exposure = s.exposure;
                 pp.contrast = s.contrast;
                 pp.saturation = s.saturation;
+                pp.contact_shadows_enabled = s.contact_shadows_enabled;
+                pp.contact_shadows_max_distance = s.contact_shadows_max_distance;
+                pp.contact_shadows_thickness = s.contact_shadows_thickness;
+                pp.contact_shadows_intensity = s.contact_shadows_intensity;
+                pp.contact_shadows_step_count = s.contact_shadows_step_count;
+                pp.contact_shadows_debug = s.contact_shadows_debug;
             }
 
             // Update post-process output handle (may change on resize).
@@ -1006,12 +1029,23 @@ impl Application for GGEditor {
             .unwrap_or(-1);
     }
 
-    fn on_render(&mut self, renderer: &mut Renderer) {
-        profile_scope!("GGEditor::on_render");
+    fn on_pre_render(&mut self, renderer: &mut Renderer) {
+        // Drain deferred framebuffers from a previous MSAA change.
+        // The old FBs were kept alive so this frame's egui primitives (which
+        // may reference the old descriptor sets) could render safely. Now that
+        // the GPU is idle, we can destroy them.
+        if !self.viewport.pending_drop_fbs.is_empty() {
+            renderer.wait_gpu_idle();
+            self.viewport.pending_drop_fbs.clear();
+        }
 
         // Handle MSAA sample count change — recreate framebuffers + pipelines.
+        // This runs BEFORE viewport_infos extraction so the new framebuffer
+        // handles are captured for the current frame's command buffer recording.
         if self.ui.msaa_changed {
             self.ui.msaa_changed = false;
+            renderer.wait_gpu_idle();
+
             let msaa = self
                 .editor_settings
                 .msaa_samples
@@ -1020,11 +1054,16 @@ impl Application for GGEditor {
             let attachments = vec![
                 FramebufferTextureFormat::RGBA16F.into(),
                 FramebufferTextureFormat::RedInteger.into(),
+                FramebufferTextureFormat::NormalMap.into(),
                 FramebufferTextureFormat::Depth.into(),
             ];
 
-            // Recreate scene framebuffer.
-            self.viewport.scene_fb = None; // drop old
+            // Move old framebuffers to deferred-destroy list (kept alive for
+            // this frame because egui primitives may still reference the old
+            // descriptor sets / egui texture IDs).
+            if let Some(old_fb) = self.viewport.scene_fb.take() {
+                self.viewport.pending_drop_fbs.push(old_fb);
+            }
             match renderer.create_framebuffer(FramebufferSpec {
                 width: self.viewport.size.0.max(1),
                 height: self.viewport.size.1.max(1),
@@ -1033,7 +1072,7 @@ impl Application for GGEditor {
             }) {
                 Ok(fb) => {
                     if let Err(e) = renderer
-                        .resize_postprocess(fb.color_image_view(), fb.width(), fb.height())
+                        .resize_postprocess(fb.color_image_view(), fb.depth_image_view(), fb.msaa_depth_image_view(), fb.normal_image_view(), fb.width(), fb.height())
                     {
                         error!("Failed to resize postprocess for MSAA: {e}");
                     } else if let Some(pp) = renderer.postprocess() {
@@ -1045,8 +1084,8 @@ impl Application for GGEditor {
             }
 
             // Recreate game framebuffer if it exists.
-            if self.viewport.game_fb.is_some() {
-                self.viewport.game_fb = None; // drop old
+            if let Some(old_game_fb) = self.viewport.game_fb.take() {
+                self.viewport.pending_drop_fbs.push(old_game_fb);
                 match renderer.create_framebuffer(FramebufferSpec {
                     width: self.viewport.game_size.0.max(1),
                     height: self.viewport.game_size.1.max(1),
@@ -1058,8 +1097,8 @@ impl Application for GGEditor {
                 }
             }
 
-            // Offscreen pipeline recreation happens automatically in
-            // application.rs when it detects a new framebuffer render pass.
+            // Offscreen pipeline recreation is handled automatically by
+            // application.rs after on_pre_render returns.
             info!("MSAA changed to {msaa}");
         }
 
@@ -1084,6 +1123,10 @@ impl Application for GGEditor {
                 Err(e) => warn!("Failed to create game framebuffer: {e}"),
             }
         }
+    }
+
+    fn on_render(&mut self, renderer: &mut Renderer) {
+        profile_scope!("GGEditor::on_render");
 
         // Drop old scenes that may hold GPU resources (textures). We must
         // wait for all in-flight GPU work to finish before destroying them,
@@ -1153,11 +1196,19 @@ impl Application for GGEditor {
         match self.playback.scene_state {
             SceneState::Edit => {
                 renderer.set_camera_position(self.editor_camera.position());
+                renderer.set_camera_clip_planes(
+                    self.editor_camera.near_clip(),
+                    self.editor_camera.far_clip(),
+                );
                 self.scene
                     .on_update_editor(&self.editor_camera.view_projection(), renderer);
             }
             SceneState::Simulate => {
                 renderer.set_camera_position(self.editor_camera.position());
+                renderer.set_camera_clip_planes(
+                    self.editor_camera.near_clip(),
+                    self.editor_camera.far_clip(),
+                );
                 self.scene
                     .on_update_simulation(&self.editor_camera.view_projection(), renderer);
             }

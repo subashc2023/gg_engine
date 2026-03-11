@@ -53,7 +53,7 @@ impl Default for DepthConfig {
         Self {
             test: true,
             write: true,
-            compare_op: vk::CompareOp::LESS_OR_EQUAL,
+            compare_op: vk::CompareOp::GREATER_OR_EQUAL,
         }
     }
 }
@@ -63,21 +63,21 @@ impl DepthConfig {
     pub const DISABLED: Self = Self {
         test: false,
         write: false,
-        compare_op: vk::CompareOp::LESS_OR_EQUAL,
+        compare_op: vk::CompareOp::GREATER_OR_EQUAL,
     };
 
-    /// Standard 3D depth: test + write with LESS_OR_EQUAL.
+    /// Standard 3D depth: test + write with GREATER_OR_EQUAL (reverse-Z).
     pub const STANDARD_3D: Self = Self {
         test: true,
         write: true,
-        compare_op: vk::CompareOp::LESS_OR_EQUAL,
+        compare_op: vk::CompareOp::GREATER_OR_EQUAL,
     };
 
     /// Read-only depth: test but no write (e.g. transparent 3D objects).
     pub const READ_ONLY: Self = Self {
         test: true,
         write: false,
-        compare_op: vk::CompareOp::LESS_OR_EQUAL,
+        compare_op: vk::CompareOp::GREATER_OR_EQUAL,
     };
 }
 
@@ -161,8 +161,8 @@ fn rasterizer(
         .front_face(vk::FrontFace::COUNTER_CLOCKWISE)
         .line_width(1.0)
         .depth_bias_enable(wireframe)
-        .depth_bias_constant_factor(if wireframe { -1.0 } else { 0.0 })
-        .depth_bias_slope_factor(if wireframe { -1.0 } else { 0.0 });
+        .depth_bias_constant_factor(if wireframe { 1.0 } else { 0.0 })
+        .depth_bias_slope_factor(if wireframe { 1.0 } else { 0.0 });
     info
 }
 
@@ -192,10 +192,19 @@ fn batch_blend_attachments(
             .dst_alpha_blend_factor(vk::BlendFactor::ZERO)
             .alpha_blend_op(vk::BlendOp::ADD),
     );
-    for _ in 1..color_attachment_count {
+    if color_attachment_count > 1 {
+        // Attachment 1: entity ID — R channel only, no blending.
         attachments.push(
             vk::PipelineColorBlendAttachmentState::default()
                 .color_write_mask(vk::ColorComponentFlags::R)
+                .blend_enable(false),
+        );
+    }
+    for _ in 2..color_attachment_count {
+        // Attachment 2+: normal map etc. — RGBA, no blending.
+        attachments.push(
+            vk::PipelineColorBlendAttachmentState::default()
+                .color_write_mask(vk::ColorComponentFlags::RGBA)
                 .blend_enable(false),
         );
     }
@@ -307,7 +316,7 @@ pub(crate) fn create_pipeline(
     let depth_stencil = vk::PipelineDepthStencilStateCreateInfo::default()
         .depth_test_enable(true)
         .depth_write_enable(true)
-        .depth_compare_op(vk::CompareOp::LESS_OR_EQUAL)
+        .depth_compare_op(vk::CompareOp::GREATER_OR_EQUAL)
         .depth_bounds_test_enable(false)
         .stencil_test_enable(false);
 
@@ -760,13 +769,20 @@ pub(crate) fn create_3d_pipeline(
         .stencil_test_enable(false);
 
     // Build blend attachments: first uses the material's blend mode,
-    // additional attachments (e.g. entity ID in editor) use no blending.
+    // attachment 1 = entity ID (R-only), attachment 2+ = normals etc. (RGBA).
     let mut blend_attachments = Vec::with_capacity(color_attachment_count as usize);
     blend_attachments.push(blend_mode_attachment(blend_mode));
-    for _ in 1..color_attachment_count {
+    if color_attachment_count > 1 {
         blend_attachments.push(
             vk::PipelineColorBlendAttachmentState::default()
                 .color_write_mask(vk::ColorComponentFlags::R)
+                .blend_enable(false),
+        );
+    }
+    for _ in 2..color_attachment_count {
+        blend_attachments.push(
+            vk::PipelineColorBlendAttachmentState::default()
+                .color_write_mask(vk::ColorComponentFlags::RGBA)
                 .blend_enable(false),
         );
     }

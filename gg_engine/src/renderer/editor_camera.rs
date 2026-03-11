@@ -235,6 +235,11 @@ impl EditorCamera {
     fn update_projection(&mut self) {
         self.projection =
             Mat4::perspective_lh(self.fov, self.aspect_ratio, self.near_clip, self.far_clip);
+        // Reverse-Z: map near→1, far→0 in NDC depth for better precision at distance.
+        // IEEE-754 float has more mantissa bits near 0, so reverse-Z gives dramatically
+        // better depth resolution at distance compared to standard Z.
+        self.projection.z_axis.z = self.near_clip / (self.near_clip - self.far_clip);
+        self.projection.w_axis.z = self.near_clip * self.far_clip / (self.far_clip - self.near_clip);
         // Vulkan Y-flip: NDC Y+ is down, we want Y+ up.
         self.projection.y_axis.y *= -1.0;
     }

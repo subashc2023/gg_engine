@@ -1441,7 +1441,10 @@ impl Renderer2DData {
     /// Compiles each `.glsl` file with `glslc`, creates new shader modules,
     /// and rebuilds all pipelines. On failure, returns an error and keeps
     /// the old pipelines intact.
-    pub(super) fn reload_shaders(&mut self, shader_dir: &Path) -> Result<u32, String> {
+    pub(super) fn reload_shaders(
+        &mut self,
+        shader_dir: &Path,
+    ) -> Result<(u32, Vec<(String, shader_compiler::CompiledShader)>), String> {
         let entries: Vec<_> = std::fs::read_dir(shader_dir)
             .map_err(|e| format!("Cannot read shader dir '{}': {e}", shader_dir.display()))?
             .filter_map(|e| e.ok())
@@ -1457,11 +1460,21 @@ impl Renderer2DData {
         }
 
         // Phase 1: Compile all shaders. If any fail, abort before touching state.
+        // Compute shaders (#type compute) use a separate path; skip them from
+        // the vertex/fragment compilation so they don't fail with "missing #type vertex".
         let mut compiled: Vec<(String, shader_compiler::CompiledShader)> = Vec::new();
+        let mut compiled_compute: Vec<(String, shader_compiler::CompiledComputeShader)> = Vec::new();
         for path in &entries {
             let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
-            let result = shader_compiler::compile_glsl(path)?;
-            compiled.push((stem.to_string(), result));
+            let source = std::fs::read_to_string(path)
+                .map_err(|e| format!("Cannot read '{}': {e}", path.display()))?;
+            if source.contains("#type compute") {
+                let result = shader_compiler::compile_compute_glsl(path)?;
+                compiled_compute.push((stem.to_string(), result));
+            } else {
+                let result = shader_compiler::compile_glsl(path)?;
+                compiled.push((stem.to_string(), result));
+            }
         }
 
         // Phase 2: Create new Shader objects from the compiled SPIR-V.
@@ -1605,7 +1618,7 @@ impl Renderer2DData {
 
         let count = new_shaders.len() as u32;
         log::info!(target: "gg_engine", "Hot-reloaded {} shaders", count);
-        Ok(count)
+        Ok((count, compiled))
     }
 
     // -- Accessors for GpuParticleSystem rendering ----------------------------

@@ -103,6 +103,7 @@ layout(location = 4) in flat int v_entity_id;
 layout(location = 0) out vec4 out_color;
 #ifdef OFFSCREEN
 layout(location = 1) out int out_entity_id;
+layout(location = 2) out vec4 out_normal;
 #endif
 
 // Interleaved gradient noise (Jimenez 2014) — deterministic per-pixel hash.
@@ -116,9 +117,10 @@ float calculate_shadow(vec3 world_pos, vec3 normal) {
     if (lighting.counts.z == 0) return 1.0; // No shadow mapping active
 
     // Select cascade based on fragment depth in NDC.
+    // Reverse-Z: near→1, far→0, so farther = lower depth_ndc.
     vec4 clip_pos = camera.u_view_projection * vec4(world_pos, 1.0);
-    float depth_ndc = clip_pos.z / clip_pos.w; // [0,1] in Vulkan
-    int cascade = (depth_ndc > lighting.cascade_split_depth.x) ? 1 : 0;
+    float depth_ndc = clip_pos.z / clip_pos.w;
+    int cascade = (depth_ndc < lighting.cascade_split_depth.x) ? 1 : 0;
 
     // Offset along surface normal to reduce shadow acne on curved geometry.
     // Scale bias by surface angle to light — grazing angles need more offset.
@@ -247,5 +249,6 @@ void main() {
 
 #ifdef OFFSCREEN
     out_entity_id = v_entity_id;
+    out_normal = vec4(n, 1.0);
 #endif
 }

@@ -200,6 +200,27 @@ pub(crate) fn settings_ui(
         ui.add(egui::Slider::new(&mut pp.exposure, -5.0..=5.0).text("Exposure"));
         ui.add(egui::Slider::new(&mut pp.contrast, 0.0..=3.0).text("Contrast"));
         ui.add(egui::Slider::new(&mut pp.saturation, 0.0..=3.0).text("Saturation"));
+
+        ui.add_space(4.0);
+        ui.checkbox(&mut pp.contact_shadows_enabled, "Contact Shadows");
+        if pp.contact_shadows_enabled {
+            ui.add(egui::Slider::new(&mut pp.contact_shadows_max_distance, 0.01..=3.0).text("Max Distance"));
+            ui.add(egui::Slider::new(&mut pp.contact_shadows_thickness, 0.01..=1.0).text("Thickness"));
+            ui.add(egui::Slider::new(&mut pp.contact_shadows_intensity, 0.0..=1.0).text("Intensity"));
+            let mut steps = pp.contact_shadows_step_count;
+            ui.add(egui::Slider::new(&mut steps, 4..=64).text("Steps"));
+            pp.contact_shadows_step_count = steps;
+            let debug_labels = ["Off", "Linear Depth", "Raw (no fade)", "Precision ULPs"];
+            let mut debug_idx = (pp.contact_shadows_debug as usize).min(debug_labels.len() - 1);
+            egui::ComboBox::from_label("Debug")
+                .selected_text(debug_labels[debug_idx])
+                .show_ui(ui, |ui| {
+                    for (i, label) in debug_labels.iter().enumerate() {
+                        ui.selectable_value(&mut debug_idx, i, *label);
+                    }
+                });
+            pp.contact_shadows_debug = debug_idx as i32;
+        }
     }
 
     if !scene_warnings.is_empty() {

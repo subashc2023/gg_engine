@@ -100,6 +100,9 @@ pub struct Renderer {
 
     // Camera eye position for specular lighting (set each frame by the caller).
     camera_position: Vec3,
+    // Camera clip planes for contact shadow depth linearization.
+    camera_near: f32,
+    camera_far: f32,
 
     // Format info for framebuffer creation.
     color_format: vk::Format,
@@ -252,6 +255,8 @@ impl Renderer {
             material_library,
             lighting,
             camera_position: Vec3::ZERO,
+            camera_near: 0.1,
+            camera_far: 1000.0,
             color_format,
             depth_format,
             pipeline_cache,
@@ -634,6 +639,11 @@ impl Renderer {
         Ok(())
     }
 
+    /// Return the current offscreen render pass (if any).
+    pub fn offscreen_render_pass(&self) -> Option<vk::RenderPass> {
+        self.offscreen_render_pass
+    }
+
     /// Return the maximum MSAA sample count supported by the GPU.
     pub fn max_msaa_samples(&self) -> vk::SampleCountFlags {
         self.max_msaa_samples
@@ -907,6 +917,9 @@ impl Renderer {
     pub fn init_postprocess(
         &mut self,
         scene_color_view: vk::ImageView,
+        scene_depth_view: Option<vk::ImageView>,
+        msaa_depth_view: Option<vk::ImageView>,
+        scene_normal_view: Option<vk::ImageView>,
         width: u32,
         height: u32,
     ) -> Result<(), String> {
@@ -916,6 +929,9 @@ impl Renderer {
             self.descriptor_pool,
             self.texture_descriptor_set_layout,
             scene_color_view,
+            scene_depth_view,
+            msaa_depth_view,
+            scene_normal_view,
             self.pipeline_cache,
             width,
             height,
@@ -928,6 +944,9 @@ impl Renderer {
     pub fn resize_postprocess(
         &mut self,
         scene_color_view: vk::ImageView,
+        scene_depth_view: Option<vk::ImageView>,
+        msaa_depth_view: Option<vk::ImageView>,
+        scene_normal_view: Option<vk::ImageView>,
         width: u32,
         height: u32,
     ) -> Result<(), String> {
@@ -935,11 +954,14 @@ impl Renderer {
             pp.resize(
                 &self.allocator,
                 scene_color_view,
+                scene_depth_view,
+                msaa_depth_view,
+                scene_normal_view,
                 width,
                 height,
             )
         } else {
-            self.init_postprocess(scene_color_view, width, height)
+            self.init_postprocess(scene_color_view, scene_depth_view, msaa_depth_view, scene_normal_view, width, height)
         }
     }
 
@@ -965,7 +987,14 @@ impl Renderer {
                     .device_wait_idle()
                     .map_err(|e| format!("device_wait_idle failed: {e}"))?;
             }
-            data.reload_shaders(shader_dir)
+            let (mut count, compiled) = data.reload_shaders(shader_dir)?;
+
+            // Also hot-reload post-processing pipelines (contact shadows, bloom, etc.).
+            if let Some(pp) = &mut self.postprocess {
+                count += pp.reload_shaders(&compiled)?;
+            }
+
+            Ok(count)
         } else {
             Err("2D renderer not initialized".to_string())
         }
@@ -1855,6 +1884,17 @@ impl Renderer {
     /// Get the current camera eye position.
     pub fn camera_position(&self) -> Vec3 {
         self.camera_position
+    }
+
+    /// Set the camera near/far clip planes (used for contact shadow depth linearization).
+    pub fn set_camera_clip_planes(&mut self, near: f32, far: f32) {
+        self.camera_near = near;
+        self.camera_far = far;
+    }
+
+    /// Get the camera clip planes (near, far).
+    pub fn camera_clip_planes(&self) -> (f32, f32) {
+        (self.camera_near, self.camera_far)
     }
 
     /// Set the scene time used for GPU-computed animation.

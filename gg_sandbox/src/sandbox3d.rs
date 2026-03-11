@@ -195,6 +195,9 @@ impl Sandbox3D {
 
         let aspect = self.window_width as f32 / self.window_height.max(1) as f32;
         let mut proj = Mat4::perspective_lh(45.0_f32.to_radians(), aspect, 0.1, 100.0);
+        // Reverse-Z: near→1, far→0 for better depth precision at distance.
+        proj.z_axis.z = 0.1 / (0.1 - 100.0);
+        proj.w_axis.z = 0.1 * 100.0 / (100.0 - 0.1);
         proj.y_axis.y *= -1.0;
 
         let eye = Vec3::new(

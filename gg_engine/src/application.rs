@@ -78,6 +78,12 @@ pub trait Application {
     /// (e.g. camera, crosshair) that should bypass physics interpolation.
     fn on_late_update(&mut self, _input: &Input) {}
 
+    /// Called after `on_egui` but before viewport framebuffer handles are
+    /// captured for GPU command recording. Use this for operations that
+    /// recreate framebuffers (e.g. MSAA sample count changes) so the new
+    /// handles are used in the current frame's command buffer.
+    fn on_pre_render(&mut self, _renderer: &mut Renderer) {}
+
     /// Submit draw calls. Called each frame between `begin_scene` / `end_scene`.
     fn on_render(&mut self, _renderer: &mut Renderer) {}
 
@@ -720,7 +726,34 @@ impl<T: Application> ApplicationHandler for EngineRunner<T> {
                     .expect("Failed to set egui textures");
             }
 
-            // Egui texture registration for all viewport framebuffers (first frame / after resize).
+            // Pre-render callback: runs after on_egui (UI flags set) but before
+            // viewport framebuffer handles are captured for command recording.
+            // Used for MSAA changes that recreate framebuffers.
+            self.app.on_pre_render(renderer);
+
+            // If a viewport framebuffer's render pass changed (e.g. MSAA recreation),
+            // recreate the offscreen batch pipeline to match.
+            for vi in 0..self.app.viewport_count() {
+                if let Some(fb) = self.app.viewport_framebuffer(vi) {
+                    if fb.color_attachment_count() > 1 {
+                        let need_update = renderer
+                            .offscreen_render_pass()
+                            .map_or(true, |rp| rp != fb.render_pass());
+                        if need_update {
+                            if let Err(e) = renderer.create_offscreen_batch_pipeline(
+                                fb.render_pass(),
+                                fb.color_attachment_count() as u32,
+                                fb.sample_count(),
+                            ) {
+                                log::error!(target: "gg_engine", "Offscreen pipeline recreate failed: {e}");
+                            }
+                        }
+                        break;
+                    }
+                }
+            }
+
+            // Egui texture registration for all viewport framebuffers (first frame / after resize / after MSAA recreation).
             for vi in 0..self.app.viewport_count() {
                 if let Some(fb) = self.app.viewport_framebuffer_mut(vi) {
                     if fb.egui_texture_id().is_none() {
@@ -776,8 +809,11 @@ impl<T: Application> ApplicationHandler for EngineRunner<T> {
                             } else if vi == 0 {
                                 // Resize post-processing pipeline to match.
                                 let color_view = fb.color_image_view();
+                                let depth_view = fb.depth_image_view();
+                                let msaa_depth_view = fb.msaa_depth_image_view();
+                                let normal_view = fb.normal_image_view();
                                 if let Err(e) =
-                                    renderer.resize_postprocess(color_view, w, h)
+                                    renderer.resize_postprocess(color_view, depth_view, msaa_depth_view, normal_view, w, h)
                                 {
                                     log::error!(target: "gg_engine", "Post-process resize failed: {e}");
                                 }
@@ -820,6 +856,7 @@ impl<T: Application> ApplicationHandler for EngineRunner<T> {
                         width: fb.width(),
                         height: fb.height(),
                         color_image: fb.color_image(),
+                        depth_image: fb.depth_image(),
                         pending_readback: pending,
                         readback_image,
                         readback_buffer: fb.readback_buffer(),
@@ -912,6 +949,8 @@ struct SceneFbInfo {
     width: u32,
     height: u32,
     color_image: vk::Image,
+    /// Raw depth `vk::Image` (either 1x or MSAA) for pipeline barriers.
+    depth_image: Option<vk::Image>,
     // Pixel readback.
     pending_readback: Option<(usize, i32, i32)>,
     readback_image: Option<vk::Image>,
@@ -1077,10 +1116,9 @@ fn render_frame<T: Application>(
             unsafe {
                 device.cmd_end_render_pass(cmd_buf);
 
-                // Pipeline barrier: ensure offscreen color write is visible
-                // as a shader read when egui samples the texture in the
-                // swapchain render pass.
-                let barrier = vk::ImageMemoryBarrier::default()
+                // Pipeline barriers: ensure offscreen color AND depth writes
+                // are visible as shader reads for post-processing / egui.
+                let color_barrier = vk::ImageMemoryBarrier::default()
                     .old_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
                     .new_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
                     .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
@@ -1096,14 +1134,38 @@ fn render_frame<T: Application>(
                     .src_access_mask(vk::AccessFlags::COLOR_ATTACHMENT_WRITE)
                     .dst_access_mask(vk::AccessFlags::SHADER_READ);
 
+                let mut barriers = vec![color_barrier];
+
+                // Depth barrier: flush depth writes so the post-processing
+                // contact shadow pass (or MSAA depth resolve) can read them.
+                if let Some(depth_img) = fb.depth_image {
+                    let depth_barrier = vk::ImageMemoryBarrier::default()
+                        .old_layout(vk::ImageLayout::DEPTH_STENCIL_READ_ONLY_OPTIMAL)
+                        .new_layout(vk::ImageLayout::DEPTH_STENCIL_READ_ONLY_OPTIMAL)
+                        .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+                        .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+                        .image(depth_img)
+                        .subresource_range(vk::ImageSubresourceRange {
+                            aspect_mask: vk::ImageAspectFlags::DEPTH,
+                            base_mip_level: 0,
+                            level_count: 1,
+                            base_array_layer: 0,
+                            layer_count: 1,
+                        })
+                        .src_access_mask(vk::AccessFlags::DEPTH_STENCIL_ATTACHMENT_WRITE)
+                        .dst_access_mask(vk::AccessFlags::SHADER_READ);
+                    barriers.push(depth_barrier);
+                }
+
                 device.cmd_pipeline_barrier(
                     cmd_buf,
-                    vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT,
+                    vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT
+                        | vk::PipelineStageFlags::LATE_FRAGMENT_TESTS,
                     vk::PipelineStageFlags::FRAGMENT_SHADER,
                     vk::DependencyFlags::empty(),
                     &[],
                     &[],
-                    &[barrier],
+                    &barriers,
                 );
 
                 // Pixel readback: copy 1×1 region from the target attachment
@@ -1222,7 +1284,7 @@ fn render_frame<T: Application>(
             },
             vk::ClearValue {
                 depth_stencil: vk::ClearDepthStencilValue {
-                    depth: 1.0,
+                    depth: 0.0, // Reverse-Z: far plane = 0.
                     stencil: 0,
                 },
             },
@@ -1264,7 +1326,7 @@ fn render_frame<T: Application>(
             },
             vk::ClearValue {
                 depth_stencil: vk::ClearDepthStencilValue {
-                    depth: 1.0,
+                    depth: 0.0, // Reverse-Z: far plane = 0.
                     stencil: 0,
                 },
             },

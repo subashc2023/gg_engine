@@ -45,6 +45,7 @@ layout(location = 4) in flat int v_entity_id;
 layout(location = 0) out vec4 out_color;
 #ifdef OFFSCREEN
 layout(location = 1) out int out_entity_id;
+layout(location = 2) out vec4 out_normal;
 #endif
 
 void main() {
@@ -59,5 +60,6 @@ void main() {
     out_color.a *= circle;
 #ifdef OFFSCREEN
     out_entity_id = v_entity_id;
+    out_normal = vec4(0.0, 0.0, 1.0, 0.0);
 #endif
 }

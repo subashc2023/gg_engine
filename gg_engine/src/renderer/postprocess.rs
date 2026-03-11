@@ -74,10 +74,37 @@ struct CompositePushConstants {
     contrast: f32,
     saturation: f32,
     tonemapping_mode: i32,
+    apply_shadow: i32,
     _pad0: f32,
     _pad1: f32,
-    _pad2: f32,
 }
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct BilateralBlurPushConstants {
+    texel_size: [f32; 2],
+    direction: [f32; 2],
+    near_plane: f32,
+    far_plane: f32,
+    _pad: [f32; 2],
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct ContactShadowPushConstants {
+    inv_view_projection: [f32; 16], // 64 bytes
+    view_projection: [f32; 16],     // 64 bytes
+    light_direction: [f32; 4],      // 16 bytes: xyz = dir toward light, w = 0
+    max_distance: f32,              // 4 bytes
+    thickness: f32,                 // 4 bytes (world-space units)
+    intensity: f32,                 // 4 bytes
+    step_count: i32,                // 4 bytes
+    near_plane: f32,                // 4 bytes
+    far_plane: f32,                 // 4 bytes
+    debug_mode: i32,                // 4 bytes: 0=normal, 1=depth, 2=raw, 3=precision
+    _pad1: f32,                     // 4 bytes padding to 16-byte alignment
+}
+// Total: 176 bytes (within 256-byte push constant limit on desktop GPUs)
 
 // ---------------------------------------------------------------------------
 // Internal image for intermediate render targets
@@ -122,12 +149,39 @@ pub struct PostProcessPipeline {
     upsample_pipeline: Pipeline,
     composite_pipeline: Pipeline,
 
+    // Contact shadows pipeline + intermediate images
+    contact_shadow_pipeline: Option<Pipeline>,
+    contact_shadowed: Option<PostProcessImage>,  // shadow factor output (ping-pong A)
+    shadow_temp: Option<PostProcessImage>,        // bilateral blur intermediate (ping-pong B)
+    bilateral_blur_pipeline: Option<Pipeline>,
+    /// Descriptor set for the 1x depth (either direct or resolved from MSAA).
+    depth_ds: Option<vk::DescriptorSet>,
+    depth_sampler: Option<vk::Sampler>,
+    /// Descriptor set for the G-buffer normal attachment.
+    normal_ds: Option<vk::DescriptorSet>,
+
+    // MSAA depth resolve resources (only when MSAA enabled).
+    depth_resolve_pipeline: Option<Pipeline>,
+    msaa_depth_ds: Option<vk::DescriptorSet>,
+    resolved_depth: Option<PostProcessImage>,
+
+    // Per-frame contact shadow data (set by caller before execute).
+    cs_inv_vp: [f32; 16],
+    cs_vp: [f32; 16],
+    cs_light_dir: [f32; 3],
+    cs_near: f32,
+    cs_far: f32,
+    cs_has_light: bool,
+
     // Sampler layout (1 combined image sampler at binding 0)
     sampler_ds_layout: vk::DescriptorSetLayout,
     ds_pool: vk::DescriptorPool,
 
     // Linear sampler used by all passes
     linear_sampler: vk::Sampler,
+
+    // Pipeline cache for shader hot-reload
+    pipeline_cache: vk::PipelineCache,
 
     // Intermediate images
     bloom_mips: Vec<PostProcessImage>,
@@ -147,6 +201,14 @@ pub struct PostProcessPipeline {
     pub contrast: f32,
     pub saturation: f32,
 
+    // Contact shadow settings
+    pub contact_shadows_enabled: bool,
+    pub contact_shadows_max_distance: f32,
+    pub contact_shadows_thickness: f32,
+    pub contact_shadows_intensity: f32,
+    pub contact_shadows_step_count: i32,
+    pub contact_shadows_debug: i32,
+
     width: u32,
     height: u32,
 }
@@ -154,9 +216,10 @@ pub struct PostProcessPipeline {
 impl PostProcessPipeline {
     /// Create the post-processing pipeline.
     ///
-    /// `scene_color_view` is the offscreen framebuffer's color attachment
-    /// image view (the input to post-processing).
-    /// `scene_color_format` is the format of that attachment (typically B8G8R8A8_SRGB).
+    /// `scene_color_view` — offscreen framebuffer's color attachment image view.
+    /// `scene_depth_view` — 1x depth image view (non-MSAA), or `None` if MSAA.
+    /// `msaa_depth_view` — MSAA depth image view (when MSAA enabled), or `None`.
+    /// `scene_normal_view` — G-buffer normal attachment view, or `None`.
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         device: &ash::Device,
@@ -164,6 +227,9 @@ impl PostProcessPipeline {
         descriptor_pool: vk::DescriptorPool,
         texture_ds_layout: vk::DescriptorSetLayout,
         scene_color_view: vk::ImageView,
+        scene_depth_view: Option<vk::ImageView>,
+        msaa_depth_view: Option<vk::ImageView>,
+        scene_normal_view: Option<vk::ImageView>,
         pipeline_cache: vk::PipelineCache,
         width: u32,
         height: u32,
@@ -194,8 +260,9 @@ impl PostProcessPipeline {
         }
         .map_err(|e| format!("Failed to create PP descriptor set layout: {e}"))?;
 
-        // --- Descriptor pool (bloom mips + output + scene = BLOOM_MIP_LEVELS + 2) ---
-        let max_sets = (BLOOM_MIP_LEVELS + 2) as u32;
+        // --- Descriptor pool ---
+        // bloom mips + output + scene + contact_shadowed + shadow_temp + depth + msaa_depth + resolved_depth + normal
+        let max_sets = (BLOOM_MIP_LEVELS + 8) as u32;
         let pool_size = vk::DescriptorPoolSize {
             ty: vk::DescriptorType::COMBINED_IMAGE_SAMPLER,
             descriptor_count: max_sets,
@@ -316,11 +383,161 @@ impl PostProcessPipeline {
             device,
             &composite_shader,
             store_pass,
-            &[sampler_ds_layout, sampler_ds_layout], // scene + bloom
+            &[sampler_ds_layout, sampler_ds_layout, sampler_ds_layout], // scene + bloom + shadow
             std::mem::size_of::<CompositePushConstants>() as u32,
             false,
             pipeline_cache,
         )?;
+
+        // --- Bilateral blur pipeline ---
+        let bilateral_blur_shader = Shader::new(
+            device,
+            "bilateral_blur",
+            super::shaders::BILATERAL_BLUR_VERT_SPV,
+            super::shaders::BILATERAL_BLUR_FRAG_SPV,
+        )?;
+        let bilateral_blur_pipeline = create_fullscreen_pipeline(
+            device,
+            &bilateral_blur_shader,
+            store_pass,
+            &[sampler_ds_layout, sampler_ds_layout], // shadow + depth
+            std::mem::size_of::<BilateralBlurPushConstants>() as u32,
+            false,
+            pipeline_cache,
+        )?;
+
+        // --- Contact shadows (requires either 1x depth or MSAA depth) ---
+        let has_any_depth = scene_depth_view.is_some() || msaa_depth_view.is_some();
+
+        // Nearest sampler for depth (exact values, no interpolation).
+        let depth_sampler = if has_any_depth {
+            Some(unsafe {
+                device.create_sampler(
+                    &vk::SamplerCreateInfo::default()
+                        .mag_filter(vk::Filter::NEAREST)
+                        .min_filter(vk::Filter::NEAREST)
+                        .address_mode_u(vk::SamplerAddressMode::CLAMP_TO_EDGE)
+                        .address_mode_v(vk::SamplerAddressMode::CLAMP_TO_EDGE)
+                        .address_mode_w(vk::SamplerAddressMode::CLAMP_TO_EDGE),
+                    None,
+                )
+            }
+            .map_err(|e| format!("Failed to create depth sampler: {e}"))?)
+        } else {
+            None
+        };
+
+        // Contact shadow pipeline + intermediate image (shared by MSAA and non-MSAA paths).
+        let (contact_shadow_pipeline, contact_shadowed, shadow_temp) = if has_any_depth {
+            let cs_shader = Shader::new(
+                device,
+                "contact_shadows",
+                super::shaders::CONTACT_SHADOWS_VERT_SPV,
+                super::shaders::CONTACT_SHADOWS_FRAG_SPV,
+            )?;
+            let cs_pipeline = create_fullscreen_pipeline(
+                device,
+                &cs_shader,
+                store_pass,
+                &[sampler_ds_layout, sampler_ds_layout], // depth + normal
+                std::mem::size_of::<ContactShadowPushConstants>() as u32,
+                false,
+                pipeline_cache,
+            )?;
+            let cs_image = create_pp_image(
+                device,
+                allocator,
+                ds_pool,
+                sampler_ds_layout,
+                linear_sampler,
+                store_pass,
+                pp_format,
+                width,
+                height,
+            )?;
+            let cs_temp = create_pp_image(
+                device,
+                allocator,
+                ds_pool,
+                sampler_ds_layout,
+                linear_sampler,
+                store_pass,
+                pp_format,
+                width,
+                height,
+            )?;
+            (Some(cs_pipeline), Some(cs_image), Some(cs_temp))
+        } else {
+            (None, None, None)
+        };
+
+        // MSAA depth resolve resources (resolve MSAA depth → 1x R16F image).
+        let (depth_resolve_pipeline, msaa_depth_ds, resolved_depth, depth_ds) =
+            if let Some(msaa_dv) = msaa_depth_view {
+                let resolve_shader = Shader::new(
+                    device,
+                    "depth_resolve",
+                    super::shaders::DEPTH_RESOLVE_VERT_SPV,
+                    super::shaders::DEPTH_RESOLVE_FRAG_SPV,
+                )?;
+                let resolve_pipeline = create_fullscreen_pipeline(
+                    device,
+                    &resolve_shader,
+                    store_pass,
+                    &[sampler_ds_layout], // MSAA depth input
+                    0, // no push constants
+                    false,
+                    pipeline_cache,
+                )?;
+                let resolved = create_pp_image(
+                    device,
+                    allocator,
+                    ds_pool,
+                    sampler_ds_layout,
+                    depth_sampler.unwrap(),
+                    store_pass,
+                    pp_format,
+                    width,
+                    height,
+                )?;
+                let msaa_ds = allocate_and_write_ds_with_layout(
+                    device,
+                    ds_pool,
+                    sampler_ds_layout,
+                    depth_sampler.unwrap(),
+                    msaa_dv,
+                    vk::ImageLayout::DEPTH_STENCIL_READ_ONLY_OPTIMAL,
+                )?;
+                // Contact shadows sample the resolved (1x) depth image.
+                let d_ds = resolved.descriptor_set;
+                (Some(resolve_pipeline), Some(msaa_ds), Some(resolved), Some(d_ds))
+            } else if let Some(depth_view) = scene_depth_view {
+                // Non-MSAA: sample depth directly.
+                let d_ds = allocate_and_write_ds_with_layout(
+                    device,
+                    ds_pool,
+                    sampler_ds_layout,
+                    depth_sampler.unwrap(),
+                    depth_view,
+                    vk::ImageLayout::DEPTH_STENCIL_READ_ONLY_OPTIMAL,
+                )?;
+                (None, None, None, Some(d_ds))
+            } else {
+                (None, None, None, None)
+            };
+
+        // --- Normal G-buffer descriptor set ---
+        let normal_ds = if let Some(nv) = scene_normal_view {
+            Some(allocate_and_write_ds(
+                device,
+                ds_pool,
+                sampler_ds_layout,
+                linear_sampler,
+                nv,
+            )?)
+        } else {
+            None
+        };
 
         Ok(Self {
             device: device.clone(),
@@ -329,9 +546,26 @@ impl PostProcessPipeline {
             downsample_pipeline,
             upsample_pipeline,
             composite_pipeline,
+            contact_shadow_pipeline,
+            contact_shadowed,
+            shadow_temp,
+            bilateral_blur_pipeline: Some(bilateral_blur_pipeline),
+            depth_ds,
+            depth_sampler,
+            normal_ds,
+            depth_resolve_pipeline,
+            msaa_depth_ds,
+            resolved_depth,
+            cs_inv_vp: [0.0; 16],
+            cs_vp: [0.0; 16],
+            cs_light_dir: [0.0; 3],
+            cs_near: 0.1,
+            cs_far: 1000.0,
+            cs_has_light: false,
             sampler_ds_layout,
             ds_pool,
             linear_sampler,
+            pipeline_cache,
             bloom_mips,
             output,
             scene_ds,
@@ -344,6 +578,12 @@ impl PostProcessPipeline {
             exposure: 0.0,
             contrast: 1.0,
             saturation: 1.0,
+            contact_shadows_enabled: false,
+            contact_shadows_max_distance: 0.5,
+            contact_shadows_thickness: 0.15,
+            contact_shadows_intensity: 0.6,
+            contact_shadows_step_count: 24,
+            contact_shadows_debug: 0,
             width,
             height,
         })
@@ -355,6 +595,9 @@ impl PostProcessPipeline {
         &mut self,
         allocator: &Arc<Mutex<GpuAllocator>>,
         scene_color_view: vk::ImageView,
+        scene_depth_view: Option<vk::ImageView>,
+        msaa_depth_view: Option<vk::ImageView>,
+        scene_normal_view: Option<vk::ImageView>,
         width: u32,
         height: u32,
     ) -> Result<(), String> {
@@ -448,9 +691,160 @@ impl PostProcessPipeline {
             scene_color_view,
         )?;
 
+        // --- Destroy old normal DS ---
+        if let Some(n_ds) = self.normal_ds.take() {
+            unsafe {
+                let _ = self.device.free_descriptor_sets(self.ds_pool, &[n_ds]);
+            }
+        }
+
+        // --- Destroy old contact shadow / resolve resources ---
+        if let Some(cs_img) = self.contact_shadowed.take() {
+            unsafe {
+                let _ = self
+                    .device
+                    .free_descriptor_sets(self.ds_pool, &[cs_img.descriptor_set]);
+                self.device.destroy_framebuffer(cs_img.framebuffer, None);
+                self.device.destroy_image_view(cs_img.image_view, None);
+                self.device.destroy_image(cs_img.image, None);
+            }
+        }
+        if let Some(st_img) = self.shadow_temp.take() {
+            unsafe {
+                let _ = self
+                    .device
+                    .free_descriptor_sets(self.ds_pool, &[st_img.descriptor_set]);
+                self.device.destroy_framebuffer(st_img.framebuffer, None);
+                self.device.destroy_image_view(st_img.image_view, None);
+                self.device.destroy_image(st_img.image, None);
+            }
+        }
+        // Only free depth_ds if it's NOT the resolved_depth's DS (avoid double-free).
+        let resolved_ds = self.resolved_depth.as_ref().map(|r| r.descriptor_set);
+        if let Some(d_ds) = self.depth_ds.take() {
+            if resolved_ds != Some(d_ds) {
+                unsafe {
+                    let _ = self.device.free_descriptor_sets(self.ds_pool, &[d_ds]);
+                }
+            }
+        }
+        if let Some(rd) = self.resolved_depth.take() {
+            unsafe {
+                let _ = self
+                    .device
+                    .free_descriptor_sets(self.ds_pool, &[rd.descriptor_set]);
+                self.device.destroy_framebuffer(rd.framebuffer, None);
+                self.device.destroy_image_view(rd.image_view, None);
+                self.device.destroy_image(rd.image, None);
+            }
+        }
+        if let Some(m_ds) = self.msaa_depth_ds.take() {
+            unsafe {
+                let _ = self.device.free_descriptor_sets(self.ds_pool, &[m_ds]);
+            }
+        }
+
+        // --- Recreate contact shadow + resolve resources ---
+        let has_any_depth = scene_depth_view.is_some() || msaa_depth_view.is_some();
+        let depth_samp = self.depth_sampler.unwrap_or(self.linear_sampler);
+
+        if has_any_depth && self.contact_shadow_pipeline.is_some() {
+            self.contact_shadowed = Some(create_pp_image(
+                &self.device,
+                allocator,
+                self.ds_pool,
+                self.sampler_ds_layout,
+                self.linear_sampler,
+                self.store_pass,
+                pp_format,
+                width,
+                height,
+            )?);
+            self.shadow_temp = Some(create_pp_image(
+                &self.device,
+                allocator,
+                self.ds_pool,
+                self.sampler_ds_layout,
+                self.linear_sampler,
+                self.store_pass,
+                pp_format,
+                width,
+                height,
+            )?);
+        }
+
+        if let Some(msaa_dv) = msaa_depth_view {
+            // MSAA: resolve depth → 1x intermediate, contact shadows sample that.
+            let resolved = create_pp_image(
+                &self.device,
+                allocator,
+                self.ds_pool,
+                self.sampler_ds_layout,
+                depth_samp,
+                self.store_pass,
+                pp_format,
+                width,
+                height,
+            )?;
+            self.msaa_depth_ds = Some(allocate_and_write_ds_with_layout(
+                &self.device,
+                self.ds_pool,
+                self.sampler_ds_layout,
+                depth_samp,
+                msaa_dv,
+                vk::ImageLayout::DEPTH_STENCIL_READ_ONLY_OPTIMAL,
+            )?);
+            self.depth_ds = Some(resolved.descriptor_set);
+            self.resolved_depth = Some(resolved);
+        } else if let Some(depth_view) = scene_depth_view {
+            // Non-MSAA: sample depth directly.
+            self.depth_ds = Some(allocate_and_write_ds_with_layout(
+                &self.device,
+                self.ds_pool,
+                self.sampler_ds_layout,
+                depth_samp,
+                depth_view,
+                vk::ImageLayout::DEPTH_STENCIL_READ_ONLY_OPTIMAL,
+            )?);
+        }
+
+        // --- Recreate normal DS ---
+        if let Some(nv) = scene_normal_view {
+            self.normal_ds = Some(allocate_and_write_ds(
+                &self.device,
+                self.ds_pool,
+                self.sampler_ds_layout,
+                self.linear_sampler,
+                nv,
+            )?);
+        }
+
         self.width = width;
         self.height = height;
         Ok(())
+    }
+
+    /// Set per-frame contact shadow data (camera matrices + light direction).
+    /// Must be called before `execute()` each frame when contact shadows are active.
+    pub fn set_contact_shadow_data(
+        &mut self,
+        inv_vp: glam::Mat4,
+        vp: glam::Mat4,
+        light_dir: glam::Vec3,
+        near_plane: f32,
+        far_plane: f32,
+    ) {
+        self.cs_inv_vp = inv_vp.to_cols_array();
+        self.cs_vp = vp.to_cols_array();
+        self.cs_light_dir = [light_dir.x, light_dir.y, light_dir.z];
+        self.cs_near = near_plane;
+        self.cs_far = far_plane;
+        self.cs_has_light = true;
+    }
+
+    /// Clear per-frame contact shadow data (no directional light this frame).
+    pub fn clear_contact_shadow_data(&mut self) {
+        self.cs_has_light = false;
     }
 
     /// Execute the post-processing pipeline.
@@ -461,12 +855,43 @@ impl PostProcessPipeline {
     pub fn execute(&self, cmd_buf: vk::CommandBuffer) {
         let _timer = ProfileTimer::new("PostProcess::execute");
 
-        // Guard: only run bloom if all mip levels were successfully created.
+        // Resolve MSAA depth to 1x if needed (before contact shadows).
+        if self.depth_resolve_pipeline.is_some() && self.contact_shadows_active() {
+            self.execute_depth_resolve(cmd_buf);
+        }
+
+        // Contact shadows: output shadow factor, then bilateral blur.
+        let has_shadow = if self.contact_shadows_active() {
+            self.execute_contact_shadows(cmd_buf);
+            // Bilateral blur: H pass → shadow_temp, V pass → contact_shadowed.
+            // Skip blur in debug modes — it only processes .r and would corrupt RGB debug output.
+            if self.contact_shadows_debug == 0
+                && self.bilateral_blur_pipeline.is_some()
+                && self.shadow_temp.is_some()
+            {
+                self.execute_bilateral_blur(cmd_buf);
+            }
+            true
+        } else {
+            false
+        };
+
+        // Bloom always reads from raw scene (shadow applied in composite).
         if self.bloom_enabled && self.bloom_mips.len() == BLOOM_MIP_LEVELS {
-            self.execute_bloom_downsample(cmd_buf);
+            self.execute_bloom_downsample(cmd_buf, self.scene_ds);
             self.execute_bloom_upsample(cmd_buf);
         }
-        self.execute_composite(cmd_buf);
+        self.execute_composite(cmd_buf, has_shadow);
+    }
+
+    /// Returns true when contact shadows should run this frame.
+    fn contact_shadows_active(&self) -> bool {
+        self.contact_shadows_enabled
+            && self.cs_has_light
+            && self.contact_shadow_pipeline.is_some()
+            && self.contact_shadowed.is_some()
+            && self.depth_ds.is_some()
+            && self.normal_ds.is_some()
     }
 
     /// The output image's descriptor set handle for egui texture registration.
@@ -479,13 +904,126 @@ impl PostProcessPipeline {
         (self.width, self.height)
     }
 
+    /// Hot-reload post-processing shaders from compiled SPIR-V.
+    ///
+    /// Rebuilds all post-processing pipelines (bloom downsample/upsample,
+    /// composite, contact shadows, depth resolve) using the provided compiled
+    /// shaders. The old pipelines are dropped after replacement.
+    pub(crate) fn reload_shaders(
+        &mut self,
+        compiled: &[(String, super::shader_compiler::CompiledShader)],
+    ) -> Result<u32, String> {
+        let mut count = 0u32;
+
+        for (name, cs) in compiled {
+            match name.as_str() {
+                "bloom_downsample" => {
+                    let shader = Shader::new(&self.device, name, &cs.vert_spv, &cs.frag_spv)?;
+                    let pipeline = create_fullscreen_pipeline(
+                        &self.device,
+                        &shader,
+                        self.store_pass,
+                        &[self.sampler_ds_layout],
+                        std::mem::size_of::<DownsamplePushConstants>() as u32,
+                        false,
+                        self.pipeline_cache,
+                    )?;
+                    self.downsample_pipeline = pipeline;
+                    count += 1;
+                }
+                "bloom_upsample" => {
+                    let shader = Shader::new(&self.device, name, &cs.vert_spv, &cs.frag_spv)?;
+                    let pipeline = create_fullscreen_pipeline(
+                        &self.device,
+                        &shader,
+                        self.blend_pass,
+                        &[self.sampler_ds_layout],
+                        std::mem::size_of::<UpsamplePushConstants>() as u32,
+                        true,
+                        self.pipeline_cache,
+                    )?;
+                    self.upsample_pipeline = pipeline;
+                    count += 1;
+                }
+                "postprocess_composite" => {
+                    let shader = Shader::new(&self.device, name, &cs.vert_spv, &cs.frag_spv)?;
+                    let pipeline = create_fullscreen_pipeline(
+                        &self.device,
+                        &shader,
+                        self.store_pass,
+                        &[self.sampler_ds_layout, self.sampler_ds_layout, self.sampler_ds_layout],
+                        std::mem::size_of::<CompositePushConstants>() as u32,
+                        false,
+                        self.pipeline_cache,
+                    )?;
+                    self.composite_pipeline = pipeline;
+                    count += 1;
+                }
+                "contact_shadows" => {
+                    if self.contact_shadow_pipeline.is_some() {
+                        let shader =
+                            Shader::new(&self.device, name, &cs.vert_spv, &cs.frag_spv)?;
+                        let pipeline = create_fullscreen_pipeline(
+                            &self.device,
+                            &shader,
+                            self.store_pass,
+                            &[self.sampler_ds_layout, self.sampler_ds_layout],
+                            std::mem::size_of::<ContactShadowPushConstants>() as u32,
+                            false,
+                            self.pipeline_cache,
+                        )?;
+                        self.contact_shadow_pipeline = Some(pipeline);
+                        count += 1;
+                    }
+                }
+                "bilateral_blur" => {
+                    if self.bilateral_blur_pipeline.is_some() {
+                        let shader =
+                            Shader::new(&self.device, name, &cs.vert_spv, &cs.frag_spv)?;
+                        let pipeline = create_fullscreen_pipeline(
+                            &self.device,
+                            &shader,
+                            self.store_pass,
+                            &[self.sampler_ds_layout, self.sampler_ds_layout],
+                            std::mem::size_of::<BilateralBlurPushConstants>() as u32,
+                            false,
+                            self.pipeline_cache,
+                        )?;
+                        self.bilateral_blur_pipeline = Some(pipeline);
+                        count += 1;
+                    }
+                }
+                "depth_resolve" => {
+                    if self.depth_resolve_pipeline.is_some() {
+                        let shader =
+                            Shader::new(&self.device, name, &cs.vert_spv, &cs.frag_spv)?;
+                        let pipeline = create_fullscreen_pipeline(
+                            &self.device,
+                            &shader,
+                            self.store_pass,
+                            &[self.sampler_ds_layout],
+                            0,
+                            false,
+                            self.pipeline_cache,
+                        )?;
+                        self.depth_resolve_pipeline = Some(pipeline);
+                        count += 1;
+                    }
+                }
+                _ => {} // Not a post-process shader.
+            }
+        }
+
+        Ok(count)
+    }
+
     // -- Internal passes ------------------------------------------------------
 
-    fn execute_bloom_downsample(&self, cmd_buf: vk::CommandBuffer) {
+    fn execute_bloom_downsample(&self, cmd_buf: vk::CommandBuffer, scene_source: vk::DescriptorSet) {
         for (i, mip) in self.bloom_mips.iter().enumerate() {
             // Source: scene for first pass, previous mip for subsequent.
             let source_ds = if i == 0 {
-                self.scene_ds
+                scene_source
             } else {
                 self.bloom_mips[i - 1].descriptor_set
             };
@@ -680,7 +1218,7 @@ impl PostProcessPipeline {
         }
     }
 
-    fn execute_composite(&self, cmd_buf: vk::CommandBuffer) {
+    fn execute_composite(&self, cmd_buf: vk::CommandBuffer, has_shadow: bool) {
         let extent = vk::Extent2D {
             width: self.output.width,
             height: self.output.height,
@@ -708,6 +1246,13 @@ impl PostProcessPipeline {
             self.scene_ds
         };
 
+        // Shadow DS: use blurred shadow factor, or scene as dummy when off.
+        let shadow_ds = if has_shadow {
+            self.contact_shadowed.as_ref().unwrap().descriptor_set
+        } else {
+            self.scene_ds // dummy — apply_shadow=0 means it won't be sampled
+        };
+
         let pc = CompositePushConstants {
             bloom_intensity: if self.bloom_enabled {
                 self.bloom_intensity
@@ -718,9 +1263,13 @@ impl PostProcessPipeline {
             contrast: self.contrast,
             saturation: self.saturation,
             tonemapping_mode: self.tonemapping.to_int(),
+            apply_shadow: if has_shadow {
+                if self.contact_shadows_debug > 0 { 2 } else { 1 }
+            } else {
+                0
+            },
             _pad0: 0.0,
             _pad1: 0.0,
-            _pad2: 0.0,
         };
 
         unsafe {
@@ -754,13 +1303,13 @@ impl PostProcessPipeline {
                 self.composite_pipeline.pipeline(),
             );
 
-            // Set 0 = scene, Set 1 = bloom.
+            // Set 0 = scene, Set 1 = bloom, Set 2 = shadow.
             self.device.cmd_bind_descriptor_sets(
                 cmd_buf,
                 vk::PipelineBindPoint::GRAPHICS,
                 self.composite_pipeline.layout(),
                 0,
-                &[self.scene_ds, bloom_ds],
+                &[self.scene_ds, bloom_ds, shadow_ds],
                 &[],
             );
 
@@ -783,6 +1332,325 @@ impl PostProcessPipeline {
 
         // Barrier: output is now in SHADER_READ_ONLY for egui sampling.
         self.barrier_shader_read(cmd_buf, self.output.image);
+    }
+
+    // -- MSAA depth resolve pass ------------------------------------------------
+
+    fn execute_depth_resolve(&self, cmd_buf: vk::CommandBuffer) {
+        let resolve_pipeline = self.depth_resolve_pipeline.as_ref().unwrap();
+        let msaa_ds = self.msaa_depth_ds.unwrap();
+        let resolved = self.resolved_depth.as_ref().unwrap();
+
+        let extent = vk::Extent2D {
+            width: resolved.width,
+            height: resolved.height,
+        };
+
+        let clear = vk::ClearValue {
+            color: vk::ClearColorValue {
+                float32: [1.0, 0.0, 0.0, 1.0],
+            },
+        };
+
+        let rp_info = vk::RenderPassBeginInfo::default()
+            .render_pass(self.store_pass)
+            .framebuffer(resolved.framebuffer)
+            .render_area(vk::Rect2D {
+                offset: vk::Offset2D { x: 0, y: 0 },
+                extent,
+            })
+            .clear_values(std::slice::from_ref(&clear));
+
+        unsafe {
+            self.device
+                .cmd_begin_render_pass(cmd_buf, &rp_info, vk::SubpassContents::INLINE);
+
+            self.device.cmd_set_viewport(
+                cmd_buf,
+                0,
+                &[vk::Viewport {
+                    x: 0.0,
+                    y: 0.0,
+                    width: resolved.width as f32,
+                    height: resolved.height as f32,
+                    min_depth: 0.0,
+                    max_depth: 1.0,
+                }],
+            );
+            self.device.cmd_set_scissor(
+                cmd_buf,
+                0,
+                &[vk::Rect2D {
+                    offset: vk::Offset2D { x: 0, y: 0 },
+                    extent,
+                }],
+            );
+
+            self.device.cmd_bind_pipeline(
+                cmd_buf,
+                vk::PipelineBindPoint::GRAPHICS,
+                resolve_pipeline.pipeline(),
+            );
+
+            // Set 0 = MSAA depth.
+            self.device.cmd_bind_descriptor_sets(
+                cmd_buf,
+                vk::PipelineBindPoint::GRAPHICS,
+                resolve_pipeline.layout(),
+                0,
+                &[msaa_ds],
+                &[],
+            );
+
+            self.device.cmd_draw(cmd_buf, 3, 1, 0, 0);
+
+            self.device.cmd_end_render_pass(cmd_buf);
+        }
+
+        // Barrier: resolved depth ready for contact shadow sampling.
+        self.barrier_shader_read(cmd_buf, resolved.image);
+    }
+
+    // -- Contact shadows pass ---------------------------------------------------
+
+    fn execute_contact_shadows(&self, cmd_buf: vk::CommandBuffer) {
+        let cs_image = self.contact_shadowed.as_ref().unwrap();
+        let cs_pipeline = self.contact_shadow_pipeline.as_ref().unwrap();
+        let depth_ds = self.depth_ds.unwrap();
+        let normal_ds = self.normal_ds.unwrap();
+
+        let extent = vk::Extent2D {
+            width: cs_image.width,
+            height: cs_image.height,
+        };
+
+        let clear = vk::ClearValue {
+            color: vk::ClearColorValue {
+                float32: [0.0, 0.0, 0.0, 1.0],
+            },
+        };
+
+        let rp_info = vk::RenderPassBeginInfo::default()
+            .render_pass(self.store_pass)
+            .framebuffer(cs_image.framebuffer)
+            .render_area(vk::Rect2D {
+                offset: vk::Offset2D { x: 0, y: 0 },
+                extent,
+            })
+            .clear_values(std::slice::from_ref(&clear));
+
+        let pc = ContactShadowPushConstants {
+            inv_view_projection: self.cs_inv_vp,
+            view_projection: self.cs_vp,
+            light_direction: [
+                self.cs_light_dir[0],
+                self.cs_light_dir[1],
+                self.cs_light_dir[2],
+                0.0,
+            ],
+            max_distance: self.contact_shadows_max_distance,
+            thickness: self.contact_shadows_thickness,
+            intensity: self.contact_shadows_intensity,
+            step_count: self.contact_shadows_step_count,
+            near_plane: self.cs_near,
+            far_plane: self.cs_far,
+            debug_mode: self.contact_shadows_debug,
+            _pad1: 0.0,
+        };
+
+        unsafe {
+            self.device
+                .cmd_begin_render_pass(cmd_buf, &rp_info, vk::SubpassContents::INLINE);
+
+            self.device.cmd_set_viewport(
+                cmd_buf,
+                0,
+                &[vk::Viewport {
+                    x: 0.0,
+                    y: 0.0,
+                    width: cs_image.width as f32,
+                    height: cs_image.height as f32,
+                    min_depth: 0.0,
+                    max_depth: 1.0,
+                }],
+            );
+            self.device.cmd_set_scissor(
+                cmd_buf,
+                0,
+                &[vk::Rect2D {
+                    offset: vk::Offset2D { x: 0, y: 0 },
+                    extent,
+                }],
+            );
+
+            self.device.cmd_bind_pipeline(
+                cmd_buf,
+                vk::PipelineBindPoint::GRAPHICS,
+                cs_pipeline.pipeline(),
+            );
+
+            // Set 0 = depth, Set 1 = normal.
+            self.device.cmd_bind_descriptor_sets(
+                cmd_buf,
+                vk::PipelineBindPoint::GRAPHICS,
+                cs_pipeline.layout(),
+                0,
+                &[depth_ds, normal_ds],
+                &[],
+            );
+
+            let pc_bytes = std::slice::from_raw_parts(
+                &pc as *const ContactShadowPushConstants as *const u8,
+                std::mem::size_of::<ContactShadowPushConstants>(),
+            );
+            self.device.cmd_push_constants(
+                cmd_buf,
+                cs_pipeline.layout(),
+                vk::ShaderStageFlags::FRAGMENT,
+                0,
+                pc_bytes,
+            );
+
+            self.device.cmd_draw(cmd_buf, 3, 1, 0, 0);
+
+            self.device.cmd_end_render_pass(cmd_buf);
+        }
+
+        // Barrier: contact-shadowed image ready for downstream sampling.
+        self.barrier_shader_read(cmd_buf, cs_image.image);
+    }
+
+    // -- Bilateral blur pass (H then V) ----------------------------------------
+
+    fn execute_bilateral_blur(&self, cmd_buf: vk::CommandBuffer) {
+        let blur_pipeline = self.bilateral_blur_pipeline.as_ref().unwrap();
+        let shadow_a = self.contact_shadowed.as_ref().unwrap(); // CS output, final blurred result
+        let shadow_b = self.shadow_temp.as_ref().unwrap();       // intermediate
+        let depth_ds = self.depth_ds.unwrap();
+
+        let extent = vk::Extent2D {
+            width: shadow_a.width,
+            height: shadow_a.height,
+        };
+
+        let clear = vk::ClearValue {
+            color: vk::ClearColorValue {
+                float32: [1.0, 1.0, 1.0, 1.0],
+            },
+        };
+
+        let texel_size = [1.0 / shadow_a.width as f32, 1.0 / shadow_a.height as f32];
+
+        // Horizontal pass: read shadow_a → write shadow_b.
+        let pc_h = BilateralBlurPushConstants {
+            texel_size,
+            direction: [1.0, 0.0],
+            near_plane: self.cs_near,
+            far_plane: self.cs_far,
+            _pad: [0.0; 2],
+        };
+
+        unsafe {
+            let rp_info = vk::RenderPassBeginInfo::default()
+                .render_pass(self.store_pass)
+                .framebuffer(shadow_b.framebuffer)
+                .render_area(vk::Rect2D {
+                    offset: vk::Offset2D { x: 0, y: 0 },
+                    extent,
+                })
+                .clear_values(std::slice::from_ref(&clear));
+
+            self.device
+                .cmd_begin_render_pass(cmd_buf, &rp_info, vk::SubpassContents::INLINE);
+
+            self.device.cmd_set_viewport(cmd_buf, 0, &[vk::Viewport {
+                x: 0.0, y: 0.0,
+                width: shadow_a.width as f32, height: shadow_a.height as f32,
+                min_depth: 0.0, max_depth: 1.0,
+            }]);
+            self.device.cmd_set_scissor(cmd_buf, 0, &[vk::Rect2D {
+                offset: vk::Offset2D { x: 0, y: 0 }, extent,
+            }]);
+
+            self.device.cmd_bind_pipeline(
+                cmd_buf, vk::PipelineBindPoint::GRAPHICS, blur_pipeline.pipeline(),
+            );
+
+            // Set 0 = shadow input (shadow_a), Set 1 = depth.
+            self.device.cmd_bind_descriptor_sets(
+                cmd_buf, vk::PipelineBindPoint::GRAPHICS, blur_pipeline.layout(),
+                0, &[shadow_a.descriptor_set, depth_ds], &[],
+            );
+
+            let pc_bytes = std::slice::from_raw_parts(
+                &pc_h as *const BilateralBlurPushConstants as *const u8,
+                std::mem::size_of::<BilateralBlurPushConstants>(),
+            );
+            self.device.cmd_push_constants(
+                cmd_buf, blur_pipeline.layout(), vk::ShaderStageFlags::FRAGMENT, 0, pc_bytes,
+            );
+
+            self.device.cmd_draw(cmd_buf, 3, 1, 0, 0);
+            self.device.cmd_end_render_pass(cmd_buf);
+        }
+
+        self.barrier_shader_read(cmd_buf, shadow_b.image);
+
+        // Vertical pass: read shadow_b → write shadow_a (overwrite CS output with blurred).
+        let pc_v = BilateralBlurPushConstants {
+            texel_size,
+            direction: [0.0, 1.0],
+            near_plane: self.cs_near,
+            far_plane: self.cs_far,
+            _pad: [0.0; 2],
+        };
+
+        unsafe {
+            let rp_info = vk::RenderPassBeginInfo::default()
+                .render_pass(self.store_pass)
+                .framebuffer(shadow_a.framebuffer)
+                .render_area(vk::Rect2D {
+                    offset: vk::Offset2D { x: 0, y: 0 },
+                    extent,
+                })
+                .clear_values(std::slice::from_ref(&clear));
+
+            self.device
+                .cmd_begin_render_pass(cmd_buf, &rp_info, vk::SubpassContents::INLINE);
+
+            self.device.cmd_set_viewport(cmd_buf, 0, &[vk::Viewport {
+                x: 0.0, y: 0.0,
+                width: shadow_a.width as f32, height: shadow_a.height as f32,
+                min_depth: 0.0, max_depth: 1.0,
+            }]);
+            self.device.cmd_set_scissor(cmd_buf, 0, &[vk::Rect2D {
+                offset: vk::Offset2D { x: 0, y: 0 }, extent,
+            }]);
+
+            self.device.cmd_bind_pipeline(
+                cmd_buf, vk::PipelineBindPoint::GRAPHICS, blur_pipeline.pipeline(),
+            );
+
+            // Set 0 = shadow input (shadow_b), Set 1 = depth.
+            self.device.cmd_bind_descriptor_sets(
+                cmd_buf, vk::PipelineBindPoint::GRAPHICS, blur_pipeline.layout(),
+                0, &[shadow_b.descriptor_set, depth_ds], &[],
+            );
+
+            let pc_bytes = std::slice::from_raw_parts(
+                &pc_v as *const BilateralBlurPushConstants as *const u8,
+                std::mem::size_of::<BilateralBlurPushConstants>(),
+            );
+            self.device.cmd_push_constants(
+                cmd_buf, blur_pipeline.layout(), vk::ShaderStageFlags::FRAGMENT, 0, pc_bytes,
+            );
+
+            self.device.cmd_draw(cmd_buf, 3, 1, 0, 0);
+            self.device.cmd_end_render_pass(cmd_buf);
+        }
+
+        // Barrier: blurred shadow factor ready for composite sampling.
+        self.barrier_shader_read(cmd_buf, shadow_a.image);
     }
 
     // -- Barrier helpers ------------------------------------------------------
@@ -872,6 +1740,49 @@ impl Drop for PostProcessPipeline {
             let _ = self
                 .device
                 .free_descriptor_sets(self.ds_pool, &[self.scene_ds]);
+
+            // Contact shadow resources.
+            if let Some(cs_img) = &self.contact_shadowed {
+                self.device.destroy_framebuffer(cs_img.framebuffer, None);
+                self.device.destroy_image_view(cs_img.image_view, None);
+                self.device.destroy_image(cs_img.image, None);
+                let _ = self
+                    .device
+                    .free_descriptor_sets(self.ds_pool, &[cs_img.descriptor_set]);
+            }
+            if let Some(st_img) = &self.shadow_temp {
+                self.device.destroy_framebuffer(st_img.framebuffer, None);
+                self.device.destroy_image_view(st_img.image_view, None);
+                self.device.destroy_image(st_img.image, None);
+                let _ = self
+                    .device
+                    .free_descriptor_sets(self.ds_pool, &[st_img.descriptor_set]);
+            }
+            // Only free depth_ds if it's not the resolved_depth's DS (shared handle).
+            let resolved_ds = self.resolved_depth.as_ref().map(|r| r.descriptor_set);
+            if let Some(d_ds) = self.depth_ds {
+                if resolved_ds != Some(d_ds) {
+                    let _ = self.device.free_descriptor_sets(self.ds_pool, &[d_ds]);
+                }
+            }
+            // MSAA depth resolve resources.
+            if let Some(rd) = &self.resolved_depth {
+                self.device.destroy_framebuffer(rd.framebuffer, None);
+                self.device.destroy_image_view(rd.image_view, None);
+                self.device.destroy_image(rd.image, None);
+                let _ = self
+                    .device
+                    .free_descriptor_sets(self.ds_pool, &[rd.descriptor_set]);
+            }
+            if let Some(m_ds) = self.msaa_depth_ds {
+                let _ = self.device.free_descriptor_sets(self.ds_pool, &[m_ds]);
+            }
+            if let Some(n_ds) = self.normal_ds {
+                let _ = self.device.free_descriptor_sets(self.ds_pool, &[n_ds]);
+            }
+            if let Some(d_sampler) = self.depth_sampler {
+                self.device.destroy_sampler(d_sampler, None);
+            }
 
             self.device.destroy_sampler(self.linear_sampler, None);
             self.device
@@ -1166,6 +2077,41 @@ fn allocate_and_write_ds(
     Ok(ds)
 }
 
+/// Like [`allocate_and_write_ds`] but with an explicit image layout.
+fn allocate_and_write_ds_with_layout(
+    device: &ash::Device,
+    pool: vk::DescriptorPool,
+    layout: vk::DescriptorSetLayout,
+    sampler: vk::Sampler,
+    image_view: vk::ImageView,
+    image_layout: vk::ImageLayout,
+) -> Result<vk::DescriptorSet, String> {
+    let layouts = [layout];
+    let alloc_info = vk::DescriptorSetAllocateInfo::default()
+        .descriptor_pool(pool)
+        .set_layouts(&layouts);
+
+    let ds = unsafe { device.allocate_descriptor_sets(&alloc_info) }
+        .map_err(|e| format!("Failed to allocate PP descriptor set: {e}"))?[0];
+
+    let image_info = vk::DescriptorImageInfo::default()
+        .sampler(sampler)
+        .image_view(image_view)
+        .image_layout(image_layout);
+
+    let write = vk::WriteDescriptorSet::default()
+        .dst_set(ds)
+        .dst_binding(0)
+        .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+        .image_info(std::slice::from_ref(&image_info));
+
+    unsafe {
+        device.update_descriptor_sets(&[write], &[]);
+    }
+
+    Ok(ds)
+}
+
 /// Create a fullscreen-triangle pipeline (no vertex input) with push constants.
 fn create_fullscreen_pipeline(
     device: &ash::Device,
@@ -1235,16 +2181,21 @@ fn create_fullscreen_pipeline(
     let color_blending =
         vk::PipelineColorBlendStateCreateInfo::default().attachments(&blend_attachments);
 
-    // Push constants (fragment stage).
+    // Push constants (fragment stage) — only if the shader uses them.
     let push_range = vk::PushConstantRange {
         stage_flags: vk::ShaderStageFlags::FRAGMENT,
         offset: 0,
         size: push_constant_size,
     };
+    let push_ranges: &[vk::PushConstantRange] = if push_constant_size > 0 {
+        std::slice::from_ref(&push_range)
+    } else {
+        &[]
+    };
 
     let layout_info = vk::PipelineLayoutCreateInfo::default()
         .set_layouts(ds_layouts)
-        .push_constant_ranges(std::slice::from_ref(&push_range));
+        .push_constant_ranges(push_ranges);
 
     let pipeline_layout = unsafe { device.create_pipeline_layout(&layout_info, None) }
         .map_err(|e| format!("Failed to create PP pipeline layout: {e}"))?;
