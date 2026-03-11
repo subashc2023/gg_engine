@@ -597,6 +597,9 @@ pub struct ShadowCameraInfo {
     pub near: f32,
     /// Camera far clip distance (positive, world units).
     pub far: f32,
+    /// Camera position in world space. Used as the bounding sphere center
+    /// so that cascades are rotation-invariant (only translation moves them).
+    pub camera_position: Vec3,
 }
 
 /// Blend factor between uniform and logarithmic cascade splits.
@@ -702,23 +705,25 @@ pub fn compute_cascade_vps(
             sub_corners[i + 4] = world_corners[i].lerp(world_corners[i + 4], t_far);
         }
 
-        // Center of the sub-frustum.
-        let center = sub_corners.iter().copied().fold(Vec3::ZERO, |a, b| a + b) / 8.0;
-
-        // Bounding sphere of the sub-frustum. Using a sphere instead of a tight
-        // AABB ensures all visible fragments are well inside the shadow map (no UV
-        // edge fade artifacts), and the ortho extent doesn't change with camera
-        // rotation, eliminating shadow shimmer from frustum shape changes.
+        // Rotation-invariant bounding sphere: center at the CAMERA POSITION
+        // so that turning the camera doesn't shift the cascade coverage area.
+        // The radius is the max distance from the camera to any sub-frustum
+        // corner. For a symmetric perspective frustum, this distance depends
+        // only on the cascade's depth range, FOV, and aspect — not on camera
+        // orientation — so both center and radius are rotation-invariant.
+        let center = camera.camera_position;
         let radius = sub_corners
             .iter()
             .map(|c| (*c - center).length())
             .fold(0.0_f32, f32::max);
 
-        // Light view matrix — eye behind the sub-frustum, looking along light direction.
+        // Light view matrix — eye behind the cascade center, looking along
+        // the light direction.
         let light_view = Mat4::look_at_lh(center - light_dir * MAX_SHADOW_EXTENT, center, up);
 
-        // Extend Z range to include scene AABB (captures shadow casters outside
-        // the camera frustum, e.g. objects behind the camera casting forward).
+        // Z range from the full scene AABB (rotation-stable — the scene AABB
+        // doesn't change with camera orientation for a given light direction).
+        // Also include the sub-frustum to ensure receivers are always covered.
         let mut z_min = f32::MAX;
         let mut z_max = f32::NEG_INFINITY;
 
@@ -728,7 +733,6 @@ pub fn compute_cascade_vps(
             z_max = z_max.max(ls.z);
         }
 
-        // Also include sub-frustum Z range.
         for corner in &sub_corners {
             let ls = light_view.transform_point3(*corner);
             z_min = z_min.min(ls.z);
@@ -741,8 +745,9 @@ pub fn compute_cascade_vps(
         light_proj.y_axis.y *= -1.0; // Vulkan Y-flip
 
         // Texel snapping: prevent shadow shimmer from sub-texel jitter.
-        // With sphere fitting, the radius is stable across rotations, so the
-        // ortho extent doesn't change — only the translation needs snapping.
+        // Both center and radius are rotation-invariant, so the ortho extent
+        // is stable — only translation needs snapping. Camera-position-based
+        // center means the shadow map grid only shifts when the camera moves.
         let shadow_vp = light_proj * light_view;
         let half_texels = DEFAULT_SHADOW_MAP_SIZE as f32 * 0.5;
         let origin_clip = shadow_vp.transform_point3(Vec3::ZERO);
@@ -769,7 +774,10 @@ use super::shader::Shader;
 
 /// Create a depth-only pipeline for the shadow pass.
 ///
-/// Front-face culling to reduce peter-panning. No color attachments.
+/// Back-face culling (standard) with slope-scaled depth bias for angled surfaces.
+/// Constant bias is handled entirely on the receiver side (fragment shader) via
+/// world-space normal + light-direction offsets. Shadow pancaking in the vertex
+/// shader clamps to near plane. No color attachments.
 /// Push constants: light VP matrix (64 bytes) + model matrix (64 bytes) = 128 bytes, vertex stage.
 /// The light VP is passed via push constants (not UBO) so that per-cascade values
 /// are correctly recorded into the command buffer instead of racing on a shared buffer.
@@ -815,16 +823,18 @@ pub(crate) fn create_shadow_pipeline(
         .viewport_count(1)
         .scissor_count(1);
 
-    // Front-face culling to reduce peter-panning artifact.
-    // Depth bias to prevent shadow acne (self-shadowing artifacts).
+    // Back-face culling (standard) + slope-scaled depth bias for angled
+    // surfaces. All constant bias is handled on the receiver side (fragment
+    // shader) via world-space normal + light-direction offsets, which are
+    // independent of D32_SFLOAT's tiny ULP-based hardware constant bias.
     let rasterizer = vk::PipelineRasterizationStateCreateInfo::default()
         .polygon_mode(vk::PolygonMode::FILL)
-        .cull_mode(vk::CullModeFlags::FRONT)
+        .cull_mode(vk::CullModeFlags::BACK)
         .front_face(vk::FrontFace::COUNTER_CLOCKWISE)
         .line_width(1.0)
         .depth_bias_enable(true)
-        .depth_bias_constant_factor(0.75)
-        .depth_bias_slope_factor(1.0);
+        .depth_bias_constant_factor(0.0)
+        .depth_bias_slope_factor(2.0);
 
     let multisampling = vk::PipelineMultisampleStateCreateInfo::default()
         .rasterization_samples(vk::SampleCountFlags::TYPE_1);

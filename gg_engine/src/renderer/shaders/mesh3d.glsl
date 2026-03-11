@@ -115,14 +115,20 @@ float interleavedGradientNoise(vec2 pos) {
 // shadow: shadow factor in [0.08, 1.0] (1.0 = lit, 0.08 = shadowed).
 // coverage: 0.0 at shadow map edges/outside, 1.0 in interior.
 vec2 sample_cascade_shadow(vec3 world_pos, vec3 normal, int cascade) {
-    // Offset along surface normal to reduce shadow acne on curved geometry.
-    // Scale bias by surface angle to light — grazing angles need more offset.
-    // Near cascade (0) has higher texel density so needs less bias.
+    // Receiver-side bias: push the sample point to prevent self-shadowing.
+    // Two offsets are combined:
+    //   1. Normal bias: push along surface normal. Larger at grazing angles
+    //      where self-shadowing is worst; smaller when face-on to light.
+    //   2. Light-direction bias: push toward the light. This handles flat
+    //      surfaces facing the light (cos_theta ≈ 1) where normal bias
+    //      alone is too small relative to shadow map texel size.
+    // Both are in world space, independent of shadow map resolution or
+    // depth range, giving consistent results across cascades and scenes.
     vec3 light_dir = normalize(-lighting.dir_direction.xyz);
     float cos_theta = clamp(dot(normal, light_dir), 0.0, 1.0);
-    float bias_scale = (cascade == 0) ? 0.5 : 1.0;
-    float normal_bias = mix(0.01, 0.0005, cos_theta) * bias_scale;
-    vec3 biased_pos = world_pos + normal * normal_bias;
+    float normal_bias = mix(0.02, 0.002, cos_theta);
+    float light_bias = mix(0.001, 0.01, cos_theta);
+    vec3 biased_pos = world_pos + normal * normal_bias + light_dir * light_bias;
     vec4 light_space_pos = lighting.shadow_light_vp[cascade] * vec4(biased_pos, 1.0);
     vec3 proj_coords = light_space_pos.xyz / light_space_pos.w;
 

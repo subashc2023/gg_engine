@@ -1122,11 +1122,13 @@ impl Scene {
         {
             if camera.primary && camera.camera.projection_type() == ProjectionType::Perspective {
                 let world = self.get_world_transform(Entity::new(handle));
+                let (_, _, translation) = world.to_scale_rotation_translation();
                 let vp = *camera.camera.projection() * world.inverse();
                 return Some(ShadowCameraInfo {
                     view_projection: vp,
                     near: camera.camera.perspective_near(),
                     far: camera.camera.perspective_far(),
+                    camera_position: translation,
                 });
             }
         }

@@ -175,6 +175,7 @@ impl Sandbox3D {
             view_projection: cam_proj * cam_view,
             near: 0.1,
             far: 100.0,
+            camera_position: eye,
         };
         let (cascade_vps, split_depth) =
             gg_engine::renderer::shadow_map::compute_cascade_vps(&camera_info, light_dir, scene_min, scene_max);

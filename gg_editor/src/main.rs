@@ -626,6 +626,7 @@ impl Application for GGEditor {
             view_projection: self.editor_camera.view_projection(),
             near: self.editor_camera.near_clip(),
             far: self.editor_camera.far_clip(),
+            camera_position: self.editor_camera.position(),
         };
         self.scene
             .render_shadow_pass(renderer, cmd_buf, current_frame, 0, Some(&camera_info));
