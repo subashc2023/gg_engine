@@ -88,6 +88,8 @@ layout(set = 3, binding = 0) uniform LightingUBO {
     // Cascaded shadow mapping (4 cascades)
     mat4 shadow_light_vp[NUM_CASCADES]; // per-cascade light-space VP matrices
     vec4 cascade_split_depth;           // xyz = 3 split depths (NDC), w = shadow_distance
+    vec4 cascade_texel_size;            // world-units-per-texel per cascade (for bias scaling)
+    ivec4 shadow_settings;              // x = quality (0-3), yzw = reserved
 } lighting;
 
 // Shadow map (set 4):
@@ -152,14 +154,69 @@ float findBlockerDepth(vec2 uv, int cascade, float receiver_depth, float search_
     return blocker_sum / float(blocker_count);
 }
 
-// Sample shadow from a single cascade using PCSS.
+// ---------------------------------------------------------------------------
+// Fixed-radius PCF helpers (quality tiers 0-2)
+// ---------------------------------------------------------------------------
+
+// 4-tap PCF with fixed 1-texel radius (Low quality).
+float pcf_low(vec3 proj, int cascade, vec2 texel_size) {
+    float shadow = 0.0;
+    shadow += texture(u_shadow_map, vec4(proj.xy + vec2(-0.5, -0.5) * texel_size, float(cascade), proj.z));
+    shadow += texture(u_shadow_map, vec4(proj.xy + vec2( 0.5, -0.5) * texel_size, float(cascade), proj.z));
+    shadow += texture(u_shadow_map, vec4(proj.xy + vec2(-0.5,  0.5) * texel_size, float(cascade), proj.z));
+    shadow += texture(u_shadow_map, vec4(proj.xy + vec2( 0.5,  0.5) * texel_size, float(cascade), proj.z));
+    return shadow * 0.25;
+}
+
+// 9-tap PCF with Vogel disk (Medium quality).
+float pcf_medium(vec3 proj, int cascade, vec2 texel_size) {
+    float noise = interleavedGradientNoise(gl_FragCoord.xy);
+    float shadow = 0.0;
+    float radius = 1.5;
+    for (int i = 0; i < 9; i++) {
+        float r = sqrt((float(i) + 0.5) / 9.0);
+        float theta = float(i) * GOLDEN_ANGLE + noise * 6.283185;
+        vec2 offset = vec2(cos(theta), sin(theta)) * r * radius * texel_size;
+        vec2 sample_uv = clamp(proj.xy + offset, vec2(0.0), vec2(1.0));
+        shadow += texture(u_shadow_map, vec4(sample_uv, float(cascade), proj.z));
+    }
+    return shadow / 9.0;
+}
+
+// 16-tap PCF with Vogel disk (High quality).
+float pcf_high(vec3 proj, int cascade, vec2 texel_size) {
+    float noise = interleavedGradientNoise(gl_FragCoord.xy);
+    float shadow = 0.0;
+    float radius = 2.5;
+    for (int i = 0; i < 16; i++) {
+        float r = sqrt((float(i) + 0.5) / 16.0);
+        float theta = float(i) * GOLDEN_ANGLE + noise * 6.283185;
+        vec2 offset = vec2(cos(theta), sin(theta)) * r * radius * texel_size;
+        vec2 sample_uv = clamp(proj.xy + offset, vec2(0.0), vec2(1.0));
+        shadow += texture(u_shadow_map, vec4(sample_uv, float(cascade), proj.z));
+    }
+    return shadow / 16.0;
+}
+
+// ---------------------------------------------------------------------------
+// Sample shadow from a single cascade.
 // Returns vec2(shadow, coverage).
+// Quality tier selects the sampling technique:
+//   0 = Low (4-tap PCF), 1 = Medium (9-tap), 2 = High (16-tap), 3 = Ultra (PCSS)
+// ---------------------------------------------------------------------------
 vec2 sample_cascade_shadow(vec3 world_pos, vec3 normal, int cascade) {
     // Receiver-side bias: push the sample point to prevent self-shadowing.
+    // Use sqrt scaling with cascade texel size — sub-linear growth reduces
+    // visible peter-panning jumps at cascade boundaries while still giving
+    // far cascades the extra bias they need.
     vec3 light_dir = normalize(-lighting.dir_direction.xyz);
     float cos_theta = clamp(dot(normal, light_dir), 0.0, 1.0);
-    float normal_bias = mix(0.02, 0.002, cos_theta);
-    float light_bias = mix(0.001, 0.01, cos_theta);
+    float texel_scale = sqrt(lighting.cascade_texel_size[cascade]
+                           / max(lighting.cascade_texel_size[0], 0.0001));
+    // Normal bias: large at grazing angles (acne-prone), small when face-on.
+    float normal_bias = mix(0.015, 0.001, cos_theta) * texel_scale;
+    // Light bias: large at grazing angles (most self-shadowing), small face-on.
+    float light_bias = mix(0.005, 0.0005, cos_theta) * texel_scale;
     vec3 biased_pos = world_pos + normal * normal_bias + light_dir * light_bias;
     vec4 light_space_pos = lighting.shadow_light_vp[cascade] * vec4(biased_pos, 1.0);
     vec3 proj_coords = light_space_pos.xyz / light_space_pos.w;
@@ -178,40 +235,47 @@ vec2 sample_cascade_shadow(vec3 world_pos, vec3 normal, int cascade) {
         return vec2(1.0, 0.0);
     }
 
-    // Compute texels-per-world for this cascade (derivative-based).
     vec2 texel_size = 1.0 / textureSize(u_shadow_map_raw, 0).xy;
-    float world_per_pixel = length(fwidth(v_world_position));
-    float texels_per_pixel = length(fwidth(proj_coords.xy)) / length(texel_size);
-    float texels_per_world = texels_per_pixel / max(world_per_pixel, 0.0001);
+    int quality = lighting.shadow_settings.x;
+    float shadow;
 
-    // PCSS Step 1: Blocker search.
-    // Search radius in texels — proportional to light size in shadow map space.
-    float search_radius = clamp(LIGHT_SIZE * texels_per_world, 4.0, 32.0);
-    float blocker_depth = findBlockerDepth(proj_coords.xy, cascade, proj_coords.z, search_radius);
-
-    float pcf_radius;
-    if (blocker_depth < 0.0) {
-        // No blockers found — fully lit.
-        return vec2(1.0, coverage);
+    if (quality <= 0) {
+        // Low: 4-tap fixed PCF
+        shadow = pcf_low(proj_coords, cascade, texel_size);
+    } else if (quality == 1) {
+        // Medium: 9-tap Vogel disk PCF
+        shadow = pcf_medium(proj_coords, cascade, texel_size);
+    } else if (quality == 2) {
+        // High: 16-tap Vogel disk PCF
+        shadow = pcf_high(proj_coords, cascade, texel_size);
     } else {
-        // PCSS Step 2: Estimate penumbra from blocker distance.
-        // penumbra ∝ light_size × (receiver - blocker) / blocker
+        // Ultra: full PCSS (blocker search + variable-radius PCF)
+        float world_per_pixel = length(fwidth(v_world_position));
+        float texels_per_pixel = length(fwidth(proj_coords.xy)) / length(texel_size);
+        float texels_per_world = texels_per_pixel / max(world_per_pixel, 0.0001);
+
+        float search_radius = clamp(LIGHT_SIZE * texels_per_world, 4.0, 32.0);
+        float blocker_depth = findBlockerDepth(proj_coords.xy, cascade, proj_coords.z, search_radius);
+
+        if (blocker_depth < 0.0) {
+            return vec2(1.0, coverage);
+        }
+
         float penumbra_ratio = (proj_coords.z - blocker_depth) / max(blocker_depth, 0.0001);
         float penumbra_world = LIGHT_SIZE * penumbra_ratio;
-        pcf_radius = clamp(penumbra_world * texels_per_world, MIN_PENUMBRA, MAX_PENUMBRA);
-    }
+        float pcf_radius = clamp(penumbra_world * texels_per_world, MIN_PENUMBRA, MAX_PENUMBRA);
 
-    // PCSS Step 3: Variable-radius PCF using Vogel disk.
-    float noise = interleavedGradientNoise(gl_FragCoord.xy);
-    float shadow = 0.0;
-    for (int i = 0; i < PCF_SAMPLES; i++) {
-        float r = sqrt((float(i) + 0.5) / float(PCF_SAMPLES));
-        float theta = float(i) * GOLDEN_ANGLE + noise * 6.283185;
-        vec2 offset = vec2(cos(theta), sin(theta)) * r * pcf_radius * texel_size;
-        vec2 sample_uv = clamp(proj_coords.xy + offset, vec2(0.0), vec2(1.0));
-        shadow += texture(u_shadow_map, vec4(sample_uv, float(cascade), proj_coords.z));
+        float noise = interleavedGradientNoise(gl_FragCoord.xy);
+        shadow = 0.0;
+        for (int i = 0; i < PCF_SAMPLES; i++) {
+            float r = sqrt((float(i) + 0.5) / float(PCF_SAMPLES));
+            float theta = float(i) * GOLDEN_ANGLE + noise * 6.283185;
+            vec2 offset = vec2(cos(theta), sin(theta)) * r * pcf_radius * texel_size;
+            vec2 sample_uv = clamp(proj_coords.xy + offset, vec2(0.0), vec2(1.0));
+            shadow += texture(u_shadow_map, vec4(sample_uv, float(cascade), proj_coords.z));
+        }
+        shadow /= float(PCF_SAMPLES);
     }
-    shadow /= float(PCF_SAMPLES);
 
     // Minimum shadow prevents pitch-black (some scattered light always reaches).
     shadow = max(shadow, 0.08);

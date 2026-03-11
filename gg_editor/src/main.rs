@@ -118,6 +118,7 @@ pub(crate) struct PostProcessSettings {
     pub contact_shadows_step_count: i32,
     pub contact_shadows_debug: i32,
     pub shadow_debug_mode: i32,
+    pub shadow_quality: i32,
 }
 
 impl Default for PostProcessSettings {
@@ -139,6 +140,7 @@ impl Default for PostProcessSettings {
             contact_shadows_step_count: 64,
             contact_shadows_debug: 0,
             shadow_debug_mode: 0,
+            shadow_quality: 3, // Ultra (PCSS) by default
         }
     }
 }
@@ -660,8 +662,9 @@ impl Application for GGEditor {
                 pp.contact_shadows_debug = s.contact_shadows_debug;
             }
 
-            // Sync shadow cascade debug mode to renderer.
+            // Sync shadow cascade debug mode and quality tier to renderer.
             renderer.set_shadow_debug_mode(self.postprocess_settings.shadow_debug_mode);
+            renderer.set_shadow_quality(self.postprocess_settings.shadow_quality);
 
 
             // Update post-process output handle (may change on resize).

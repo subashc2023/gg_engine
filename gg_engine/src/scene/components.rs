@@ -1202,6 +1202,9 @@ pub struct MeshRendererComponent {
     pub loaded_mesh: Option<Ref<crate::renderer::Mesh>>,
     /// Local-space AABB computed from loaded mesh vertices. Not serialized.
     pub local_bounds: Option<(Vec3, Vec3)>,
+    /// When true, this mesh uses the alpha-tested shadow pipeline so
+    /// partially transparent textures (foliage, fences) cast shaped shadows.
+    pub cast_alpha_shadow: bool,
     /// Runtime-only uploaded vertex array. Not serialized.
     pub(crate) vertex_array: Option<crate::renderer::VertexArray>,
 }
@@ -1219,6 +1222,7 @@ impl Clone for MeshRendererComponent {
             texture_handle: self.texture_handle,
             loaded_mesh: self.loaded_mesh.clone(), // Arc clone (refcount bump).
             local_bounds: self.local_bounds,
+            cast_alpha_shadow: self.cast_alpha_shadow,
             vertex_array: None, // Runtime-only, not copied.
         }
     }
@@ -1237,6 +1241,7 @@ impl MeshRendererComponent {
             texture_handle: Uuid::from_raw(0),
             loaded_mesh: None,
             local_bounds: None,
+            cast_alpha_shadow: false,
             vertex_array: None,
         }
     }
@@ -1271,6 +1276,7 @@ impl Default for MeshRendererComponent {
             texture_handle: Uuid::from_raw(0),
             loaded_mesh: None,
             local_bounds: None,
+            cast_alpha_shadow: false,
             vertex_array: None,
         }
     }
@@ -1296,6 +1302,10 @@ pub struct DirectionalLightComponent {
     /// Maximum distance (world units) at which shadows are rendered.
     /// Cascades are distributed within this range. Default: 100.0.
     pub shadow_distance: f32,
+    /// Use front-face culling in the shadow pass instead of back-face.
+    /// Eliminates self-shadowing acne at the cost of slight light leaking
+    /// on thin single-sided geometry.
+    pub shadow_cull_front_faces: bool,
 }
 
 impl DirectionalLightComponent {
@@ -1317,6 +1327,7 @@ impl Default for DirectionalLightComponent {
             intensity: 1.0,
             cast_shadows: false,
             shadow_distance: 100.0,
+            shadow_cull_front_faces: false,
         }
     }
 }

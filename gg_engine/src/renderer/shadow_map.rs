@@ -653,9 +653,11 @@ const CASCADE_SPLIT_LAMBDA: f32 = 0.75;
 /// Compute per-cascade orthographic light-space VP matrices by fitting
 /// each cascade's frustum to a sub-frustum of the camera.
 ///
-/// Returns `(cascade_vps, split_ndcs, shadow_far)` where `split_ndcs` contains 3
-/// cascade split depths in Vulkan NDC (reverse-Z) for the fragment shader, and
-/// `shadow_far` is the effective shadow distance (for shader distance fade).
+/// Returns `(cascade_vps, split_ndcs, shadow_far, texel_sizes)` where
+/// `split_ndcs` contains 3 cascade split depths in Vulkan NDC (reverse-Z)
+/// for the fragment shader, `shadow_far` is the effective shadow distance
+/// (for shader distance fade), and `texel_sizes` gives the world-units-per-
+/// texel for each cascade (used for per-cascade bias scaling).
 ///
 /// The camera sub-frustum corners define the XY bounds of each cascade's
 /// orthographic projection, while the scene AABB extends the Z range to
@@ -665,7 +667,7 @@ pub fn compute_cascade_vps(
     light_direction: Vec3,
     scene_min: Vec3,
     scene_max: Vec3,
-) -> ([Mat4; NUM_SHADOW_CASCADES], [f32; 3], f32) {
+) -> ([Mat4; NUM_SHADOW_CASCADES], [f32; 3], f32, [f32; NUM_SHADOW_CASCADES]) {
     let inv_vp = camera.view_projection.inverse();
     let near = camera.near;
     let actual_far = camera.far;
@@ -735,6 +737,7 @@ pub fn compute_cascade_vps(
     cascade_ranges[NUM_SHADOW_CASCADES - 1] = (t_splits[num_splits - 1], t_shadow_far);
 
     let mut cascade_vps = [Mat4::IDENTITY; NUM_SHADOW_CASCADES];
+    let mut texel_sizes = [1.0_f32; NUM_SHADOW_CASCADES];
 
     let light_dir = light_direction.normalize();
     let up = if light_dir.y.abs() > 0.99 {
@@ -760,19 +763,31 @@ pub fn compute_cascade_vps(
             sub_corners[i + 4] = world_corners[i].lerp(world_corners[i + 4], t_far);
         }
 
-        // Rotation-invariant bounding sphere: center at the CAMERA POSITION
-        // so that turning the camera doesn't shift the cascade coverage area.
-        let center = camera.camera_position;
-        let radius = sub_corners
+        // Bounding sphere centered on the sub-frustum centroid.
+        // This is much tighter than using camera position (which wastes
+        // texels on the half-sphere behind the camera).
+        let centroid = sub_corners.iter().copied().sum::<Vec3>() / 8.0;
+        let center = centroid;
+        let raw_radius = sub_corners
             .iter()
             .map(|c| (*c - center).length())
             .fold(0.0_f32, f32::max);
+
+        // Round radius up to the next texel-aligned increment so the
+        // ortho extent stays constant as the camera rotates (prevents
+        // shadow shimmer from the sphere growing/shrinking by fractions
+        // of a texel).
+        let texels_per_unit = DEFAULT_SHADOW_MAP_SIZE as f32 / (raw_radius * 2.0).max(0.001);
+        let radius = (raw_radius * texels_per_unit).ceil() / texels_per_unit;
 
         // Light view matrix — eye behind the cascade center, looking along
         // the light direction.
         let light_view = Mat4::look_at_lh(center - light_dir * MAX_SHADOW_EXTENT, center, up);
 
-        // Z range from the full scene AABB (rotation-stable).
+        // Z range: start from the scene AABB (captures shadow casters
+        // outside the camera frustum), then clamp to avoid a single
+        // far-away object stretching all cascades and destroying depth
+        // precision.
         let mut z_min = f32::MAX;
         let mut z_max = f32::NEG_INFINITY;
 
@@ -782,10 +797,25 @@ pub fn compute_cascade_vps(
             z_max = z_max.max(ls.z);
         }
 
+        // Sub-frustum Z extents in light space.
+        let mut sub_z_min = f32::MAX;
+        let mut sub_z_max = f32::NEG_INFINITY;
         for corner in &sub_corners {
             let ls = light_view.transform_point3(*corner);
+            sub_z_min = sub_z_min.min(ls.z);
+            sub_z_max = sub_z_max.max(ls.z);
             z_min = z_min.min(ls.z);
             z_max = z_max.max(ls.z);
+        }
+
+        // Clamp z_max so distant objects don't dilute depth precision.
+        // Allow up to 1× the sub-frustum depth range (or 10 units min)
+        // beyond the sub-frustum's far extent to capture nearby casters.
+        let sub_depth = (sub_z_max - sub_z_min).abs().max(10.0);
+        z_max = z_max.min(sub_z_max + sub_depth);
+        // Ensure a valid range even when scene AABB is degenerate.
+        if z_max - z_min < 1.0 {
+            z_min = z_max - 1.0;
         }
 
         // Build orthographic projection from the bounding sphere XY + scene Z.
@@ -805,9 +835,12 @@ pub fn compute_cascade_vps(
         light_proj.w_axis.y += offset_y;
 
         cascade_vps[cascade_idx] = light_proj * light_view;
+
+        // World-units-per-texel for this cascade (ortho covers [-radius, radius]).
+        texel_sizes[cascade_idx] = (radius * 2.0) / DEFAULT_SHADOW_MAP_SIZE as f32;
     }
 
-    (cascade_vps, split_ndcs, shadow_far)
+    (cascade_vps, split_ndcs, shadow_far, texel_sizes)
 }
 
 // ---------------------------------------------------------------------------
@@ -820,19 +853,24 @@ use super::shader::Shader;
 
 /// Create a depth-only pipeline for the shadow pass.
 ///
-/// Back-face culling (standard) with slope-scaled depth bias for angled surfaces.
-/// Constant bias is handled entirely on the receiver side (fragment shader) via
-/// world-space normal + light-direction offsets. Shadow pancaking in the vertex
-/// shader clamps to near plane. No color attachments.
+/// Slope-scaled depth bias for angled surfaces. Constant bias is handled
+/// entirely on the receiver side (fragment shader) via world-space normal +
+/// light-direction offsets. Shadow pancaking in the vertex shader clamps to
+/// near plane. No color attachments.
 /// Push constants: light VP matrix (64 bytes) + model matrix (64 bytes) = 128 bytes, vertex stage.
 /// The light VP is passed via push constants (not UBO) so that per-cascade values
 /// are correctly recorded into the command buffer instead of racing on a shared buffer.
+///
+/// When `front_face_cull` is `true`, front faces are culled instead of back faces.
+/// This eliminates self-shadowing acne on front faces at the cost of light leaking
+/// on thin single-sided geometry.
 pub(crate) fn create_shadow_pipeline(
     device: &ash::Device,
     shader: &Shader,
     render_pass: vk::RenderPass,
     _shadow_camera_ds_layout: vk::DescriptorSetLayout,
     pipeline_cache: vk::PipelineCache,
+    front_face_cull: bool,
 ) -> Result<Pipeline, String> {
     let entry_point = c"main";
 
@@ -869,13 +907,17 @@ pub(crate) fn create_shadow_pipeline(
         .viewport_count(1)
         .scissor_count(1);
 
-    // Back-face culling (standard) + slope-scaled depth bias for angled
-    // surfaces. All constant bias is handled on the receiver side (fragment
-    // shader) via world-space normal + light-direction offsets, which are
-    // independent of D32_SFLOAT's tiny ULP-based hardware constant bias.
+    // Slope-scaled depth bias for angled surfaces. All constant bias is
+    // handled on the receiver side (fragment shader) via world-space normal
+    // + light-direction offsets.
+    let cull_mode = if front_face_cull {
+        vk::CullModeFlags::FRONT
+    } else {
+        vk::CullModeFlags::BACK
+    };
     let rasterizer = vk::PipelineRasterizationStateCreateInfo::default()
         .polygon_mode(vk::PolygonMode::FILL)
-        .cull_mode(vk::CullModeFlags::BACK)
+        .cull_mode(cull_mode)
         .front_face(vk::FrontFace::COUNTER_CLOCKWISE)
         .line_width(1.0)
         .depth_bias_enable(true)
@@ -928,6 +970,127 @@ pub(crate) fn create_shadow_pipeline(
                     device.destroy_pipeline_layout(pipeline_layout, None);
                 }
                 format!("Failed to create shadow pipeline: {e}")
+            })?[0];
+
+    Ok(Pipeline::from_raw(
+        pipeline,
+        pipeline_layout,
+        device.clone(),
+    ))
+}
+
+/// Create an alpha-tested depth pipeline for the shadow pass.
+///
+/// Like the opaque variant but includes a fragment shader that samples the
+/// albedo texture from the bindless array and discards fragments below the
+/// alpha cutoff. Used for foliage, fences, and other alpha-masked geometry.
+///
+/// Push constants: light VP (64B) + model (64B) + alpha_cutoff (4B) + tex_index (4B) = 136B.
+/// Descriptor set: set 1 = bindless texture array (same as main pass).
+pub(crate) fn create_shadow_alpha_pipeline(
+    device: &ash::Device,
+    shader: &Shader,
+    render_pass: vk::RenderPass,
+    bindless_ds_layout: vk::DescriptorSetLayout,
+    pipeline_cache: vk::PipelineCache,
+) -> Result<Pipeline, String> {
+    let entry_point = c"main";
+
+    let vert_stage = vk::PipelineShaderStageCreateInfo::default()
+        .stage(vk::ShaderStageFlags::VERTEX)
+        .module(shader.vert_module())
+        .name(entry_point);
+
+    let frag_stage = vk::PipelineShaderStageCreateInfo::default()
+        .stage(vk::ShaderStageFlags::FRAGMENT)
+        .module(shader.frag_module())
+        .name(entry_point);
+
+    let shader_stages = [vert_stage, frag_stage];
+
+    let vertex_layout = Mesh::vertex_layout();
+    let binding = vertex_layout.vk_binding_description(0);
+    let attributes = vertex_layout.vk_attribute_descriptions(0);
+    let bindings = [binding];
+
+    let vertex_input = vk::PipelineVertexInputStateCreateInfo::default()
+        .vertex_binding_descriptions(&bindings)
+        .vertex_attribute_descriptions(&attributes);
+
+    let input_assembly = vk::PipelineInputAssemblyStateCreateInfo::default()
+        .topology(vk::PrimitiveTopology::TRIANGLE_LIST)
+        .primitive_restart_enable(false);
+
+    let dynamic_states = [vk::DynamicState::VIEWPORT, vk::DynamicState::SCISSOR];
+    let dynamic_state =
+        vk::PipelineDynamicStateCreateInfo::default().dynamic_states(&dynamic_states);
+
+    let viewport_state = vk::PipelineViewportStateCreateInfo::default()
+        .viewport_count(1)
+        .scissor_count(1);
+
+    // Back-face culling + slope-scaled depth bias (same as opaque variant).
+    let rasterizer = vk::PipelineRasterizationStateCreateInfo::default()
+        .polygon_mode(vk::PolygonMode::FILL)
+        .cull_mode(vk::CullModeFlags::BACK)
+        .front_face(vk::FrontFace::COUNTER_CLOCKWISE)
+        .line_width(1.0)
+        .depth_bias_enable(true)
+        .depth_bias_constant_factor(0.0)
+        .depth_bias_slope_factor(2.0);
+
+    let multisampling = vk::PipelineMultisampleStateCreateInfo::default()
+        .rasterization_samples(vk::SampleCountFlags::TYPE_1);
+
+    let depth_stencil = vk::PipelineDepthStencilStateCreateInfo::default()
+        .depth_test_enable(true)
+        .depth_write_enable(true)
+        .depth_compare_op(vk::CompareOp::LESS_OR_EQUAL)
+        .depth_bounds_test_enable(false)
+        .stencil_test_enable(false);
+
+    let color_blending = vk::PipelineColorBlendStateCreateInfo::default();
+
+    // Push constants: light VP (64) + model (64) + alpha_cutoff (4) + tex_index (4) = 136 bytes.
+    // Both vertex and fragment stages read push constants.
+    let push_constant_range = vk::PushConstantRange {
+        stage_flags: vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT,
+        offset: 0,
+        size: 136,
+    };
+
+    // Descriptor set layout: set 1 = bindless texture array (for alpha sampling).
+    // Set 0 is unused in this pipeline (the opaque shadow pass used UBO here,
+    // but this pipeline only needs textures).
+    let ds_layouts = [bindless_ds_layout];
+
+    let layout_info = vk::PipelineLayoutCreateInfo::default()
+        .set_layouts(&ds_layouts)
+        .push_constant_ranges(std::slice::from_ref(&push_constant_range));
+    let pipeline_layout = unsafe { device.create_pipeline_layout(&layout_info, None) }
+        .map_err(|e| format!("Failed to create shadow alpha pipeline layout: {e}"))?;
+
+    let pipeline_info = vk::GraphicsPipelineCreateInfo::default()
+        .stages(&shader_stages)
+        .vertex_input_state(&vertex_input)
+        .input_assembly_state(&input_assembly)
+        .viewport_state(&viewport_state)
+        .rasterization_state(&rasterizer)
+        .multisample_state(&multisampling)
+        .depth_stencil_state(&depth_stencil)
+        .color_blend_state(&color_blending)
+        .dynamic_state(&dynamic_state)
+        .layout(pipeline_layout)
+        .render_pass(render_pass)
+        .subpass(0);
+
+    let pipeline =
+        unsafe { device.create_graphics_pipelines(pipeline_cache, &[pipeline_info], None) }
+            .map_err(|(_, e)| {
+                unsafe {
+                    device.destroy_pipeline_layout(pipeline_layout, None);
+                }
+                format!("Failed to create shadow alpha pipeline: {e}")
             })?[0];
 
     Ok(Pipeline::from_raw(

@@ -877,6 +877,9 @@ struct MeshRendererData {
     /// Mesh asset handle (glTF/GLB). 0 = no asset, use primitive instead.
     #[serde(rename = "MeshAsset", default)]
     mesh_asset: u64,
+    /// Use alpha-tested shadow pipeline for this mesh.
+    #[serde(rename = "CastAlphaShadow", default)]
+    cast_alpha_shadow: bool,
 }
 
 fn default_roughness() -> f32 {
@@ -905,6 +908,8 @@ struct DirectionalLightData {
     cast_shadows: bool,
     #[serde(rename = "ShadowDistance", default = "default_shadow_distance")]
     shadow_distance: f32,
+    #[serde(rename = "ShadowCullFrontFaces", default)]
+    shadow_cull_front_faces: bool,
 }
 
 fn default_shadow_distance() -> f32 {
@@ -1560,6 +1565,7 @@ impl SceneSerializer {
                         emissive_strength: mc.emissive_strength,
                         albedo_texture: mc.texture_handle.raw(),
                         mesh_asset,
+                        cast_alpha_shadow: mc.cast_alpha_shadow,
                     }
                 }),
             directional_light: scene
@@ -1570,6 +1576,7 @@ impl SceneSerializer {
                     intensity: dl.intensity,
                     cast_shadows: dl.cast_shadows,
                     shadow_distance: dl.shadow_distance,
+                    shadow_cull_front_faces: dl.shadow_cull_front_faces,
                 }),
             point_light: scene
                 .get_component::<PointLightComponent>(entity)
@@ -2040,6 +2047,7 @@ impl SceneSerializer {
                     texture_handle: Uuid::from_raw(mrd.albedo_texture),
                     loaded_mesh: None,
                     local_bounds: None,
+                    cast_alpha_shadow: mrd.cast_alpha_shadow,
                     vertex_array: None,
                 },
             );
@@ -2054,6 +2062,7 @@ impl SceneSerializer {
                     intensity: dl.intensity,
                     cast_shadows: dl.cast_shadows,
                     shadow_distance: dl.shadow_distance,
+                    shadow_cull_front_faces: dl.shadow_cull_front_faces,
                 },
             );
         }

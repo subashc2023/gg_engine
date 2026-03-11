@@ -178,7 +178,7 @@ impl Sandbox3D {
             camera_position: eye,
             shadow_distance: 100.0,
         };
-        let (cascade_vps, split_depths, _shadow_far) =
+        let (cascade_vps, split_depths, _shadow_far, _texel_sizes) =
             gg_engine::renderer::shadow_map::compute_cascade_vps(&camera_info, light_dir, scene_min, scene_max);
         self.shadow_cascade_vps = Some(cascade_vps);
         self.shadow_split_depths = split_depths;
@@ -196,7 +196,7 @@ impl Sandbox3D {
         ];
 
         for cascade in 0..gg_engine::renderer::NUM_SHADOW_CASCADES {
-            renderer.begin_shadow_pass(&cascade_vps[cascade], cascade, cmd_buf, current_frame, 0);
+            renderer.begin_shadow_pass(&cascade_vps[cascade], cascade, cmd_buf, current_frame, 0, false);
             for (va_opt, model) in mesh_vas.iter().zip(&mesh_models) {
                 if let Some(va) = va_opt {
                     renderer.submit_shadow(va, model, cmd_buf);
@@ -249,6 +249,7 @@ impl Sandbox3D {
             shadow_cascade_vps: self.shadow_cascade_vps,
             cascade_split_depths: self.shadow_split_depths,
             shadow_distance: 100.0,
+            cascade_texel_sizes: [1.0; 4],
         };
         renderer.upload_lights(&light_env);
 

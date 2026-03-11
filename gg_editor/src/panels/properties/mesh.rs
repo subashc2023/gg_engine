@@ -272,6 +272,29 @@ pub(crate) fn draw_mesh_renderer_component(
                 changed = true;
             }
 
+            // Alpha shadow toggle.
+            {
+                let mut alpha_shadow = scene
+                    .get_component::<MeshRendererComponent>(entity)
+                    .unwrap()
+                    .cast_alpha_shadow;
+                if ui
+                    .checkbox(&mut alpha_shadow, "Cast Alpha Shadow")
+                    .on_hover_text(
+                        "Use the alpha-tested shadow pipeline so transparent \
+                         textures (foliage, fences) cast shaped shadows.",
+                    )
+                    .changed()
+                {
+                    if let Some(mut mc) =
+                        scene.get_component_mut::<MeshRendererComponent>(entity)
+                    {
+                        mc.cast_alpha_shadow = alpha_shadow;
+                    }
+                    *scene_dirty = true;
+                }
+            }
+
             if changed {
                 let needs_reupload = {
                     let mc = scene

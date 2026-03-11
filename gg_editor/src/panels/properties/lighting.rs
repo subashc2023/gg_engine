@@ -70,6 +70,13 @@ pub(crate) fn draw_directional_light_component(
                 changed = true;
             }
 
+            let mut shadow_cull_front_faces = {
+                let dl = scene
+                    .get_component::<DirectionalLightComponent>(entity)
+                    .unwrap();
+                dl.shadow_cull_front_faces
+            };
+
             if cast_shadows {
                 if ui
                     .add(
@@ -77,6 +84,16 @@ pub(crate) fn draw_directional_light_component(
                             .speed(1.0)
                             .range(1.0..=1000.0)
                             .prefix("Shadow Distance: "),
+                    )
+                    .changed()
+                {
+                    changed = true;
+                }
+                if ui
+                    .checkbox(&mut shadow_cull_front_faces, "Front-Face Cull (Shadow)")
+                    .on_hover_text(
+                        "Cull front faces in the shadow pass instead of back faces.\n\
+                         Reduces self-shadowing acne but may cause light leaking on thin geometry.",
                     )
                     .changed()
                 {
@@ -90,6 +107,7 @@ pub(crate) fn draw_directional_light_component(
                     dl.intensity = intensity;
                     dl.cast_shadows = cast_shadows;
                     dl.shadow_distance = shadow_distance;
+                    dl.shadow_cull_front_faces = shadow_cull_front_faces;
                 }
                 *scene_dirty = true;
             }

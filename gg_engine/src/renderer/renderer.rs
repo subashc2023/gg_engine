@@ -151,13 +151,17 @@ pub struct Renderer {
 
     // Shadow mapping system (lazily initialized).
     shadow_map: Option<ShadowMapSystem>,
-    shadow_pipeline: Option<Arc<Pipeline>>,
+    shadow_pipeline: Option<Arc<Pipeline>>,         // back-face cull (default)
+    shadow_pipeline_front: Option<Arc<Pipeline>>,   // front-face cull variant
+    shadow_alpha_pipeline: Option<Arc<Pipeline>>,   // alpha-tested variant
 
     // GPU timestamp profiler.
     gpu_profiler: Option<GpuProfiler>,
 
     // Shadow cascade debug visualization mode (0 = off, written to LightGpuData.counts.w).
     shadow_debug_mode: i32,
+    // Shadow quality tier (0=Low 4-tap, 1=Medium 9-tap, 2=High 16-tap, 3=Ultra PCSS).
+    shadow_quality: i32,
 
     // Post-processing pipeline (lazily initialized when scene framebuffer is available).
     postprocess: Option<PostProcessPipeline>,
@@ -281,9 +285,12 @@ impl Renderer {
             offscreen_sample_count: vk::SampleCountFlags::TYPE_1,
             shadow_map: Some(shadow_map),
             shadow_pipeline: None,
+            shadow_pipeline_front: None,
+            shadow_alpha_pipeline: None,
             gpu_profiler: None,
             postprocess: None,
             shadow_debug_mode: 0,
+            shadow_quality: 3, // Ultra (PCSS) by default
         })
     }
 
@@ -682,6 +689,7 @@ impl Renderer {
         if let Some(ctx) = self.draw_context {
             let mut gpu_data = env.to_gpu_data();
             gpu_data.counts[3] = self.shadow_debug_mode;
+            gpu_data.shadow_settings[0] = self.shadow_quality;
             self.lighting
                 .write_ubo(&gpu_data, ctx.current_frame, ctx.viewport_index);
         }
@@ -693,9 +701,20 @@ impl Renderer {
     /// itself is created eagerly in `Renderer::new` (needed for descriptor
     /// set layout at pipeline creation time).
     pub fn init_shadow_pipeline(&mut self) -> Result<(), String> {
-        if self.shadow_pipeline.is_some() {
+        self.init_shadow_pipeline_variant(false)
+    }
+
+    /// Ensure the shadow pipeline variant for the given cull mode exists.
+    fn init_shadow_pipeline_variant(&mut self, front_face_cull: bool) -> Result<(), String> {
+        let slot = if front_face_cull {
+            &self.shadow_pipeline_front
+        } else {
+            &self.shadow_pipeline
+        };
+        if slot.is_some() {
             return Ok(());
         }
+
         let sm = self
             .shadow_map
             .as_ref()
@@ -712,11 +731,18 @@ impl Renderer {
             sm.render_pass(),
             sm.camera_ds_layout(),
             self.pipeline_cache,
+            front_face_cull,
         )?);
 
-        self.shadow_pipeline = Some(pipeline);
-        log::info!(target: "gg_engine", "Shadow pipeline created ({}x{})",
-            sm.width(), sm.height());
+        let label = if front_face_cull { "front-cull" } else { "back-cull" };
+        log::info!(target: "gg_engine", "Shadow pipeline created ({}, {}x{})",
+            label, sm.width(), sm.height());
+
+        if front_face_cull {
+            self.shadow_pipeline_front = Some(pipeline);
+        } else {
+            self.shadow_pipeline = Some(pipeline);
+        }
         Ok(())
     }
 
@@ -727,22 +753,36 @@ impl Renderer {
 
     /// Begin the shadow depth-only render pass for a specific cascade.
     /// Must be called OUTSIDE the main render pass (before `begin_scene`).
+    ///
+    /// When `front_face_cull` is `true`, the front-face cull pipeline variant
+    /// is used (lazily created on first use).
     pub fn begin_shadow_pass(
-        &self,
+        &mut self,
         light_vp: &Mat4,
         cascade: usize,
         cmd_buf: vk::CommandBuffer,
         _current_frame: usize,
         _viewport_index: usize,
+        front_face_cull: bool,
     ) {
+        // Ensure the requested pipeline variant exists.
+        if front_face_cull && self.shadow_pipeline_front.is_none() {
+            if let Err(e) = self.init_shadow_pipeline_variant(true) {
+                log::error!("Failed to create front-cull shadow pipeline: {e}");
+                return;
+            }
+        }
+
         let sm = self
             .shadow_map
             .as_ref()
             .expect("Shadow map not initialized");
-        let pipeline = self
-            .shadow_pipeline
-            .as_ref()
-            .expect("Shadow pipeline not initialized");
+        let pipeline = if front_face_cull {
+            self.shadow_pipeline_front.as_ref()
+        } else {
+            self.shadow_pipeline.as_ref()
+        }
+        .expect("Shadow pipeline not initialized");
 
         let extent = vk::Extent2D {
             width: sm.width(),
@@ -858,6 +898,149 @@ impl Renderer {
     pub fn end_shadow_pass(&self, cmd_buf: vk::CommandBuffer) {
         unsafe {
             self.device.cmd_end_render_pass(cmd_buf);
+        }
+    }
+
+    /// Lazily create the alpha-tested shadow pipeline.
+    pub fn init_shadow_alpha_pipeline(&mut self) -> Result<(), String> {
+        if self.shadow_alpha_pipeline.is_some() {
+            return Ok(());
+        }
+        let sm = self
+            .shadow_map
+            .as_ref()
+            .expect("Shadow map system not initialized");
+
+        let shader = self.create_shader(
+            "shadow_alpha",
+            super::shaders::SHADOW_ALPHA_VERT_SPV,
+            super::shaders::SHADOW_ALPHA_FRAG_SPV,
+        )?;
+
+        let bindless_layout = self
+            .renderer_2d
+            .as_ref()
+            .map(|r2d| r2d.bindless_ds_layout())
+            .unwrap_or(self.texture_descriptor_set_layout);
+
+        let pipeline = Arc::new(shadow_map::create_shadow_alpha_pipeline(
+            &self.device,
+            &shader,
+            sm.render_pass(),
+            bindless_layout,
+            self.pipeline_cache,
+        )?);
+
+        log::info!(target: "gg_engine", "Shadow alpha pipeline created");
+        self.shadow_alpha_pipeline = Some(pipeline);
+        Ok(())
+    }
+
+    /// Returns `true` if the alpha-tested shadow pipeline is ready.
+    pub fn has_shadow_alpha_pipeline(&self) -> bool {
+        self.shadow_alpha_pipeline.is_some()
+    }
+
+    /// Bind the alpha-tested shadow pipeline within a shadow render pass.
+    /// Call after `begin_shadow_pass` before submitting alpha-tested meshes.
+    pub fn bind_shadow_alpha_pipeline(
+        &self,
+        light_vp: &Mat4,
+        cmd_buf: vk::CommandBuffer,
+        current_frame: usize,
+    ) {
+        let pipeline = self
+            .shadow_alpha_pipeline
+            .as_ref()
+            .expect("Shadow alpha pipeline not initialized");
+
+        unsafe {
+            self.device.cmd_bind_pipeline(
+                cmd_buf,
+                vk::PipelineBindPoint::GRAPHICS,
+                pipeline.pipeline(),
+            );
+
+            // Bind the bindless texture descriptor set at set 0.
+            if let Some(ref r2d) = self.renderer_2d {
+                self.device.cmd_bind_descriptor_sets(
+                    cmd_buf,
+                    vk::PipelineBindPoint::GRAPHICS,
+                    pipeline.layout(),
+                    0,
+                    &[r2d.bindless_descriptor_set(current_frame)],
+                    &[],
+                );
+            }
+
+            // Push light VP matrix (bytes [0..64]).
+            let vp_bytes = std::slice::from_raw_parts(
+                light_vp as *const Mat4 as *const u8,
+                std::mem::size_of::<Mat4>(),
+            );
+            self.device.cmd_push_constants(
+                cmd_buf,
+                pipeline.layout(),
+                vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT,
+                0,
+                vp_bytes,
+            );
+        }
+    }
+
+    /// Submit a mesh to the alpha-tested shadow pass.
+    /// Must be called after `bind_shadow_alpha_pipeline`.
+    pub fn submit_shadow_alpha(
+        &self,
+        vertex_array: &VertexArray,
+        transform: &Mat4,
+        alpha_cutoff: f32,
+        tex_index: i32,
+        cmd_buf: vk::CommandBuffer,
+    ) {
+        let pipeline = self
+            .shadow_alpha_pipeline
+            .as_ref()
+            .expect("Shadow alpha pipeline not initialized");
+
+        unsafe {
+            // Push model matrix at offset 64 (after light VP at 0).
+            let transform_bytes = std::slice::from_raw_parts(
+                transform as *const Mat4 as *const u8,
+                std::mem::size_of::<Mat4>(),
+            );
+            self.device.cmd_push_constants(
+                cmd_buf,
+                pipeline.layout(),
+                vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT,
+                64,
+                transform_bytes,
+            );
+
+            // Push alpha_cutoff (4 bytes at offset 128) + tex_index (4 bytes at offset 132).
+            let extra: [u8; 8] = {
+                let mut buf = [0u8; 8];
+                buf[0..4].copy_from_slice(&alpha_cutoff.to_ne_bytes());
+                buf[4..8].copy_from_slice(&tex_index.to_ne_bytes());
+                buf
+            };
+            self.device.cmd_push_constants(
+                cmd_buf,
+                pipeline.layout(),
+                vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT,
+                128,
+                &extra,
+            );
+        }
+
+        vertex_array.bind(cmd_buf);
+        let index_count = vertex_array
+            .index_buffer()
+            .expect("VertexArray has no index buffer")
+            .count();
+        unsafe {
+            self.device
+                .cmd_draw_indexed(cmd_buf, index_count, 1, 0, 0, 0);
         }
     }
 
@@ -1897,6 +2080,11 @@ impl Renderer {
         self.shadow_debug_mode = mode;
     }
 
+    /// Set the shadow quality tier (0=Low 4-tap, 1=Medium 9-tap, 2=High 16-tap, 3=Ultra PCSS).
+    pub fn set_shadow_quality(&mut self, quality: i32) {
+        self.shadow_quality = quality.clamp(0, 3);
+    }
+
     /// Set the camera near/far clip planes (used for contact shadow depth linearization).
     pub fn set_camera_clip_planes(&mut self, near: f32, far: f32) {
         self.camera_near = near;
@@ -2369,8 +2557,10 @@ impl Drop for Renderer {
         drop(self.postprocess.take());
         // Drop GPU profiler (owns query pools).
         drop(self.gpu_profiler.take());
-        // Drop shadow pipeline before shadow map (pipeline references render pass).
+        // Drop shadow pipelines before shadow map (pipelines reference render pass).
         drop(self.shadow_pipeline.take());
+        drop(self.shadow_pipeline_front.take());
+        drop(self.shadow_alpha_pipeline.take());
         // Drop shadow map system (owns descriptor set layouts, render pass, image).
         drop(self.shadow_map.take());
         unsafe {

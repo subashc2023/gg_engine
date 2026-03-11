@@ -602,7 +602,16 @@ impl PostProcessPipeline {
         height: u32,
     ) -> Result<(), String> {
         if width == self.width && height == self.height {
-            return Ok(());
+            // Size unchanged but input views may have changed (e.g. MSAA
+            // framebuffer recreation at the same dimensions). Update only
+            // the descriptor sets that reference external images.
+            return self.rebind_input_views(
+                allocator,
+                scene_color_view,
+                scene_depth_view,
+                msaa_depth_view,
+                scene_normal_view,
+            );
         }
 
         // Wait for GPU to finish using old resources.
@@ -774,6 +783,25 @@ impl PostProcessPipeline {
         }
 
         if let Some(msaa_dv) = msaa_depth_view {
+            // Create depth resolve pipeline if switching to MSAA at runtime.
+            if self.depth_resolve_pipeline.is_none() {
+                let resolve_shader = Shader::new(
+                    &self.device,
+                    "depth_resolve",
+                    super::shaders::DEPTH_RESOLVE_VERT_SPV,
+                    super::shaders::DEPTH_RESOLVE_FRAG_SPV,
+                )?;
+                self.depth_resolve_pipeline = Some(create_fullscreen_pipeline(
+                    &self.device,
+                    &resolve_shader,
+                    self.store_pass,
+                    &[self.sampler_ds_layout],
+                    0,
+                    false,
+                    self.pipeline_cache,
+                )?);
+            }
+
             // MSAA: resolve depth → 1x intermediate, contact shadows sample that.
             let resolved = create_pp_image(
                 &self.device,
@@ -821,6 +849,188 @@ impl PostProcessPipeline {
 
         self.width = width;
         self.height = height;
+        Ok(())
+    }
+
+    /// Update only the descriptor sets that reference external framebuffer
+    /// images. Called when the framebuffer is recreated at the same size
+    /// (e.g. MSAA sample count change) so the intermediate bloom/output images
+    /// can stay as-is but the input bindings must point to the new views.
+    fn rebind_input_views(
+        &mut self,
+        allocator: &Arc<Mutex<GpuAllocator>>,
+        scene_color_view: vk::ImageView,
+        scene_depth_view: Option<vk::ImageView>,
+        msaa_depth_view: Option<vk::ImageView>,
+        scene_normal_view: Option<vk::ImageView>,
+    ) -> Result<(), String> {
+        unsafe {
+            let _ = self.device.device_wait_idle();
+        }
+
+        // Update scene color DS in-place.
+        update_ds(&self.device, self.scene_ds, self.linear_sampler, scene_color_view);
+
+        let has_any_depth = scene_depth_view.is_some() || msaa_depth_view.is_some();
+
+        // --- Rebuild depth / MSAA-depth descriptor sets ---
+        // Free old depth-related DSes.
+        let resolved_ds = self.resolved_depth.as_ref().map(|r| r.descriptor_set);
+        if let Some(d_ds) = self.depth_ds.take() {
+            if resolved_ds != Some(d_ds) {
+                unsafe {
+                    let _ = self.device.free_descriptor_sets(self.ds_pool, &[d_ds]);
+                }
+            }
+        }
+        if let Some(rd) = self.resolved_depth.take() {
+            unsafe {
+                let _ = self.device.free_descriptor_sets(self.ds_pool, &[rd.descriptor_set]);
+                self.device.destroy_framebuffer(rd.framebuffer, None);
+                self.device.destroy_image_view(rd.image_view, None);
+                self.device.destroy_image(rd.image, None);
+            }
+        }
+        if let Some(m_ds) = self.msaa_depth_ds.take() {
+            unsafe {
+                let _ = self.device.free_descriptor_sets(self.ds_pool, &[m_ds]);
+            }
+        }
+
+        // Create depth sampler if we now need one but didn't before.
+        if has_any_depth && self.depth_sampler.is_none() {
+            self.depth_sampler = Some(unsafe {
+                self.device.create_sampler(
+                    &vk::SamplerCreateInfo::default()
+                        .mag_filter(vk::Filter::NEAREST)
+                        .min_filter(vk::Filter::NEAREST)
+                        .address_mode_u(vk::SamplerAddressMode::CLAMP_TO_EDGE)
+                        .address_mode_v(vk::SamplerAddressMode::CLAMP_TO_EDGE)
+                        .address_mode_w(vk::SamplerAddressMode::CLAMP_TO_EDGE),
+                    None,
+                )
+            }
+            .map_err(|e| format!("Failed to create depth sampler: {e}"))?);
+        }
+        let depth_samp = self.depth_sampler.unwrap_or(self.linear_sampler);
+
+        // Recreate MSAA depth resolve or direct depth DS.
+        if let Some(msaa_dv) = msaa_depth_view {
+            // Create depth resolve pipeline if not yet available (switching
+            // from non-MSAA to MSAA at runtime).
+            if self.depth_resolve_pipeline.is_none() {
+                let resolve_shader = Shader::new(
+                    &self.device,
+                    "depth_resolve",
+                    super::shaders::DEPTH_RESOLVE_VERT_SPV,
+                    super::shaders::DEPTH_RESOLVE_FRAG_SPV,
+                )?;
+                self.depth_resolve_pipeline = Some(create_fullscreen_pipeline(
+                    &self.device,
+                    &resolve_shader,
+                    self.store_pass,
+                    &[self.sampler_ds_layout],
+                    0,
+                    false,
+                    self.pipeline_cache,
+                )?);
+            }
+
+            let resolved = create_pp_image(
+                &self.device,
+                allocator,
+                self.ds_pool,
+                self.sampler_ds_layout,
+                depth_samp,
+                self.store_pass,
+                PP_FORMAT,
+                self.width,
+                self.height,
+            )?;
+            self.msaa_depth_ds = Some(allocate_and_write_ds_with_layout(
+                &self.device,
+                self.ds_pool,
+                self.sampler_ds_layout,
+                depth_samp,
+                msaa_dv,
+                vk::ImageLayout::DEPTH_STENCIL_READ_ONLY_OPTIMAL,
+            )?);
+            self.depth_ds = Some(resolved.descriptor_set);
+            self.resolved_depth = Some(resolved);
+        } else if let Some(dv) = scene_depth_view {
+            self.depth_ds = Some(allocate_and_write_ds_with_layout(
+                &self.device,
+                self.ds_pool,
+                self.sampler_ds_layout,
+                depth_samp,
+                dv,
+                vk::ImageLayout::DEPTH_STENCIL_READ_ONLY_OPTIMAL,
+            )?);
+        }
+
+        // --- Rebuild normal DS ---
+        if let Some(n_ds) = self.normal_ds.take() {
+            unsafe {
+                let _ = self.device.free_descriptor_sets(self.ds_pool, &[n_ds]);
+            }
+        }
+        if let Some(nv) = scene_normal_view {
+            self.normal_ds = Some(allocate_and_write_ds(
+                &self.device,
+                self.ds_pool,
+                self.sampler_ds_layout,
+                self.linear_sampler,
+                nv,
+            )?);
+        }
+
+        // --- Rebuild contact shadow intermediate images if depth availability changed ---
+        let need_cs = has_any_depth && self.contact_shadow_pipeline.is_some();
+        let has_cs = self.contact_shadowed.is_some();
+        if need_cs && !has_cs {
+            // Depth became available — create contact shadow images.
+            self.contact_shadowed = Some(create_pp_image(
+                &self.device,
+                allocator,
+                self.ds_pool,
+                self.sampler_ds_layout,
+                self.linear_sampler,
+                self.store_pass,
+                PP_FORMAT,
+                self.width,
+                self.height,
+            )?);
+            self.shadow_temp = Some(create_pp_image(
+                &self.device,
+                allocator,
+                self.ds_pool,
+                self.sampler_ds_layout,
+                self.linear_sampler,
+                self.store_pass,
+                PP_FORMAT,
+                self.width,
+                self.height,
+            )?);
+        } else if !need_cs && has_cs {
+            // Depth gone — tear down contact shadow images.
+            if let Some(cs) = self.contact_shadowed.take() {
+                unsafe {
+                    let _ = self.device.free_descriptor_sets(self.ds_pool, &[cs.descriptor_set]);
+                    self.device.destroy_framebuffer(cs.framebuffer, None);
+                    self.device.destroy_image_view(cs.image_view, None);
+                    self.device.destroy_image(cs.image, None);
+                }
+            }
+            if let Some(st) = self.shadow_temp.take() {
+                unsafe {
+                    let _ = self.device.free_descriptor_sets(self.ds_pool, &[st.descriptor_set]);
+                    self.device.destroy_framebuffer(st.framebuffer, None);
+                    self.device.destroy_image_view(st.image_view, None);
+                    self.device.destroy_image(st.image, None);
+                }
+            }
+        }
+
         Ok(())
     }
 

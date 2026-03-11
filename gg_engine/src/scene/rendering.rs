@@ -1212,9 +1212,9 @@ impl Scene {
             .query::<(hecs::Entity, &DirectionalLightComponent)>()
             .iter()
             .find(|(_, dl)| dl.cast_shadows)
-            .map(|(handle, dl)| (handle, dl.shadow_distance));
+            .map(|(handle, dl)| (handle, dl.shadow_distance, dl.shadow_cull_front_faces));
 
-        let (handle, shadow_distance) = match shadow_light {
+        let (handle, shadow_distance, front_face_cull) = match shadow_light {
             Some(h) => h,
             None => return,
         };
@@ -1224,15 +1224,15 @@ impl Scene {
         let (_, world_rot, _) = world.to_scale_rotation_translation();
         let direction = DirectionalLightComponent::direction(world_rot);
 
-        // Collect meshes.
-        let meshes: Vec<(hecs::Entity, glam::Mat4)> = self
+        // Collect meshes, tagging each as opaque or alpha-tested.
+        let meshes: Vec<(hecs::Entity, glam::Mat4, bool)> = self
             .world
             .query::<(hecs::Entity, &MeshRendererComponent)>()
             .iter()
             .filter_map(|(h, mc)| {
                 if mc.vertex_array.is_some() {
                     let w = self.get_world_transform(super::Entity::new(h));
-                    Some((h, w))
+                    Some((h, w, mc.cast_alpha_shadow))
                 } else {
                     None
                 }
@@ -1243,11 +1243,19 @@ impl Scene {
             return;
         }
 
-        // Initialize shadow pipeline if needed.
+        let has_alpha = meshes.iter().any(|(_, _, alpha)| *alpha);
+
+        // Initialize shadow pipelines as needed.
         if !renderer.has_shadow_pipeline() {
             if let Err(e) = renderer.init_shadow_pipeline() {
                 log::error!("Failed to create shadow pipeline: {e}");
                 return;
+            }
+        }
+        if has_alpha && !renderer.has_shadow_alpha_pipeline() {
+            if let Err(e) = renderer.init_shadow_alpha_pipeline() {
+                log::error!("Failed to create shadow alpha pipeline: {e}");
+                // Alpha meshes will fall back to opaque shadow pass.
             }
         }
 
@@ -1256,31 +1264,95 @@ impl Scene {
         // Compute per-cascade VP matrices. When camera frustum info is available,
         // each cascade is fitted to a sub-frustum slice for much better shadow
         // resolution near the viewer. Otherwise fall back to scene-AABB fitting.
-        let (cascade_vps, split_depths, effective_shadow_far) = if let Some(cam) = camera {
-            compute_cascade_vps(cam, direction, scene_min, scene_max)
-        } else {
-            let vp = compute_directional_light_vp(direction, scene_min, scene_max);
-            (
-                [vp; crate::renderer::NUM_SHADOW_CASCADES],
-                [0.75, 0.5, 0.25],
-                shadow_distance,
-            )
-        };
+        let (cascade_vps, split_depths, effective_shadow_far, texel_sizes) =
+            if let Some(cam) = camera {
+                compute_cascade_vps(cam, direction, scene_min, scene_max)
+            } else {
+                let vp = compute_directional_light_vp(direction, scene_min, scene_max);
+                (
+                    [vp; crate::renderer::NUM_SHADOW_CASCADES],
+                    [0.75, 0.5, 0.25],
+                    shadow_distance,
+                    [1.0; crate::renderer::NUM_SHADOW_CASCADES],
+                )
+            };
 
-        // Render each cascade.
+        // Pre-compute world-space AABBs for per-cascade frustum culling.
+        let mesh_bounds: Vec<Option<super::spatial::Aabb3D>> = meshes
+            .iter()
+            .map(|(h, w, _)| {
+                let mc = self.world.get::<&MeshRendererComponent>(*h).unwrap();
+                mc.local_bounds
+                    .map(|(lmin, lmax)| super::spatial::Aabb3D::from_local_bounds(lmin, lmax, w))
+            })
+            .collect();
+
+        let use_alpha_pipeline = has_alpha && renderer.has_shadow_alpha_pipeline();
+
+        // Render each cascade with per-cascade frustum culling.
         for cascade in 0..crate::renderer::NUM_SHADOW_CASCADES {
+            let frustum =
+                super::spatial::Frustum3D::from_view_projection(&cascade_vps[cascade]);
+
             renderer.begin_shadow_pass(
                 &cascade_vps[cascade],
                 cascade,
                 cmd_buf,
                 current_frame,
                 viewport_index,
+                front_face_cull,
             );
 
-            for (handle, world_transform) in &meshes {
+            // Pass 1: opaque meshes (standard shadow pipeline, already bound by begin_shadow_pass).
+            for (idx, (handle, world_transform, is_alpha)) in meshes.iter().enumerate() {
+                if *is_alpha {
+                    continue;
+                }
+                let visible = mesh_bounds[idx]
+                    .as_ref()
+                    .map(|aabb| frustum.contains_aabb(aabb))
+                    .unwrap_or(true);
+                if !visible {
+                    continue;
+                }
                 let mesh_comp = self.world.get::<&MeshRendererComponent>(*handle).unwrap();
                 if let Some(ref va) = mesh_comp.vertex_array {
                     renderer.submit_shadow(va, world_transform, cmd_buf);
+                }
+            }
+
+            // Pass 2: alpha-tested meshes (switch to alpha shadow pipeline).
+            if use_alpha_pipeline {
+                renderer.bind_shadow_alpha_pipeline(&cascade_vps[cascade], cmd_buf, current_frame);
+
+                for (idx, (handle, world_transform, is_alpha)) in meshes.iter().enumerate() {
+                    if !*is_alpha {
+                        continue;
+                    }
+                    let visible = mesh_bounds[idx]
+                        .as_ref()
+                        .map(|aabb| frustum.contains_aabb(aabb))
+                        .unwrap_or(true);
+                    if !visible {
+                        continue;
+                    }
+                    let mesh_comp =
+                        self.world.get::<&MeshRendererComponent>(*handle).unwrap();
+                    if let Some(ref va) = mesh_comp.vertex_array {
+                        // Get the bindless texture slot. -1 means no texture (skip alpha test).
+                        let tex_index = mesh_comp
+                            .texture
+                            .as_ref()
+                            .map(|t| t.bindless_index() as i32)
+                            .unwrap_or(-1);
+                        renderer.submit_shadow_alpha(
+                            va,
+                            world_transform,
+                            0.5, // Default alpha cutoff for shadow pass.
+                            tex_index,
+                            cmd_buf,
+                        );
+                    }
                 }
             }
 
@@ -1292,7 +1364,7 @@ impl Scene {
         // so the shader's distance fade matches where cascades actually end.
         self.shadow_cascade_cache
             .borrow_mut()
-            .replace((cascade_vps, split_depths, effective_shadow_far));
+            .replace((cascade_vps, split_depths, effective_shadow_far, texel_sizes));
     }
 
     /// Compute a conservative AABB for shadow frustum fitting.
@@ -1303,14 +1375,14 @@ impl Scene {
     /// frustum bounds. Falls back to all meshes if no static ones exist.
     fn compute_mesh_scene_bounds(
         &self,
-        meshes: &[(hecs::Entity, glam::Mat4)],
+        meshes: &[(hecs::Entity, glam::Mat4, bool)],
     ) -> (glam::Vec3, glam::Vec3) {
         let mut min = glam::Vec3::splat(f32::MAX);
         let mut max = glam::Vec3::splat(f32::NEG_INFINITY);
         let mut count = 0;
 
         // First pass: AABB from non-dynamic meshes only (stable frustum).
-        for (handle, world_transform) in meshes {
+        for (handle, world_transform, _) in meshes {
             let is_dynamic = self
                 .world
                 .get::<&RigidBody3DComponent>(*handle)
@@ -1327,7 +1399,7 @@ impl Scene {
 
         // Fallback: if every mesh is dynamic, include them all.
         if count == 0 {
-            for (handle, world_transform) in meshes {
+            for (handle, world_transform, _) in meshes {
                 self.expand_aabb_for_mesh(*handle, world_transform, &mut min, &mut max);
             }
         }
@@ -1404,10 +1476,13 @@ impl Scene {
 
         // Check for cascade VP data stashed by a prior render_shadow_pass call.
         if light_env.shadow_cascade_vps.is_none() {
-            if let Some((vps, splits, dist)) = self.shadow_cascade_cache.borrow_mut().take() {
+            if let Some((vps, splits, dist, tsizes)) =
+                self.shadow_cascade_cache.borrow_mut().take()
+            {
                 light_env.shadow_cascade_vps = Some(vps);
                 light_env.cascade_split_depths = splits;
                 light_env.shadow_distance = dist;
+                light_env.cascade_texel_sizes = tsizes;
             } else if let Some((handle, dl)) = self
                 .world
                 .query::<(hecs::Entity, &DirectionalLightComponent)>()
@@ -1419,7 +1494,9 @@ impl Scene {
                 let world = self.get_world_transform(super::Entity::new(handle));
                 let (_, world_rot, _) = world.to_scale_rotation_translation();
                 let direction = DirectionalLightComponent::direction(world_rot);
-                let (scene_min, scene_max) = self.compute_mesh_scene_bounds(&meshes);
+                let meshes_2: Vec<(hecs::Entity, glam::Mat4, bool)> =
+                    meshes.iter().map(|&(h, w)| (h, w, false)).collect();
+                let (scene_min, scene_max) = self.compute_mesh_scene_bounds(&meshes_2);
                 let vp = compute_directional_light_vp(direction, scene_min, scene_max);
                 light_env.shadow_cascade_vps =
                     Some([vp; crate::renderer::NUM_SHADOW_CASCADES]);

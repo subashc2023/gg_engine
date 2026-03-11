@@ -247,6 +247,17 @@ pub(crate) fn settings_ui(
                 }
             });
         pp.shadow_debug_mode = debug_idx as i32;
+
+        let quality_labels = ["Low (4-tap)", "Medium (9-tap)", "High (16-tap)", "Ultra (PCSS)"];
+        let mut quality_idx = (pp.shadow_quality as usize).min(quality_labels.len() - 1);
+        egui::ComboBox::from_label("Shadow Quality")
+            .selected_text(quality_labels[quality_idx])
+            .show_ui(ui, |ui| {
+                for (i, label) in quality_labels.iter().enumerate() {
+                    ui.selectable_value(&mut quality_idx, i, *label);
+                }
+            });
+        pp.shadow_quality = quality_idx as i32;
     }
 
     if !scene_warnings.is_empty() {

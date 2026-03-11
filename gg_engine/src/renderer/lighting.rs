@@ -43,6 +43,8 @@ pub struct LightGpuData {
     // Shadow mapping (cascaded)
     pub shadow_light_vp: [[f32; 16]; NUM_SHADOW_CASCADES], // 4 × mat4 = 256 bytes
     pub cascade_split_depth: [f32; 4], // xyz = 3 split depths (NDC), w = shadow_distance
+    pub cascade_texel_size: [f32; 4],  // world-units-per-texel per cascade (for bias scaling)
+    pub shadow_settings: [i32; 4],     // x = quality (0-3), yzw = reserved
 }
 
 impl LightGpuData {
@@ -60,6 +62,8 @@ impl LightGpuData {
             counts: [0, 0, 0, 0],
             shadow_light_vp: [[0.0; 16]; NUM_SHADOW_CASCADES],
             cascade_split_depth: [0.0; 4],
+            cascade_texel_size: [1.0; 4],
+            shadow_settings: [0; 4],
         }
     }
 
@@ -184,6 +188,8 @@ pub struct LightEnvironment {
     pub cascade_split_depths: [f32; 3],
     /// Shadow distance in world units (for shader fade-out). Packed into cascade_split_depth.w.
     pub shadow_distance: f32,
+    /// World-units-per-texel for each cascade (used for per-cascade bias scaling).
+    pub cascade_texel_sizes: [f32; 4],
 }
 
 impl Default for LightEnvironment {
@@ -197,6 +203,7 @@ impl Default for LightEnvironment {
             shadow_cascade_vps: None,
             cascade_split_depths: [0.0; 3],
             shadow_distance: 100.0,
+            cascade_texel_sizes: [1.0; 4],
         }
     }
 }
@@ -248,6 +255,7 @@ impl LightEnvironment {
             data.cascade_split_depth[1] = self.cascade_split_depths[1];
             data.cascade_split_depth[2] = self.cascade_split_depths[2];
             data.cascade_split_depth[3] = self.shadow_distance;
+            data.cascade_texel_size = self.cascade_texel_sizes;
             data.counts[2] = 1; // has_shadow = true
         }
 
@@ -270,8 +278,10 @@ mod tests {
         // ambient + camera_pos + counts = 3 × vec4 = 48 bytes
         // shadow_light_vp: 4 × mat4 = 256 bytes
         // cascade_split_depth: vec4 = 16 bytes
-        // Total = 32 + 512 + 48 + 256 + 16 = 864 bytes
-        assert_eq!(LightGpuData::SIZE, 864);
+        // cascade_texel_size: vec4 = 16 bytes
+        // shadow_settings: ivec4 = 16 bytes
+        // Total = 32 + 512 + 48 + 256 + 16 + 16 + 16 = 896 bytes
+        assert_eq!(LightGpuData::SIZE, 896);
     }
 
     #[test]
@@ -304,6 +314,7 @@ mod tests {
             shadow_cascade_vps: None,
             cascade_split_depths: [0.0; 3],
             shadow_distance: 100.0,
+            cascade_texel_sizes: [1.0; 4],
         };
         let gpu = env.to_gpu_data();
         assert_eq!(gpu.counts[0], 1); // 1 point light
