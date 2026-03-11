@@ -5,7 +5,7 @@ use super::{
     RigidBody3DComponent, RigidBody3DType, Scene, SpriteAnimatorComponent, SpriteRendererComponent,
     TextComponent, TilemapComponent, TransformComponent, TILE_FLIP_H, TILE_FLIP_V, TILE_ID_MASK,
 };
-use crate::renderer::shadow_map::compute_directional_light_vp;
+use crate::renderer::shadow_map::{compute_cascade_vps, compute_directional_light_vp, ShadowCameraInfo};
 use crate::renderer::{Font, LightEnvironment, Mesh, Renderer, SubTexture2D};
 
 /// Sort key for 2D renderable ordering. Sorted by layer, then sub-order,
@@ -1109,6 +1109,30 @@ impl Scene {
         self.render_meshes(renderer);
     }
 
+    /// Find the primary ECS camera and return its frustum info for shadow
+    /// cascade fitting. Returns `None` if no primary camera exists or it
+    /// uses orthographic projection (CSM frustum fitting requires perspective).
+    pub fn primary_camera_info(&self) -> Option<ShadowCameraInfo> {
+        use crate::renderer::ProjectionType;
+
+        for (handle, camera) in self
+            .world
+            .query::<(hecs::Entity, &super::CameraComponent)>()
+            .iter()
+        {
+            if camera.primary && camera.camera.projection_type() == ProjectionType::Perspective {
+                let world = self.get_world_transform(Entity::new(handle));
+                let vp = *camera.camera.projection() * world.inverse();
+                return Some(ShadowCameraInfo {
+                    view_projection: vp,
+                    near: camera.camera.perspective_near(),
+                    far: camera.camera.perspective_far(),
+                });
+            }
+        }
+        None
+    }
+
     /// Collect all light components from the scene into a [`LightEnvironment`].
     ///
     /// Gathers directional lights, point lights, and ambient light settings.
@@ -1156,14 +1180,16 @@ impl Scene {
     /// Must be called OUTSIDE the main render pass (before `begin_scene`).
     /// If no directional light with `cast_shadows` exists, this is a no-op.
     ///
-    /// Returns the light-space VP matrix if shadows were rendered, so the
-    /// caller can set it on the `LightEnvironment` for the main pass.
+    /// When `camera` is provided, each cascade is fitted to a sub-frustum of
+    /// the camera for dramatically better shadow resolution near the viewer.
+    /// When `None`, falls back to scene-AABB fitting (same VP for both cascades).
     pub fn render_shadow_pass(
         &self,
         renderer: &mut Renderer,
         cmd_buf: ash::vk::CommandBuffer,
         current_frame: usize,
         viewport_index: usize,
+        camera: Option<&ShadowCameraInfo>,
     ) {
         // Find the first directional light with shadows enabled.
         let shadow_light = self
@@ -1210,10 +1236,14 @@ impl Scene {
             }
         }
 
-        // Use scene-AABB fitted VP for both cascades. This gives stable shadow
-        // coverage regardless of camera angle — essential for an orbit camera.
-        let (cascade_vps, split_depth) = {
-            let (scene_min, scene_max) = self.compute_mesh_scene_bounds(&meshes);
+        let (scene_min, scene_max) = self.compute_mesh_scene_bounds(&meshes);
+
+        // Compute per-cascade VP matrices. When camera frustum info is available,
+        // each cascade is fitted to a sub-frustum slice for much better shadow
+        // resolution near the viewer. Otherwise fall back to scene-AABB fitting.
+        let (cascade_vps, split_depth) = if let Some(cam) = camera {
+            compute_cascade_vps(cam, direction, scene_min, scene_max)
+        } else {
             let vp = compute_directional_light_vp(direction, scene_min, scene_max);
             ([vp, vp], 0.5)
         };

@@ -117,6 +117,7 @@ pub(crate) struct PostProcessSettings {
     pub contact_shadows_intensity: f32,
     pub contact_shadows_step_count: i32,
     pub contact_shadows_debug: i32,
+    pub shadow_debug_mode: i32,
 }
 
 impl Default for PostProcessSettings {
@@ -137,6 +138,7 @@ impl Default for PostProcessSettings {
             contact_shadows_intensity: 0.6,
             contact_shadows_step_count: 64,
             contact_shadows_debug: 0,
+            shadow_debug_mode: 0,
         }
     }
 }
@@ -619,8 +621,14 @@ impl Application for GGEditor {
         self.scene.resolve_meshes(renderer);
 
         // Run the shadow depth pass (shared shadow map for all viewports).
+        // Pass the editor camera's frustum info for per-cascade fitting.
+        let camera_info = gg_engine::renderer::ShadowCameraInfo {
+            view_projection: self.editor_camera.view_projection(),
+            near: self.editor_camera.near_clip(),
+            far: self.editor_camera.far_clip(),
+        };
         self.scene
-            .render_shadow_pass(renderer, cmd_buf, current_frame, 0);
+            .render_shadow_pass(renderer, cmd_buf, current_frame, 0, Some(&camera_info));
     }
 
     fn on_render_viewport(&mut self, renderer: &mut Renderer, viewport_index: usize) {
@@ -644,6 +652,10 @@ impl Application for GGEditor {
                 pp.contact_shadows_step_count = s.contact_shadows_step_count;
                 pp.contact_shadows_debug = s.contact_shadows_debug;
             }
+
+            // Sync shadow cascade debug mode to renderer.
+            renderer.set_shadow_debug_mode(self.postprocess_settings.shadow_debug_mode);
+
 
             // Update post-process output handle (may change on resize).
             if let Some(pp) = renderer.postprocess() {

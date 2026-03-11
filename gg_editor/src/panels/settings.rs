@@ -223,6 +223,32 @@ pub(crate) fn settings_ui(
         }
     }
 
+    // -- Shadow Debug --
+    ui.add_space(8.0);
+    ui.heading("Shadow Debug");
+    ui.separator();
+    {
+        let debug_labels = [
+            "Off",
+            "Cascade Index",
+            "Cascade 0 Shadow",
+            "Cascade 1 Shadow",
+            "Cascade 0 Coverage",
+            "Cascade 1 Coverage",
+            "Final Shadow",
+            "Cascade Difference",
+        ];
+        let mut debug_idx = (pp.shadow_debug_mode as usize).min(debug_labels.len() - 1);
+        egui::ComboBox::from_label("CSM Debug")
+            .selected_text(debug_labels[debug_idx])
+            .show_ui(ui, |ui| {
+                for (i, label) in debug_labels.iter().enumerate() {
+                    ui.selectable_value(&mut debug_idx, i, *label);
+                }
+            });
+        pp.shadow_debug_mode = debug_idx as i32;
+    }
+
     if !scene_warnings.is_empty() {
         ui.add_space(8.0);
         ui.heading("Warnings");

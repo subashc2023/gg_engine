@@ -1,7 +1,7 @@
 use std::sync::{Arc, Mutex};
 
 use ash::vk;
-use glam::{Mat4, Vec3};
+use glam::{Mat4, Vec2, Vec3, Vec4, Vec4Swizzles};
 
 use super::gpu_allocation::{GpuAllocation, GpuAllocator, MemoryLocation};
 use super::lighting::NUM_SHADOW_CASCADES;
@@ -579,6 +579,184 @@ pub fn compute_directional_light_vp(
     light_proj.w_axis.y += offset_y;
 
     light_proj * light_view
+}
+
+// ---------------------------------------------------------------------------
+// Camera-frustum-fitted cascaded shadow maps
+// ---------------------------------------------------------------------------
+
+/// Camera frustum data needed for per-cascade shadow map frustum fitting.
+///
+/// Pass this to [`compute_cascade_vps`] (or indirectly via
+/// `Scene::render_shadow_pass`) so that each cascade covers a different
+/// depth slice of the camera frustum instead of the full scene AABB.
+pub struct ShadowCameraInfo {
+    /// The camera's full view-projection matrix (including reverse-Z and Y-flip).
+    pub view_projection: Mat4,
+    /// Camera near clip distance (positive, world units).
+    pub near: f32,
+    /// Camera far clip distance (positive, world units).
+    pub far: f32,
+}
+
+/// Blend factor between uniform and logarithmic cascade splits.
+/// 0.0 = fully uniform, 1.0 = fully logarithmic.
+/// Higher values allocate more shadow resolution to near-field geometry.
+const CASCADE_SPLIT_LAMBDA: f32 = 0.75;
+
+/// Compute per-cascade orthographic light-space VP matrices by fitting
+/// each cascade's frustum to a sub-frustum of the camera.
+///
+/// Returns `(cascade_vps, split_ndc)` where `split_ndc` is the cascade
+/// split depth in Vulkan NDC (reverse-Z) for the fragment shader.
+///
+/// The camera sub-frustum corners define the XY bounds of each cascade's
+/// orthographic projection, while the scene AABB extends the Z range to
+/// include shadow casters that might be outside the camera frustum.
+pub fn compute_cascade_vps(
+    camera: &ShadowCameraInfo,
+    light_direction: Vec3,
+    scene_min: Vec3,
+    scene_max: Vec3,
+) -> ([Mat4; NUM_SHADOW_CASCADES], f32) {
+    let inv_vp = camera.view_projection.inverse();
+    let near = camera.near;
+    let actual_far = camera.far;
+
+    // Cap the effective shadow distance to the scene extent. There's no point
+    // computing cascades far beyond where geometry exists — it wastes shadow map
+    // resolution on empty space. The multiplier gives headroom for shadows that
+    // extend past the scene AABB (e.g. long shadows at low sun angles).
+    let scene_diagonal = (scene_max - scene_min).length().max(MIN_SHADOW_EXTENT);
+    let shadow_far = actual_far.min(scene_diagonal * 3.0).max(near * 10.0);
+
+    // 1. Extract 8 frustum corners from inv_VP.
+    //    Vulkan reverse-Z NDC: near plane at z=1, far plane at z=0.
+    let ndc_corners: [Vec4; 8] = [
+        // Near plane (z = 1)
+        Vec4::new(-1.0, -1.0, 1.0, 1.0),
+        Vec4::new(1.0, -1.0, 1.0, 1.0),
+        Vec4::new(1.0, 1.0, 1.0, 1.0),
+        Vec4::new(-1.0, 1.0, 1.0, 1.0),
+        // Far plane (z = 0)
+        Vec4::new(-1.0, -1.0, 0.0, 1.0),
+        Vec4::new(1.0, -1.0, 0.0, 1.0),
+        Vec4::new(1.0, 1.0, 0.0, 1.0),
+        Vec4::new(-1.0, 1.0, 0.0, 1.0),
+    ];
+
+    let mut world_corners = [Vec3::ZERO; 8];
+    for (i, ndc) in ndc_corners.iter().enumerate() {
+        let world = inv_vp * *ndc;
+        world_corners[i] = world.xyz() / world.w;
+    }
+
+    // Near corners = [0..4], Far corners = [4..8].
+    // The frustum edges go from near_corner[i] (at camera.near) to
+    // far_corner[i] (at camera.far). Lerp parameter t ∈ [0, 1] maps to
+    // view-space distance = near + t * (actual_far - near).
+
+    // 2. Compute practical split distance (PSSM blend) using capped shadow_far.
+    let uniform_split = near + (shadow_far - near) * 0.5;
+    let log_split = near * (shadow_far / near).sqrt();
+    let split_distance =
+        uniform_split * (1.0 - CASCADE_SPLIT_LAMBDA) + log_split * CASCADE_SPLIT_LAMBDA;
+
+    // Convert split and shadow_far to lerp parameters along the actual frustum
+    // edges (which span from camera.near to camera.far, NOT shadow_far).
+    let t_split = (split_distance - near) / (actual_far - near);
+    let t_shadow_far = (shadow_far - near) / (actual_far - near);
+
+    // 3. Compute split depth in NDC using the camera's actual near/far
+    //    (reverse-Z: near=1, far=0), since the shader reads from the camera's
+    //    depth buffer which uses the real projection.
+    let split_ndc =
+        near * (actual_far - split_distance) / ((actual_far - near) * split_distance);
+
+    // 4. For each cascade, compute sub-frustum and fit orthographic projection.
+    //    Cascade 0 = near (t=0 to t_split), Cascade 1 = far (t_split to t_shadow_far).
+    let cascade_ranges = [(0.0_f32, t_split), (t_split, t_shadow_far)];
+    let mut cascade_vps = [Mat4::IDENTITY; NUM_SHADOW_CASCADES];
+
+    let light_dir = light_direction.normalize();
+    let up = if light_dir.y.abs() > 0.99 {
+        Vec3::Z
+    } else {
+        Vec3::Y
+    };
+
+    // Pre-compute scene AABB corners for light-space projection.
+    let scene_aabb_corners: [Vec3; 8] = std::array::from_fn(|i| {
+        Vec3::new(
+            if i & 1 != 0 { scene_max.x } else { scene_min.x },
+            if i & 2 != 0 { scene_max.y } else { scene_min.y },
+            if i & 4 != 0 { scene_max.z } else { scene_min.z },
+        )
+    });
+
+    for (cascade_idx, &(t_near, t_far)) in cascade_ranges.iter().enumerate() {
+        // Sub-frustum corners: interpolate between near and far frustum corners.
+        let mut sub_corners = [Vec3::ZERO; 8];
+        for i in 0..4 {
+            sub_corners[i] = world_corners[i].lerp(world_corners[i + 4], t_near);
+            sub_corners[i + 4] = world_corners[i].lerp(world_corners[i + 4], t_far);
+        }
+
+        // Center of the sub-frustum.
+        let center = sub_corners.iter().copied().fold(Vec3::ZERO, |a, b| a + b) / 8.0;
+
+        // Bounding sphere of the sub-frustum. Using a sphere instead of a tight
+        // AABB ensures all visible fragments are well inside the shadow map (no UV
+        // edge fade artifacts), and the ortho extent doesn't change with camera
+        // rotation, eliminating shadow shimmer from frustum shape changes.
+        let radius = sub_corners
+            .iter()
+            .map(|c| (*c - center).length())
+            .fold(0.0_f32, f32::max);
+
+        // Light view matrix — eye behind the sub-frustum, looking along light direction.
+        let light_view = Mat4::look_at_lh(center - light_dir * MAX_SHADOW_EXTENT, center, up);
+
+        // Extend Z range to include scene AABB (captures shadow casters outside
+        // the camera frustum, e.g. objects behind the camera casting forward).
+        let mut z_min = f32::MAX;
+        let mut z_max = f32::NEG_INFINITY;
+
+        for &corner in &scene_aabb_corners {
+            let ls = light_view.transform_point3(corner);
+            z_min = z_min.min(ls.z);
+            z_max = z_max.max(ls.z);
+        }
+
+        // Also include sub-frustum Z range.
+        for corner in &sub_corners {
+            let ls = light_view.transform_point3(*corner);
+            z_min = z_min.min(ls.z);
+            z_max = z_max.max(ls.z);
+        }
+
+        // Build orthographic projection from the bounding sphere XY + scene Z.
+        let mut light_proj =
+            Mat4::orthographic_lh(-radius, radius, -radius, radius, z_min, z_max);
+        light_proj.y_axis.y *= -1.0; // Vulkan Y-flip
+
+        // Texel snapping: prevent shadow shimmer from sub-texel jitter.
+        // With sphere fitting, the radius is stable across rotations, so the
+        // ortho extent doesn't change — only the translation needs snapping.
+        let shadow_vp = light_proj * light_view;
+        let half_texels = DEFAULT_SHADOW_MAP_SIZE as f32 * 0.5;
+        let origin_clip = shadow_vp.transform_point3(Vec3::ZERO);
+        let tx = origin_clip.x * half_texels;
+        let ty = origin_clip.y * half_texels;
+        let offset_x = (tx.round() - tx) / half_texels;
+        let offset_y = (ty.round() - ty) / half_texels;
+        light_proj.w_axis.x += offset_x;
+        light_proj.w_axis.y += offset_y;
+
+        cascade_vps[cascade_idx] = light_proj * light_view;
+    }
+
+    (cascade_vps, split_ndc)
 }
 
 // ---------------------------------------------------------------------------

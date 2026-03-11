@@ -156,6 +156,9 @@ pub struct Renderer {
     // GPU timestamp profiler.
     gpu_profiler: Option<GpuProfiler>,
 
+    // Shadow cascade debug visualization mode (0 = off, written to LightGpuData.counts.w).
+    shadow_debug_mode: i32,
+
     // Post-processing pipeline (lazily initialized when scene framebuffer is available).
     postprocess: Option<PostProcessPipeline>,
 }
@@ -280,6 +283,7 @@ impl Renderer {
             shadow_pipeline: None,
             gpu_profiler: None,
             postprocess: None,
+            shadow_debug_mode: 0,
         })
     }
 
@@ -676,7 +680,8 @@ impl Renderer {
     /// the previous frame's light data remains in the UBO.
     pub fn upload_lights(&self, env: &LightEnvironment) {
         if let Some(ctx) = self.draw_context {
-            let gpu_data = env.to_gpu_data();
+            let mut gpu_data = env.to_gpu_data();
+            gpu_data.counts[3] = self.shadow_debug_mode;
             self.lighting
                 .write_ubo(&gpu_data, ctx.current_frame, ctx.viewport_index);
         }
@@ -1884,6 +1889,12 @@ impl Renderer {
     /// Get the current camera eye position.
     pub fn camera_position(&self) -> Vec3 {
         self.camera_position
+    }
+
+    /// Set the shadow cascade debug visualization mode (0 = off, 1-6 = debug views).
+    /// Written to `LightGpuData.counts.w` and read by `mesh3d.glsl`.
+    pub fn set_shadow_debug_mode(&mut self, mode: i32) {
+        self.shadow_debug_mode = mode;
     }
 
     /// Set the camera near/far clip planes (used for contact shadow depth linearization).

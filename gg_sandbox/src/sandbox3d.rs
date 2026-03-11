@@ -1,7 +1,6 @@
 use std::sync::Arc;
 
 use gg_engine::prelude::*;
-use gg_engine::renderer::shadow_map::compute_directional_light_vp;
 use gg_engine::renderer::Pipeline;
 
 /// 3D test scene: cube, sphere, and ground plane with directional + point lighting,
@@ -159,10 +158,28 @@ impl Sandbox3D {
         // Scene AABB covering the sandbox geometry.
         let scene_min = Vec3::new(-3.0, -1.0, -3.0);
         let scene_max = Vec3::new(3.5, 2.0, 3.0);
-        let vp = compute_directional_light_vp(light_dir, scene_min, scene_max);
-        let cascade_vps = [vp, vp];
+
+        // Compute per-cascade VPs fitted to the camera frustum.
+        let aspect = self.window_width as f32 / self.window_height.max(1) as f32;
+        let mut cam_proj = Mat4::perspective_lh(45.0_f32.to_radians(), aspect, 0.1, 100.0);
+        cam_proj.z_axis.z = 0.1 / (0.1 - 100.0);
+        cam_proj.w_axis.z = 0.1 * 100.0 / (100.0 - 0.1);
+        cam_proj.y_axis.y *= -1.0;
+        let eye = Vec3::new(
+            self.orbit_dist * self.orbit_pitch.cos() * self.orbit_yaw.sin(),
+            self.orbit_dist * self.orbit_pitch.sin(),
+            self.orbit_dist * self.orbit_pitch.cos() * self.orbit_yaw.cos(),
+        );
+        let cam_view = Mat4::look_at_lh(eye, Vec3::ZERO, Vec3::Y);
+        let camera_info = gg_engine::renderer::ShadowCameraInfo {
+            view_projection: cam_proj * cam_view,
+            near: 0.1,
+            far: 100.0,
+        };
+        let (cascade_vps, split_depth) =
+            gg_engine::renderer::shadow_map::compute_cascade_vps(&camera_info, light_dir, scene_min, scene_max);
         self.shadow_cascade_vps = Some(cascade_vps);
-        self.shadow_split_depth = 0.5;
+        self.shadow_split_depth = split_depth;
 
         // Mesh transforms for shadow submission.
         let mesh_models: Vec<Mat4> = vec![

@@ -283,8 +283,10 @@ impl Application for GGPlayer {
         current_frame: usize,
     ) {
         if self.runtime_started {
+            // Find the primary camera for per-cascade frustum fitting.
+            let camera_info = self.scene.primary_camera_info();
             self.scene
-                .render_shadow_pass(renderer, cmd_buf, current_frame, 0);
+                .render_shadow_pass(renderer, cmd_buf, current_frame, 0, camera_info.as_ref());
         }
     }
 
