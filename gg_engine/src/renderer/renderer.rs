@@ -180,7 +180,7 @@ impl Renderer {
         // descriptor set per (frame, viewport) slot. Shadow also needs sampler sets.
         let ubo_slot_count = (super::MAX_FRAMES_IN_FLIGHT * super::MAX_VIEWPORTS) as u32;
         let total_ubo_sets = ubo_slot_count * 4; // camera + material + lighting + shadow camera
-        let total_sampler_descriptors = 100 + ubo_slot_count; // textures + shadow map samplers
+        let total_sampler_descriptors = 100 + ubo_slot_count * 2; // textures + shadow map (2 samplers per set: PCF + PCSS blocker)
         let total_sets = total_sampler_descriptors + total_ubo_sets;
         let pool_sizes = [
             vk::DescriptorPoolSize {

@@ -622,11 +622,17 @@ impl Application for GGEditor {
 
         // Run the shadow depth pass (shared shadow map for all viewports).
         // Pass the editor camera's frustum info for per-cascade fitting.
+        // Read shadow distance from the scene's directional light (if any).
+        let shadow_distance = self
+            .scene
+            .find_first_shadow_distance()
+            .unwrap_or(100.0);
         let camera_info = gg_engine::renderer::ShadowCameraInfo {
             view_projection: self.editor_camera.view_projection(),
             near: self.editor_camera.near_clip(),
             far: self.editor_camera.far_clip(),
             camera_position: self.editor_camera.position(),
+            shadow_distance,
         };
         self.scene
             .render_shadow_pass(renderer, cmd_buf, current_frame, 0, Some(&camera_info));

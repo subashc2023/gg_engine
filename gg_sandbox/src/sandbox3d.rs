@@ -31,8 +31,8 @@ pub struct Sandbox3D {
 
     // Shadow mapping.
     shadows_enabled: bool,
-    shadow_cascade_vps: Option<[Mat4; 2]>,
-    shadow_split_depth: f32,
+    shadow_cascade_vps: Option<[Mat4; 4]>,
+    shadow_split_depths: [f32; 3],
 }
 
 impl Sandbox3D {
@@ -56,7 +56,7 @@ impl Sandbox3D {
             elapsed: 0.0,
             shadows_enabled: true,
             shadow_cascade_vps: None,
-            shadow_split_depth: 0.0,
+            shadow_split_depths: [0.0; 3],
         }
     }
 
@@ -176,11 +176,12 @@ impl Sandbox3D {
             near: 0.1,
             far: 100.0,
             camera_position: eye,
+            shadow_distance: 100.0,
         };
-        let (cascade_vps, split_depth) =
+        let (cascade_vps, split_depths, _shadow_far) =
             gg_engine::renderer::shadow_map::compute_cascade_vps(&camera_info, light_dir, scene_min, scene_max);
         self.shadow_cascade_vps = Some(cascade_vps);
-        self.shadow_split_depth = split_depth;
+        self.shadow_split_depths = split_depths;
 
         // Mesh transforms for shadow submission.
         let mesh_models: Vec<Mat4> = vec![
@@ -194,7 +195,7 @@ impl Sandbox3D {
             self.sphere_va.as_ref(),
         ];
 
-        for cascade in 0..2 {
+        for cascade in 0..gg_engine::renderer::NUM_SHADOW_CASCADES {
             renderer.begin_shadow_pass(&cascade_vps[cascade], cascade, cmd_buf, current_frame, 0);
             for (va_opt, model) in mesh_vas.iter().zip(&mesh_models) {
                 if let Some(va) = va_opt {
@@ -246,7 +247,8 @@ impl Sandbox3D {
             ambient_intensity: 1.0,
             camera_position: eye,
             shadow_cascade_vps: self.shadow_cascade_vps,
-            cascade_split_depth: self.shadow_split_depth,
+            cascade_split_depths: self.shadow_split_depths,
+            shadow_distance: 100.0,
         };
         renderer.upload_lights(&light_env);
 

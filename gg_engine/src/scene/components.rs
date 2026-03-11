@@ -1293,6 +1293,9 @@ pub struct DirectionalLightComponent {
     pub intensity: f32,
     /// Whether this light casts shadows via a shadow map.
     pub cast_shadows: bool,
+    /// Maximum distance (world units) at which shadows are rendered.
+    /// Cascades are distributed within this range. Default: 100.0.
+    pub shadow_distance: f32,
 }
 
 impl DirectionalLightComponent {
@@ -1313,6 +1316,7 @@ impl Default for DirectionalLightComponent {
             color: Vec3::ONE,
             intensity: 1.0,
             cast_shadows: false,
+            shadow_distance: 100.0,
         }
     }
 }

@@ -60,14 +60,28 @@ pub(crate) fn draw_directional_light_component(
 
             ui.separator();
 
-            let mut cast_shadows = {
+            let (mut cast_shadows, mut shadow_distance) = {
                 let dl = scene
                     .get_component::<DirectionalLightComponent>(entity)
                     .unwrap();
-                dl.cast_shadows
+                (dl.cast_shadows, dl.shadow_distance)
             };
             if ui.checkbox(&mut cast_shadows, "Cast Shadows").changed() {
                 changed = true;
+            }
+
+            if cast_shadows {
+                if ui
+                    .add(
+                        egui::DragValue::new(&mut shadow_distance)
+                            .speed(1.0)
+                            .range(1.0..=1000.0)
+                            .prefix("Shadow Distance: "),
+                    )
+                    .changed()
+                {
+                    changed = true;
+                }
             }
 
             if changed {
@@ -75,6 +89,7 @@ pub(crate) fn draw_directional_light_component(
                     dl.color = Vec3::from(color_arr);
                     dl.intensity = intensity;
                     dl.cast_shadows = cast_shadows;
+                    dl.shadow_distance = shadow_distance;
                 }
                 *scene_dirty = true;
             }

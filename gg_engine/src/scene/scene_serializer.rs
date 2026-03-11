@@ -903,6 +903,12 @@ struct DirectionalLightData {
     intensity: f32,
     #[serde(rename = "CastShadows", default)]
     cast_shadows: bool,
+    #[serde(rename = "ShadowDistance", default = "default_shadow_distance")]
+    shadow_distance: f32,
+}
+
+fn default_shadow_distance() -> f32 {
+    100.0
 }
 
 #[derive(Serialize, Deserialize)]
@@ -1563,6 +1569,7 @@ impl SceneSerializer {
                     color: dl.color.into(),
                     intensity: dl.intensity,
                     cast_shadows: dl.cast_shadows,
+                    shadow_distance: dl.shadow_distance,
                 }),
             point_light: scene
                 .get_component::<PointLightComponent>(entity)
@@ -2046,6 +2053,7 @@ impl SceneSerializer {
                     color: Vec3::from(dl.color),
                     intensity: dl.intensity,
                     cast_shadows: dl.cast_shadows,
+                    shadow_distance: dl.shadow_distance,
                 },
             );
         }

@@ -1,7 +1,7 @@
 use std::sync::{Arc, Mutex};
 
 use ash::vk;
-use glam::{Mat4, Vec2, Vec3, Vec4, Vec4Swizzles};
+use glam::{Mat4, Vec3, Vec4, Vec4Swizzles};
 
 use super::gpu_allocation::{GpuAllocation, GpuAllocator, MemoryLocation};
 use super::lighting::NUM_SHADOW_CASCADES;
@@ -13,7 +13,9 @@ use super::{MAX_FRAMES_IN_FLIGHT, MAX_VIEWPORTS};
 // ---------------------------------------------------------------------------
 
 /// Default shadow map resolution (width and height in texels per cascade).
-pub const DEFAULT_SHADOW_MAP_SIZE: u32 = 6144;
+/// 4 cascades × 4096² × 4 bytes = 256 MB of GPU depth memory
+/// (less than the old 2 × 6144² = 288 MB).
+pub const DEFAULT_SHADOW_MAP_SIZE: u32 = 4096;
 
 // ---------------------------------------------------------------------------
 // ShadowMapSystem — depth-only shadow pass infrastructure
@@ -36,8 +38,10 @@ pub(crate) struct ShadowMapSystem {
     /// Full-array view (TYPE_2D_ARRAY) for sampling in the main pass.
     depth_array_view: vk::ImageView,
 
-    // Comparison sampler for hardware PCF
+    // Comparison sampler for hardware PCF (binding 0)
     sampler: vk::Sampler,
+    // Non-comparison sampler for PCSS blocker search (binding 1)
+    raw_sampler: vk::Sampler,
 
     // Depth-only render pass + per-cascade framebuffers
     render_pass: vk::RenderPass,
@@ -89,7 +93,7 @@ impl ShadowMapSystem {
         // so it's valid for sampling in the main pass even before any shadow pass runs.
         Self::transition_depth_initial(device, command_pool, graphics_queue, depth_image)?;
 
-        // --- Comparison sampler (for hardware PCF via sampler2DShadow) ---
+        // --- Comparison sampler (for hardware PCF via sampler2DArrayShadow) ---
         let sampler_info = vk::SamplerCreateInfo::default()
             .mag_filter(vk::Filter::LINEAR)
             .min_filter(vk::Filter::LINEAR)
@@ -104,6 +108,21 @@ impl ShadowMapSystem {
             .max_lod(1.0);
         let sampler = unsafe { device.create_sampler(&sampler_info, None) }
             .map_err(|e| format!("Failed to create shadow sampler: {e}"))?;
+
+        // --- Non-comparison sampler (for PCSS blocker search via sampler2DArray) ---
+        let raw_sampler_info = vk::SamplerCreateInfo::default()
+            .mag_filter(vk::Filter::NEAREST)
+            .min_filter(vk::Filter::NEAREST)
+            .address_mode_u(vk::SamplerAddressMode::CLAMP_TO_BORDER)
+            .address_mode_v(vk::SamplerAddressMode::CLAMP_TO_BORDER)
+            .address_mode_w(vk::SamplerAddressMode::CLAMP_TO_BORDER)
+            .border_color(vk::BorderColor::FLOAT_OPAQUE_WHITE)
+            .compare_enable(false)
+            .mipmap_mode(vk::SamplerMipmapMode::NEAREST)
+            .min_lod(0.0)
+            .max_lod(1.0);
+        let raw_sampler = unsafe { device.create_sampler(&raw_sampler_info, None) }
+            .map_err(|e| format!("Failed to create shadow raw sampler: {e}"))?;
 
         // --- Depth-only render pass ---
         let render_pass = Self::create_render_pass(device, depth_format)?;
@@ -134,14 +153,22 @@ impl ShadowMapSystem {
                 })?;
 
         // --- Shadow map descriptor set layout (for main pass, set 4) ---
-        //     binding 0: combined image sampler (shadow depth texture), fragment stage
-        let shadow_sampler_binding = vk::DescriptorSetLayoutBinding::default()
-            .binding(0)
-            .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
-            .descriptor_count(1)
-            .stage_flags(vk::ShaderStageFlags::FRAGMENT);
-        let shadow_ds_layout_info = vk::DescriptorSetLayoutCreateInfo::default()
-            .bindings(std::slice::from_ref(&shadow_sampler_binding));
+        //     binding 0: comparison sampler (sampler2DArrayShadow) for PCF
+        //     binding 1: non-comparison sampler (sampler2DArray) for PCSS blocker search
+        let shadow_bindings = [
+            vk::DescriptorSetLayoutBinding::default()
+                .binding(0)
+                .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+                .descriptor_count(1)
+                .stage_flags(vk::ShaderStageFlags::FRAGMENT),
+            vk::DescriptorSetLayoutBinding::default()
+                .binding(1)
+                .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+                .descriptor_count(1)
+                .stage_flags(vk::ShaderStageFlags::FRAGMENT),
+        ];
+        let shadow_ds_layout_info =
+            vk::DescriptorSetLayoutCreateInfo::default().bindings(&shadow_bindings);
         let shadow_ds_layout =
             unsafe { device.create_descriptor_set_layout(&shadow_ds_layout_info, None) }
                 .map_err(|e| format!("Failed to create shadow map descriptor set layout: {e}"))?;
@@ -183,19 +210,30 @@ impl ShadowMapSystem {
             unsafe { device.allocate_descriptor_sets(&sampler_alloc_info) }
                 .map_err(|e| format!("Failed to allocate shadow map descriptor sets: {e}"))?;
 
-        // Write shadow map array image to each descriptor set
+        // Write shadow map array image to each descriptor set (both bindings).
         for &ds in &shadow_descriptor_sets {
-            let image_info = vk::DescriptorImageInfo::default()
+            // Binding 0: comparison sampler (for PCF)
+            let cmp_image_info = vk::DescriptorImageInfo::default()
                 .sampler(sampler)
                 .image_view(depth_array_view)
                 .image_layout(vk::ImageLayout::DEPTH_STENCIL_READ_ONLY_OPTIMAL);
-            let write = vk::WriteDescriptorSet::default()
+            let cmp_write = vk::WriteDescriptorSet::default()
                 .dst_set(ds)
                 .dst_binding(0)
                 .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
-                .image_info(std::slice::from_ref(&image_info));
+                .image_info(std::slice::from_ref(&cmp_image_info));
+            // Binding 1: non-comparison sampler (for PCSS blocker search)
+            let raw_image_info = vk::DescriptorImageInfo::default()
+                .sampler(raw_sampler)
+                .image_view(depth_array_view)
+                .image_layout(vk::ImageLayout::DEPTH_STENCIL_READ_ONLY_OPTIMAL);
+            let raw_write = vk::WriteDescriptorSet::default()
+                .dst_set(ds)
+                .dst_binding(1)
+                .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+                .image_info(std::slice::from_ref(&raw_image_info));
             unsafe {
-                device.update_descriptor_sets(&[write], &[]);
+                device.update_descriptor_sets(&[cmp_write, raw_write], &[]);
             }
         }
 
@@ -205,6 +243,7 @@ impl ShadowMapSystem {
             depth_layer_views,
             depth_array_view,
             sampler,
+            raw_sampler,
             render_pass,
             framebuffers,
             width,
@@ -502,6 +541,7 @@ impl Drop for ShadowMapSystem {
             }
             self.device.destroy_render_pass(self.render_pass, None);
             self.device.destroy_sampler(self.sampler, None);
+            self.device.destroy_sampler(self.raw_sampler, None);
             self.device.destroy_image_view(self.depth_array_view, None);
             for view in &self.depth_layer_views {
                 self.device.destroy_image_view(*view, None);
@@ -600,6 +640,9 @@ pub struct ShadowCameraInfo {
     /// Camera position in world space. Used as the bounding sphere center
     /// so that cascades are rotation-invariant (only translation moves them).
     pub camera_position: Vec3,
+    /// Maximum shadow distance in world units. Cascades are distributed within
+    /// this range. Defaults to 100.0 if not specified.
+    pub shadow_distance: f32,
 }
 
 /// Blend factor between uniform and logarithmic cascade splits.
@@ -610,8 +653,9 @@ const CASCADE_SPLIT_LAMBDA: f32 = 0.75;
 /// Compute per-cascade orthographic light-space VP matrices by fitting
 /// each cascade's frustum to a sub-frustum of the camera.
 ///
-/// Returns `(cascade_vps, split_ndc)` where `split_ndc` is the cascade
-/// split depth in Vulkan NDC (reverse-Z) for the fragment shader.
+/// Returns `(cascade_vps, split_ndcs, shadow_far)` where `split_ndcs` contains 3
+/// cascade split depths in Vulkan NDC (reverse-Z) for the fragment shader, and
+/// `shadow_far` is the effective shadow distance (for shader distance fade).
 ///
 /// The camera sub-frustum corners define the XY bounds of each cascade's
 /// orthographic projection, while the scene AABB extends the Z range to
@@ -621,17 +665,15 @@ pub fn compute_cascade_vps(
     light_direction: Vec3,
     scene_min: Vec3,
     scene_max: Vec3,
-) -> ([Mat4; NUM_SHADOW_CASCADES], f32) {
+) -> ([Mat4; NUM_SHADOW_CASCADES], [f32; 3], f32) {
     let inv_vp = camera.view_projection.inverse();
     let near = camera.near;
     let actual_far = camera.far;
 
-    // Cap the effective shadow distance to the scene extent. There's no point
-    // computing cascades far beyond where geometry exists — it wastes shadow map
-    // resolution on empty space. The multiplier gives headroom for shadows that
-    // extend past the scene AABB (e.g. long shadows at low sun angles).
-    let scene_diagonal = (scene_max - scene_min).length().max(MIN_SHADOW_EXTENT);
-    let shadow_far = actual_far.min(scene_diagonal * 3.0).max(near * 10.0);
+    // Use the configurable shadow distance, clamped only to the camera far plane.
+    // The scene AABB still contributes to the Z-range (depth extent) of each
+    // cascade's orthographic projection, ensuring shadow casters are captured.
+    let shadow_far = camera.shadow_distance.min(actual_far).max(near * 10.0);
 
     // 1. Extract 8 frustum corners from inv_VP.
     //    Vulkan reverse-Z NDC: near plane at z=1, far plane at z=0.
@@ -659,26 +701,39 @@ pub fn compute_cascade_vps(
     // far_corner[i] (at camera.far). Lerp parameter t ∈ [0, 1] maps to
     // view-space distance = near + t * (actual_far - near).
 
-    // 2. Compute practical split distance (PSSM blend) using capped shadow_far.
-    let uniform_split = near + (shadow_far - near) * 0.5;
-    let log_split = near * (shadow_far / near).sqrt();
-    let split_distance =
-        uniform_split * (1.0 - CASCADE_SPLIT_LAMBDA) + log_split * CASCADE_SPLIT_LAMBDA;
+    // 2. Compute 3 split distances (PSSM blend) for 4 cascades.
+    let num_splits = NUM_SHADOW_CASCADES - 1; // 3
+    let mut split_distances = [0.0_f32; 3];
+    for i in 0..num_splits {
+        let frac = (i + 1) as f32 / NUM_SHADOW_CASCADES as f32;
+        let uniform_split = near + (shadow_far - near) * frac;
+        let log_split = near * (shadow_far / near).powf(frac);
+        split_distances[i] =
+            uniform_split * (1.0 - CASCADE_SPLIT_LAMBDA) + log_split * CASCADE_SPLIT_LAMBDA;
+    }
 
-    // Convert split and shadow_far to lerp parameters along the actual frustum
+    // Convert splits and shadow_far to lerp parameters along the actual frustum
     // edges (which span from camera.near to camera.far, NOT shadow_far).
-    let t_split = (split_distance - near) / (actual_far - near);
-    let t_shadow_far = (shadow_far - near) / (actual_far - near);
+    let range = actual_far - near;
+    let t_shadow_far = (shadow_far - near) / range;
+    let t_splits: [f32; 3] = std::array::from_fn(|i| (split_distances[i] - near) / range);
 
-    // 3. Compute split depth in NDC using the camera's actual near/far
+    // 3. Compute split depths in NDC using the camera's actual near/far
     //    (reverse-Z: near=1, far=0), since the shader reads from the camera's
     //    depth buffer which uses the real projection.
-    let split_ndc =
-        near * (actual_far - split_distance) / ((actual_far - near) * split_distance);
+    let split_ndcs: [f32; 3] = std::array::from_fn(|i| {
+        near * (actual_far - split_distances[i]) / (range * split_distances[i])
+    });
 
     // 4. For each cascade, compute sub-frustum and fit orthographic projection.
-    //    Cascade 0 = near (t=0 to t_split), Cascade 1 = far (t_split to t_shadow_far).
-    let cascade_ranges = [(0.0_f32, t_split), (t_split, t_shadow_far)];
+    //    Cascade 0 = nearest, Cascade 3 = farthest.
+    let mut cascade_ranges = [(0.0_f32, 0.0_f32); NUM_SHADOW_CASCADES];
+    cascade_ranges[0] = (0.0, t_splits[0]);
+    for i in 1..num_splits {
+        cascade_ranges[i] = (t_splits[i - 1], t_splits[i]);
+    }
+    cascade_ranges[NUM_SHADOW_CASCADES - 1] = (t_splits[num_splits - 1], t_shadow_far);
+
     let mut cascade_vps = [Mat4::IDENTITY; NUM_SHADOW_CASCADES];
 
     let light_dir = light_direction.normalize();
@@ -707,10 +762,6 @@ pub fn compute_cascade_vps(
 
         // Rotation-invariant bounding sphere: center at the CAMERA POSITION
         // so that turning the camera doesn't shift the cascade coverage area.
-        // The radius is the max distance from the camera to any sub-frustum
-        // corner. For a symmetric perspective frustum, this distance depends
-        // only on the cascade's depth range, FOV, and aspect — not on camera
-        // orientation — so both center and radius are rotation-invariant.
         let center = camera.camera_position;
         let radius = sub_corners
             .iter()
@@ -721,9 +772,7 @@ pub fn compute_cascade_vps(
         // the light direction.
         let light_view = Mat4::look_at_lh(center - light_dir * MAX_SHADOW_EXTENT, center, up);
 
-        // Z range from the full scene AABB (rotation-stable — the scene AABB
-        // doesn't change with camera orientation for a given light direction).
-        // Also include the sub-frustum to ensure receivers are always covered.
+        // Z range from the full scene AABB (rotation-stable).
         let mut z_min = f32::MAX;
         let mut z_max = f32::NEG_INFINITY;
 
@@ -745,9 +794,6 @@ pub fn compute_cascade_vps(
         light_proj.y_axis.y *= -1.0; // Vulkan Y-flip
 
         // Texel snapping: prevent shadow shimmer from sub-texel jitter.
-        // Both center and radius are rotation-invariant, so the ortho extent
-        // is stable — only translation needs snapping. Camera-position-based
-        // center means the shadow map grid only shifts when the camera moves.
         let shadow_vp = light_proj * light_view;
         let half_texels = DEFAULT_SHADOW_MAP_SIZE as f32 * 0.5;
         let origin_clip = shadow_vp.transform_point3(Vec3::ZERO);
@@ -761,7 +807,7 @@ pub fn compute_cascade_vps(
         cascade_vps[cascade_idx] = light_proj * light_view;
     }
 
-    (cascade_vps, split_ndc)
+    (cascade_vps, split_ndcs, shadow_far)
 }
 
 // ---------------------------------------------------------------------------

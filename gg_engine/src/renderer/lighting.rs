@@ -15,7 +15,7 @@ use super::{MAX_FRAMES_IN_FLIGHT, MAX_VIEWPORTS};
 pub const MAX_POINT_LIGHTS: usize = 16;
 
 /// Number of shadow map cascades for directional light CSM.
-pub const NUM_SHADOW_CASCADES: usize = 2;
+pub const NUM_SHADOW_CASCADES: usize = 4;
 
 // ---------------------------------------------------------------------------
 // LightGpuData — the UBO struct written to the GPU (std140 layout)
@@ -38,11 +38,11 @@ pub struct LightGpuData {
     // Scene-wide data
     pub ambient_color: [f32; 4],   // xyz = color, w = intensity
     pub camera_position: [f32; 4], // xyz = eye position, w = unused
-    pub counts: [i32; 4], // x = num_point_lights, y = has_directional, z = has_shadow, w = unused
+    pub counts: [i32; 4], // x = num_point_lights, y = has_directional, z = has_shadow, w = csm_debug
 
     // Shadow mapping (cascaded)
-    pub shadow_light_vp: [[f32; 16]; NUM_SHADOW_CASCADES], // 2 × mat4 = 128 bytes
-    pub cascade_split_depth: [f32; 4], // x = split depth (NDC), y-w = unused (16 bytes)
+    pub shadow_light_vp: [[f32; 16]; NUM_SHADOW_CASCADES], // 4 × mat4 = 256 bytes
+    pub cascade_split_depth: [f32; 4], // xyz = 3 split depths (NDC), w = shadow_distance
 }
 
 impl LightGpuData {
@@ -180,8 +180,10 @@ pub struct LightEnvironment {
     pub camera_position: Vec3,
     /// Per-cascade light-space VP matrices. `Some` = shadows enabled.
     pub shadow_cascade_vps: Option<[Mat4; NUM_SHADOW_CASCADES]>,
-    /// Cascade split depth in Vulkan NDC [0,1]. Fragments with depth > split use cascade 1.
-    pub cascade_split_depth: f32,
+    /// Cascade split depths in Vulkan NDC (3 splits for 4 cascades).
+    pub cascade_split_depths: [f32; 3],
+    /// Shadow distance in world units (for shader fade-out). Packed into cascade_split_depth.w.
+    pub shadow_distance: f32,
 }
 
 impl Default for LightEnvironment {
@@ -193,7 +195,8 @@ impl Default for LightEnvironment {
             ambient_intensity: 1.0,
             camera_position: Vec3::ZERO,
             shadow_cascade_vps: None,
-            cascade_split_depth: 0.0,
+            cascade_split_depths: [0.0; 3],
+            shadow_distance: 100.0,
         }
     }
 }
@@ -241,7 +244,10 @@ impl LightEnvironment {
             for (i, vp) in cascade_vps.iter().enumerate() {
                 data.shadow_light_vp[i] = vp.to_cols_array();
             }
-            data.cascade_split_depth[0] = self.cascade_split_depth;
+            data.cascade_split_depth[0] = self.cascade_split_depths[0];
+            data.cascade_split_depth[1] = self.cascade_split_depths[1];
+            data.cascade_split_depth[2] = self.cascade_split_depths[2];
+            data.cascade_split_depth[3] = self.shadow_distance;
             data.counts[2] = 1; // has_shadow = true
         }
 
@@ -262,10 +268,10 @@ mod tests {
         // DirectionalLight: 2 × vec4 = 32 bytes
         // PointLights: 16 × 2 × vec4 = 512 bytes
         // ambient + camera_pos + counts = 3 × vec4 = 48 bytes
-        // shadow_light_vp: 2 × mat4 = 128 bytes
+        // shadow_light_vp: 4 × mat4 = 256 bytes
         // cascade_split_depth: vec4 = 16 bytes
-        // Total = 32 + 512 + 48 + 128 + 16 = 736 bytes
-        assert_eq!(LightGpuData::SIZE, 736);
+        // Total = 32 + 512 + 48 + 256 + 16 = 864 bytes
+        assert_eq!(LightGpuData::SIZE, 864);
     }
 
     #[test]
@@ -296,7 +302,8 @@ mod tests {
             ambient_intensity: 0.5,
             camera_position: Vec3::new(0.0, 5.0, -10.0),
             shadow_cascade_vps: None,
-            cascade_split_depth: 0.0,
+            cascade_split_depths: [0.0; 3],
+            shadow_distance: 100.0,
         };
         let gpu = env.to_gpu_data();
         assert_eq!(gpu.counts[0], 1); // 1 point light

@@ -233,10 +233,10 @@ pub(crate) fn settings_ui(
             "Cascade Index",
             "Cascade 0 Shadow",
             "Cascade 1 Shadow",
-            "Cascade 0 Coverage",
-            "Cascade 1 Coverage",
+            "Cascade 2 Shadow",
+            "Cascade 3 Shadow",
             "Final Shadow",
-            "Cascade Difference",
+            "Distance Fade",
         ];
         let mut debug_idx = (pp.shadow_debug_mode as usize).min(debug_labels.len() - 1);
         egui::ComboBox::from_label("CSM Debug")

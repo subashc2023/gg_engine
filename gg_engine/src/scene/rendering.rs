@@ -1115,6 +1115,8 @@ impl Scene {
     pub fn primary_camera_info(&self) -> Option<ShadowCameraInfo> {
         use crate::renderer::ProjectionType;
 
+        let shadow_distance = self.find_first_shadow_distance().unwrap_or(100.0);
+
         for (handle, camera) in self
             .world
             .query::<(hecs::Entity, &super::CameraComponent)>()
@@ -1129,10 +1131,21 @@ impl Scene {
                     near: camera.camera.perspective_near(),
                     far: camera.camera.perspective_far(),
                     camera_position: translation,
+                    shadow_distance,
                 });
             }
         }
         None
+    }
+
+    /// Return the `shadow_distance` from the first directional light with
+    /// `cast_shadows` enabled, or `None` if none exists.
+    pub fn find_first_shadow_distance(&self) -> Option<f32> {
+        self.world
+            .query::<&DirectionalLightComponent>()
+            .iter()
+            .find(|dl| dl.cast_shadows)
+            .map(|dl| dl.shadow_distance)
     }
 
     /// Collect all light components from the scene into a [`LightEnvironment`].
@@ -1199,9 +1212,9 @@ impl Scene {
             .query::<(hecs::Entity, &DirectionalLightComponent)>()
             .iter()
             .find(|(_, dl)| dl.cast_shadows)
-            .map(|(handle, _dl)| handle);
+            .map(|(handle, dl)| (handle, dl.shadow_distance));
 
-        let handle = match shadow_light {
+        let (handle, shadow_distance) = match shadow_light {
             Some(h) => h,
             None => return,
         };
@@ -1243,11 +1256,15 @@ impl Scene {
         // Compute per-cascade VP matrices. When camera frustum info is available,
         // each cascade is fitted to a sub-frustum slice for much better shadow
         // resolution near the viewer. Otherwise fall back to scene-AABB fitting.
-        let (cascade_vps, split_depth) = if let Some(cam) = camera {
+        let (cascade_vps, split_depths, effective_shadow_far) = if let Some(cam) = camera {
             compute_cascade_vps(cam, direction, scene_min, scene_max)
         } else {
             let vp = compute_directional_light_vp(direction, scene_min, scene_max);
-            ([vp, vp], 0.5)
+            (
+                [vp; crate::renderer::NUM_SHADOW_CASCADES],
+                [0.75, 0.5, 0.25],
+                shadow_distance,
+            )
         };
 
         // Render each cascade.
@@ -1271,9 +1288,11 @@ impl Scene {
         }
 
         // Stash cascade data for the main pass lighting upload.
+        // Use the effective shadow_far (not the component's shadow_distance)
+        // so the shader's distance fade matches where cascades actually end.
         self.shadow_cascade_cache
             .borrow_mut()
-            .replace((cascade_vps, split_depth));
+            .replace((cascade_vps, split_depths, effective_shadow_far));
     }
 
     /// Compute a conservative AABB for shadow frustum fitting.
@@ -1385,23 +1404,27 @@ impl Scene {
 
         // Check for cascade VP data stashed by a prior render_shadow_pass call.
         if light_env.shadow_cascade_vps.is_none() {
-            if let Some((vps, split)) = self.shadow_cascade_cache.borrow_mut().take() {
+            if let Some((vps, splits, dist)) = self.shadow_cascade_cache.borrow_mut().take() {
                 light_env.shadow_cascade_vps = Some(vps);
-                light_env.cascade_split_depth = split;
-            } else if let Some((handle, _dl)) = self
+                light_env.cascade_split_depths = splits;
+                light_env.shadow_distance = dist;
+            } else if let Some((handle, dl)) = self
                 .world
                 .query::<(hecs::Entity, &DirectionalLightComponent)>()
                 .iter()
                 .find(|(_, dl)| dl.cast_shadows)
             {
-                // Fallback: compute scene-AABB-based VP (both cascades use same VP).
+                // Fallback: compute scene-AABB-based VP (all cascades use same VP).
+                let shadow_distance = dl.shadow_distance;
                 let world = self.get_world_transform(super::Entity::new(handle));
                 let (_, world_rot, _) = world.to_scale_rotation_translation();
                 let direction = DirectionalLightComponent::direction(world_rot);
                 let (scene_min, scene_max) = self.compute_mesh_scene_bounds(&meshes);
                 let vp = compute_directional_light_vp(direction, scene_min, scene_max);
-                light_env.shadow_cascade_vps = Some([vp, vp]);
-                light_env.cascade_split_depth = 0.5;
+                light_env.shadow_cascade_vps =
+                    Some([vp; crate::renderer::NUM_SHADOW_CASCADES]);
+                light_env.cascade_split_depths = [0.75, 0.5, 0.25];
+                light_env.shadow_distance = shadow_distance;
             }
         }
 

@@ -124,9 +124,9 @@ pub struct Scene {
     master_volume: f32,
     /// Per-category volume multipliers (0.0–1.0), indexed by [`AudioCategory`].
     category_volumes: [f32; AudioCategory::COUNT],
-    /// Stashed cascade VP matrices + split depth from `render_shadow_pass`,
-    /// consumed by `render_meshes` for the `LightEnvironment` upload.
-    shadow_cascade_cache: RefCell<Option<([glam::Mat4; 2], f32)>>,
+    /// Stashed cascade VP matrices + split depths + shadow_distance from
+    /// `render_shadow_pass`, consumed by `render_meshes` for the `LightEnvironment`.
+    shadow_cascade_cache: RefCell<Option<([glam::Mat4; 4], [f32; 3], f32)>>,
 }
 
 /// Invokes `$callback!` with every cloneable component type.

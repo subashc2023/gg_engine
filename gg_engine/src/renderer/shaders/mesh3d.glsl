@@ -48,6 +48,7 @@ void main() {
 #version 450
 
 #define MAX_POINT_LIGHTS 16
+#define NUM_CASCADES 4
 
 layout(set = 0, binding = 0) uniform CameraBuffer {
     mat4 u_view_projection;
@@ -82,15 +83,18 @@ layout(set = 3, binding = 0) uniform LightingUBO {
     // Scene-wide
     vec4 ambient_color;    // xyz = color, w = intensity
     vec4 camera_position;  // xyz = eye position, w = unused
-    ivec4 counts;          // x = num_point_lights, y = has_directional, z = has_shadow, w = unused
+    ivec4 counts;          // x = num_point_lights, y = has_directional, z = has_shadow, w = csm_debug
 
-    // Cascaded shadow mapping (2 cascades)
-    mat4 shadow_light_vp[2];    // per-cascade light-space VP matrices
-    vec4 cascade_split_depth;   // x = split depth (NDC [0,1]), y-w = unused
+    // Cascaded shadow mapping (4 cascades)
+    mat4 shadow_light_vp[NUM_CASCADES]; // per-cascade light-space VP matrices
+    vec4 cascade_split_depth;           // xyz = 3 split depths (NDC), w = shadow_distance
 } lighting;
 
-// Shadow map (set 4) — 2-layer depth comparison sampler array.
+// Shadow map (set 4):
+//   binding 0 = comparison sampler (sampler2DArrayShadow) for PCF
+//   binding 1 = non-comparison sampler (sampler2DArray) for PCSS blocker search
 layout(set = 4, binding = 0) uniform sampler2DArrayShadow u_shadow_map;
+layout(set = 4, binding = 1) uniform sampler2DArray u_shadow_map_raw;
 
 layout(location = 0) in vec4 v_color;
 layout(location = 1) in vec3 v_normal;
@@ -106,24 +110,52 @@ layout(location = 1) out int out_entity_id;
 layout(location = 2) out vec4 out_normal;
 #endif
 
+// ---------------------------------------------------------------------------
+// PCSS — Percentage-Closer Soft Shadows
+// ---------------------------------------------------------------------------
+
+const float GOLDEN_ANGLE = 2.399963; // pi * (3 - sqrt(5))
+const int BLOCKER_SAMPLES = 16;
+const int PCF_SAMPLES = 32;
+const float LIGHT_SIZE = 0.04; // World-space light source size — controls penumbra growth rate
+const float MIN_PENUMBRA = 1.5; // Minimum PCF radius in texels (sharp contact shadows)
+const float MAX_PENUMBRA = 32.0; // Maximum PCF radius in texels (avoids over-blur)
+
 // Interleaved gradient noise (Jimenez 2014) — deterministic per-pixel hash.
 float interleavedGradientNoise(vec2 pos) {
     return fract(52.9829189 * fract(0.06711056 * pos.x + 0.00583715 * pos.y));
 }
 
-// Sample shadow from a single cascade. Returns vec2(shadow, coverage).
-// shadow: shadow factor in [0.08, 1.0] (1.0 = lit, 0.08 = shadowed).
-// coverage: 0.0 at shadow map edges/outside, 1.0 in interior.
+// PCSS blocker search: find average depth of occluders within the search region.
+// Returns -1.0 if no blockers found (fully lit).
+float findBlockerDepth(vec2 uv, int cascade, float receiver_depth, float search_radius_texels) {
+    float noise = interleavedGradientNoise(gl_FragCoord.xy);
+    vec2 texel_size = 1.0 / textureSize(u_shadow_map_raw, 0).xy;
+
+    float blocker_sum = 0.0;
+    int blocker_count = 0;
+
+    for (int i = 0; i < BLOCKER_SAMPLES; i++) {
+        float r = sqrt((float(i) + 0.5) / float(BLOCKER_SAMPLES));
+        float theta = float(i) * GOLDEN_ANGLE + noise * 6.283185;
+        vec2 offset = vec2(cos(theta), sin(theta)) * r * search_radius_texels * texel_size;
+        vec2 sample_uv = clamp(uv + offset, vec2(0.0), vec2(1.0));
+
+        float depth = texture(u_shadow_map_raw, vec3(sample_uv, float(cascade))).r;
+        if (depth < receiver_depth) {
+            blocker_sum += depth;
+            blocker_count++;
+        }
+    }
+
+    if (blocker_count == 0) return -1.0;
+    return blocker_sum / float(blocker_count);
+}
+
+// Sample shadow from a single cascade using PCSS.
+// Returns vec2(shadow, coverage).
 vec2 sample_cascade_shadow(vec3 world_pos, vec3 normal, int cascade) {
     // Receiver-side bias: push the sample point to prevent self-shadowing.
-    // Two offsets are combined:
-    //   1. Normal bias: push along surface normal. Larger at grazing angles
-    //      where self-shadowing is worst; smaller when face-on to light.
-    //   2. Light-direction bias: push toward the light. This handles flat
-    //      surfaces facing the light (cos_theta ≈ 1) where normal bias
-    //      alone is too small relative to shadow map texel size.
-    // Both are in world space, independent of shadow map resolution or
-    // depth range, giving consistent results across cascades and scenes.
     vec3 light_dir = normalize(-lighting.dir_direction.xyz);
     float cos_theta = clamp(dot(normal, light_dir), 0.0, 1.0);
     float normal_bias = mix(0.02, 0.002, cos_theta);
@@ -142,106 +174,133 @@ vec2 sample_cascade_shadow(vec3 world_pos, vec3 normal, int cascade) {
                    * smoothstep(0.0, fade_margin, proj_coords.y)
                    * smoothstep(1.0, 1.0 - fade_margin, proj_coords.y);
 
-    // Outside shadow map frustum = no coverage.
     if (coverage <= 0.0 || proj_coords.z > 1.0 || proj_coords.z < 0.0) {
         return vec2(1.0, 0.0);
     }
 
-    // Vogel disk PCF — golden-angle spiral with per-pixel rotation.
-    // World-space-consistent penumbra: both cascades produce the same
-    // shadow softness at any given point, eliminating visible seams.
-    const int SHADOW_SAMPLES = 32;
-    const float GOLDEN_ANGLE = 2.399963; // pi * (3 - sqrt(5))
-    float noise = interleavedGradientNoise(gl_FragCoord.xy);
-    float shadow = 0.0;
-    vec2 texel_size = 1.0 / textureSize(u_shadow_map, 0).xy;
-    // Compute shadow-map texels per world unit from derivatives.
-    // This ratio is cascade-dependent, so converting a fixed world-space
-    // penumbra radius gives consistent softness across cascades.
+    // Compute texels-per-world for this cascade (derivative-based).
+    vec2 texel_size = 1.0 / textureSize(u_shadow_map_raw, 0).xy;
     float world_per_pixel = length(fwidth(v_world_position));
     float texels_per_pixel = length(fwidth(proj_coords.xy)) / length(texel_size);
     float texels_per_world = texels_per_pixel / max(world_per_pixel, 0.0001);
-    const float PENUMBRA_WORLD_RADIUS = 0.03; // 3cm world-space penumbra
-    float radius = clamp(PENUMBRA_WORLD_RADIUS * texels_per_world, 1.5, 24.0);
-    for (int i = 0; i < SHADOW_SAMPLES; i++) {
-        float r = sqrt((float(i) + 0.5) / float(SHADOW_SAMPLES));
+
+    // PCSS Step 1: Blocker search.
+    // Search radius in texels — proportional to light size in shadow map space.
+    float search_radius = clamp(LIGHT_SIZE * texels_per_world, 4.0, 32.0);
+    float blocker_depth = findBlockerDepth(proj_coords.xy, cascade, proj_coords.z, search_radius);
+
+    float pcf_radius;
+    if (blocker_depth < 0.0) {
+        // No blockers found — fully lit.
+        return vec2(1.0, coverage);
+    } else {
+        // PCSS Step 2: Estimate penumbra from blocker distance.
+        // penumbra ∝ light_size × (receiver - blocker) / blocker
+        float penumbra_ratio = (proj_coords.z - blocker_depth) / max(blocker_depth, 0.0001);
+        float penumbra_world = LIGHT_SIZE * penumbra_ratio;
+        pcf_radius = clamp(penumbra_world * texels_per_world, MIN_PENUMBRA, MAX_PENUMBRA);
+    }
+
+    // PCSS Step 3: Variable-radius PCF using Vogel disk.
+    float noise = interleavedGradientNoise(gl_FragCoord.xy);
+    float shadow = 0.0;
+    for (int i = 0; i < PCF_SAMPLES; i++) {
+        float r = sqrt((float(i) + 0.5) / float(PCF_SAMPLES));
         float theta = float(i) * GOLDEN_ANGLE + noise * 6.283185;
-        vec2 offset = vec2(cos(theta), sin(theta)) * r * radius * texel_size;
+        vec2 offset = vec2(cos(theta), sin(theta)) * r * pcf_radius * texel_size;
         vec2 sample_uv = clamp(proj_coords.xy + offset, vec2(0.0), vec2(1.0));
         shadow += texture(u_shadow_map, vec4(sample_uv, float(cascade), proj_coords.z));
     }
-    shadow /= float(SHADOW_SAMPLES);
+    shadow /= float(PCF_SAMPLES);
 
-    // Minimum shadow prevents pitch-black shadows (some scattered light always reaches).
+    // Minimum shadow prevents pitch-black (some scattered light always reaches).
     shadow = max(shadow, 0.08);
 
     return vec2(shadow, coverage);
 }
 
 // Calculate shadow factor for directional light (1.0 = fully lit, 0.0 = fully shadowed).
-// Uses 2-cascade CSM with coverage-weighted blending at cascade boundaries.
-// In the blend zone, each cascade's contribution is weighted by both the depth-based
-// cascade_blend AND its UV-space coverage. As cascade 0's coverage drops at its edges,
-// cascade 1 smoothly takes over — no bright blotches, no hard lines.
+// Uses 4-cascade CSM with PCSS and coverage-weighted blending at cascade boundaries.
 float calculate_shadow(vec3 world_pos, vec3 normal) {
-    if (lighting.counts.z == 0) return 1.0; // No shadow mapping active
+    if (lighting.counts.z == 0) return 1.0;
 
-    // Select cascade based on fragment depth in NDC.
-    // Reverse-Z: near→1, far→0, so farther = lower depth_ndc.
+    // Fragment depth in NDC. Reverse-Z: near→1, far→0.
     vec4 clip_pos = camera.u_view_projection * vec4(world_pos, 1.0);
     float depth_ndc = clip_pos.z / clip_pos.w;
-    float split = lighting.cascade_split_depth.x;
 
-    // Cascade blend factor: smooth cross-fade in a band around the split depth.
-    // cascade_blend = 1.0 → cascade 0 (near), 0.0 → cascade 1 (far).
-    float blend_width = split * 0.15;
-    float cascade_blend = smoothstep(split - blend_width, split + blend_width, depth_ndc);
+    // 3 split depths for 4 cascades (reverse-Z: split[0] > split[1] > split[2]).
+    float splits[3] = float[3](
+        lighting.cascade_split_depth.x,
+        lighting.cascade_split_depth.y,
+        lighting.cascade_split_depth.z
+    );
 
-    // Early-out: purely in cascade 0 (near camera) — apply edge fade toward lit.
-    if (cascade_blend > 0.99) {
-        vec2 sc = sample_cascade_shadow(world_pos, normal, 0);
-        return mix(1.0, sc.x, sc.y);
+    // Select cascade based on depth: cascade 0 is nearest.
+    int cascade = NUM_CASCADES - 1;
+    for (int i = 0; i < NUM_CASCADES - 1; i++) {
+        if (depth_ndc > splits[i]) {
+            cascade = i;
+            break;
+        }
     }
-    // Early-out: purely in cascade 1 (far from camera) — apply edge fade toward lit.
-    if (cascade_blend < 0.01) {
-        vec2 sc = sample_cascade_shadow(world_pos, normal, 1);
-        return mix(1.0, sc.x, sc.y);
+
+    // Blend factor with the next cascade for smooth transitions.
+    float blend = 0.0;
+    if (cascade < NUM_CASCADES - 1) {
+        float blend_width = splits[cascade] * 0.15;
+        blend = smoothstep(splits[cascade] + blend_width, splits[cascade] - blend_width, depth_ndc);
     }
 
-    // Blend zone: coverage-weighted blend between cascades.
-    // Each cascade's weight = depth-based blend * UV-space coverage.
-    // As cascade 0's coverage drops at its edges, cascade 1 takes over smoothly.
-    vec2 sc0 = sample_cascade_shadow(world_pos, normal, 0);
-    vec2 sc1 = sample_cascade_shadow(world_pos, normal, 1);
+    // Shadow distance fade-out.
+    float shadow_distance = lighting.cascade_split_depth.w;
+    float frag_dist = length(world_pos - lighting.camera_position.xyz);
+    float distance_fade = 1.0 - smoothstep(shadow_distance * 0.85, shadow_distance, frag_dist);
+    if (distance_fade <= 0.0) return 1.0;
 
-    float w0 = cascade_blend * sc0.y;        // depth weight * coverage
-    float w1 = (1.0 - cascade_blend) * sc1.y;
+    // Early-out for no blend zone.
+    if (blend < 0.01) {
+        vec2 sc = sample_cascade_shadow(world_pos, normal, cascade);
+        float shadow = mix(1.0, sc.x, sc.y);
+        return mix(1.0, shadow, distance_fade);
+    }
+
+    // Blend zone: coverage-weighted blend between current and next cascade.
+    vec2 sc0 = sample_cascade_shadow(world_pos, normal, cascade);
+    vec2 sc1 = sample_cascade_shadow(world_pos, normal, cascade + 1);
+
+    float w0 = (1.0 - blend) * sc0.y;
+    float w1 = blend * sc1.y;
     float total = w0 + w1;
 
-    if (total <= 0.0) return 1.0; // no coverage from either cascade
-    return (sc0.x * w0 + sc1.x * w1) / total;
+    if (total <= 0.0) return 1.0;
+    float shadow = (sc0.x * w0 + sc1.x * w1) / total;
+    return mix(1.0, shadow, distance_fade);
 }
 
-// Blinn-Phong specular with roughness-based shininess.
+// ---------------------------------------------------------------------------
+// Blinn-Phong lighting
+// ---------------------------------------------------------------------------
+
 vec3 blinn_phong(vec3 light_dir, vec3 light_color, float light_intensity,
                  vec3 normal, vec3 view_dir, vec3 albedo) {
-    // Diffuse
     float ndotl = max(dot(normal, light_dir), 0.0);
     vec3 diffuse = albedo * light_color * light_intensity * ndotl;
 
-    // Specular (Blinn-Phong) — only when surface faces the light.
     vec3 specular = vec3(0.0);
     if (ndotl > 0.0) {
         vec3 half_dir = normalize(light_dir + view_dir);
         float shininess = max(2.0 / (push.u_roughness * push.u_roughness + 0.001) - 2.0, 1.0);
         float spec = pow(max(dot(normal, half_dir), 0.0), shininess);
-        // Metallic surfaces reflect the albedo color; dielectrics reflect white.
         vec3 spec_color = mix(vec3(0.04), albedo, push.u_metallic);
         specular = spec_color * light_color * light_intensity * spec;
     }
 
     return diffuse + specular;
 }
+
+// ---------------------------------------------------------------------------
+// Main
+// ---------------------------------------------------------------------------
 
 void main() {
     vec3 n = normalize(v_normal);
@@ -279,7 +338,6 @@ void main() {
 
         if (dist < radius) {
             vec3 light_dir = to_light / dist;
-            // Smooth quadratic attenuation: (1 - (d/r)^2)^2
             float ratio = dist / radius;
             float atten = max(1.0 - ratio * ratio, 0.0);
             atten = atten * atten;
@@ -292,46 +350,56 @@ void main() {
     result += push.u_emissive_color.rgb * push.u_emissive_strength;
 
     // CSM debug visualization (runtime toggle via lighting.counts.w).
-    // 0 = off (normal rendering), 1-7 = debug views.
     int csm_debug = lighting.counts.w;
     if (csm_debug > 0) {
-        vec4 clip_pos = camera.u_view_projection * vec4(v_world_position, 1.0);
-        float depth_ndc = clip_pos.z / clip_pos.w;
-        float split = lighting.cascade_split_depth.x;
-        float blend_width = split * 0.15;
-        float cascade_blend = smoothstep(split - blend_width, split + blend_width, depth_ndc);
+        vec4 dbg_clip_pos = camera.u_view_projection * vec4(v_world_position, 1.0);
+        float dbg_depth = dbg_clip_pos.z / dbg_clip_pos.w;
 
-        vec2 sc0 = sample_cascade_shadow(v_world_position, n, 0);
-        vec2 sc1 = sample_cascade_shadow(v_world_position, n, 1);
+        float splits[3] = float[3](
+            lighting.cascade_split_depth.x,
+            lighting.cascade_split_depth.y,
+            lighting.cascade_split_depth.z
+        );
+
+        int dbg_cascade = NUM_CASCADES - 1;
+        for (int i = 0; i < NUM_CASCADES - 1; i++) {
+            if (dbg_depth > splits[i]) { dbg_cascade = i; break; }
+        }
 
         vec3 debug_color = vec3(0.0);
 
         if (csm_debug == 1) {
-            // Cascade index: red = cascade 0, blue = cascade 1, magenta = blend zone
-            if (cascade_blend > 0.99) debug_color = vec3(1.0, 0.0, 0.0);
-            else if (cascade_blend < 0.01) debug_color = vec3(0.0, 0.0, 1.0);
-            else debug_color = vec3(cascade_blend, 0.0, 1.0 - cascade_blend);
+            vec3 cascade_colors[4] = vec3[4](
+                vec3(1.0, 0.0, 0.0), vec3(0.0, 1.0, 0.0),
+                vec3(0.0, 0.0, 1.0), vec3(1.0, 1.0, 0.0)
+            );
+            debug_color = cascade_colors[dbg_cascade];
         }
         else if (csm_debug == 2) {
-            debug_color = vec3(sc0.x); // cascade 0 shadow value
+            vec2 sc = sample_cascade_shadow(v_world_position, n, 0);
+            debug_color = vec3(sc.x);
         }
         else if (csm_debug == 3) {
-            debug_color = vec3(sc1.x); // cascade 1 shadow value
+            vec2 sc = sample_cascade_shadow(v_world_position, n, 1);
+            debug_color = vec3(sc.x);
         }
         else if (csm_debug == 4) {
-            debug_color = vec3(0.0, sc0.y, 0.0); // cascade 0 coverage
+            vec2 sc = sample_cascade_shadow(v_world_position, n, 2);
+            debug_color = vec3(sc.x);
         }
         else if (csm_debug == 5) {
-            debug_color = vec3(0.0, sc1.y, 0.0); // cascade 1 coverage
+            vec2 sc = sample_cascade_shadow(v_world_position, n, 3);
+            debug_color = vec3(sc.x);
         }
         else if (csm_debug == 6) {
             float shadow = calculate_shadow(v_world_position, n);
-            debug_color = vec3(shadow); // final blended result
+            debug_color = vec3(shadow);
         }
         else if (csm_debug == 7) {
-            // Difference: bright red = cascades disagree on shadow value
-            float diff = abs(sc0.x - sc1.x);
-            debug_color = vec3(diff * 5.0, 0.0, 0.0);
+            float shadow_distance = lighting.cascade_split_depth.w;
+            float frag_dist = length(v_world_position - lighting.camera_position.xyz);
+            float fade = 1.0 - smoothstep(shadow_distance * 0.85, shadow_distance, frag_dist);
+            debug_color = vec3(fade, 0.0, 1.0 - fade);
         }
 
         out_color = vec4(debug_color, 1.0);
