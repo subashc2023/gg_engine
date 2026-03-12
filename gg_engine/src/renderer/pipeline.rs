@@ -139,10 +139,9 @@ fn default_rasterizer() -> vk::PipelineRasterizationStateCreateInfo<'static> {
 
 /// Rasterizer state with configurable face culling and optional wireframe mode.
 ///
-/// When `wireframe` is true, polygon mode is `LINE` with depth bias enabled
-/// (constant factor -1.0) so wireframe overlays render in front of filled
-/// geometry without z-fighting. Culling is also disabled in wireframe mode
-/// so all edges are visible.
+/// When `wireframe` is true, polygon mode is `LINE` and culling is disabled
+/// so all edges are visible. No depth bias is applied — slope-based bias
+/// causes steep triangles to incorrectly occlude front-facing wireframe edges.
 fn rasterizer(
     cull_mode: CullMode,
     wireframe: bool,
@@ -159,10 +158,7 @@ fn rasterizer(
             cull_mode.to_vk()
         })
         .front_face(vk::FrontFace::COUNTER_CLOCKWISE)
-        .line_width(1.0)
-        .depth_bias_enable(wireframe)
-        .depth_bias_constant_factor(if wireframe { 1.0 } else { 0.0 })
-        .depth_bias_slope_factor(if wireframe { 1.0 } else { 0.0 });
+        .line_width(1.0);
     info
 }
 

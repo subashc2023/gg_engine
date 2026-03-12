@@ -986,15 +986,11 @@ impl Application for GGEditor {
 
         match self.playback.scene_state {
             SceneState::Edit => {
-                // Update editor camera (orbit/pan/zoom via Alt+mouse).
-                self.editor_camera.on_update(dt, input);
+                // Editor camera moved to on_late_update for minimal input-to-display latency.
                 // Tick animation previews (editor inspector play button).
                 self.scene.on_update_animation_previews(dt.seconds());
             }
             SceneState::Simulate => {
-                // Update editor camera — simulation renders from the editor
-                // camera, not the scene camera.
-                self.editor_camera.on_update(dt, input);
                 // Step physics (no scripts) — skip when paused unless stepping.
                 if !self.playback.paused || self.playback.step_frames > 0 {
                     // When manually stepping, use a fixed dt so each click
@@ -1049,6 +1045,17 @@ impl Application for GGEditor {
             .as_ref()
             .map(|fb| fb.hovered_entity())
             .unwrap_or(-1);
+    }
+
+    fn on_late_update(&mut self, dt: Timestep, input: &Input) {
+        // Update editor camera as late as possible to minimize input-to-display
+        // latency. This runs after on_update + on_egui, right before the VP
+        // matrix is captured for GPU command recording.
+        if self.editor_mode != EditorMode::Hub
+            && self.playback.scene_state != SceneState::Play
+        {
+            self.editor_camera.on_update(dt, input);
+        }
     }
 
     fn on_pre_render(&mut self, renderer: &mut Renderer) {

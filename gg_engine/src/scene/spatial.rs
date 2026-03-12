@@ -419,23 +419,30 @@ pub struct Frustum3D {
 
 impl Frustum3D {
     /// Extract 3D frustum planes from a view-projection matrix.
+    ///
+    /// Uses Vulkan [0,1] depth convention: clip volume is
+    /// `-w <= x <= w`, `-w <= y <= w`, `0 <= z <= w`.
+    /// The near plane is `z >= 0` (row2) and the far plane is `w - z >= 0`
+    /// (row3 - row2). This is correct for both standard and reverse-Z
+    /// projections — the plane equations are derived from the composite VP
+    /// matrix, so the depth remapping is already baked in.
     pub fn from_view_projection(vp: &glam::Mat4) -> Self {
         let c0 = vp.x_axis;
         let c1 = vp.y_axis;
         let c2 = vp.z_axis;
         let c3 = vp.w_axis;
 
-        // Left:   row3 + row0
+        // Left:   row3 + row0        (w + x >= 0)
         let left = (c0.w + c0.x, c1.w + c1.x, c2.w + c2.x, c3.w + c3.x);
-        // Right:  row3 - row0
+        // Right:  row3 - row0        (w - x >= 0)
         let right = (c0.w - c0.x, c1.w - c1.x, c2.w - c2.x, c3.w - c3.x);
-        // Bottom: row3 + row1
+        // Bottom: row3 + row1        (w + y >= 0)
         let bottom = (c0.w + c0.y, c1.w + c1.y, c2.w + c2.y, c3.w + c3.y);
-        // Top:    row3 - row1
+        // Top:    row3 - row1        (w - y >= 0)
         let top = (c0.w - c0.y, c1.w - c1.y, c2.w - c2.y, c3.w - c3.y);
-        // Near:   row3 + row2  (for [0,1] depth like Vulkan)
-        let near = (c0.w + c0.z, c1.w + c1.z, c2.w + c2.z, c3.w + c3.z);
-        // Far:    row3 - row2
+        // Near:   row2               (z >= 0, Vulkan [0,1] depth)
+        let near = (c0.z, c1.z, c2.z, c3.z);
+        // Far:    row3 - row2        (w - z >= 0)
         let far = (c0.w - c0.z, c1.w - c1.z, c2.w - c2.z, c3.w - c3.z);
 
         Self {
@@ -1023,11 +1030,26 @@ mod tests {
 
     // --- Frustum3D tests ---
 
+    /// Build a reverse-Z perspective projection matching the engine's
+    /// `SceneCamera` / `EditorCamera` setup (LH, reverse-Z, Vulkan Y-flip).
+    fn reverse_z_perspective_lh(fov: f32, aspect: f32, near: f32, far: f32) -> glam::Mat4 {
+        let mut proj = glam::Mat4::perspective_lh(fov, aspect, near, far);
+        // Reverse-Z: near→1, far→0.
+        proj.z_axis.z = near / (near - far);
+        proj.w_axis.z = near * far / (far - near);
+        // Vulkan Y-flip.
+        proj.y_axis.y *= -1.0;
+        proj
+    }
+
     #[test]
     fn frustum3d_perspective() {
-        let mut proj =
-            glam::Mat4::perspective_lh(std::f32::consts::FRAC_PI_4, 16.0 / 9.0, 0.1, 1000.0);
-        proj.y_axis.y *= -1.0; // Vulkan Y-flip
+        let proj = reverse_z_perspective_lh(
+            std::f32::consts::FRAC_PI_4,
+            16.0 / 9.0,
+            0.1,
+            1000.0,
+        );
         let view = glam::Mat4::look_at_lh(
             glam::Vec3::new(0.0, 0.0, -10.0),
             glam::Vec3::ZERO,
@@ -1050,13 +1072,30 @@ mod tests {
             glam::Vec3::new(0.5, 0.5, -19.0),
         );
         assert!(!frustum.contains_aabb(&behind));
+
+        // Entity beyond the far plane should be culled.
+        let beyond_far = Aabb3D::new(
+            glam::Vec3::new(-0.5, -0.5, 1500.0),
+            glam::Vec3::new(0.5, 0.5, 1501.0),
+        );
+        assert!(!frustum.contains_aabb(&beyond_far));
+
+        // Entity just inside near plane should be visible.
+        let at_near = Aabb3D::new(
+            glam::Vec3::new(-0.5, -0.5, -9.5),
+            glam::Vec3::new(0.5, 0.5, -9.0),
+        );
+        assert!(frustum.contains_aabb(&at_near));
     }
 
     #[test]
     fn frustum3d_sphere_test() {
-        let mut proj =
-            glam::Mat4::perspective_lh(std::f32::consts::FRAC_PI_4, 1.0, 0.1, 100.0);
-        proj.y_axis.y *= -1.0;
+        let proj = reverse_z_perspective_lh(
+            std::f32::consts::FRAC_PI_4,
+            1.0,
+            0.1,
+            100.0,
+        );
         let view = glam::Mat4::look_at_lh(
             glam::Vec3::new(0.0, 0.0, -10.0),
             glam::Vec3::ZERO,

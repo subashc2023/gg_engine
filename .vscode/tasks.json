@@ -27,6 +27,20 @@
             "problemMatcher": ["$rustc"]
         },
         {
+            "label": "cargo build release (gg_editor)",
+            "type": "shell",
+            "command": "cargo",
+            "args": ["build", "--release", "-p", "gg_editor"],
+            "problemMatcher": ["$rustc"]
+        },
+        {
+            "label": "cargo build release (gg_sandbox)",
+            "type": "shell",
+            "command": "cargo",
+            "args": ["build", "--release", "-p", "gg_sandbox"],
+            "problemMatcher": ["$rustc"]
+        },
+        {
             "label": "cargo test",
             "type": "shell",
             "command": "cargo",

@@ -76,7 +76,7 @@ pub trait Application {
     /// Use this to recompute camera transforms with the latest input state,
     /// minimizing input-to-display latency for directly-controlled objects
     /// (e.g. camera, crosshair) that should bypass physics interpolation.
-    fn on_late_update(&mut self, _input: &Input) {}
+    fn on_late_update(&mut self, _dt: Timestep, _input: &Input) {}
 
     /// Called after `on_egui` but before viewport framebuffer handles are
     /// captured for GPU command recording. Use this for operations that
@@ -252,6 +252,8 @@ struct EngineRunner<T: Application> {
     current_present_mode: PresentMode,
     default_camera: OrthographicCamera,
     last_frame_time: Instant,
+    /// Exponential moving average of frame dt for smooth camera/movement.
+    smoothed_dt: f32,
     minimized: bool,
 
     /// Pending resize: `(width, height, timestamp_of_last_resize_event)`.
@@ -616,8 +618,17 @@ impl<T: Application> ApplicationHandler for EngineRunner<T> {
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
         let _run_loop = ProfileTimer::new("Run loop");
         let now = Instant::now();
-        let dt = Timestep::from_seconds(now.duration_since(self.last_frame_time).as_secs_f32());
+        let raw_dt = now.duration_since(self.last_frame_time).as_secs_f32();
         self.last_frame_time = now;
+
+        // Clamp raw dt to [0.0001, 0.1] (10 FPS floor) to prevent teleportation
+        // on extreme spikes (window drag, OS stalls, debugger breaks).
+        let clamped = raw_dt.clamp(0.0001, 0.1);
+
+        // Exponential moving average smoothing to reduce frame-to-frame jitter
+        // in dt-dependent systems (camera fly movement, animation, physics interp).
+        self.smoothed_dt = self.smoothed_dt * 0.8 + clamped * 0.2;
+        let dt = Timestep::from_seconds(self.smoothed_dt);
 
         // Apply debounced resize once events have settled.
         if let Some((w, h, stamp)) = self.pending_resize {
@@ -828,7 +839,7 @@ impl<T: Application> ApplicationHandler for EngineRunner<T> {
 
             // Late input sampling: let the app recompute camera/view with
             // the latest input state, right before we read the VP matrix.
-            self.app.on_late_update(&self.input);
+            self.app.on_late_update(dt, &self.input);
 
             // Copy the VP matrix before the mutable borrow for render_frame.
             let camera_vp = *self
@@ -1100,7 +1111,7 @@ fn render_frame<T: Application>(
             }
 
             renderer.begin_scene(
-                camera_vp,
+                None, // VP set by on_render_viewport via set_view_projection
                 DrawContext {
                     cmd_buf,
                     extent: fb_extent,
@@ -1346,7 +1357,7 @@ fn render_frame<T: Application>(
         }
 
         renderer.begin_scene(
-            camera_vp,
+            Some(camera_vp),
             DrawContext {
                 cmd_buf,
                 extent: sc_extent,
@@ -1496,6 +1507,7 @@ pub fn run<T: Application>() {
         current_present_mode,
         default_camera,
         last_frame_time: Instant::now(),
+        smoothed_dt: 1.0 / 60.0,
         minimized: false,
         pending_resize: None,
         egui_ctx: {

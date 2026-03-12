@@ -2027,16 +2027,23 @@ impl Renderer {
 
     // -- Scene management (engine-internal) -----------------------------------
 
-    /// Begin a new scene — stores the view-projection matrix,
-    /// saves the draw context, sets viewport/scissor, and resets the batch.
-    pub(crate) fn begin_scene(&mut self, camera_vp: &Mat4, ctx: DrawContext) {
+    /// Begin a new scene — saves the draw context, sets viewport/scissor,
+    /// and resets the batch.
+    ///
+    /// When `camera_vp` is `Some`, the VP matrix is written to the camera UBO
+    /// immediately (single-pass path). When `None`, the caller is expected to
+    /// call [`set_view_projection`] before issuing draw calls (multi-viewport
+    /// path where each viewport provides its own camera).
+    pub(crate) fn begin_scene(&mut self, camera_vp: Option<&Mat4>, ctx: DrawContext) {
         let _timer = ProfileTimer::new("Renderer::begin_scene");
         self.draw_context = Some(ctx);
         RenderCommand::set_viewport(&self.api, &ctx);
 
         // Write VP matrix + time to the camera UBO for this (frame, viewport) slot.
-        self.camera
-            .set_view_projection(*camera_vp, ctx.current_frame, ctx.viewport_index);
+        if let Some(vp) = camera_vp {
+            self.camera
+                .set_view_projection(*vp, ctx.current_frame, ctx.viewport_index);
+        }
 
         // Reset batch state for this frame.
         if let Some(data) = &self.renderer_2d {

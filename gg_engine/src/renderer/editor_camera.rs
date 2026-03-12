@@ -15,6 +15,10 @@ use crate::input::Input;
 ///
 /// The camera maintains a focal point, distance, yaw, and pitch. Position is
 /// derived as `focal_point - forward * distance`.
+///
+/// Mouse input is smoothed via exponential interpolation: raw deltas accumulate
+/// into target angles/positions, and the actual values chase the targets each
+/// frame. This eliminates visible stepping from integer mouse counts.
 pub struct EditorCamera {
     fov: f32,
     aspect_ratio: f32,
@@ -26,11 +30,15 @@ pub struct EditorCamera {
     yaw: f32,
     pitch: f32,
 
+    /// Smoothing targets — raw input accumulates here, actual values interpolate toward them.
+    target_yaw: f32,
+    target_pitch: f32,
+    target_focal_point: Vec3,
+
     projection: Mat4,
     view_matrix: Mat4,
     view_projection: Mat4,
 
-    initial_mouse_position: Vec2,
     viewport_width: f32,
     viewport_height: f32,
 
@@ -42,6 +50,10 @@ pub struct EditorCamera {
 const FLY_SPEED: f32 = 5.0;
 /// Shift multiplier for fast fly.
 const FLY_FAST_MULTIPLIER: f32 = 3.0;
+
+/// Smoothing speed for exponential interpolation (higher = more responsive, less smooth).
+/// At 60 FPS this gives ~95% convergence in ~3 frames (~50ms).
+const SMOOTH_SPEED: f32 = 60.0;
 
 impl EditorCamera {
     /// Create a new editor camera.
@@ -61,11 +73,14 @@ impl EditorCamera {
             yaw: 0.0,
             pitch: 0.0,
 
+            target_yaw: 0.0,
+            target_pitch: 0.0,
+            target_focal_point: Vec3::ZERO,
+
             projection: Mat4::IDENTITY,
             view_matrix: Mat4::IDENTITY,
             view_projection: Mat4::IDENTITY,
 
-            initial_mouse_position: Vec2::ZERO,
             viewport_width: 1280.0,
             viewport_height: 720.0,
 
@@ -78,10 +93,11 @@ impl EditorCamera {
 
     // -- Public API -----------------------------------------------------------
 
-    /// Call each frame. Tracks mouse delta for orbit/pan/zoom/fly.
+    /// Call each frame. Uses raw device mouse deltas for orbit/pan/zoom/fly,
+    /// with exponential smoothing to eliminate integer-count stepping.
     pub fn on_update(&mut self, dt: crate::timestep::Timestep, input: &Input) {
-        let mouse = Vec2::new(input.mouse_x() as f32, input.mouse_y() as f32);
-        let delta = (mouse - self.initial_mouse_position) * 0.003;
+        let (raw_dx, raw_dy) = input.mouse_delta();
+        let delta = Vec2::new(raw_dx as f32, raw_dy as f32) * 0.003;
 
         let alt = input.is_key_pressed(KeyCode::LeftAlt) || input.is_key_pressed(KeyCode::RightAlt);
         let rmb = input.is_mouse_button_pressed(MouseButton::Right);
@@ -94,7 +110,9 @@ impl EditorCamera {
         } else {
             if self.flying {
                 // Exiting fly mode — place focal point in front of camera.
-                self.focal_point = self.position() + self.forward() * self.distance;
+                let fp = self.position() + self.forward() * self.distance;
+                self.focal_point = fp;
+                self.target_focal_point = fp;
                 self.flying = false;
             }
 
@@ -110,7 +128,12 @@ impl EditorCamera {
             }
         }
 
-        self.initial_mouse_position = mouse;
+        // Interpolate actual values toward targets (frame-rate independent).
+        let t = 1.0 - (-SMOOTH_SPEED * dt.seconds()).exp();
+        self.yaw += (self.target_yaw - self.yaw) * t;
+        self.pitch += (self.target_pitch - self.pitch) * t;
+        self.focal_point += (self.target_focal_point - self.focal_point) * t;
+
         self.update_view();
     }
 
@@ -218,15 +241,19 @@ impl EditorCamera {
     /// Move the focal point to the given world position, keeping distance and orientation.
     pub fn focus_on(&mut self, target: Vec3) {
         self.focal_point = target;
+        self.target_focal_point = target;
         self.update_view();
     }
 
     /// Restore camera state from persisted values.
     pub fn restore_state(&mut self, focal_point: Vec3, distance: f32, yaw: f32, pitch: f32) {
         self.focal_point = focal_point;
+        self.target_focal_point = focal_point;
         self.distance = distance;
         self.yaw = yaw;
+        self.target_yaw = yaw;
         self.pitch = pitch.clamp(-1.5, 1.5);
+        self.target_pitch = self.pitch;
         self.update_view();
     }
 
@@ -253,16 +280,15 @@ impl EditorCamera {
     }
 
     fn mouse_orbit(&mut self, delta: Vec2) {
-        self.yaw -= delta.x;
-        self.pitch -= delta.y;
-        // Clamp pitch to avoid flipping.
-        self.pitch = self.pitch.clamp(-1.5, 1.5);
+        self.target_yaw -= delta.x;
+        self.target_pitch -= delta.y;
+        self.target_pitch = self.target_pitch.clamp(-1.5, 1.5);
     }
 
     fn mouse_pan(&mut self, delta: Vec2) {
         let speed = self.pan_speed();
-        self.focal_point += -self.right() * delta.x * speed.0;
-        self.focal_point += self.up() * delta.y * speed.1;
+        self.target_focal_point += -self.right() * delta.x * speed.0;
+        self.target_focal_point += self.up() * delta.y * speed.1;
     }
 
     fn mouse_zoom(&mut self, delta: f32) {
@@ -275,11 +301,19 @@ impl EditorCamera {
     /// and moving the focal point to stay in front.
     fn fly_look(&mut self, delta: Vec2) {
         let pos = self.position();
-        self.yaw -= delta.x;
-        self.pitch -= delta.y;
-        self.pitch = self.pitch.clamp(-1.5, 1.5);
-        // Recompute focal point so camera stays at `pos` after rotation.
-        self.focal_point = pos + self.forward() * self.distance;
+        self.target_yaw -= delta.x;
+        self.target_pitch -= delta.y;
+        self.target_pitch = self.target_pitch.clamp(-1.5, 1.5);
+        // Recompute target focal point so camera stays at `pos` after rotation.
+        // Use target orientation to compute where the focal point should end up.
+        let target_orient = Quat::from_euler(
+            glam::EulerRot::YXZ,
+            -self.target_yaw,
+            -self.target_pitch,
+            0.0,
+        );
+        let target_forward = target_orient * Vec3::Z;
+        self.target_focal_point = pos + target_forward * self.distance;
     }
 
     /// WASD + QE movement in fly mode.
@@ -293,24 +327,28 @@ impl EditorCamera {
         let up = Vec3::Y; // World up for consistent vertical movement.
 
         // In fly mode, move the camera position directly by shifting the focal point.
+        let mut movement = Vec3::ZERO;
         if input.is_key_pressed(KeyCode::W) {
-            self.focal_point += forward * speed;
+            movement += forward * speed;
         }
         if input.is_key_pressed(KeyCode::S) {
-            self.focal_point -= forward * speed;
+            movement -= forward * speed;
         }
         if input.is_key_pressed(KeyCode::D) {
-            self.focal_point += right * speed;
+            movement += right * speed;
         }
         if input.is_key_pressed(KeyCode::A) {
-            self.focal_point -= right * speed;
+            movement -= right * speed;
         }
         if input.is_key_pressed(KeyCode::E) {
-            self.focal_point += up * speed;
+            movement += up * speed;
         }
         if input.is_key_pressed(KeyCode::Q) {
-            self.focal_point -= up * speed;
+            movement -= up * speed;
         }
+        // WASD movement applies to both target and actual to avoid lag.
+        self.focal_point += movement;
+        self.target_focal_point += movement;
     }
 
     fn pan_speed(&self) -> (f32, f32) {
