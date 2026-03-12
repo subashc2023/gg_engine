@@ -658,8 +658,8 @@ fn render_inline_rename(
         };
         debug_assert_eq!(*uuid, entity_uuid);
 
-        let te = egui::TextEdit::singleline(edit_text)
-            .desired_width(ui.available_width().min(160.0));
+        let te =
+            egui::TextEdit::singleline(edit_text).desired_width(ui.available_width().min(160.0));
         let response = ui.add(te);
 
         if *first_frame {

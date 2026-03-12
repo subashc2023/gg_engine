@@ -221,9 +221,16 @@ pub(crate) fn settings_ui(
         ui.add_space(4.0);
         ui.checkbox(&mut pp.contact_shadows_enabled, "Contact Shadows");
         if pp.contact_shadows_enabled {
-            ui.add(egui::Slider::new(&mut pp.contact_shadows_max_distance, 0.01..=3.0).text("Max Distance"));
-            ui.add(egui::Slider::new(&mut pp.contact_shadows_thickness, 0.01..=1.0).text("Thickness"));
-            ui.add(egui::Slider::new(&mut pp.contact_shadows_intensity, 0.0..=1.0).text("Intensity"));
+            ui.add(
+                egui::Slider::new(&mut pp.contact_shadows_max_distance, 0.01..=3.0)
+                    .text("Max Distance"),
+            );
+            ui.add(
+                egui::Slider::new(&mut pp.contact_shadows_thickness, 0.01..=1.0).text("Thickness"),
+            );
+            ui.add(
+                egui::Slider::new(&mut pp.contact_shadows_intensity, 0.0..=1.0).text("Intensity"),
+            );
             let mut steps = pp.contact_shadows_step_count;
             ui.add(egui::Slider::new(&mut steps, 4..=64).text("Steps"));
             pp.contact_shadows_step_count = steps;
@@ -265,7 +272,12 @@ pub(crate) fn settings_ui(
             });
         pp.shadow_debug_mode = debug_idx as i32;
 
-        let quality_labels = ["Low (4-tap)", "Medium (9-tap)", "High (16-tap)", "Ultra (PCSS)"];
+        let quality_labels = [
+            "Low (4-tap)",
+            "Medium (9-tap)",
+            "High (16-tap)",
+            "Ultra (PCSS)",
+        ];
         let mut quality_idx = (pp.shadow_quality as usize).min(quality_labels.len() - 1);
         egui::ComboBox::from_label("Shadow Quality")
             .selected_text(quality_labels[quality_idx])

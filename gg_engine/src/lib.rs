@@ -27,13 +27,13 @@ pub type Scope<T> = Box<T>;
 
 pub use application::{run, Application, WindowConfig};
 pub use ash;
-pub use cursor::{CursorMode, SoftwareCursor};
 pub use asset::{AssetHandle, AssetMetadata, AssetRegistry, AssetType, EditorAssetManager};
+pub use cursor::{CursorMode, SoftwareCursor};
 pub use egui;
 pub use error::{EngineError, EngineResult};
+pub use events::gamepad::{GamepadAxis, GamepadButton, GamepadEvent, GamepadId};
 pub use glam;
 pub use hecs;
-pub use events::gamepad::{GamepadAxis, GamepadButton, GamepadEvent, GamepadId};
 pub use input::Input;
 pub use layer::{Layer, LayerStack};
 pub use log;
@@ -58,15 +58,14 @@ pub use scene::{Aabb2D, Aabb3D, CullingStats, Frustum3D, SpatialGrid, SpatialGri
 pub use scene::{
     AmbientLightComponent, AnimationClip, AnimationControllerComponent, AnimationTransition,
     AudioCategory, AudioListenerComponent, AudioSourceComponent, BoxCollider2DComponent,
-    BoxCollider3DComponent, CameraComponent, CapsuleCollider3DComponent,
-    CircleCollider2DComponent, CircleRendererComponent, DirectionalLightComponent, Entity,
-    FloatOrdering, FullscreenMode, IdComponent, InstancedSpriteAnimator, MeshPrimitive,
-    MeshRendererComponent, MeshSource, NativeScript, NativeScriptComponent,
-    ParticleEmitterComponent, PointLightComponent, RelationshipComponent, RigidBody2DComponent,
-    RigidBody2DType, RigidBody3DComponent, RigidBody3DType, Scene, SceneSerializer,
-    SphereCollider3DComponent, SpriteAnimatorComponent, SpriteRendererComponent, TagComponent,
-    TextComponent, TilemapComponent, TransformComponent, TransitionCondition, UIAnchorComponent,
-    TILE_FLIP_H, TILE_FLIP_V, TILE_ID_MASK,
+    BoxCollider3DComponent, CameraComponent, CapsuleCollider3DComponent, CircleCollider2DComponent,
+    CircleRendererComponent, DirectionalLightComponent, Entity, FloatOrdering, FullscreenMode,
+    IdComponent, InstancedSpriteAnimator, MeshPrimitive, MeshRendererComponent, MeshSource,
+    NativeScript, NativeScriptComponent, ParticleEmitterComponent, PointLightComponent,
+    RelationshipComponent, RigidBody2DComponent, RigidBody2DType, RigidBody3DComponent,
+    RigidBody3DType, Scene, SceneSerializer, SphereCollider3DComponent, SpriteAnimatorComponent,
+    SpriteRendererComponent, TagComponent, TextComponent, TilemapComponent, TransformComponent,
+    TransitionCondition, UIAnchorComponent, TILE_FLIP_H, TILE_FLIP_V, TILE_ID_MASK,
 };
 #[cfg(feature = "lua-scripting")]
 pub use scene::{LuaScriptComponent, ScriptEngine, ScriptFieldValue};
@@ -81,6 +80,7 @@ pub fn engine_version() -> &'static str {
 /// Convenience re-exports for client applications.
 pub mod prelude {
     pub use crate::asset::{AssetHandle, AssetType, EditorAssetManager};
+    pub use crate::cursor::{CursorMode, SoftwareCursor};
     pub use crate::error::{EngineError, EngineResult};
     pub use crate::events::gamepad::{GamepadAxis, GamepadButton, GamepadEvent, GamepadId};
     pub use crate::events::{Event, KeyCode, KeyEvent, MouseButton, MouseEvent, WindowEvent};
@@ -112,19 +112,17 @@ pub mod prelude {
         CircleCollider2DComponent, CircleRendererComponent, DirectionalLightComponent, Entity,
         FloatOrdering, FullscreenMode, IdComponent, InstancedSpriteAnimator, MeshPrimitive,
         MeshRendererComponent, MeshSource, NativeScript, NativeScriptComponent,
-        ParticleEmitterComponent, PointLightComponent, RelationshipComponent,
-        RigidBody2DComponent, RigidBody2DType, RigidBody3DComponent, RigidBody3DType, Scene,
-        SceneSerializer, SphereCollider3DComponent, SpriteAnimatorComponent,
-        SpriteRendererComponent, TagComponent, TextComponent, TilemapComponent,
-        TransformComponent, TransitionCondition, UIAnchorComponent, TILE_FLIP_H, TILE_FLIP_V,
-        TILE_ID_MASK,
+        ParticleEmitterComponent, PointLightComponent, RelationshipComponent, RigidBody2DComponent,
+        RigidBody2DType, RigidBody3DComponent, RigidBody3DType, Scene, SceneSerializer,
+        SphereCollider3DComponent, SpriteAnimatorComponent, SpriteRendererComponent, TagComponent,
+        TextComponent, TilemapComponent, TransformComponent, TransitionCondition,
+        UIAnchorComponent, TILE_FLIP_H, TILE_FLIP_V, TILE_ID_MASK,
     };
     #[cfg(feature = "lua-scripting")]
     pub use crate::scene::{LuaScriptComponent, ScriptEngine, ScriptFieldValue};
     pub use crate::timestep::Timestep;
     pub use crate::ui_theme::BOLD_FONT;
     pub use crate::uuid::Uuid;
-    pub use crate::cursor::{CursorMode, SoftwareCursor};
     pub use crate::{profile_scope, run, Application, Ref, Scope, WindowConfig};
     pub use glam::{Mat3, Mat4, Quat, Vec2, Vec3, Vec4};
     pub use log::{debug, error, info, trace, warn};

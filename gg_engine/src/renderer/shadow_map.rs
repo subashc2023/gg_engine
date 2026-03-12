@@ -368,7 +368,7 @@ impl ShadowMapSystem {
 
         // Per-layer views (TYPE_2D) — used as framebuffer attachments.
         let mut layer_views = [vk::ImageView::null(); NUM_SHADOW_CASCADES];
-        for i in 0..NUM_SHADOW_CASCADES {
+        for (i, view) in layer_views.iter_mut().enumerate() {
             let view_info = vk::ImageViewCreateInfo::default()
                 .image(depth_image)
                 .view_type(vk::ImageViewType::TYPE_2D)
@@ -380,7 +380,7 @@ impl ShadowMapSystem {
                     base_array_layer: i as u32,
                     layer_count: 1,
                 });
-            layer_views[i] = unsafe { device.create_image_view(&view_info, None) }
+            *view = unsafe { device.create_image_view(&view_info, None) }
                 .map_err(|e| format!("Failed to create shadow layer {i} image view: {e}"))?;
         }
 
@@ -667,7 +667,12 @@ pub fn compute_cascade_vps(
     light_direction: Vec3,
     scene_min: Vec3,
     scene_max: Vec3,
-) -> ([Mat4; NUM_SHADOW_CASCADES], [f32; 3], f32, [f32; NUM_SHADOW_CASCADES]) {
+) -> (
+    [Mat4; NUM_SHADOW_CASCADES],
+    [f32; 3],
+    f32,
+    [f32; NUM_SHADOW_CASCADES],
+) {
     let inv_vp = camera.view_projection.inverse();
     let near = camera.near;
     let actual_far = camera.far;
@@ -706,12 +711,11 @@ pub fn compute_cascade_vps(
     // 2. Compute 3 split distances (PSSM blend) for 4 cascades.
     let num_splits = NUM_SHADOW_CASCADES - 1; // 3
     let mut split_distances = [0.0_f32; 3];
-    for i in 0..num_splits {
+    for (i, dist) in split_distances.iter_mut().enumerate().take(num_splits) {
         let frac = (i + 1) as f32 / NUM_SHADOW_CASCADES as f32;
         let uniform_split = near + (shadow_far - near) * frac;
         let log_split = near * (shadow_far / near).powf(frac);
-        split_distances[i] =
-            uniform_split * (1.0 - CASCADE_SPLIT_LAMBDA) + log_split * CASCADE_SPLIT_LAMBDA;
+        *dist = uniform_split * (1.0 - CASCADE_SPLIT_LAMBDA) + log_split * CASCADE_SPLIT_LAMBDA;
     }
 
     // Convert splits and shadow_far to lerp parameters along the actual frustum
@@ -819,8 +823,7 @@ pub fn compute_cascade_vps(
         }
 
         // Build orthographic projection from the bounding sphere XY + scene Z.
-        let mut light_proj =
-            Mat4::orthographic_lh(-radius, radius, -radius, radius, z_min, z_max);
+        let mut light_proj = Mat4::orthographic_lh(-radius, radius, -radius, radius, z_min, z_max);
         light_proj.y_axis.y *= -1.0; // Vulkan Y-flip
 
         // Texel snapping: prevent shadow shimmer from sub-texel jitter.

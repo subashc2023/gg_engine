@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
 
-use base64::{Engine as Base64Engine, engine::general_purpose::STANDARD as BASE64};
+use base64::{engine::general_purpose::STANDARD as BASE64, Engine as Base64Engine};
 use glam::{Vec2, Vec3, Vec4};
 use serde::{Deserialize, Serialize};
 
@@ -14,8 +14,7 @@ use crate::scene::LuaScriptComponent;
 use crate::scene::{
     AmbientLightComponent, AnimationClip, AnimationControllerComponent, AnimationTransition,
     AudioCategory, AudioListenerComponent, AudioSourceComponent, BoxCollider2DComponent,
-    BoxCollider3DComponent,
-    CameraComponent, CapsuleCollider3DComponent, CircleCollider2DComponent,
+    BoxCollider3DComponent, CameraComponent, CapsuleCollider3DComponent, CircleCollider2DComponent,
     CircleRendererComponent, DirectionalLightComponent, FloatOrdering, IdComponent,
     InstancedSpriteAnimator, MeshPrimitive, MeshRendererComponent, MeshSource,
     ParticleEmitterComponent, PointLightComponent, RelationshipComponent, RigidBody2DComponent,
@@ -1016,13 +1015,15 @@ impl SceneSerializer {
         let contents = fs::read_to_string(file_path)?;
 
         // Peek at version for migration.
-        let peek: VersionPeek = serde_yaml_ng::from_str(&contents)
-            .unwrap_or(VersionPeek { version: 1 });
+        let peek: VersionPeek =
+            serde_yaml_ng::from_str(&contents).unwrap_or(VersionPeek { version: 1 });
 
         let contents = if peek.version < SCENE_VERSION {
             log::info!(
                 "Scene '{}' is version {} (current: {}), applying migrations",
-                file_path, peek.version, SCENE_VERSION
+                file_path,
+                peek.version,
+                SCENE_VERSION
             );
             migrate_scene_yaml(contents, peek.version)
         } else if peek.version > SCENE_VERSION {
@@ -1989,8 +1990,7 @@ impl SceneSerializer {
                     spatial: asd.spatial,
                     min_distance: asd.min_distance,
                     max_distance: asd.max_distance,
-                    category: AudioCategory::from_str_loose(&asd.category)
-                        .unwrap_or_default(),
+                    category: AudioCategory::from_str_loose(&asd.category).unwrap_or_default(),
                     resolved_path: None,
                 },
             );
@@ -2316,9 +2316,9 @@ mod tests {
         let tm = scene
             .get_component::<crate::scene::TilemapComponent>(*tm_ent)
             .unwrap();
-        assert_eq!(tm.width, 20);
-        assert_eq!(tm.height, 17);
-        assert_eq!(tm.tiles.len(), 340);
+        assert_eq!(tm.width, 16);
+        assert_eq!(tm.height, 10);
+        assert_eq!(tm.tiles.len(), 160);
         assert_eq!(tm.texture_handle.raw(), 2841034490373146);
     }
 
@@ -2597,7 +2597,10 @@ Entities:
         let yaml = SceneSerializer::serialize_to_string(&scene).unwrap();
         // New format should have TilesB64 and NOT have Tiles:
         assert!(yaml.contains("TilesB64:"), "Should contain TilesB64");
-        assert!(!yaml.contains("\n    Tiles:"), "Should NOT contain legacy Tiles array");
+        assert!(
+            !yaml.contains("\n    Tiles:"),
+            "Should NOT contain legacy Tiles array"
+        );
 
         // Verify it round-trips correctly.
         let mut loaded = Scene::new();

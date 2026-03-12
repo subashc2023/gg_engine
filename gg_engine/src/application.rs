@@ -480,7 +480,8 @@ impl<T: Application> ApplicationHandler for EngineRunner<T> {
                                         if let (Some(renderer), Some(vk_ctx)) =
                                             (&mut self.renderer, &self.vulkan_context)
                                         {
-                                            renderer.init_gpu_profiler(vk_ctx.timestamp_period_ns());
+                                            renderer
+                                                .init_gpu_profiler(vk_ctx.timestamp_period_ns());
                                         }
 
                                         // Notify the application that the renderer is ready.
@@ -570,10 +571,8 @@ impl<T: Application> ApplicationHandler for EngineRunner<T> {
                 } else {
                     (1280.0, 720.0)
                 };
-                self.software_cursor_pos = (
-                    (cx + dx).clamp(0.0, max_x),
-                    (cy + dy).clamp(0.0, max_y),
-                );
+                self.software_cursor_pos =
+                    ((cx + dx).clamp(0.0, max_x), (cy + dy).clamp(0.0, max_y));
             }
         }
     }
@@ -620,8 +619,7 @@ impl<T: Application> ApplicationHandler for EngineRunner<T> {
                         .as_ref()
                         .map(|w| w.scale_factor())
                         .unwrap_or(1.0);
-                    self.software_cursor_pos =
-                        (position.x / scale, position.y / scale);
+                    self.software_cursor_pos = (position.x / scale, position.y / scale);
                 }
             }
             winit::event::WindowEvent::MouseInput { state, button, .. } => {
@@ -815,9 +813,7 @@ impl<T: Application> ApplicationHandler for EngineRunner<T> {
                                 best
                             });
                             match video_mode {
-                                Some(mode) => {
-                                    Some(winit::window::Fullscreen::Exclusive(mode))
-                                }
+                                Some(mode) => Some(winit::window::Fullscreen::Exclusive(mode)),
                                 None => {
                                     log::warn!(
                                         "No matching video mode for exclusive fullscreen; \
@@ -925,7 +921,7 @@ impl<T: Application> ApplicationHandler for EngineRunner<T> {
                     if fb.color_attachment_count() > 1 {
                         let need_update = renderer
                             .offscreen_render_pass()
-                            .map_or(true, |rp| rp != fb.render_pass());
+                            .is_none_or(|rp| rp != fb.render_pass());
                         if need_update {
                             if let Err(e) = renderer.create_offscreen_batch_pipeline(
                                 fb.render_pass(),
@@ -999,9 +995,14 @@ impl<T: Application> ApplicationHandler for EngineRunner<T> {
                                 let depth_view = fb.depth_image_view();
                                 let msaa_depth_view = fb.msaa_depth_image_view();
                                 let normal_view = fb.normal_image_view();
-                                if let Err(e) =
-                                    renderer.resize_postprocess(color_view, depth_view, msaa_depth_view, normal_view, w, h)
-                                {
+                                if let Err(e) = renderer.resize_postprocess(
+                                    color_view,
+                                    depth_view,
+                                    msaa_depth_view,
+                                    normal_view,
+                                    w,
+                                    h,
+                                ) {
                                     log::error!(target: "gg_engine", "Post-process resize failed: {e}");
                                 }
                             }
@@ -1918,10 +1919,7 @@ fn apply_cursor_mode(window: &Window, mode: CursorMode) {
         }
         CursorMode::Confined => {
             // Confine cursor to window; fall back to no grab if unsupported.
-            if window
-                .set_cursor_grab(CursorGrabMode::Confined)
-                .is_err()
-            {
+            if window.set_cursor_grab(CursorGrabMode::Confined).is_err() {
                 let _ = window.set_cursor_grab(CursorGrabMode::None);
             }
             window.set_cursor_visible(false);

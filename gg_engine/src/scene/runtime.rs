@@ -1,9 +1,9 @@
+#[cfg(feature = "lua-scripting")]
+use super::lua_ops::ScriptEngineGuard;
 use super::{
     Entity, IdComponent, NativeScript, NativeScriptComponent, RigidBody2DComponent,
     RigidBody3DComponent, Scene, TransformComponent,
 };
-#[cfg(feature = "lua-scripting")]
-use super::lua_ops::ScriptEngineGuard;
 use crate::input::Input;
 use crate::timestep::Timestep;
 
@@ -129,14 +129,8 @@ impl Scene {
 
         // Unified fixed-step loop.
         loop {
-            let can_2d = self
-                .physics_world
-                .as_ref()
-                .map_or(false, |p| p.can_step());
-            let can_3d = self
-                .physics_world_3d
-                .as_ref()
-                .map_or(false, |p| p.can_step());
+            let can_2d = self.physics_world.as_ref().is_some_and(|p| p.can_step());
+            let can_3d = self.physics_world_3d.as_ref().is_some_and(|p| p.can_step());
 
             if !can_2d && !can_3d {
                 break;
@@ -302,8 +296,12 @@ impl Scene {
             } else {
                 "on_collision_exit"
             };
-            guard.engine_mut().call_entity_collision(*uuid_a, callback, *uuid_b);
-            guard.engine_mut().call_entity_collision(*uuid_b, callback, *uuid_a);
+            guard
+                .engine_mut()
+                .call_entity_collision(*uuid_a, callback, *uuid_b);
+            guard
+                .engine_mut()
+                .call_entity_collision(*uuid_b, callback, *uuid_a);
         }
 
         // Guard drop restores engine and cleans up SceneScriptContext.
@@ -356,7 +354,9 @@ impl Scene {
         guard.engine_mut().lua().set_app_data(ctx);
 
         for uuid in &uuids {
-            guard.engine_mut().call_entity_on_fixed_update(*uuid, fixed_dt);
+            guard
+                .engine_mut()
+                .call_entity_on_fixed_update(*uuid, fixed_dt);
         }
 
         // Guard drop restores engine and cleans up SceneScriptContext.

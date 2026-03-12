@@ -236,8 +236,7 @@ impl Input {
         self.mouse_delta_x = 0.0;
         self.mouse_delta_y = 0.0;
         // Snapshot gamepad buttons for just-pressed/just-released detection.
-        self.gamepad_buttons_prev
-            .clone_from(&self.gamepad_buttons);
+        self.gamepad_buttons_prev.clone_from(&self.gamepad_buttons);
     }
 }
 

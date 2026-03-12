@@ -104,19 +104,16 @@ impl GpuProfiler {
 
                 for i in 1..count as usize {
                     let delta = timestamps[i].wrapping_sub(timestamps[i - 1]);
-                    let time_ms =
-                        delta as f64 * self.timestamp_period_ns as f64 / 1_000_000.0;
+                    let time_ms = delta as f64 * self.timestamp_period_ns as f64 / 1_000_000.0;
                     self.results.push(GpuTimingResult {
                         name: names.get(i - 1).copied().unwrap_or("unknown"),
                         time_ms: time_ms as f32,
                     });
                 }
 
-                let total_delta =
-                    timestamps[count as usize - 1].wrapping_sub(timestamps[0]);
-                self.total_frame_ms = (total_delta as f64
-                    * self.timestamp_period_ns as f64
-                    / 1_000_000.0) as f32;
+                let total_delta = timestamps[count as usize - 1].wrapping_sub(timestamps[0]);
+                self.total_frame_ms =
+                    (total_delta as f64 * self.timestamp_period_ns as f64 / 1_000_000.0) as f32;
             }
         }
 

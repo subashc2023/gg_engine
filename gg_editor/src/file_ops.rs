@@ -185,7 +185,9 @@ impl GGEditor {
             }
             if ui
                 .checkbox(&mut self.postprocess_settings.enabled, "Post-Processing")
-                .on_hover_text("Apply bloom, tone mapping, and color grading to the editor viewport")
+                .on_hover_text(
+                    "Apply bloom, tone mapping, and color grading to the editor viewport",
+                )
                 .clicked()
             {
                 ui.close();

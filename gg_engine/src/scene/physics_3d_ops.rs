@@ -507,8 +507,7 @@ impl Scene {
         let exclude_uuid =
             exclude_entity.and_then(|e| self.get_component::<IdComponent>(e).map(|id| id.id.raw()));
         if let Some(ref physics) = self.physics_world_3d {
-            let position =
-                na::Isometry3::translation(center.x, center.y, center.z);
+            let position = na::Isometry3::translation(center.x, center.y, center.z);
             let shape = rapier3d::parry::shape::Ball::new(radius);
             physics.shape_overlap(&position, &shape, exclude_uuid)
         } else {
@@ -526,8 +525,7 @@ impl Scene {
         let exclude_uuid =
             exclude_entity.and_then(|e| self.get_component::<IdComponent>(e).map(|id| id.id.raw()));
         if let Some(ref physics) = self.physics_world_3d {
-            let position =
-                na::Isometry3::translation(center.x, center.y, center.z);
+            let position = na::Isometry3::translation(center.x, center.y, center.z);
             let shape = rapier3d::parry::shape::Cuboid::new(na::Vector3::new(
                 half_extents.x,
                 half_extents.y,

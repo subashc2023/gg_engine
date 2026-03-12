@@ -311,9 +311,8 @@ impl VulkanContext {
         format: vk::Format,
         features: vk::FormatFeatureFlags,
     ) -> bool {
-        let props = unsafe {
-            instance.get_physical_device_format_properties(self.physical_device, format)
-        };
+        let props =
+            unsafe { instance.get_physical_device_format_properties(self.physical_device, format) };
         props.optimal_tiling_features.contains(features)
     }
 

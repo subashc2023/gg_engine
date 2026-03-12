@@ -286,7 +286,10 @@ impl Scene {
                 guard.engine_mut().call_entity_on_create(*uuid);
             }
 
-            guard.engine_mut().lua().remove_app_data::<SceneScriptContext>();
+            guard
+                .engine_mut()
+                .lua()
+                .remove_app_data::<SceneScriptContext>();
         }
 
         if uuids.is_empty() {
@@ -305,7 +308,9 @@ impl Scene {
         guard.engine_mut().init_pending_timer_ops();
 
         for uuid in &uuids {
-            guard.engine_mut().call_entity_on_update(*uuid, dt.seconds());
+            guard
+                .engine_mut()
+                .call_entity_on_update(*uuid, dt.seconds());
         }
 
         // Apply any timer creates/cancels that scripts requested.

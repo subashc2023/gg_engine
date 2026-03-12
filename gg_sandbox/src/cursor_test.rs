@@ -39,9 +39,7 @@ impl CursorTest {
         self.last_mouse_delta = input.mouse_delta();
 
         // Keyboard shortcuts for mode switching.
-        if input.is_key_just_pressed(KeyCode::Num1)
-            || input.is_key_just_pressed(KeyCode::Escape)
-        {
+        if input.is_key_just_pressed(KeyCode::Num1) || input.is_key_just_pressed(KeyCode::Escape) {
             self.cursor_mode = CursorMode::Normal;
             info!("Cursor mode → Normal");
         }

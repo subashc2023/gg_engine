@@ -3,7 +3,10 @@ use std::fmt;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WindowEvent {
     Close,
-    Resize { width: u32, height: u32 },
+    Resize {
+        width: u32,
+        height: u32,
+    },
     /// The window gained or lost focus. `true` = gained, `false` = lost.
     Focused(bool),
 }

@@ -14,6 +14,8 @@ pub(crate) struct CompiledShader {
 
 /// Compiled SPIR-V bytecode for a compute shader.
 pub(crate) struct CompiledComputeShader {
+    #[allow(dead_code)]
+    // Used for validation; hot-reload of compute pipelines not yet implemented.
     pub comp_spv: Vec<u8>,
 }
 

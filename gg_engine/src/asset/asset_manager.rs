@@ -504,9 +504,7 @@ impl EditorAssetManager {
             .loaded_assets
             .iter()
             .filter_map(|(handle, data)| match data {
-                AssetData::Texture(tex) if std::sync::Arc::strong_count(tex) == 1 => {
-                    Some(*handle)
-                }
+                AssetData::Texture(tex) if std::sync::Arc::strong_count(tex) == 1 => Some(*handle),
                 _ => None,
             })
             .collect();
@@ -543,8 +541,8 @@ impl EditorAssetManager {
     /// `max_cached_textures` count limit and the `gpu_memory_budget` byte limit.
     /// Only evicts textures that are not referenced elsewhere (Arc strong_count == 1).
     pub fn evict_lru(&mut self) {
-        let over_count = self.max_cached_textures > 0
-            && self.loaded_assets.len() > self.max_cached_textures;
+        let over_count =
+            self.max_cached_textures > 0 && self.loaded_assets.len() > self.max_cached_textures;
         let over_budget =
             self.gpu_memory_budget > 0 && self.total_gpu_bytes > self.gpu_memory_budget;
 

@@ -283,15 +283,13 @@ impl PhysicsWorld2D {
             na::Point2::new(max.x, max.y),
         );
         let mut results = Vec::new();
-        self.query_pipeline.colliders_with_aabb_intersecting_aabb(
-            &aabb,
-            |&collider_handle| {
+        self.query_pipeline
+            .colliders_with_aabb_intersecting_aabb(&aabb, |&collider_handle| {
                 if let Some(&uuid) = self.collider_to_uuid.get(&collider_handle) {
                     results.push(uuid);
                 }
                 true // continue iterating
-            },
-        );
+            });
         results
     }
 

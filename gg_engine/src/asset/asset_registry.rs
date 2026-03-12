@@ -202,9 +202,7 @@ impl AssetRegistry {
         let scene_handles: Vec<(AssetHandle, String)> = self
             .assets
             .iter()
-            .filter(|(_, meta)| {
-                matches!(meta.asset_type, AssetType::Scene | AssetType::Prefab)
-            })
+            .filter(|(_, meta)| matches!(meta.asset_type, AssetType::Scene | AssetType::Prefab))
             .map(|(h, meta)| (*h, meta.file_path.clone()))
             .collect();
 
@@ -213,11 +211,7 @@ impl AssetRegistry {
             if let Ok(yaml) = fs::read_to_string(&abs_path) {
                 let deps = Self::scan_scene_dependencies(&yaml);
                 if !deps.is_empty() {
-                    log::debug!(
-                        "Asset '{}' depends on {} assets",
-                        file_path,
-                        deps.len()
-                    );
+                    log::debug!("Asset '{}' depends on {} assets", file_path, deps.len());
                     self.set_dependencies(handle, deps);
                 }
             }
@@ -547,7 +541,10 @@ AudioSourceComponent:
         let tex_h = Uuid::from_raw(200);
         let audio_h = Uuid::from_raw(300);
 
-        reg.insert(scene_h, make_metadata("scenes/test.ggscene", AssetType::Scene));
+        reg.insert(
+            scene_h,
+            make_metadata("scenes/test.ggscene", AssetType::Scene),
+        );
         reg.insert(tex_h, make_metadata("textures/a.png", AssetType::Texture2D));
         reg.insert(audio_h, make_metadata("audio/b.ogg", AssetType::Audio));
 
@@ -575,7 +572,10 @@ AudioSourceComponent:
         let scene_h = Uuid::from_raw(100);
         let tex_h = Uuid::from_raw(200);
 
-        reg.insert(scene_h, make_metadata("scenes/test.ggscene", AssetType::Scene));
+        reg.insert(
+            scene_h,
+            make_metadata("scenes/test.ggscene", AssetType::Scene),
+        );
         reg.insert(tex_h, make_metadata("textures/a.png", AssetType::Texture2D));
 
         let mut deps = std::collections::HashSet::new();
@@ -595,7 +595,10 @@ AudioSourceComponent:
         let tex_a = Uuid::from_raw(200);
         let tex_b = Uuid::from_raw(300);
 
-        reg.insert(scene_h, make_metadata("scenes/test.ggscene", AssetType::Scene));
+        reg.insert(
+            scene_h,
+            make_metadata("scenes/test.ggscene", AssetType::Scene),
+        );
         reg.insert(tex_a, make_metadata("a.png", AssetType::Texture2D));
         reg.insert(tex_b, make_metadata("b.png", AssetType::Texture2D));
 

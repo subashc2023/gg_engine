@@ -539,9 +539,14 @@ impl Application for GGEditor {
         }) {
             Ok(fb) => {
                 // Initialize post-processing pipeline with the scene framebuffer.
-                if let Err(e) =
-                    renderer.init_postprocess(fb.color_image_view(), fb.depth_image_view(), fb.msaa_depth_image_view(), fb.normal_image_view(), fb.width(), fb.height())
-                {
+                if let Err(e) = renderer.init_postprocess(
+                    fb.color_image_view(),
+                    fb.depth_image_view(),
+                    fb.msaa_depth_image_view(),
+                    fb.normal_image_view(),
+                    fb.width(),
+                    fb.height(),
+                ) {
                     warn!("Failed to create post-processing pipeline: {e}");
                 } else if let Some(pp) = renderer.postprocess() {
                     self.pp_output_handle = pp.output_egui_handle();
@@ -628,10 +633,7 @@ impl Application for GGEditor {
         // Run the shadow depth pass (shared shadow map for all viewports).
         // Pass the editor camera's frustum info for per-cascade fitting.
         // Read shadow distance from the scene's directional light (if any).
-        let shadow_distance = self
-            .scene
-            .find_first_shadow_distance()
-            .unwrap_or(100.0);
+        let shadow_distance = self.scene.find_first_shadow_distance().unwrap_or(100.0);
         let camera_info = gg_engine::renderer::ShadowCameraInfo {
             view_projection: self.editor_camera.view_projection(),
             near: self.editor_camera.near_clip(),
@@ -668,7 +670,6 @@ impl Application for GGEditor {
             // Sync shadow cascade debug mode and quality tier to renderer.
             renderer.set_shadow_debug_mode(self.postprocess_settings.shadow_debug_mode);
             renderer.set_shadow_quality(self.postprocess_settings.shadow_quality);
-
 
             // Update post-process output handle (may change on resize).
             if let Some(pp) = renderer.postprocess() {
@@ -1052,9 +1053,7 @@ impl Application for GGEditor {
         // Update editor camera as late as possible to minimize input-to-display
         // latency. This runs after on_update + on_egui, right before the VP
         // matrix is captured for GPU command recording.
-        if self.editor_mode != EditorMode::Hub
-            && self.playback.scene_state != SceneState::Play
-        {
+        if self.editor_mode != EditorMode::Hub && self.playback.scene_state != SceneState::Play {
             self.editor_camera.on_update(dt, input);
         }
     }
@@ -1101,9 +1100,14 @@ impl Application for GGEditor {
                 samples,
             }) {
                 Ok(fb) => {
-                    if let Err(e) = renderer
-                        .resize_postprocess(fb.color_image_view(), fb.depth_image_view(), fb.msaa_depth_image_view(), fb.normal_image_view(), fb.width(), fb.height())
-                    {
+                    if let Err(e) = renderer.resize_postprocess(
+                        fb.color_image_view(),
+                        fb.depth_image_view(),
+                        fb.msaa_depth_image_view(),
+                        fb.normal_image_view(),
+                        fb.width(),
+                        fb.height(),
+                    ) {
                         error!("Failed to resize postprocess for MSAA: {e}");
                     } else if let Some(pp) = renderer.postprocess() {
                         self.pp_output_handle = pp.output_egui_handle();
@@ -1437,8 +1441,7 @@ impl Application for GGEditor {
 
         // If post-processing is active, use its output texture; otherwise use the raw scene FB.
         let fb_tex_id = if self.postprocess_settings.enabled {
-            self.ui
-                .pp_output_egui_tex_id
+            self.ui.pp_output_egui_tex_id
         } else {
             self.viewport
                 .scene_fb

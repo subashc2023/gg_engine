@@ -179,15 +179,28 @@ impl Sandbox3D {
             shadow_distance: 100.0,
         };
         let (cascade_vps, split_depths, _shadow_far, _texel_sizes) =
-            gg_engine::renderer::shadow_map::compute_cascade_vps(&camera_info, light_dir, scene_min, scene_max);
+            gg_engine::renderer::shadow_map::compute_cascade_vps(
+                &camera_info,
+                light_dir,
+                scene_min,
+                scene_max,
+            );
         self.shadow_cascade_vps = Some(cascade_vps);
         self.shadow_split_depths = split_depths;
 
         // Mesh transforms for shadow submission.
         let mesh_models: Vec<Mat4> = vec![
-            Mat4::from_scale_rotation_translation(Vec3::new(6.0, 1.0, 6.0), Quat::IDENTITY, Vec3::new(0.0, -0.5, 0.0)),
+            Mat4::from_scale_rotation_translation(
+                Vec3::new(6.0, 1.0, 6.0),
+                Quat::IDENTITY,
+                Vec3::new(0.0, -0.5, 0.0),
+            ),
             Mat4::from_translation(Vec3::ZERO),
-            Mat4::from_scale_rotation_translation(Vec3::splat(1.5), Quat::IDENTITY, Vec3::new(2.0, 0.25, 0.0)),
+            Mat4::from_scale_rotation_translation(
+                Vec3::splat(1.5),
+                Quat::IDENTITY,
+                Vec3::new(2.0, 0.25, 0.0),
+            ),
         ];
         let mesh_vas: Vec<Option<&VertexArray>> = vec![
             self.plane_va.as_ref(),
@@ -195,8 +208,8 @@ impl Sandbox3D {
             self.sphere_va.as_ref(),
         ];
 
-        for cascade in 0..gg_engine::renderer::NUM_SHADOW_CASCADES {
-            renderer.begin_shadow_pass(&cascade_vps[cascade], cascade, cmd_buf, current_frame, 0, false);
+        for (cascade, cascade_vp) in cascade_vps.iter().enumerate() {
+            renderer.begin_shadow_pass(cascade_vp, cascade, cmd_buf, current_frame, 0, false);
             for (va_opt, model) in mesh_vas.iter().zip(&mesh_models) {
                 if let Some(va) = va_opt {
                     renderer.submit_shadow(va, model, cmd_buf);

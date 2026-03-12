@@ -1463,7 +1463,8 @@ impl Renderer2DData {
         // Compute shaders (#type compute) use a separate path; skip them from
         // the vertex/fragment compilation so they don't fail with "missing #type vertex".
         let mut compiled: Vec<(String, shader_compiler::CompiledShader)> = Vec::new();
-        let mut compiled_compute: Vec<(String, shader_compiler::CompiledComputeShader)> = Vec::new();
+        let mut compiled_compute: Vec<(String, shader_compiler::CompiledComputeShader)> =
+            Vec::new();
         for path in &entries {
             let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
             let source = std::fs::read_to_string(path)

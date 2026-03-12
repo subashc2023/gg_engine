@@ -489,10 +489,7 @@ impl Scene {
     /// Find all entities whose 2D collider AABBs overlap the given AABB.
     pub fn aabb_query(&self, min: glam::Vec2, max: glam::Vec2) -> Vec<u64> {
         if let Some(ref physics) = self.physics_world {
-            physics.aabb_query(
-                na::Point2::new(min.x, min.y),
-                na::Point2::new(max.x, max.y),
-            )
+            physics.aabb_query(na::Point2::new(min.x, min.y), na::Point2::new(max.x, max.y))
         } else {
             Vec::new()
         }
@@ -509,8 +506,7 @@ impl Scene {
         let exclude_uuid =
             exclude_entity.and_then(|e| self.get_component::<IdComponent>(e).map(|id| id.id.raw()));
         if let Some(ref physics) = self.physics_world {
-            let position =
-                na::Isometry2::translation(center.x, center.y);
+            let position = na::Isometry2::translation(center.x, center.y);
             let shape = rapier2d::parry::shape::Ball::new(radius);
             physics.shape_overlap(&position, &shape, exclude_uuid)
         } else {
@@ -529,8 +525,7 @@ impl Scene {
         let exclude_uuid =
             exclude_entity.and_then(|e| self.get_component::<IdComponent>(e).map(|id| id.id.raw()));
         if let Some(ref physics) = self.physics_world {
-            let position =
-                na::Isometry2::translation(center.x, center.y);
+            let position = na::Isometry2::translation(center.x, center.y);
             let shape = rapier2d::parry::shape::Cuboid::new(na::Vector2::new(
                 half_extents.x,
                 half_extents.y,

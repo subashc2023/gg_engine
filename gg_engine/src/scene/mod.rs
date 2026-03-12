@@ -28,14 +28,13 @@ pub use animation::{
 pub use components::LuaScriptComponent;
 pub use components::{
     AmbientLightComponent, AudioCategory, AudioListenerComponent, AudioSourceComponent,
-    BoxCollider2DComponent,
-    BoxCollider3DComponent, CameraComponent, CapsuleCollider3DComponent, CircleCollider2DComponent,
-    CircleRendererComponent, DirectionalLightComponent, IdComponent, MeshPrimitive,
-    MeshRendererComponent, MeshSource, NativeScriptComponent, ParticleEmitterComponent,
-    PointLightComponent, RelationshipComponent, RigidBody2DComponent, RigidBody2DType,
-    RigidBody3DComponent, RigidBody3DType, SphereCollider3DComponent, SpriteRendererComponent,
-    TagComponent, TextComponent, TilemapComponent, TransformComponent, UIAnchorComponent,
-    TILE_FLIP_H, TILE_FLIP_V, TILE_ID_MASK,
+    BoxCollider2DComponent, BoxCollider3DComponent, CameraComponent, CapsuleCollider3DComponent,
+    CircleCollider2DComponent, CircleRendererComponent, DirectionalLightComponent, IdComponent,
+    MeshPrimitive, MeshRendererComponent, MeshSource, NativeScriptComponent,
+    ParticleEmitterComponent, PointLightComponent, RelationshipComponent, RigidBody2DComponent,
+    RigidBody2DType, RigidBody3DComponent, RigidBody3DType, SphereCollider3DComponent,
+    SpriteRendererComponent, TagComponent, TextComponent, TilemapComponent, TransformComponent,
+    UIAnchorComponent, TILE_FLIP_H, TILE_FLIP_V, TILE_ID_MASK,
 };
 pub use entity::Entity;
 pub use native_script::NativeScript;
@@ -143,6 +142,7 @@ pub struct Scene {
     category_volumes: [f32; AudioCategory::COUNT],
     /// Stashed cascade VP matrices + split depths + shadow_distance + texel_sizes
     /// from `render_shadow_pass`, consumed by `render_meshes` for the `LightEnvironment`.
+    #[allow(clippy::type_complexity)]
     shadow_cascade_cache: RefCell<Option<([glam::Mat4; 4], [f32; 3], f32, [f32; 4])>>,
     /// Cursor mode requested by scripts. Read by the player/runtime each frame
     /// and applied via the [`Application::cursor_mode()`] trait method.
@@ -886,11 +886,7 @@ impl Scene {
     }
 
     /// Query all entities whose 3D AABB overlaps the given world-space region.
-    pub fn query_entities_in_region_3d(
-        &self,
-        min: glam::Vec3,
-        max: glam::Vec3,
-    ) -> Vec<Entity> {
+    pub fn query_entities_in_region_3d(&self, min: glam::Vec3, max: glam::Vec3) -> Vec<Entity> {
         let Some(ref grid) = self.spatial_grid_3d else {
             return Vec::new();
         };
@@ -902,11 +898,7 @@ impl Scene {
     }
 
     /// Query all entities within `radius` world units of `center` in 3D.
-    pub fn query_entities_in_radius_3d(
-        &self,
-        center: glam::Vec3,
-        radius: f32,
-    ) -> Vec<Entity> {
+    pub fn query_entities_in_radius_3d(&self, center: glam::Vec3, radius: f32) -> Vec<Entity> {
         let Some(ref grid) = self.spatial_grid_3d else {
             return Vec::new();
         };
@@ -1144,8 +1136,9 @@ impl Scene {
             // World X: left = cam_x - half_w, right = cam_x + half_w.
             // World Y: top = cam_y + half_h, bottom = cam_y - half_h.
             // Offsets are scaled by gui_scale for resolution-independent UI sizing.
-            let world_x =
-                cam_pos.x + (-half_w + anchor.anchor.x * 2.0 * half_w) + anchor.offset.x * gui_scale;
+            let world_x = cam_pos.x
+                + (-half_w + anchor.anchor.x * 2.0 * half_w)
+                + anchor.offset.x * gui_scale;
             let world_y =
                 cam_pos.y + (half_h - anchor.anchor.y * 2.0 * half_h) + anchor.offset.y * gui_scale;
             let _ = _tc; // only needed to ensure entity has a TransformComponent

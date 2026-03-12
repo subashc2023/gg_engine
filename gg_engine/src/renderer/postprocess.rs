@@ -141,8 +141,8 @@ pub struct PostProcessPipeline {
     device: ash::Device,
 
     // Render passes
-    store_pass: vk::RenderPass,  // LOAD_OP_DONT_CARE (downsample + composite)
-    blend_pass: vk::RenderPass,  // LOAD_OP_LOAD (upsample, additive)
+    store_pass: vk::RenderPass, // LOAD_OP_DONT_CARE (downsample + composite)
+    blend_pass: vk::RenderPass, // LOAD_OP_LOAD (upsample, additive)
 
     // Pipelines
     downsample_pipeline: Pipeline,
@@ -151,8 +151,8 @@ pub struct PostProcessPipeline {
 
     // Contact shadows pipeline + intermediate images
     contact_shadow_pipeline: Option<Pipeline>,
-    contact_shadowed: Option<PostProcessImage>,  // shadow factor output (ping-pong A)
-    shadow_temp: Option<PostProcessImage>,        // bilateral blur intermediate (ping-pong B)
+    contact_shadowed: Option<PostProcessImage>, // shadow factor output (ping-pong A)
+    shadow_temp: Option<PostProcessImage>,      // bilateral blur intermediate (ping-pong B)
     bilateral_blur_pipeline: Option<Pipeline>,
     /// Descriptor set for the 1x depth (either direct or resolved from MSAA).
     depth_ds: Option<vk::DescriptorSet>,
@@ -411,18 +411,20 @@ impl PostProcessPipeline {
 
         // Nearest sampler for depth (exact values, no interpolation).
         let depth_sampler = if has_any_depth {
-            Some(unsafe {
-                device.create_sampler(
-                    &vk::SamplerCreateInfo::default()
-                        .mag_filter(vk::Filter::NEAREST)
-                        .min_filter(vk::Filter::NEAREST)
-                        .address_mode_u(vk::SamplerAddressMode::CLAMP_TO_EDGE)
-                        .address_mode_v(vk::SamplerAddressMode::CLAMP_TO_EDGE)
-                        .address_mode_w(vk::SamplerAddressMode::CLAMP_TO_EDGE),
-                    None,
-                )
-            }
-            .map_err(|e| format!("Failed to create depth sampler: {e}"))?)
+            Some(
+                unsafe {
+                    device.create_sampler(
+                        &vk::SamplerCreateInfo::default()
+                            .mag_filter(vk::Filter::NEAREST)
+                            .min_filter(vk::Filter::NEAREST)
+                            .address_mode_u(vk::SamplerAddressMode::CLAMP_TO_EDGE)
+                            .address_mode_v(vk::SamplerAddressMode::CLAMP_TO_EDGE)
+                            .address_mode_w(vk::SamplerAddressMode::CLAMP_TO_EDGE),
+                        None,
+                    )
+                }
+                .map_err(|e| format!("Failed to create depth sampler: {e}"))?,
+            )
         } else {
             None
         };
@@ -485,7 +487,7 @@ impl PostProcessPipeline {
                     &resolve_shader,
                     store_pass,
                     &[sampler_ds_layout], // MSAA depth input
-                    0, // no push constants
+                    0,                    // no push constants
                     false,
                     pipeline_cache,
                 )?;
@@ -510,7 +512,12 @@ impl PostProcessPipeline {
                 )?;
                 // Contact shadows sample the resolved (1x) depth image.
                 let d_ds = resolved.descriptor_set;
-                (Some(resolve_pipeline), Some(msaa_ds), Some(resolved), Some(d_ds))
+                (
+                    Some(resolve_pipeline),
+                    Some(msaa_ds),
+                    Some(resolved),
+                    Some(d_ds),
+                )
             } else if let Some(depth_view) = scene_depth_view {
                 // Non-MSAA: sample depth directly.
                 let d_ds = allocate_and_write_ds_with_layout(
@@ -591,6 +598,7 @@ impl PostProcessPipeline {
 
     /// Resize internal images to match a new viewport size.
     /// Call when the offscreen framebuffer is resized.
+    #[allow(clippy::too_many_arguments)]
     pub fn resize(
         &mut self,
         allocator: &Arc<Mutex<GpuAllocator>>,
@@ -650,8 +658,7 @@ impl PostProcessPipeline {
         unsafe {
             self.device
                 .destroy_framebuffer(self.output.framebuffer, None);
-            self.device
-                .destroy_image_view(self.output.image_view, None);
+            self.device.destroy_image_view(self.output.image_view, None);
             self.device.destroy_image(self.output.image, None);
         }
 
@@ -869,7 +876,12 @@ impl PostProcessPipeline {
         }
 
         // Update scene color DS in-place.
-        update_ds(&self.device, self.scene_ds, self.linear_sampler, scene_color_view);
+        update_ds(
+            &self.device,
+            self.scene_ds,
+            self.linear_sampler,
+            scene_color_view,
+        );
 
         let has_any_depth = scene_depth_view.is_some() || msaa_depth_view.is_some();
 
@@ -885,7 +897,9 @@ impl PostProcessPipeline {
         }
         if let Some(rd) = self.resolved_depth.take() {
             unsafe {
-                let _ = self.device.free_descriptor_sets(self.ds_pool, &[rd.descriptor_set]);
+                let _ = self
+                    .device
+                    .free_descriptor_sets(self.ds_pool, &[rd.descriptor_set]);
                 self.device.destroy_framebuffer(rd.framebuffer, None);
                 self.device.destroy_image_view(rd.image_view, None);
                 self.device.destroy_image(rd.image, None);
@@ -899,18 +913,20 @@ impl PostProcessPipeline {
 
         // Create depth sampler if we now need one but didn't before.
         if has_any_depth && self.depth_sampler.is_none() {
-            self.depth_sampler = Some(unsafe {
-                self.device.create_sampler(
-                    &vk::SamplerCreateInfo::default()
-                        .mag_filter(vk::Filter::NEAREST)
-                        .min_filter(vk::Filter::NEAREST)
-                        .address_mode_u(vk::SamplerAddressMode::CLAMP_TO_EDGE)
-                        .address_mode_v(vk::SamplerAddressMode::CLAMP_TO_EDGE)
-                        .address_mode_w(vk::SamplerAddressMode::CLAMP_TO_EDGE),
-                    None,
-                )
-            }
-            .map_err(|e| format!("Failed to create depth sampler: {e}"))?);
+            self.depth_sampler = Some(
+                unsafe {
+                    self.device.create_sampler(
+                        &vk::SamplerCreateInfo::default()
+                            .mag_filter(vk::Filter::NEAREST)
+                            .min_filter(vk::Filter::NEAREST)
+                            .address_mode_u(vk::SamplerAddressMode::CLAMP_TO_EDGE)
+                            .address_mode_v(vk::SamplerAddressMode::CLAMP_TO_EDGE)
+                            .address_mode_w(vk::SamplerAddressMode::CLAMP_TO_EDGE),
+                        None,
+                    )
+                }
+                .map_err(|e| format!("Failed to create depth sampler: {e}"))?,
+            );
         }
         let depth_samp = self.depth_sampler.unwrap_or(self.linear_sampler);
 
@@ -1015,7 +1031,9 @@ impl PostProcessPipeline {
             // Depth gone — tear down contact shadow images.
             if let Some(cs) = self.contact_shadowed.take() {
                 unsafe {
-                    let _ = self.device.free_descriptor_sets(self.ds_pool, &[cs.descriptor_set]);
+                    let _ = self
+                        .device
+                        .free_descriptor_sets(self.ds_pool, &[cs.descriptor_set]);
                     self.device.destroy_framebuffer(cs.framebuffer, None);
                     self.device.destroy_image_view(cs.image_view, None);
                     self.device.destroy_image(cs.image, None);
@@ -1023,7 +1041,9 @@ impl PostProcessPipeline {
             }
             if let Some(st) = self.shadow_temp.take() {
                 unsafe {
-                    let _ = self.device.free_descriptor_sets(self.ds_pool, &[st.descriptor_set]);
+                    let _ = self
+                        .device
+                        .free_descriptor_sets(self.ds_pool, &[st.descriptor_set]);
                     self.device.destroy_framebuffer(st.framebuffer, None);
                     self.device.destroy_image_view(st.image_view, None);
                     self.device.destroy_image(st.image, None);
@@ -1161,7 +1181,11 @@ impl PostProcessPipeline {
                         &self.device,
                         &shader,
                         self.store_pass,
-                        &[self.sampler_ds_layout, self.sampler_ds_layout, self.sampler_ds_layout],
+                        &[
+                            self.sampler_ds_layout,
+                            self.sampler_ds_layout,
+                            self.sampler_ds_layout,
+                        ],
                         std::mem::size_of::<CompositePushConstants>() as u32,
                         false,
                         self.pipeline_cache,
@@ -1171,8 +1195,7 @@ impl PostProcessPipeline {
                 }
                 "contact_shadows" => {
                     if self.contact_shadow_pipeline.is_some() {
-                        let shader =
-                            Shader::new(&self.device, name, &cs.vert_spv, &cs.frag_spv)?;
+                        let shader = Shader::new(&self.device, name, &cs.vert_spv, &cs.frag_spv)?;
                         let pipeline = create_fullscreen_pipeline(
                             &self.device,
                             &shader,
@@ -1188,8 +1211,7 @@ impl PostProcessPipeline {
                 }
                 "bilateral_blur" => {
                     if self.bilateral_blur_pipeline.is_some() {
-                        let shader =
-                            Shader::new(&self.device, name, &cs.vert_spv, &cs.frag_spv)?;
+                        let shader = Shader::new(&self.device, name, &cs.vert_spv, &cs.frag_spv)?;
                         let pipeline = create_fullscreen_pipeline(
                             &self.device,
                             &shader,
@@ -1205,8 +1227,7 @@ impl PostProcessPipeline {
                 }
                 "depth_resolve" => {
                     if self.depth_resolve_pipeline.is_some() {
-                        let shader =
-                            Shader::new(&self.device, name, &cs.vert_spv, &cs.frag_spv)?;
+                        let shader = Shader::new(&self.device, name, &cs.vert_spv, &cs.frag_spv)?;
                         let pipeline = create_fullscreen_pipeline(
                             &self.device,
                             &shader,
@@ -1229,7 +1250,11 @@ impl PostProcessPipeline {
 
     // -- Internal passes ------------------------------------------------------
 
-    fn execute_bloom_downsample(&self, cmd_buf: vk::CommandBuffer, scene_source: vk::DescriptorSet) {
+    fn execute_bloom_downsample(
+        &self,
+        cmd_buf: vk::CommandBuffer,
+        scene_source: vk::DescriptorSet,
+    ) {
         for (i, mip) in self.bloom_mips.iter().enumerate() {
             // Source: scene for first pass, previous mip for subsequent.
             let source_ds = if i == 0 {
@@ -1474,7 +1499,11 @@ impl PostProcessPipeline {
             saturation: self.saturation,
             tonemapping_mode: self.tonemapping.to_int(),
             apply_shadow: if has_shadow {
-                if self.contact_shadows_debug > 0 { 2 } else { 1 }
+                if self.contact_shadows_debug > 0 {
+                    2
+                } else {
+                    1
+                }
             } else {
                 0
             },
@@ -1735,7 +1764,7 @@ impl PostProcessPipeline {
     fn execute_bilateral_blur(&self, cmd_buf: vk::CommandBuffer) {
         let blur_pipeline = self.bilateral_blur_pipeline.as_ref().unwrap();
         let shadow_a = self.contact_shadowed.as_ref().unwrap(); // CS output, final blurred result
-        let shadow_b = self.shadow_temp.as_ref().unwrap();       // intermediate
+        let shadow_b = self.shadow_temp.as_ref().unwrap(); // intermediate
         let depth_ds = self.depth_ds.unwrap();
 
         let extent = vk::Extent2D {
@@ -1773,23 +1802,41 @@ impl PostProcessPipeline {
             self.device
                 .cmd_begin_render_pass(cmd_buf, &rp_info, vk::SubpassContents::INLINE);
 
-            self.device.cmd_set_viewport(cmd_buf, 0, &[vk::Viewport {
-                x: 0.0, y: 0.0,
-                width: shadow_a.width as f32, height: shadow_a.height as f32,
-                min_depth: 0.0, max_depth: 1.0,
-            }]);
-            self.device.cmd_set_scissor(cmd_buf, 0, &[vk::Rect2D {
-                offset: vk::Offset2D { x: 0, y: 0 }, extent,
-            }]);
+            self.device.cmd_set_viewport(
+                cmd_buf,
+                0,
+                &[vk::Viewport {
+                    x: 0.0,
+                    y: 0.0,
+                    width: shadow_a.width as f32,
+                    height: shadow_a.height as f32,
+                    min_depth: 0.0,
+                    max_depth: 1.0,
+                }],
+            );
+            self.device.cmd_set_scissor(
+                cmd_buf,
+                0,
+                &[vk::Rect2D {
+                    offset: vk::Offset2D { x: 0, y: 0 },
+                    extent,
+                }],
+            );
 
             self.device.cmd_bind_pipeline(
-                cmd_buf, vk::PipelineBindPoint::GRAPHICS, blur_pipeline.pipeline(),
+                cmd_buf,
+                vk::PipelineBindPoint::GRAPHICS,
+                blur_pipeline.pipeline(),
             );
 
             // Set 0 = shadow input (shadow_a), Set 1 = depth.
             self.device.cmd_bind_descriptor_sets(
-                cmd_buf, vk::PipelineBindPoint::GRAPHICS, blur_pipeline.layout(),
-                0, &[shadow_a.descriptor_set, depth_ds], &[],
+                cmd_buf,
+                vk::PipelineBindPoint::GRAPHICS,
+                blur_pipeline.layout(),
+                0,
+                &[shadow_a.descriptor_set, depth_ds],
+                &[],
             );
 
             let pc_bytes = std::slice::from_raw_parts(
@@ -1797,7 +1844,11 @@ impl PostProcessPipeline {
                 std::mem::size_of::<BilateralBlurPushConstants>(),
             );
             self.device.cmd_push_constants(
-                cmd_buf, blur_pipeline.layout(), vk::ShaderStageFlags::FRAGMENT, 0, pc_bytes,
+                cmd_buf,
+                blur_pipeline.layout(),
+                vk::ShaderStageFlags::FRAGMENT,
+                0,
+                pc_bytes,
             );
 
             self.device.cmd_draw(cmd_buf, 3, 1, 0, 0);
@@ -1828,23 +1879,41 @@ impl PostProcessPipeline {
             self.device
                 .cmd_begin_render_pass(cmd_buf, &rp_info, vk::SubpassContents::INLINE);
 
-            self.device.cmd_set_viewport(cmd_buf, 0, &[vk::Viewport {
-                x: 0.0, y: 0.0,
-                width: shadow_a.width as f32, height: shadow_a.height as f32,
-                min_depth: 0.0, max_depth: 1.0,
-            }]);
-            self.device.cmd_set_scissor(cmd_buf, 0, &[vk::Rect2D {
-                offset: vk::Offset2D { x: 0, y: 0 }, extent,
-            }]);
+            self.device.cmd_set_viewport(
+                cmd_buf,
+                0,
+                &[vk::Viewport {
+                    x: 0.0,
+                    y: 0.0,
+                    width: shadow_a.width as f32,
+                    height: shadow_a.height as f32,
+                    min_depth: 0.0,
+                    max_depth: 1.0,
+                }],
+            );
+            self.device.cmd_set_scissor(
+                cmd_buf,
+                0,
+                &[vk::Rect2D {
+                    offset: vk::Offset2D { x: 0, y: 0 },
+                    extent,
+                }],
+            );
 
             self.device.cmd_bind_pipeline(
-                cmd_buf, vk::PipelineBindPoint::GRAPHICS, blur_pipeline.pipeline(),
+                cmd_buf,
+                vk::PipelineBindPoint::GRAPHICS,
+                blur_pipeline.pipeline(),
             );
 
             // Set 0 = shadow input (shadow_b), Set 1 = depth.
             self.device.cmd_bind_descriptor_sets(
-                cmd_buf, vk::PipelineBindPoint::GRAPHICS, blur_pipeline.layout(),
-                0, &[shadow_b.descriptor_set, depth_ds], &[],
+                cmd_buf,
+                vk::PipelineBindPoint::GRAPHICS,
+                blur_pipeline.layout(),
+                0,
+                &[shadow_b.descriptor_set, depth_ds],
+                &[],
             );
 
             let pc_bytes = std::slice::from_raw_parts(
@@ -1852,7 +1921,11 @@ impl PostProcessPipeline {
                 std::mem::size_of::<BilateralBlurPushConstants>(),
             );
             self.device.cmd_push_constants(
-                cmd_buf, blur_pipeline.layout(), vk::ShaderStageFlags::FRAGMENT, 0, pc_bytes,
+                cmd_buf,
+                blur_pipeline.layout(),
+                vk::ShaderStageFlags::FRAGMENT,
+                0,
+                pc_bytes,
             );
 
             self.device.cmd_draw(cmd_buf, 3, 1, 0, 0);
@@ -1910,8 +1983,9 @@ impl PostProcessPipeline {
                 layer_count: 1,
             })
             .src_access_mask(vk::AccessFlags::SHADER_READ)
-            .dst_access_mask(vk::AccessFlags::COLOR_ATTACHMENT_WRITE
-                | vk::AccessFlags::COLOR_ATTACHMENT_READ);
+            .dst_access_mask(
+                vk::AccessFlags::COLOR_ATTACHMENT_WRITE | vk::AccessFlags::COLOR_ATTACHMENT_READ,
+            );
 
         unsafe {
             self.device.cmd_pipeline_barrier(
@@ -1943,7 +2017,8 @@ impl Drop for PostProcessPipeline {
                     .free_descriptor_sets(self.ds_pool, &[mip.descriptor_set]);
             }
 
-            self.device.destroy_framebuffer(self.output.framebuffer, None);
+            self.device
+                .destroy_framebuffer(self.output.framebuffer, None);
             self.device.destroy_image_view(self.output.image_view, None);
             self.device.destroy_image(self.output.image, None);
 
@@ -2090,10 +2165,7 @@ fn create_pp_image(
         .format(format)
         .tiling(vk::ImageTiling::OPTIMAL)
         .initial_layout(vk::ImageLayout::UNDEFINED)
-        .usage(
-            vk::ImageUsageFlags::COLOR_ATTACHMENT
-                | vk::ImageUsageFlags::SAMPLED,
-        )
+        .usage(vk::ImageUsageFlags::COLOR_ATTACHMENT | vk::ImageUsageFlags::SAMPLED)
         .sharing_mode(vk::SharingMode::EXCLUSIVE)
         .samples(vk::SampleCountFlags::TYPE_1);
 
@@ -2136,8 +2208,7 @@ fn create_pp_image(
         .map_err(|e| format!("Failed to create PP framebuffer: {e}"))?;
 
     // Descriptor set.
-    let descriptor_set =
-        allocate_and_write_ds(device, ds_pool, ds_layout, sampler, image_view)?;
+    let descriptor_set = allocate_and_write_ds(device, ds_pool, ds_layout, sampler, image_view)?;
 
     Ok(PostProcessImage {
         image,
@@ -2154,6 +2225,7 @@ fn create_pp_image(
 /// allocating a new one. This keeps the raw `VkDescriptorSet` handle stable
 /// so that external references (e.g. egui texture IDs) remain valid across
 /// resize operations.
+#[allow(clippy::too_many_arguments)]
 fn create_pp_image_reuse_ds(
     device: &ash::Device,
     allocator: &Arc<Mutex<GpuAllocator>>,
@@ -2433,5 +2505,9 @@ fn create_fullscreen_pipeline(
                 format!("Failed to create PP pipeline: {e}")
             })?[0];
 
-    Ok(Pipeline::from_raw(pipeline, pipeline_layout, device.clone()))
+    Ok(Pipeline::from_raw(
+        pipeline,
+        pipeline_layout,
+        device.clone(),
+    ))
 }

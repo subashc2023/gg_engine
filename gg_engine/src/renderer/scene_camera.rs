@@ -155,8 +155,10 @@ impl SceneCamera {
                     self.perspective_far,
                 );
                 // Reverse-Z: near→1, far→0 for better depth precision at distance.
-                self.projection.z_axis.z = self.perspective_near / (self.perspective_near - self.perspective_far);
-                self.projection.w_axis.z = self.perspective_near * self.perspective_far / (self.perspective_far - self.perspective_near);
+                self.projection.z_axis.z =
+                    self.perspective_near / (self.perspective_near - self.perspective_far);
+                self.projection.w_axis.z = self.perspective_near * self.perspective_far
+                    / (self.perspective_far - self.perspective_near);
                 // Vulkan Y-flip: NDC Y+ is down, we want Y+ up.
                 self.projection.y_axis.y *= -1.0;
             }

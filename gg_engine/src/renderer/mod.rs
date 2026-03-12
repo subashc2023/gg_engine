@@ -44,10 +44,9 @@ pub(crate) use framebuffer::ClearValues;
 pub use framebuffer::{
     Framebuffer, FramebufferSpec, FramebufferTextureFormat, FramebufferTextureSpec, MsaaSamples,
 };
-pub use gpu_profiling::{GpuProfiler, GpuTimingResult};
 pub(crate) use gpu_allocation::GpuAllocator;
+pub use gpu_profiling::{GpuProfiler, GpuTimingResult};
 pub use lighting::{LightEnvironment, LightGpuData, MAX_POINT_LIGHTS, NUM_SHADOW_CASCADES};
-pub use shadow_map::ShadowCameraInfo;
 pub use material::{BlendMode, Material, MaterialGpuData, MaterialHandle, MaterialLibrary};
 pub use mesh::{load_gltf, Mesh, MeshVertex};
 pub use orthographic_camera::OrthographicCamera;
@@ -58,6 +57,7 @@ pub use renderer_2d::Renderer2DStats;
 pub use scene_camera::{ProjectionType, SceneCamera};
 pub use shader::Shader;
 pub use shader_library::ShaderLibrary;
+pub use shadow_map::ShadowCameraInfo;
 pub use sub_texture::SubTexture2D;
 pub use swapchain::{Swapchain, SwapchainError};
 pub use texture::{ImageFormat, Texture2D, TextureCpuData, TextureSpecification};

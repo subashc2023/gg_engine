@@ -286,9 +286,7 @@ pub(crate) fn draw_mesh_renderer_component(
                     )
                     .changed()
                 {
-                    if let Some(mut mc) =
-                        scene.get_component_mut::<MeshRendererComponent>(entity)
-                    {
+                    if let Some(mut mc) = scene.get_component_mut::<MeshRendererComponent>(entity) {
                         mc.cast_alpha_shadow = alpha_shadow;
                     }
                     *scene_dirty = true;

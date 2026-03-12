@@ -11,9 +11,11 @@ use super::font::{Font, FontCpuData};
 use super::framebuffer::{Framebuffer, FramebufferSpec};
 use super::gpu_allocation::GpuAllocator;
 use super::gpu_particle_system::GpuParticleSystem;
+use super::gpu_profiling::GpuProfiler;
 use super::lighting::{LightEnvironment, LightingSystem};
 use super::material::{MaterialHandle, MaterialLibrary};
 use super::pipeline::{self, Pipeline};
+use super::postprocess::PostProcessPipeline;
 use super::render_command::RenderCommand;
 use super::renderer_2d::{
     BatchCircleVertex, BatchLineVertex, BatchQuadVertex, Renderer2DData, Renderer2DStats,
@@ -21,8 +23,6 @@ use super::renderer_2d::{
 };
 use super::renderer_api::{RendererAPI, VulkanRendererAPI};
 use super::shader::Shader;
-use super::gpu_profiling::GpuProfiler;
-use super::postprocess::PostProcessPipeline;
 use super::shadow_map::{self, ShadowMapSystem};
 use super::sub_texture::SubTexture2D;
 use super::texture::TextureCpuData;
@@ -151,9 +151,9 @@ pub struct Renderer {
 
     // Shadow mapping system (lazily initialized).
     shadow_map: Option<ShadowMapSystem>,
-    shadow_pipeline: Option<Arc<Pipeline>>,         // back-face cull (default)
-    shadow_pipeline_front: Option<Arc<Pipeline>>,   // front-face cull variant
-    shadow_alpha_pipeline: Option<Arc<Pipeline>>,   // alpha-tested variant
+    shadow_pipeline: Option<Arc<Pipeline>>, // back-face cull (default)
+    shadow_pipeline_front: Option<Arc<Pipeline>>, // front-face cull variant
+    shadow_alpha_pipeline: Option<Arc<Pipeline>>, // alpha-tested variant
 
     // GPU timestamp profiler.
     gpu_profiler: Option<GpuProfiler>,
@@ -745,7 +745,11 @@ impl Renderer {
             front_face_cull,
         )?);
 
-        let label = if front_face_cull { "front-cull" } else { "back-cull" };
+        let label = if front_face_cull {
+            "front-cull"
+        } else {
+            "back-cull"
+        };
         log::info!(target: "gg_engine", "Shadow pipeline created ({}, {}x{})",
             label, sm.width(), sm.height());
 
@@ -1160,7 +1164,14 @@ impl Renderer {
                 height,
             )
         } else {
-            self.init_postprocess(scene_color_view, scene_depth_view, msaa_depth_view, scene_normal_view, width, height)
+            self.init_postprocess(
+                scene_color_view,
+                scene_depth_view,
+                msaa_depth_view,
+                scene_normal_view,
+                width,
+                height,
+            )
         }
     }
 

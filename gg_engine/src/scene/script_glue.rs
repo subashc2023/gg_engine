@@ -297,10 +297,7 @@ pub fn register_all(lua: &Lua) -> LuaResult<()> {
         "get_gravity_scale",
         lua.create_function(lua_get_gravity_scale)?,
     )?;
-    engine.set(
-        "screen_to_world",
-        lua.create_function(lua_screen_to_world)?,
-    )?;
+    engine.set("screen_to_world", lua.create_function(lua_screen_to_world)?)?;
 
     // 3D Physics
     engine.set(
@@ -338,14 +335,8 @@ pub fn register_all(lua: &Lua) -> LuaResult<()> {
     engine.set("get_gravity_3d", lua.create_function(lua_get_gravity_3d)?)?;
 
     // Runtime body type changes
-    engine.set(
-        "set_body_type",
-        lua.create_function(lua_set_body_type)?,
-    )?;
-    engine.set(
-        "get_body_type",
-        lua.create_function(lua_get_body_type)?,
-    )?;
+    engine.set("set_body_type", lua.create_function(lua_set_body_type)?)?;
+    engine.set("get_body_type", lua.create_function(lua_get_body_type)?)?;
     engine.set(
         "set_body_type_3d",
         lua.create_function(lua_set_body_type_3d)?,
@@ -358,21 +349,12 @@ pub fn register_all(lua: &Lua) -> LuaResult<()> {
     // Shape overlap queries
     engine.set("point_query", lua.create_function(lua_point_query)?)?;
     engine.set("aabb_query", lua.create_function(lua_aabb_query)?)?;
-    engine.set(
-        "overlap_circle",
-        lua.create_function(lua_overlap_circle)?,
-    )?;
+    engine.set("overlap_circle", lua.create_function(lua_overlap_circle)?)?;
     engine.set("overlap_box", lua.create_function(lua_overlap_box)?)?;
     engine.set("point_query_3d", lua.create_function(lua_point_query_3d)?)?;
     engine.set("aabb_query_3d", lua.create_function(lua_aabb_query_3d)?)?;
-    engine.set(
-        "overlap_sphere",
-        lua.create_function(lua_overlap_sphere)?,
-    )?;
-    engine.set(
-        "overlap_box_3d",
-        lua.create_function(lua_overlap_box_3d)?,
-    )?;
+    engine.set("overlap_sphere", lua.create_function(lua_overlap_sphere)?)?;
+    engine.set("overlap_box_3d", lua.create_function(lua_overlap_box_3d)?)?;
 
     // Joints (2D)
     engine.set(
@@ -406,10 +388,7 @@ pub fn register_all(lua: &Lua) -> LuaResult<()> {
         "create_prismatic_joint_3d",
         lua.create_function(lua_create_prismatic_joint_3d)?,
     )?;
-    engine.set(
-        "remove_joint_3d",
-        lua.create_function(lua_remove_joint_3d)?,
-    )?;
+    engine.set("remove_joint_3d", lua.create_function(lua_remove_joint_3d)?)?;
 
     // Entity queries
     engine.set(
@@ -443,32 +422,14 @@ pub fn register_all(lua: &Lua) -> LuaResult<()> {
     engine.set("get_gravity", lua.create_function(lua_get_gravity)?)?;
 
     // Cursor
-    engine.set(
-        "set_cursor_mode",
-        lua.create_function(lua_set_cursor_mode)?,
-    )?;
-    engine.set(
-        "get_cursor_mode",
-        lua.create_function(lua_get_cursor_mode)?,
-    )?;
-    engine.set(
-        "set_window_size",
-        lua.create_function(lua_set_window_size)?,
-    )?;
-    engine.set(
-        "get_window_size",
-        lua.create_function(lua_get_window_size)?,
-    )?;
+    engine.set("set_cursor_mode", lua.create_function(lua_set_cursor_mode)?)?;
+    engine.set("get_cursor_mode", lua.create_function(lua_get_cursor_mode)?)?;
+    engine.set("set_window_size", lua.create_function(lua_set_window_size)?)?;
+    engine.set("get_window_size", lua.create_function(lua_get_window_size)?)?;
 
     // UI Anchor
-    engine.set(
-        "set_ui_anchor",
-        lua.create_function(lua_set_ui_anchor)?,
-    )?;
-    engine.set(
-        "get_ui_anchor",
-        lua.create_function(lua_get_ui_anchor)?,
-    )?;
+    engine.set("set_ui_anchor", lua.create_function(lua_set_ui_anchor)?)?;
+    engine.set("get_ui_anchor", lua.create_function(lua_get_ui_anchor)?)?;
 
     // Time
     engine.set("get_time", lua.create_function(lua_get_time)?)?;
@@ -489,8 +450,14 @@ pub fn register_all(lua: &Lua) -> LuaResult<()> {
     engine.set("set_vsync", lua.create_function(lua_set_vsync)?)?;
     engine.set("get_fullscreen", lua.create_function(lua_get_fullscreen)?)?;
     engine.set("set_fullscreen", lua.create_function(lua_set_fullscreen)?)?;
-    engine.set("get_shadow_quality", lua.create_function(lua_get_shadow_quality)?)?;
-    engine.set("set_shadow_quality", lua.create_function(lua_set_shadow_quality)?)?;
+    engine.set(
+        "get_shadow_quality",
+        lua.create_function(lua_get_shadow_quality)?,
+    )?;
+    engine.set(
+        "set_shadow_quality",
+        lua.create_function(lua_set_shadow_quality)?,
+    )?;
     engine.set("quit", lua.create_function(lua_quit)?)?;
     engine.set("load_scene", lua.create_function(lua_load_scene)?)?;
     engine.set("get_gui_scale", lua.create_function(lua_get_gui_scale)?)?;
@@ -1614,7 +1581,9 @@ fn lua_set_body_type(lua: &Lua, (entity_id, type_str): (u64, String)) -> LuaResu
 /// `Engine.get_body_type(entity_id)` — returns "static", "dynamic", or "kinematic".
 fn lua_get_body_type(lua: &Lua, entity_id: u64) -> LuaResult<Option<String>> {
     with_entity(lua, entity_id, None, |scene, entity| {
-        scene.get_body_type(entity).map(|bt| bt.label().to_ascii_lowercase())
+        scene
+            .get_body_type(entity)
+            .map(|bt| bt.label().to_ascii_lowercase())
     })
 }
 
@@ -1635,7 +1604,9 @@ fn lua_set_body_type_3d(lua: &Lua, (entity_id, type_str): (u64, String)) -> LuaR
 /// `Engine.get_body_type_3d(entity_id)` — returns "static", "dynamic", or "kinematic".
 fn lua_get_body_type_3d(lua: &Lua, entity_id: u64) -> LuaResult<Option<String>> {
     with_entity(lua, entity_id, None, |scene, entity| {
-        scene.get_body_type_3d(entity).map(|bt| bt.label().to_ascii_lowercase())
+        scene
+            .get_body_type_3d(entity)
+            .map(|bt| bt.label().to_ascii_lowercase())
     })
 }
 
@@ -1673,10 +1644,7 @@ fn lua_aabb_query(
         None => return lua.create_table(),
     };
     let scene = unsafe { ctx.scene() };
-    let results = scene.aabb_query(
-        glam::Vec2::new(min_x, min_y),
-        glam::Vec2::new(max_x, max_y),
-    );
+    let results = scene.aabb_query(glam::Vec2::new(min_x, min_y), glam::Vec2::new(max_x, max_y));
     uuid_vec_to_lua_table(lua, results)
 }
 
@@ -1706,8 +1674,11 @@ fn lua_overlap_box(
     };
     let scene = unsafe { ctx.scene() };
     let exclude = exclude_id.and_then(|uuid| scene.find_entity_by_uuid(uuid));
-    let results =
-        scene.overlap_box(glam::Vec2::new(cx, cy), glam::Vec2::new(half_w, half_h), exclude);
+    let results = scene.overlap_box(
+        glam::Vec2::new(cx, cy),
+        glam::Vec2::new(half_w, half_h),
+        exclude,
+    );
     uuid_vec_to_lua_table(lua, results)
 }
 
@@ -1870,7 +1841,17 @@ fn lua_remove_joint(lua: &Lua, joint_id: i64) -> LuaResult<()> {
 fn lua_create_revolute_joint_3d(
     lua: &Lua,
     (ea_id, eb_id, ax, ay, az, bx, by, bz, dx, dy, dz): (
-        u64, u64, f32, f32, f32, f32, f32, f32, f32, f32, f32,
+        u64,
+        u64,
+        f32,
+        f32,
+        f32,
+        f32,
+        f32,
+        f32,
+        f32,
+        f32,
+        f32,
     ),
 ) -> LuaResult<Option<i64>> {
     let mut ctx = match lua.app_data_mut::<SceneScriptContext>() {
@@ -1960,7 +1941,17 @@ fn lua_create_ball_joint_3d(
 fn lua_create_prismatic_joint_3d(
     lua: &Lua,
     (ea_id, eb_id, ax, ay, az, bx, by, bz, dx, dy, dz): (
-        u64, u64, f32, f32, f32, f32, f32, f32, f32, f32, f32,
+        u64,
+        u64,
+        f32,
+        f32,
+        f32,
+        f32,
+        f32,
+        f32,
+        f32,
+        f32,
+        f32,
     ),
 ) -> LuaResult<Option<i64>> {
     let mut ctx = match lua.app_data_mut::<SceneScriptContext>() {
@@ -2291,9 +2282,7 @@ fn lua_get_cursor_mode(lua: &Lua, _: ()) -> LuaResult<String> {
 /// `Engine.set_window_size(w, h)` — request a window resize (physical pixels).
 fn lua_set_window_size(lua: &Lua, (w, h): (u32, u32)) -> LuaResult<()> {
     if w < 320 || h < 240 {
-        return Err(mlua::Error::runtime(
-            "Window size too small (min 320x240)",
-        ));
+        return Err(mlua::Error::runtime("Window size too small (min 320x240)"));
     }
     let ctx = match lua.app_data_mut::<SceneScriptContext>() {
         Some(ctx) => ctx,
@@ -2514,7 +2503,11 @@ fn lua_set_ui_anchor(
 }
 
 /// `Engine.get_ui_anchor(entity_id)` → `(anchor_x, anchor_y, offset_x, offset_y)` or `(nil)`.
-fn lua_get_ui_anchor(lua: &Lua, entity_id: u64) -> LuaResult<(Option<f32>, Option<f32>, Option<f32>, Option<f32>)> {
+#[allow(clippy::type_complexity)]
+fn lua_get_ui_anchor(
+    lua: &Lua,
+    entity_id: u64,
+) -> LuaResult<(Option<f32>, Option<f32>, Option<f32>, Option<f32>)> {
     let ctx = match lua.app_data_mut::<SceneScriptContext>() {
         Some(ctx) => ctx,
         None => return Ok((None, None, None, None)),
@@ -2528,7 +2521,12 @@ fn lua_get_ui_anchor(lua: &Lua, entity_id: u64) -> LuaResult<(Option<f32>, Optio
         Some(ua) => ua,
         None => return Ok((None, None, None, None)),
     };
-    Ok((Some(ua.anchor.x), Some(ua.anchor.y), Some(ua.offset.x), Some(ua.offset.y)))
+    Ok((
+        Some(ua.anchor.x),
+        Some(ua.anchor.y),
+        Some(ua.offset.x),
+        Some(ua.offset.y),
+    ))
 }
 
 // ---------------------------------------------------------------------------
@@ -2700,10 +2698,14 @@ mod tests {
         assert!(engine.get::<LuaFunction>("create_prismatic_joint").is_ok());
         assert!(engine.get::<LuaFunction>("remove_joint").is_ok());
         // Joints (3D)
-        assert!(engine.get::<LuaFunction>("create_revolute_joint_3d").is_ok());
+        assert!(engine
+            .get::<LuaFunction>("create_revolute_joint_3d")
+            .is_ok());
         assert!(engine.get::<LuaFunction>("create_fixed_joint_3d").is_ok());
         assert!(engine.get::<LuaFunction>("create_ball_joint_3d").is_ok());
-        assert!(engine.get::<LuaFunction>("create_prismatic_joint_3d").is_ok());
+        assert!(engine
+            .get::<LuaFunction>("create_prismatic_joint_3d")
+            .is_ok());
         assert!(engine.get::<LuaFunction>("remove_joint_3d").is_ok());
         // Cursor
         assert!(engine.get::<LuaFunction>("set_cursor_mode").is_ok());

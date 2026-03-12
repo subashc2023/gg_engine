@@ -6,7 +6,9 @@ use super::{
     TextComponent, TilemapComponent, TransformComponent, UIAnchorComponent, TILE_FLIP_H,
     TILE_FLIP_V, TILE_ID_MASK,
 };
-use crate::renderer::shadow_map::{compute_cascade_vps, compute_directional_light_vp, ShadowCameraInfo};
+use crate::renderer::shadow_map::{
+    compute_cascade_vps, compute_directional_light_vp, ShadowCameraInfo,
+};
 use crate::renderer::{Font, LightEnvironment, Mesh, Renderer, SubTexture2D};
 
 /// Sort key for 2D renderable ordering. Sorted by layer, then sub-order,
@@ -739,9 +741,16 @@ impl Scene {
 
         let sprite_renderables: Vec<RenderSortKey> = {
             use crate::jobs::parallel::PAR_THRESHOLD;
-            let make_key = |handle: hecs::Entity, sorting_layer: i32, order_in_layer: i32, wt: &glam::Mat4| {
-                RenderSortKey { sorting_layer, order_in_layer, z: wt.w_axis.z, kind: 0, entity: handle }
-            };
+            let make_key =
+                |handle: hecs::Entity, sorting_layer: i32, order_in_layer: i32, wt: &glam::Mat4| {
+                    RenderSortKey {
+                        sorting_layer,
+                        order_in_layer,
+                        z: wt.w_axis.z,
+                        kind: 0,
+                        entity: handle,
+                    }
+                };
             if sprites.len() >= PAR_THRESHOLD {
                 use rayon::prelude::*;
                 crate::jobs::pool().install(|| {
@@ -852,7 +861,12 @@ impl Scene {
         // Flush all pending batches when the renderable type changes so that
         // cross-type draw ordering (e.g. text behind a sprite) is respected.
         let mut prev_kind: u8 = u8::MAX;
-        for &RenderSortKey { kind, entity: handle, .. } in &renderables {
+        for &RenderSortKey {
+            kind,
+            entity: handle,
+            ..
+        } in &renderables
+        {
             if kind != prev_kind {
                 renderer.flush_all_batches();
                 prev_kind = kind;
@@ -997,9 +1011,7 @@ impl Scene {
                     let Ok(text) = self.world.get::<&TextComponent>(handle) else {
                         continue;
                     };
-                    if gui_scale != 1.0
-                        && self.world.get::<&UIAnchorComponent>(handle).is_ok()
-                    {
+                    if gui_scale != 1.0 && self.world.get::<&UIAnchorComponent>(handle).is_ok() {
                         if let Some(font) = &text.font {
                             renderer.draw_text_string(
                                 &text.text,
@@ -1313,12 +1325,11 @@ impl Scene {
         let use_alpha_pipeline = has_alpha && renderer.has_shadow_alpha_pipeline();
 
         // Render each cascade with per-cascade frustum culling.
-        for cascade in 0..crate::renderer::NUM_SHADOW_CASCADES {
-            let frustum =
-                super::spatial::Frustum3D::from_view_projection(&cascade_vps[cascade]);
+        for (cascade, cascade_vp) in cascade_vps.iter().enumerate() {
+            let frustum = super::spatial::Frustum3D::from_view_projection(cascade_vp);
 
             renderer.begin_shadow_pass(
-                &cascade_vps[cascade],
+                cascade_vp,
                 cascade,
                 cmd_buf,
                 current_frame,
@@ -1346,7 +1357,7 @@ impl Scene {
 
             // Pass 2: alpha-tested meshes (switch to alpha shadow pipeline).
             if use_alpha_pipeline {
-                renderer.bind_shadow_alpha_pipeline(&cascade_vps[cascade], cmd_buf, current_frame);
+                renderer.bind_shadow_alpha_pipeline(cascade_vp, cmd_buf, current_frame);
 
                 for (idx, (handle, world_transform, is_alpha)) in meshes.iter().enumerate() {
                     if !*is_alpha {
@@ -1359,8 +1370,7 @@ impl Scene {
                     if !visible {
                         continue;
                     }
-                    let mesh_comp =
-                        self.world.get::<&MeshRendererComponent>(*handle).unwrap();
+                    let mesh_comp = self.world.get::<&MeshRendererComponent>(*handle).unwrap();
                     if let Some(ref va) = mesh_comp.vertex_array {
                         // Get the bindless texture slot. -1 means no texture (skip alpha test).
                         let tex_index = mesh_comp
@@ -1385,9 +1395,12 @@ impl Scene {
         // Stash cascade data for the main pass lighting upload.
         // Use the effective shadow_far (not the component's shadow_distance)
         // so the shader's distance fade matches where cascades actually end.
-        self.shadow_cascade_cache
-            .borrow_mut()
-            .replace((cascade_vps, split_depths, effective_shadow_far, texel_sizes));
+        self.shadow_cascade_cache.borrow_mut().replace((
+            cascade_vps,
+            split_depths,
+            effective_shadow_far,
+            texel_sizes,
+        ));
     }
 
     /// Compute a conservative AABB for shadow frustum fitting.
@@ -1499,8 +1512,7 @@ impl Scene {
 
         // Check for cascade VP data stashed by a prior render_shadow_pass call.
         if light_env.shadow_cascade_vps.is_none() {
-            if let Some((vps, splits, dist, tsizes)) =
-                self.shadow_cascade_cache.borrow_mut().take()
+            if let Some((vps, splits, dist, tsizes)) = self.shadow_cascade_cache.borrow_mut().take()
             {
                 light_env.shadow_cascade_vps = Some(vps);
                 light_env.cascade_split_depths = splits;
@@ -1521,8 +1533,7 @@ impl Scene {
                     meshes.iter().map(|&(h, w)| (h, w, false)).collect();
                 let (scene_min, scene_max) = self.compute_mesh_scene_bounds(&meshes_2);
                 let vp = compute_directional_light_vp(direction, scene_min, scene_max);
-                light_env.shadow_cascade_vps =
-                    Some([vp; crate::renderer::NUM_SHADOW_CASCADES]);
+                light_env.shadow_cascade_vps = Some([vp; crate::renderer::NUM_SHADOW_CASCADES]);
                 light_env.cascade_split_depths = [0.75, 0.5, 0.25];
                 light_env.shadow_distance = shadow_distance;
             }

@@ -232,8 +232,7 @@ impl Scene {
         let cache = self.build_world_transform_cache_impl();
 
         // Take a snapshot of current local transforms for next frame's dirty detection.
-        let mut snapshots =
-            HashMap::with_capacity(self.world.len() as usize);
+        let mut snapshots = HashMap::with_capacity(self.world.len() as usize);
         for (handle, tc, rel) in self
             .world
             .query::<(hecs::Entity, &TransformComponent, &RelationshipComponent)>()

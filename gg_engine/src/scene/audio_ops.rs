@@ -38,9 +38,8 @@ impl Scene {
 
         if let Some(ref mut engine) = self.audio_engine {
             for (uuid, path, volume, pitch, looping, streaming, category) in auto_play {
-                let effective = volume
-                    * self.category_volumes[category as usize]
-                    * self.master_volume;
+                let effective =
+                    volume * self.category_volumes[category as usize] * self.master_volume;
                 engine.play_sound(uuid, &path, effective, pitch, looping, streaming);
             }
         }
@@ -246,9 +245,10 @@ impl Scene {
                 None => return,
             };
             let vol = self.effective_volume(asc.volume, asc.category);
-            let play_info = asc.resolved_path.as_ref().map(|p| {
-                (p.clone(), asc.pitch, asc.looping, asc.streaming)
-            });
+            let play_info = asc
+                .resolved_path
+                .as_ref()
+                .map(|p| (p.clone(), asc.pitch, asc.looping, asc.streaming));
             (id, vol, play_info)
         };
 
@@ -451,8 +451,7 @@ impl Scene {
                     -60.0 * t
                 };
                 // Combine entity volume × category × master, then convert to dB.
-                let effective_linear =
-                    asc.volume * cat_vols[asc.category as usize] * master;
+                let effective_linear = asc.volume * cat_vols[asc.category as usize] * master;
                 let volume_db = super::audio::linear_to_db(effective_linear);
                 let effective_volume = volume_db + atten_db;
                 (id.id.raw(), panning, effective_volume)

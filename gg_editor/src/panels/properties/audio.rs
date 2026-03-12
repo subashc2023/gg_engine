@@ -118,7 +118,10 @@ pub(crate) fn draw_audio_source_component(
                     .show_ui(ui, |ui| {
                         for i in 0..AudioCategory::COUNT {
                             let cat = AudioCategory::from_index(i).unwrap();
-                            if ui.selectable_value(&mut cat_index, i, cat.label()).changed() {
+                            if ui
+                                .selectable_value(&mut cat_index, i, cat.label())
+                                .changed()
+                            {
                                 if let Some(mut ac) =
                                     scene.get_component_mut::<AudioSourceComponent>(entity)
                                 {

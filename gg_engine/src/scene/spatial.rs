@@ -1044,12 +1044,7 @@ mod tests {
 
     #[test]
     fn frustum3d_perspective() {
-        let proj = reverse_z_perspective_lh(
-            std::f32::consts::FRAC_PI_4,
-            16.0 / 9.0,
-            0.1,
-            1000.0,
-        );
+        let proj = reverse_z_perspective_lh(std::f32::consts::FRAC_PI_4, 16.0 / 9.0, 0.1, 1000.0);
         let view = glam::Mat4::look_at_lh(
             glam::Vec3::new(0.0, 0.0, -10.0),
             glam::Vec3::ZERO,
@@ -1063,7 +1058,10 @@ mod tests {
         assert!(frustum.contains_aabb(&center));
 
         // Entity far to the side should be culled.
-        let far = Aabb3D::new(glam::Vec3::new(100.0, 100.0, 0.0), glam::Vec3::new(101.0, 101.0, 1.0));
+        let far = Aabb3D::new(
+            glam::Vec3::new(100.0, 100.0, 0.0),
+            glam::Vec3::new(101.0, 101.0, 1.0),
+        );
         assert!(!frustum.contains_aabb(&far));
 
         // Entity behind the camera should be culled.
@@ -1090,12 +1088,7 @@ mod tests {
 
     #[test]
     fn frustum3d_sphere_test() {
-        let proj = reverse_z_perspective_lh(
-            std::f32::consts::FRAC_PI_4,
-            1.0,
-            0.1,
-            100.0,
-        );
+        let proj = reverse_z_perspective_lh(std::f32::consts::FRAC_PI_4, 1.0, 0.1, 100.0);
         let view = glam::Mat4::look_at_lh(
             glam::Vec3::new(0.0, 0.0, -10.0),
             glam::Vec3::ZERO,
@@ -1121,11 +1114,21 @@ mod tests {
         let e3 = world.spawn(());
 
         let mut grid = SpatialGrid3D::new(10.0);
-        grid.insert(e1, &Aabb3D::new(glam::Vec3::splat(1.0), glam::Vec3::splat(5.0)));
-        grid.insert(e2, &Aabb3D::new(glam::Vec3::splat(20.0), glam::Vec3::splat(25.0)));
-        grid.insert(e3, &Aabb3D::new(glam::Vec3::splat(5.0), glam::Vec3::splat(15.0)));
+        grid.insert(
+            e1,
+            &Aabb3D::new(glam::Vec3::splat(1.0), glam::Vec3::splat(5.0)),
+        );
+        grid.insert(
+            e2,
+            &Aabb3D::new(glam::Vec3::splat(20.0), glam::Vec3::splat(25.0)),
+        );
+        grid.insert(
+            e3,
+            &Aabb3D::new(glam::Vec3::splat(5.0), glam::Vec3::splat(15.0)),
+        );
 
-        let result = grid.query_region_dedup(&Aabb3D::new(glam::Vec3::ZERO, glam::Vec3::splat(5.0)));
+        let result =
+            grid.query_region_dedup(&Aabb3D::new(glam::Vec3::ZERO, glam::Vec3::splat(5.0)));
         assert!(result.contains(&e1));
         assert!(result.contains(&e3));
         assert!(!result.contains(&e2));
@@ -1146,7 +1149,10 @@ mod tests {
 
         let mut grid = SpatialGrid3D::new(10.0);
         grid.insert(e1, &Aabb3D::new(glam::Vec3::ZERO, glam::Vec3::ONE));
-        grid.insert(e2, &Aabb3D::new(glam::Vec3::splat(50.0), glam::Vec3::splat(51.0)));
+        grid.insert(
+            e2,
+            &Aabb3D::new(glam::Vec3::splat(50.0), glam::Vec3::splat(51.0)),
+        );
         assert_eq!(grid.entity_count(), 2);
     }
 }

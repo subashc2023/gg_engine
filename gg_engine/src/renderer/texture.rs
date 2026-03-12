@@ -824,60 +824,55 @@ impl Texture2D {
         )?;
 
         // Upload.
-        execute_one_shot(
-            device,
-            res.command_pool,
-            res.graphics_queue,
-            |cmd_buf| {
-                transition_image_layout(
-                    device,
+        execute_one_shot(device, res.command_pool, res.graphics_queue, |cmd_buf| {
+            transition_image_layout(
+                device,
+                cmd_buf,
+                image,
+                vk::ImageLayout::UNDEFINED,
+                vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+                0,
+                1,
+            );
+
+            let region = vk::BufferImageCopy {
+                buffer_offset: 0,
+                buffer_row_length: 0,
+                buffer_image_height: 0,
+                image_subresource: vk::ImageSubresourceLayers {
+                    aspect_mask: vk::ImageAspectFlags::COLOR,
+                    mip_level: 0,
+                    base_array_layer: 0,
+                    layer_count: 1,
+                },
+                image_offset: vk::Offset3D { x: 0, y: 0, z: 0 },
+                image_extent: vk::Extent3D {
+                    width,
+                    height,
+                    depth: 1,
+                },
+            };
+
+            unsafe {
+                device.cmd_copy_buffer_to_image(
                     cmd_buf,
-                    image,
-                    vk::ImageLayout::UNDEFINED,
-                    vk::ImageLayout::TRANSFER_DST_OPTIMAL,
-                    0,
-                    1,
-                );
-
-                let region = vk::BufferImageCopy {
-                    buffer_offset: 0,
-                    buffer_row_length: 0,
-                    buffer_image_height: 0,
-                    image_subresource: vk::ImageSubresourceLayers {
-                        aspect_mask: vk::ImageAspectFlags::COLOR,
-                        mip_level: 0,
-                        base_array_layer: 0,
-                        layer_count: 1,
-                    },
-                    image_offset: vk::Offset3D { x: 0, y: 0, z: 0 },
-                    image_extent: vk::Extent3D {
-                        width,
-                        height,
-                        depth: 1,
-                    },
-                };
-
-                unsafe {
-                    device.cmd_copy_buffer_to_image(
-                        cmd_buf,
-                        staging_buffer,
-                        image,
-                        vk::ImageLayout::TRANSFER_DST_OPTIMAL,
-                        &[region],
-                    );
-                }
-
-                transition_image_layout(
-                    device,
-                    cmd_buf,
+                    staging_buffer,
                     image,
                     vk::ImageLayout::TRANSFER_DST_OPTIMAL,
-                    vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
-                    0,
-                    1,
+                    &[region],
                 );
-            },
-        )?;
+            }
+
+            transition_image_layout(
+                device,
+                cmd_buf,
+                image,
+                vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+                vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
+                0,
+                1,
+            );
+        })?;
 
         unsafe {
             device.destroy_buffer(staging_buffer, None);
