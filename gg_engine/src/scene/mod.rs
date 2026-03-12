@@ -373,6 +373,10 @@ impl Scene {
         *new_scene.core.fullscreen_mode.lock() = source.core.fullscreen_mode();
         *new_scene.core.gui_scale.lock() = source.core.gui_scale();
 
+        // Copy script module search path.
+        new_scene.core.script_module_search_path =
+            source.core.script_module_search_path.clone();
+
         new_scene
     }
 

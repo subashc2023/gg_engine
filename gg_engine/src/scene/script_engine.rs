@@ -169,6 +169,124 @@ impl ScriptEngine {
     }
 
     // -----------------------------------------------------------------
+    // Module system
+    // -----------------------------------------------------------------
+
+    /// Register a safe `require()` function that loads `.lua` modules from the
+    /// given search path. Modules are cached — each file is loaded at most once.
+    ///
+    /// Module names use dot-separated paths (e.g. `require("utils.math")` loads
+    /// `<search_path>/utils/math.lua`). Traversal outside the search path is
+    /// blocked (no `..` allowed).
+    pub fn register_module_loader(&self, search_path: std::path::PathBuf) {
+        // Create a module cache table in the Lua registry.
+        let cache = match self.lua.create_table() {
+            Ok(t) => t,
+            Err(e) => {
+                log::error!("ScriptEngine: failed to create module cache: {e}");
+                return;
+            }
+        };
+        let cache_key = match self.lua.create_registry_value(cache) {
+            Ok(k) => k,
+            Err(e) => {
+                log::error!("ScriptEngine: failed to register module cache: {e}");
+                return;
+            }
+        };
+
+        // Share the search path and cache key with the closure via Arc.
+        let search_path = std::sync::Arc::new(search_path);
+        let cache_key = std::sync::Arc::new(cache_key);
+
+        let require_fn = self.lua.create_function(move |lua, module_name: String| {
+            // Validate module name: no ".." segments, no absolute paths.
+            if module_name.contains("..") || module_name.starts_with('/') || module_name.starts_with('\\') {
+                return Err(mlua::Error::RuntimeError(format!(
+                    "require: invalid module name '{module_name}' (path traversal not allowed)"
+                )));
+            }
+
+            // Check the cache first.
+            let cache: LuaTable = lua.registry_value(&cache_key)?;
+            if let Ok(cached) = cache.get::<LuaValue>(module_name.as_str()) {
+                if !cached.is_nil() {
+                    return Ok(cached);
+                }
+            }
+
+            // Convert dot-separated module name to a relative path.
+            let rel_path = module_name.replace('.', std::path::MAIN_SEPARATOR_STR) + ".lua";
+            let full_path = search_path.join(&rel_path);
+
+            // Verify the resolved path is within the search directory.
+            let canonical_search = match search_path.canonicalize() {
+                Ok(p) => p,
+                Err(_) => {
+                    return Err(mlua::Error::RuntimeError(format!(
+                        "require: module search path '{}' not found",
+                        search_path.display()
+                    )));
+                }
+            };
+            let canonical_module = match full_path.canonicalize() {
+                Ok(p) => p,
+                Err(_) => {
+                    return Err(mlua::Error::RuntimeError(format!(
+                        "require: module '{module_name}' not found (looked for '{}')",
+                        full_path.display()
+                    )));
+                }
+            };
+            if !canonical_module.starts_with(&canonical_search) {
+                return Err(mlua::Error::RuntimeError(format!(
+                    "require: module '{module_name}' escapes the search path"
+                )));
+            }
+
+            // Read and execute the module file.
+            let source = std::fs::read_to_string(&full_path).map_err(|e| {
+                mlua::Error::RuntimeError(format!(
+                    "require: failed to read module '{module_name}' ({}): {e}",
+                    full_path.display()
+                ))
+            })?;
+
+            let chunk_name = full_path
+                .file_name()
+                .map(|n| n.to_string_lossy().to_string())
+                .unwrap_or_else(|| module_name.clone());
+
+            let result: LuaValue = lua
+                .load(&source)
+                .set_name(&chunk_name)
+                .eval()?;
+
+            // If the module returned nil/nothing, store `true` as a sentinel so
+            // subsequent requires don't re-execute the file.
+            let to_cache = if result.is_nil() {
+                LuaValue::Boolean(true)
+            } else {
+                result.clone()
+            };
+            cache.set(module_name.as_str(), to_cache)?;
+
+            Ok(result)
+        });
+
+        match require_fn {
+            Ok(f) => {
+                if let Err(e) = self.lua.globals().set("require", f) {
+                    log::error!("ScriptEngine: failed to register require(): {e}");
+                }
+            }
+            Err(e) => {
+                log::error!("ScriptEngine: failed to create require function: {e}");
+            }
+        }
+    }
+
+    // -----------------------------------------------------------------
     // Per-entity environment methods
     // -----------------------------------------------------------------
 

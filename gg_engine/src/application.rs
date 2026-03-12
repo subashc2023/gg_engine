@@ -630,6 +630,13 @@ impl<T: Application> ApplicationHandler for EngineRunner<T> {
                     }
                 }
             }
+            winit::event::WindowEvent::MouseWheel { delta, .. } => {
+                let (dx, dy) = match delta {
+                    MouseScrollDelta::LineDelta(x, y) => (*x as f64, *y as f64),
+                    MouseScrollDelta::PixelDelta(pos) => (pos.x, pos.y),
+                };
+                self.input.accumulate_scroll_delta(dx, dy);
+            }
             winit::event::WindowEvent::Focused(focused) => {
                 if !focused {
                     // Clear all pressed keys/buttons on focus loss to prevent

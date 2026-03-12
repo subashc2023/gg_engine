@@ -3,6 +3,7 @@ use crate::renderer::VertexArray;
 use crate::uuid::Uuid;
 
 use std::collections::{HashMap, VecDeque};
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
 
 use parking_lot::{Mutex, RwLock};
@@ -117,6 +118,11 @@ pub struct SceneCore {
     pub(super) shadow_quality_state: AtomicI32,
     /// Global GUI scale factor for UI-anchored entities.
     pub(super) gui_scale: Mutex<f32>,
+
+    // Script module system
+    /// Base directory for Lua `require()`. Set by the editor/player before runtime start.
+    /// Module names are resolved as `<module_search_path>/<name>.lua`.
+    pub(super) script_module_search_path: Option<PathBuf>,
 }
 
 // Compile-time verification that SceneCore is Send + Sync.
@@ -156,6 +162,7 @@ impl SceneCore {
             fullscreen_mode: Mutex::new(FullscreenMode::Windowed),
             shadow_quality_state: AtomicI32::new(3),
             gui_scale: Mutex::new(1.0),
+            script_module_search_path: None,
         }
     }
 
@@ -671,6 +678,16 @@ impl SceneCore {
     /// Take (consume) the pending scene load request.
     pub fn take_requested_load_scene(&self) -> Option<String> {
         self.requested_load_scene.lock().take()
+    }
+
+    /// Set the module search path for Lua `require()`. Call before runtime start.
+    pub fn set_script_module_search_path(&mut self, path: PathBuf) {
+        self.script_module_search_path = Some(path);
+    }
+
+    /// Get the module search path for Lua `require()`, if configured.
+    pub fn script_module_search_path(&self) -> Option<&std::path::Path> {
+        self.script_module_search_path.as_deref()
     }
 
     /// Current viewport dimensions in physical pixels.

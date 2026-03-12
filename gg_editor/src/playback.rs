@@ -20,6 +20,12 @@ impl GGEditor {
         // them here on the runtime copy before starting.
         self.attach_native_scripts();
 
+        // Set module search path for Lua `require()` if a project is loaded.
+        if let Some(ref project) = self.project_state.project {
+            self.scene
+                .set_script_module_search_path(project.script_module_path());
+        }
+
         self.scene.on_runtime_start();
     }
 

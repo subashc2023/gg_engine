@@ -73,6 +73,11 @@ impl Scene {
         // --- Setup phase (uses &mut self) ---
         let mut engine = ScriptEngine::new();
 
+        // Register safe module loader if a script search path is configured.
+        if let Some(search_path) = &self.core.script_module_search_path {
+            engine.register_module_loader(search_path.clone());
+        }
+
         // Collect entities with non-empty script paths (avoid borrow conflicts).
         let scripts: Vec<(hecs::Entity, u64, String)> = self
             .world

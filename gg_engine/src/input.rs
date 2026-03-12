@@ -21,6 +21,8 @@ pub struct Input {
     mouse_y: f64,
     mouse_delta_x: f64,
     mouse_delta_y: f64,
+    scroll_delta_x: f64,
+    scroll_delta_y: f64,
     // Gamepad state
     gamepad_buttons: HashMap<GamepadId, HashSet<GamepadButton>>,
     gamepad_buttons_prev: HashMap<GamepadId, HashSet<GamepadButton>>,
@@ -39,6 +41,8 @@ impl Input {
             mouse_y: 0.0,
             mouse_delta_x: 0.0,
             mouse_delta_y: 0.0,
+            scroll_delta_x: 0.0,
+            scroll_delta_y: 0.0,
             gamepad_buttons: HashMap::new(),
             gamepad_buttons_prev: HashMap::new(),
             gamepad_axes: HashMap::new(),
@@ -89,6 +93,13 @@ impl Input {
     /// Reset to (0, 0) each frame.
     pub fn mouse_delta(&self) -> (f64, f64) {
         (self.mouse_delta_x, self.mouse_delta_y)
+    }
+
+    /// Scroll wheel delta accumulated this frame.
+    /// Positive Y = scroll up, negative Y = scroll down.
+    /// Reset to (0, 0) each frame.
+    pub fn scroll_delta(&self) -> (f64, f64) {
+        (self.scroll_delta_x, self.scroll_delta_y)
     }
 
     // -- Gamepad query API ----------------------------------------------------
@@ -181,6 +192,11 @@ impl Input {
         self.mouse_delta_y += dy;
     }
 
+    pub(crate) fn accumulate_scroll_delta(&mut self, dx: f64, dy: f64) {
+        self.scroll_delta_x += dx;
+        self.scroll_delta_y += dy;
+    }
+
     #[allow(dead_code)]
     pub(crate) fn gamepad_connect(&mut self, gamepad: GamepadId) {
         self.connected_gamepads.insert(gamepad);
@@ -235,6 +251,8 @@ impl Input {
             .clone_from(&self.mouse_buttons_pressed);
         self.mouse_delta_x = 0.0;
         self.mouse_delta_y = 0.0;
+        self.scroll_delta_x = 0.0;
+        self.scroll_delta_y = 0.0;
         // Snapshot gamepad buttons for just-pressed/just-released detection.
         self.gamepad_buttons_prev.clone_from(&self.gamepad_buttons);
     }

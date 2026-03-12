@@ -173,6 +173,10 @@ impl GGPlayer {
         new_scene.set_shadow_quality_state(self.scene.shadow_quality());
         new_scene.set_gui_scale(self.scene.gui_scale());
         new_scene.set_cursor_mode(self.scene.cursor_mode());
+        // Preserve script module search path for the new scene.
+        if let Some(search_path) = self.scene.script_module_search_path() {
+            new_scene.set_script_module_search_path(search_path.to_path_buf());
+        }
 
         // Swap scenes — old scene goes to deferred destroy.
         let old = std::mem::replace(&mut self.scene, new_scene);
@@ -269,6 +273,7 @@ impl Application for GGPlayer {
         // Seed initial settings state on the scene.
         scene.set_vsync_enabled(config.vsync);
         scene.set_cursor_mode(gg_engine::cursor::CursorMode::Confined);
+        scene.set_script_module_search_path(project.script_module_path());
 
         info!(
             "GGPlayer: loaded project '{}', scene '{}', {}x{}, vsync={}",

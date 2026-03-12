@@ -10,6 +10,7 @@ use super::{CameraComponent, Entity, Scene, TransformComponent};
 
 /// Lua return type for 3D raycast: `(entity_uuid?, hx, hy, hz, nx, ny, nz, toi)`.
 type LuaRaycastHit3D = (Option<u64>, f32, f32, f32, f32, f32, f32, f32);
+use crate::events::gamepad::{GamepadAxis, GamepadButton};
 use crate::events::{KeyCode, MouseButton};
 use crate::input::Input;
 
@@ -135,6 +136,18 @@ pub fn register_all(lua: &Lua) -> LuaResult<()> {
     engine.set("vector_dot", lua.create_function(vector_dot)?)?;
     engine.set("vector_cross", lua.create_function(vector_cross)?)?;
     engine.set("vector_normalize", lua.create_function(vector_normalize)?)?;
+    engine.set("vector_length", lua.create_function(vector_length)?)?;
+    engine.set("distance", lua.create_function(lua_distance)?)?;
+    engine.set("distance_2d", lua.create_function(lua_distance_2d)?)?;
+    engine.set("lerp", lua.create_function(lua_lerp)?)?;
+    engine.set("lerp_vec3", lua.create_function(lua_lerp_vec3)?)?;
+    engine.set("slerp", lua.create_function(lua_slerp)?)?;
+    engine.set("clamp", lua.create_function(lua_clamp)?)?;
+    engine.set("move_toward", lua.create_function(lua_move_toward)?)?;
+    engine.set(
+        "move_toward_vec3",
+        lua.create_function(lua_move_toward_vec3)?,
+    )?;
 
     // Transform
     engine.set("get_translation", lua.create_function(get_translation)?)?;
@@ -160,6 +173,27 @@ pub fn register_all(lua: &Lua) -> LuaResult<()> {
     engine.set(
         "get_mouse_position",
         lua.create_function(get_mouse_position)?,
+    )?;
+    engine.set("get_mouse_delta", lua.create_function(get_mouse_delta)?)?;
+    engine.set("get_scroll_delta", lua.create_function(get_scroll_delta)?)?;
+
+    // Gamepad input
+    engine.set(
+        "is_gamepad_button_down",
+        lua.create_function(lua_is_gamepad_button_down)?,
+    )?;
+    engine.set(
+        "is_gamepad_button_pressed",
+        lua.create_function(lua_is_gamepad_button_just_pressed)?,
+    )?;
+    engine.set(
+        "is_gamepad_button_released",
+        lua.create_function(lua_is_gamepad_button_just_released)?,
+    )?;
+    engine.set("get_gamepad_axis", lua.create_function(lua_get_gamepad_axis)?)?;
+    engine.set(
+        "is_gamepad_connected",
+        lua.create_function(lua_is_gamepad_connected)?,
     )?;
 
     // Component queries
@@ -463,6 +497,16 @@ pub fn register_all(lua: &Lua) -> LuaResult<()> {
     engine.set("get_gui_scale", lua.create_function(lua_get_gui_scale)?)?;
     engine.set("set_gui_scale", lua.create_function(lua_set_gui_scale)?)?;
 
+    // Component manipulation
+    engine.set(
+        "add_component",
+        lua.create_function(lua_add_component)?,
+    )?;
+    engine.set(
+        "remove_component",
+        lua.create_function(lua_remove_component)?,
+    )?;
+
     // Logging
     engine.set("log", lua.create_function(lua_log)?)?;
 
@@ -657,6 +701,118 @@ fn get_mouse_position(lua: &Lua, _: ()) -> LuaResult<(f64, f64)> {
     with_input(lua, (0.0, 0.0), |input| input.mouse_position())
 }
 
+/// `Engine.get_mouse_delta()` — returns `(dx, dy)` raw mouse motion delta this frame.
+fn get_mouse_delta(lua: &Lua, _: ()) -> LuaResult<(f64, f64)> {
+    with_input(lua, (0.0, 0.0), |input| input.mouse_delta())
+}
+
+/// `Engine.get_scroll_delta()` — returns `(dx, dy)` scroll wheel delta this frame.
+fn get_scroll_delta(lua: &Lua, _: ()) -> LuaResult<(f64, f64)> {
+    with_input(lua, (0.0, 0.0), |input| input.scroll_delta())
+}
+
+// ---------------------------------------------------------------------------
+// Gamepad button/axis name → enum mapping
+// ---------------------------------------------------------------------------
+
+fn gamepad_button_name_to_enum(name: &str) -> Option<GamepadButton> {
+    match name {
+        "South" | "A" | "Cross" => Some(GamepadButton::South),
+        "East" | "B" | "Circle" => Some(GamepadButton::East),
+        "West" | "X" | "Square" => Some(GamepadButton::West),
+        "North" | "Y" | "Triangle" => Some(GamepadButton::North),
+        "LeftBumper" | "L1" => Some(GamepadButton::LeftBumper),
+        "RightBumper" | "R1" => Some(GamepadButton::RightBumper),
+        "LeftTrigger" | "L2" => Some(GamepadButton::LeftTrigger),
+        "RightTrigger" | "R2" => Some(GamepadButton::RightTrigger),
+        "Select" | "Back" | "Share" => Some(GamepadButton::Select),
+        "Start" | "Options" => Some(GamepadButton::Start),
+        "Guide" | "Home" | "PS" => Some(GamepadButton::Guide),
+        "LeftStick" | "L3" => Some(GamepadButton::LeftStick),
+        "RightStick" | "R3" => Some(GamepadButton::RightStick),
+        "DPadUp" => Some(GamepadButton::DPadUp),
+        "DPadDown" => Some(GamepadButton::DPadDown),
+        "DPadLeft" => Some(GamepadButton::DPadLeft),
+        "DPadRight" => Some(GamepadButton::DPadRight),
+        _ => None,
+    }
+}
+
+fn gamepad_axis_name_to_enum(name: &str) -> Option<GamepadAxis> {
+    match name {
+        "LeftStickX" => Some(GamepadAxis::LeftStickX),
+        "LeftStickY" => Some(GamepadAxis::LeftStickY),
+        "RightStickX" => Some(GamepadAxis::RightStickX),
+        "RightStickY" => Some(GamepadAxis::RightStickY),
+        "LeftTrigger" => Some(GamepadAxis::LeftTrigger),
+        "RightTrigger" => Some(GamepadAxis::RightTrigger),
+        _ => None,
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Gamepad input bindings
+// ---------------------------------------------------------------------------
+
+/// `Engine.is_gamepad_button_down(gamepad_id, button_name)` — true while held.
+fn lua_is_gamepad_button_down(lua: &Lua, (gamepad_id, name): (usize, String)) -> LuaResult<bool> {
+    with_input(lua, false, |input| {
+        gamepad_button_name_to_enum(&name)
+            .map(|btn| input.is_gamepad_button_pressed(gamepad_id, btn))
+            .unwrap_or_else(|| {
+                log::warn!("ScriptGlue: unknown gamepad button name '{}'", name);
+                false
+            })
+    })
+}
+
+/// `Engine.is_gamepad_button_pressed(gamepad_id, button_name)` — true on first frame pressed.
+fn lua_is_gamepad_button_just_pressed(
+    lua: &Lua,
+    (gamepad_id, name): (usize, String),
+) -> LuaResult<bool> {
+    with_input(lua, false, |input| {
+        gamepad_button_name_to_enum(&name)
+            .map(|btn| input.is_gamepad_button_just_pressed(gamepad_id, btn))
+            .unwrap_or_else(|| {
+                log::warn!("ScriptGlue: unknown gamepad button name '{}'", name);
+                false
+            })
+    })
+}
+
+/// `Engine.is_gamepad_button_released(gamepad_id, button_name)` — true on first frame released.
+fn lua_is_gamepad_button_just_released(
+    lua: &Lua,
+    (gamepad_id, name): (usize, String),
+) -> LuaResult<bool> {
+    with_input(lua, false, |input| {
+        gamepad_button_name_to_enum(&name)
+            .map(|btn| input.is_gamepad_button_just_released(gamepad_id, btn))
+            .unwrap_or_else(|| {
+                log::warn!("ScriptGlue: unknown gamepad button name '{}'", name);
+                false
+            })
+    })
+}
+
+/// `Engine.get_gamepad_axis(gamepad_id, axis_name)` — returns analog axis value (f32).
+fn lua_get_gamepad_axis(lua: &Lua, (gamepad_id, name): (usize, String)) -> LuaResult<f32> {
+    with_input(lua, 0.0, |input| {
+        gamepad_axis_name_to_enum(&name)
+            .map(|axis| input.gamepad_axis(gamepad_id, axis))
+            .unwrap_or_else(|| {
+                log::warn!("ScriptGlue: unknown gamepad axis name '{}'", name);
+                0.0
+            })
+    })
+}
+
+/// `Engine.is_gamepad_connected(gamepad_id)` — true if the gamepad is connected.
+fn lua_is_gamepad_connected(lua: &Lua, gamepad_id: usize) -> LuaResult<bool> {
+    with_input(lua, false, |input| input.is_gamepad_connected(gamepad_id))
+}
+
 // ---------------------------------------------------------------------------
 // Engine.get_rotation / Engine.set_rotation / Engine.get_scale / Engine.set_scale
 // ---------------------------------------------------------------------------
@@ -745,6 +901,23 @@ fn has_component(lua: &Lua, (entity_id, name): (u64, String)) -> LuaResult<bool>
         "ParticleEmitter" => scene.has_component::<super::ParticleEmitterComponent>(entity),
         "Text" => scene.has_component::<super::TextComponent>(entity),
         "SpriteAnimator" => scene.has_component::<super::SpriteAnimatorComponent>(entity),
+        "InstancedSpriteAnimator" => {
+            scene.has_component::<super::InstancedSpriteAnimator>(entity)
+        }
+        "AnimationController" => {
+            scene.has_component::<super::AnimationControllerComponent>(entity)
+        }
+        "RigidBody3D" => scene.has_component::<super::RigidBody3DComponent>(entity),
+        "BoxCollider3D" => scene.has_component::<super::BoxCollider3DComponent>(entity),
+        "SphereCollider3D" => scene.has_component::<super::SphereCollider3DComponent>(entity),
+        "CapsuleCollider3D" => scene.has_component::<super::CapsuleCollider3DComponent>(entity),
+        "MeshRenderer" => scene.has_component::<super::MeshRendererComponent>(entity),
+        "DirectionalLight" => {
+            scene.has_component::<super::DirectionalLightComponent>(entity)
+        }
+        "PointLight" => scene.has_component::<super::PointLightComponent>(entity),
+        "AmbientLight" => scene.has_component::<super::AmbientLightComponent>(entity),
+        "UIAnchor" => scene.has_component::<super::UIAnchorComponent>(entity),
         "LuaScript" => {
             #[cfg(feature = "lua-scripting")]
             {
@@ -2034,6 +2207,82 @@ fn vector_normalize(_lua: &Lua, (x, y, z): (f32, f32, f32)) -> LuaResult<(f32, f
     Ok((n.x, n.y, n.z))
 }
 
+/// `Engine.vector_length(x, y, z)` → scalar length.
+fn vector_length(_lua: &Lua, (x, y, z): (f32, f32, f32)) -> LuaResult<f32> {
+    Ok(glam::Vec3::new(x, y, z).length())
+}
+
+/// `Engine.distance(x1, y1, z1, x2, y2, z2)` → Euclidean distance between two 3D points.
+fn lua_distance(
+    _lua: &Lua,
+    (x1, y1, z1, x2, y2, z2): (f32, f32, f32, f32, f32, f32),
+) -> LuaResult<f32> {
+    Ok(glam::Vec3::new(x1, y1, z1).distance(glam::Vec3::new(x2, y2, z2)))
+}
+
+/// `Engine.distance_2d(x1, y1, x2, y2)` → Euclidean distance between two 2D points.
+fn lua_distance_2d(_lua: &Lua, (x1, y1, x2, y2): (f32, f32, f32, f32)) -> LuaResult<f32> {
+    Ok(glam::Vec2::new(x1, y1).distance(glam::Vec2::new(x2, y2)))
+}
+
+/// `Engine.lerp(a, b, t)` → linear interpolation between two scalars.
+fn lua_lerp(_lua: &Lua, (a, b, t): (f32, f32, f32)) -> LuaResult<f32> {
+    Ok(a + (b - a) * t)
+}
+
+/// `Engine.lerp_vec3(x1, y1, z1, x2, y2, z2, t)` → component-wise lerp of two 3D vectors.
+fn lua_lerp_vec3(
+    _lua: &Lua,
+    (x1, y1, z1, x2, y2, z2, t): (f32, f32, f32, f32, f32, f32, f32),
+) -> LuaResult<(f32, f32, f32)> {
+    let v = glam::Vec3::new(x1, y1, z1).lerp(glam::Vec3::new(x2, y2, z2), t);
+    Ok((v.x, v.y, v.z))
+}
+
+/// `Engine.slerp(x1, y1, z1, w1, x2, y2, z2, w2, t)` → spherical interpolation of two quaternions.
+/// Returns `(x, y, z, w)`.
+fn lua_slerp(
+    _lua: &Lua,
+    (x1, y1, z1, w1, x2, y2, z2, w2, t): (f32, f32, f32, f32, f32, f32, f32, f32, f32),
+) -> LuaResult<(f32, f32, f32, f32)> {
+    let q = glam::Quat::from_xyzw(x1, y1, z1, w1)
+        .normalize()
+        .slerp(glam::Quat::from_xyzw(x2, y2, z2, w2).normalize(), t);
+    Ok((q.x, q.y, q.z, q.w))
+}
+
+/// `Engine.clamp(value, min, max)` → clamped scalar.
+fn lua_clamp(_lua: &Lua, (value, min, max): (f32, f32, f32)) -> LuaResult<f32> {
+    Ok(value.clamp(min, max))
+}
+
+/// `Engine.move_toward(current, target, max_delta)` → scalar moved toward target by at most max_delta.
+fn lua_move_toward(_lua: &Lua, (current, target, max_delta): (f32, f32, f32)) -> LuaResult<f32> {
+    let diff = target - current;
+    if diff.abs() <= max_delta {
+        Ok(target)
+    } else {
+        Ok(current + diff.signum() * max_delta)
+    }
+}
+
+/// `Engine.move_toward_vec3(x1, y1, z1, x2, y2, z2, max_delta)` → 3D point moved toward target.
+fn lua_move_toward_vec3(
+    _lua: &Lua,
+    (x1, y1, z1, x2, y2, z2, max_delta): (f32, f32, f32, f32, f32, f32, f32),
+) -> LuaResult<(f32, f32, f32)> {
+    let from = glam::Vec3::new(x1, y1, z1);
+    let to = glam::Vec3::new(x2, y2, z2);
+    let diff = to - from;
+    let dist = diff.length();
+    if dist <= max_delta || dist < f32::EPSILON {
+        Ok((to.x, to.y, to.z))
+    } else {
+        let v = from + diff / dist * max_delta;
+        Ok((v.x, v.y, v.z))
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Timer bindings
 // ---------------------------------------------------------------------------
@@ -2144,6 +2393,17 @@ fn lua_find_entities_with_component(lua: &Lua, name: String) -> LuaResult<LuaTab
         "ParticleEmitter" => collect_uuids!(super::ParticleEmitterComponent),
         "Text" => collect_uuids!(super::TextComponent),
         "SpriteAnimator" => collect_uuids!(super::SpriteAnimatorComponent),
+        "InstancedSpriteAnimator" => collect_uuids!(super::InstancedSpriteAnimator),
+        "AnimationController" => collect_uuids!(super::AnimationControllerComponent),
+        "RigidBody3D" => collect_uuids!(super::RigidBody3DComponent),
+        "BoxCollider3D" => collect_uuids!(super::BoxCollider3DComponent),
+        "SphereCollider3D" => collect_uuids!(super::SphereCollider3DComponent),
+        "CapsuleCollider3D" => collect_uuids!(super::CapsuleCollider3DComponent),
+        "MeshRenderer" => collect_uuids!(super::MeshRendererComponent),
+        "DirectionalLight" => collect_uuids!(super::DirectionalLightComponent),
+        "PointLight" => collect_uuids!(super::PointLightComponent),
+        "AmbientLight" => collect_uuids!(super::AmbientLightComponent),
+        "UIAnchor" => collect_uuids!(super::UIAnchorComponent),
         #[cfg(feature = "lua-scripting")]
         "LuaScript" => collect_uuids!(super::LuaScriptComponent),
         _ => {
@@ -2567,6 +2827,184 @@ fn lua_is_key_just_released(lua: &Lua, key_name: String) -> LuaResult<bool> {
 }
 
 // ---------------------------------------------------------------------------
+// Component manipulation
+// ---------------------------------------------------------------------------
+
+/// Extract an f32 from a LuaValue (supports Integer and Number).
+fn lua_value_as_f32(v: &LuaValue) -> Option<f32> {
+    match v {
+        LuaValue::Integer(n) => Some(*n as f32),
+        LuaValue::Number(n) => Some(*n as f32),
+        _ => None,
+    }
+}
+
+/// `Engine.add_component(entity_id, component_name, ...)` — add a component to an entity at runtime.
+///
+/// Supported components and their arguments:
+/// - `"SpriteRenderer"` — no extra args (default white sprite)
+/// - `"CircleRenderer"` — no extra args (default white circle)
+/// - `"Text", text_string` — creates text component with given string
+/// - `"AudioSource"` — no extra args (empty audio source)
+/// - `"AudioListener"` — no extra args
+/// - `"ParticleEmitter"` — no extra args (default emitter)
+/// - `"UIAnchor", ax, ay, ox, oy` — creates UI anchor
+/// - `"Camera"` — no extra args (default camera)
+/// - `"RigidBody2D"` — no extra args (default dynamic body)
+/// - `"BoxCollider2D"` — no extra args (default 1x1 box)
+/// - `"CircleCollider2D"` — no extra args (default radius 0.5)
+fn lua_add_component(lua: &Lua, args: mlua::Variadic<LuaValue>) -> LuaResult<bool> {
+    if args.len() < 2 {
+        return Err(mlua::Error::RuntimeError(
+            "add_component requires at least (entity_id, component_name)".into(),
+        ));
+    }
+    let entity_id = match &args[0] {
+        LuaValue::Integer(n) => *n as u64,
+        LuaValue::Number(n) => *n as u64,
+        _ => return Err(mlua::Error::RuntimeError("entity_id must be a number".into())),
+    };
+    let name = match &args[1] {
+        LuaValue::String(s) => s.to_str().map(|s| s.to_string()).unwrap_or_default(),
+        _ => return Err(mlua::Error::RuntimeError("component_name must be a string".into())),
+    };
+
+    let mut ctx = match lua.app_data_mut::<SceneScriptContext>() {
+        Some(ctx) => ctx,
+        None => return Ok(false),
+    };
+    let scene = unsafe { ctx.scene_mut() };
+    let entity = match scene.find_entity_by_uuid(entity_id) {
+        Some(e) => e,
+        None => return Ok(false),
+    };
+
+    match name.as_str() {
+        "SpriteRenderer" => {
+            if !scene.has_component::<super::SpriteRendererComponent>(entity) {
+                scene.add_component(entity, super::SpriteRendererComponent::default());
+            }
+        }
+        "CircleRenderer" => {
+            if !scene.has_component::<super::CircleRendererComponent>(entity) {
+                scene.add_component(entity, super::CircleRendererComponent::default());
+            }
+        }
+        "Text" => {
+            if !scene.has_component::<super::TextComponent>(entity) {
+                let text = args.get(2)
+                    .and_then(|v| match v {
+                        LuaValue::String(s) => s.to_str().ok().map(|s| s.to_string()),
+                        _ => None,
+                    })
+                    .unwrap_or_default();
+                scene.add_component(entity, super::TextComponent {
+                    text,
+                    ..Default::default()
+                });
+            }
+        }
+        "AudioSource" => {
+            if !scene.has_component::<super::AudioSourceComponent>(entity) {
+                scene.add_component(entity, super::AudioSourceComponent::default());
+            }
+        }
+        "AudioListener" => {
+            if !scene.has_component::<super::AudioListenerComponent>(entity) {
+                scene.add_component(entity, super::AudioListenerComponent::default());
+            }
+        }
+        "ParticleEmitter" => {
+            if !scene.has_component::<super::ParticleEmitterComponent>(entity) {
+                scene.add_component(entity, super::ParticleEmitterComponent::default());
+            }
+        }
+        "UIAnchor" => {
+            let ax = args.get(2).and_then(lua_value_as_f32).unwrap_or(0.0);
+            let ay = args.get(3).and_then(lua_value_as_f32).unwrap_or(0.0);
+            let ox = args.get(4).and_then(lua_value_as_f32).unwrap_or(0.0);
+            let oy = args.get(5).and_then(lua_value_as_f32).unwrap_or(0.0);
+            if scene.has_component::<super::UIAnchorComponent>(entity) {
+                if let Some(mut ua) = scene.get_component_mut::<super::UIAnchorComponent>(entity) {
+                    ua.anchor = glam::Vec2::new(ax, ay);
+                    ua.offset = glam::Vec2::new(ox, oy);
+                }
+            } else {
+                scene.add_component(entity, super::UIAnchorComponent {
+                    anchor: glam::Vec2::new(ax, ay),
+                    offset: glam::Vec2::new(ox, oy),
+                });
+            }
+        }
+        "Camera" => {
+            if !scene.has_component::<super::CameraComponent>(entity) {
+                scene.add_component(entity, super::CameraComponent::default());
+            }
+        }
+        "RigidBody2D" => {
+            if !scene.has_component::<super::RigidBody2DComponent>(entity) {
+                scene.add_component(entity, super::RigidBody2DComponent::default());
+            }
+        }
+        "BoxCollider2D" => {
+            if !scene.has_component::<super::BoxCollider2DComponent>(entity) {
+                scene.add_component(entity, super::BoxCollider2DComponent::default());
+            }
+        }
+        "CircleCollider2D" => {
+            if !scene.has_component::<super::CircleCollider2DComponent>(entity) {
+                scene.add_component(entity, super::CircleCollider2DComponent::default());
+            }
+        }
+        "SpriteAnimator" => {
+            if !scene.has_component::<super::SpriteAnimatorComponent>(entity) {
+                scene.add_component(entity, super::SpriteAnimatorComponent::default());
+            }
+        }
+        _ => {
+            log::warn!("ScriptGlue: add_component: unsupported component '{}'", name);
+            return Ok(false);
+        }
+    }
+
+    Ok(true)
+}
+
+/// `Engine.remove_component(entity_id, component_name)` — remove a component from an entity at runtime.
+fn lua_remove_component(lua: &Lua, (entity_id, name): (u64, String)) -> LuaResult<bool> {
+    let mut ctx = match lua.app_data_mut::<SceneScriptContext>() {
+        Some(ctx) => ctx,
+        None => return Ok(false),
+    };
+    let scene = unsafe { ctx.scene_mut() };
+    let entity = match scene.find_entity_by_uuid(entity_id) {
+        Some(e) => e,
+        None => return Ok(false),
+    };
+
+    let removed = match name.as_str() {
+        "SpriteRenderer" => scene.remove_component::<super::SpriteRendererComponent>(entity).is_some(),
+        "CircleRenderer" => scene.remove_component::<super::CircleRendererComponent>(entity).is_some(),
+        "Text" => scene.remove_component::<super::TextComponent>(entity).is_some(),
+        "AudioSource" => scene.remove_component::<super::AudioSourceComponent>(entity).is_some(),
+        "AudioListener" => scene.remove_component::<super::AudioListenerComponent>(entity).is_some(),
+        "ParticleEmitter" => scene.remove_component::<super::ParticleEmitterComponent>(entity).is_some(),
+        "UIAnchor" => scene.remove_component::<super::UIAnchorComponent>(entity).is_some(),
+        "Camera" => scene.remove_component::<super::CameraComponent>(entity).is_some(),
+        "SpriteAnimator" => scene.remove_component::<super::SpriteAnimatorComponent>(entity).is_some(),
+        "RigidBody2D" => scene.remove_component::<super::RigidBody2DComponent>(entity).is_some(),
+        "BoxCollider2D" => scene.remove_component::<super::BoxCollider2DComponent>(entity).is_some(),
+        "CircleCollider2D" => scene.remove_component::<super::CircleCollider2DComponent>(entity).is_some(),
+        _ => {
+            log::warn!("ScriptGlue: remove_component: unsupported component '{}'", name);
+            false
+        }
+    };
+
+    Ok(removed)
+}
+
+// ---------------------------------------------------------------------------
 // Logging
 // ---------------------------------------------------------------------------
 
@@ -2615,6 +3053,15 @@ mod tests {
         assert!(engine.get::<LuaFunction>("vector_dot").is_ok());
         assert!(engine.get::<LuaFunction>("vector_cross").is_ok());
         assert!(engine.get::<LuaFunction>("vector_normalize").is_ok());
+        assert!(engine.get::<LuaFunction>("vector_length").is_ok());
+        assert!(engine.get::<LuaFunction>("distance").is_ok());
+        assert!(engine.get::<LuaFunction>("distance_2d").is_ok());
+        assert!(engine.get::<LuaFunction>("lerp").is_ok());
+        assert!(engine.get::<LuaFunction>("lerp_vec3").is_ok());
+        assert!(engine.get::<LuaFunction>("slerp").is_ok());
+        assert!(engine.get::<LuaFunction>("clamp").is_ok());
+        assert!(engine.get::<LuaFunction>("move_toward").is_ok());
+        assert!(engine.get::<LuaFunction>("move_toward_vec3").is_ok());
         // Transform
         assert!(engine.get::<LuaFunction>("get_translation").is_ok());
         assert!(engine.get::<LuaFunction>("set_translation").is_ok());
@@ -2628,6 +3075,18 @@ mod tests {
         assert!(engine.get::<LuaFunction>("is_mouse_button_down").is_ok());
         assert!(engine.get::<LuaFunction>("is_mouse_button_pressed").is_ok());
         assert!(engine.get::<LuaFunction>("get_mouse_position").is_ok());
+        assert!(engine.get::<LuaFunction>("get_mouse_delta").is_ok());
+        assert!(engine.get::<LuaFunction>("get_scroll_delta").is_ok());
+        // Gamepad
+        assert!(engine.get::<LuaFunction>("is_gamepad_button_down").is_ok());
+        assert!(engine
+            .get::<LuaFunction>("is_gamepad_button_pressed")
+            .is_ok());
+        assert!(engine
+            .get::<LuaFunction>("is_gamepad_button_released")
+            .is_ok());
+        assert!(engine.get::<LuaFunction>("get_gamepad_axis").is_ok());
+        assert!(engine.get::<LuaFunction>("is_gamepad_connected").is_ok());
         // Component queries
         assert!(engine.get::<LuaFunction>("has_component").is_ok());
         // Entity lifecycle
@@ -2731,6 +3190,9 @@ mod tests {
         assert!(engine.get::<LuaFunction>("load_scene").is_ok());
         assert!(engine.get::<LuaFunction>("get_gui_scale").is_ok());
         assert!(engine.get::<LuaFunction>("set_gui_scale").is_ok());
+        // Component manipulation
+        assert!(engine.get::<LuaFunction>("add_component").is_ok());
+        assert!(engine.get::<LuaFunction>("remove_component").is_ok());
     }
 
     #[test]
@@ -2794,6 +3256,63 @@ mod tests {
         assert!((nx - 1.0).abs() < 0.001);
         assert!(ny.abs() < 0.001);
         assert!(nz.abs() < 0.001);
+    }
+
+    #[test]
+    fn math_helpers() {
+        let lua = setup();
+
+        // distance
+        lua.load("d = Engine.distance(0, 0, 0, 3, 4, 0)").exec().unwrap();
+        let d: f32 = lua.globals().get("d").unwrap();
+        assert!((d - 5.0).abs() < 0.001);
+
+        // distance_2d
+        lua.load("d2 = Engine.distance_2d(0, 0, 3, 4)").exec().unwrap();
+        let d2: f32 = lua.globals().get("d2").unwrap();
+        assert!((d2 - 5.0).abs() < 0.001);
+
+        // lerp
+        lua.load("l = Engine.lerp(0, 10, 0.25)").exec().unwrap();
+        let l: f32 = lua.globals().get("l").unwrap();
+        assert!((l - 2.5).abs() < 0.001);
+
+        // clamp
+        lua.load("c = Engine.clamp(15, 0, 10)").exec().unwrap();
+        let c: f32 = lua.globals().get("c").unwrap();
+        assert!((c - 10.0).abs() < 0.001);
+
+        // move_toward
+        lua.load("m = Engine.move_toward(0, 10, 3)").exec().unwrap();
+        let m: f32 = lua.globals().get("m").unwrap();
+        assert!((m - 3.0).abs() < 0.001);
+
+        // move_toward (arrives at target)
+        lua.load("m2 = Engine.move_toward(8, 10, 5)").exec().unwrap();
+        let m2: f32 = lua.globals().get("m2").unwrap();
+        assert!((m2 - 10.0).abs() < 0.001);
+
+        // vector_length
+        lua.load("vl = Engine.vector_length(3, 4, 0)").exec().unwrap();
+        let vl: f32 = lua.globals().get("vl").unwrap();
+        assert!((vl - 5.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn gamepad_button_name_mapping() {
+        assert_eq!(gamepad_button_name_to_enum("South"), Some(GamepadButton::South));
+        assert_eq!(gamepad_button_name_to_enum("A"), Some(GamepadButton::South));
+        assert_eq!(gamepad_button_name_to_enum("North"), Some(GamepadButton::North));
+        assert_eq!(gamepad_button_name_to_enum("DPadUp"), Some(GamepadButton::DPadUp));
+        assert_eq!(gamepad_button_name_to_enum("L1"), Some(GamepadButton::LeftBumper));
+        assert_eq!(gamepad_button_name_to_enum("bogus"), None);
+    }
+
+    #[test]
+    fn gamepad_axis_name_mapping() {
+        assert_eq!(gamepad_axis_name_to_enum("LeftStickX"), Some(GamepadAxis::LeftStickX));
+        assert_eq!(gamepad_axis_name_to_enum("RightTrigger"), Some(GamepadAxis::RightTrigger));
+        assert_eq!(gamepad_axis_name_to_enum("bogus"), None);
     }
 
     #[test]
