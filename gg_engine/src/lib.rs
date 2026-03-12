@@ -63,9 +63,10 @@ pub use scene::{
     IdComponent, InstancedSpriteAnimator, MeshPrimitive, MeshRendererComponent, MeshSource,
     NativeScript, NativeScriptComponent, ParticleEmitterComponent, PointLightComponent,
     RelationshipComponent, RigidBody2DComponent, RigidBody2DType, RigidBody3DComponent,
-    RigidBody3DType, Scene, SceneSerializer, SphereCollider3DComponent, SpriteAnimatorComponent,
-    SpriteRendererComponent, TagComponent, TextComponent, TilemapComponent, TransformComponent,
-    TransitionCondition, UIAnchorComponent, TILE_FLIP_H, TILE_FLIP_V, TILE_ID_MASK,
+    RigidBody3DType, RigidBodyType, Scene, SceneSerializer, SphereCollider3DComponent,
+    SpriteAnimatorComponent, SpriteRendererComponent, TagComponent, TextComponent,
+    TilemapComponent, TransformComponent, TransitionCondition, UIAnchorComponent, TILE_FLIP_H,
+    TILE_FLIP_V, TILE_ID_MASK,
 };
 #[cfg(feature = "lua-scripting")]
 pub use scene::{LuaScriptComponent, ScriptEngine, ScriptFieldValue};
@@ -113,10 +114,10 @@ pub mod prelude {
         FloatOrdering, FullscreenMode, IdComponent, InstancedSpriteAnimator, MeshPrimitive,
         MeshRendererComponent, MeshSource, NativeScript, NativeScriptComponent,
         ParticleEmitterComponent, PointLightComponent, RelationshipComponent, RigidBody2DComponent,
-        RigidBody2DType, RigidBody3DComponent, RigidBody3DType, Scene, SceneSerializer,
-        SphereCollider3DComponent, SpriteAnimatorComponent, SpriteRendererComponent, TagComponent,
-        TextComponent, TilemapComponent, TransformComponent, TransitionCondition,
-        UIAnchorComponent, TILE_FLIP_H, TILE_FLIP_V, TILE_ID_MASK,
+        RigidBody2DType, RigidBody3DComponent, RigidBody3DType, RigidBodyType, Scene,
+        SceneSerializer, SphereCollider3DComponent, SpriteAnimatorComponent,
+        SpriteRendererComponent, TagComponent, TextComponent, TilemapComponent, TransformComponent,
+        TransitionCondition, UIAnchorComponent, TILE_FLIP_H, TILE_FLIP_V, TILE_ID_MASK,
     };
     #[cfg(feature = "lua-scripting")]
     pub use crate::scene::{LuaScriptComponent, ScriptEngine, ScriptFieldValue};

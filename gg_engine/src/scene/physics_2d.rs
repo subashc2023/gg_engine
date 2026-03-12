@@ -3,12 +3,7 @@ use rapier2d::prelude::*;
 use std::collections::HashMap;
 use std::sync::Mutex;
 
-/// Fixed physics timestep (1/60 s ≈ 16.67 ms).
-const FIXED_TIMESTEP: f32 = 1.0 / 60.0;
-
-/// Maximum frame delta fed into the accumulator (caps at 250 ms to prevent
-/// a "spiral of death" after long hitches).
-const MAX_FRAME_DT: f32 = 0.25;
+use super::physics_common::{PhysicsTimestep, FIXED_TIMESTEP};
 
 /// Bundles all rapier2d simulation state needed for a single physics world.
 pub(crate) struct PhysicsWorld2D {
@@ -24,9 +19,8 @@ pub(crate) struct PhysicsWorld2D {
     pub(crate) multibody_joints: MultibodyJointSet,
     ccd_solver: CCDSolver,
     query_pipeline: QueryPipeline,
-    /// Leftover time from the previous frame, carried forward for the next
-    /// fixed-step accumulation.
-    accumulator: f32,
+    /// Fixed-timestep accumulator (shared logic with 3D).
+    timestep: PhysicsTimestep,
     /// Pre-step positions/rotations for interpolation (position_x, position_y, angle).
     prev_transforms: HashMap<RigidBodyHandle, (f32, f32, f32)>,
     /// Maps collider handles to entity UUIDs for collision event dispatch.
@@ -54,7 +48,7 @@ impl PhysicsWorld2D {
             multibody_joints: MultibodyJointSet::new(),
             ccd_solver: CCDSolver::new(),
             query_pipeline: QueryPipeline::new(),
-            accumulator: 0.0,
+            timestep: PhysicsTimestep::new(),
             prev_transforms: HashMap::new(),
             collider_to_uuid: HashMap::new(),
             collision_collector: CollisionCollector::new(),
@@ -63,12 +57,12 @@ impl PhysicsWorld2D {
 
     /// Feed frame delta-time into the accumulator (clamped to MAX_FRAME_DT).
     pub(crate) fn accumulate(&mut self, dt: f32) {
-        self.accumulator += dt.min(MAX_FRAME_DT);
+        self.timestep.accumulate(dt);
     }
 
     /// Returns `true` if the accumulator has enough time for another fixed step.
     pub(crate) fn can_step(&self) -> bool {
-        self.accumulator >= FIXED_TIMESTEP
+        self.timestep.can_step()
     }
 
     /// Snapshot current body positions as "previous" for interpolation.
@@ -111,7 +105,7 @@ impl PhysicsWorld2D {
             &(),
             &self.collision_collector,
         );
-        self.accumulator -= FIXED_TIMESTEP;
+        self.timestep.consume_step();
     }
 
     /// Drain collected collision events, resolving collider handles to entity UUIDs.
@@ -148,13 +142,13 @@ impl PhysicsWorld2D {
 
     /// The fixed timestep value (1/60 s).
     pub(crate) fn fixed_timestep(&self) -> f32 {
-        FIXED_TIMESTEP
+        self.timestep.fixed_timestep()
     }
 
     /// Interpolation alpha: fraction of a timestep remaining in the accumulator.
     /// Ranges from 0.0 (just stepped) to ~1.0 (about to step).
     pub(crate) fn alpha(&self) -> f32 {
-        self.accumulator / FIXED_TIMESTEP
+        self.timestep.alpha()
     }
 
     /// Get the pre-step (previous) transform for a body, if available.

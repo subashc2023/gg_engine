@@ -239,26 +239,12 @@ impl egui_dock::TabViewer for EditorTabViewer<'_> {
                     ui,
                     self.scene,
                     self.selection,
-                    self.viewport.size,
-                    self.viewport.focused,
-                    self.viewport.hovered,
-                    self.viewport.fb_tex_id,
-                    self.viewport.gizmo,
-                    self.viewport.gizmo_operation,
-                    self.viewport.editor_camera,
-                    self.viewport.scene_fb,
-                    self.viewport.hovered_entity,
+                    &mut self.viewport,
                     self.pending_open_path,
                     self.is_playing,
                     self.scene_dirty,
                     self.undo_system,
-                    self.viewport.gizmo_editing,
                     self.tilemap_paint,
-                    self.viewport.mouse_pos,
-                    &self.viewport.tileset_preview,
-                    self.viewport.snap_to_grid,
-                    self.viewport.grid_size,
-                    self.viewport.gizmo_local,
                 );
             }
 
@@ -301,28 +287,26 @@ impl egui_dock::TabViewer for EditorTabViewer<'_> {
 
             Tab::Settings => {
                 self.unfocus_viewport_on_click(ui);
-                settings::settings_ui(
-                    ui,
-                    self.scene,
-                    self.frame_time_ms,
-                    self.render_stats,
-                    self.vsync,
-                    self.viewport.hovered_entity,
-                    self.show_grid,
-                    self.show_xz_grid,
-                    self.snap_to_grid,
-                    self.grid_size,
-                    self.scene_warnings,
-                    self.theme,
-                    self.reload_shaders_requested,
-                    self.msaa_samples,
-                    self.max_msaa_samples,
-                    self.msaa_changed,
-                    self.show_physics_colliders,
-                    self.postprocess_settings,
-                    self.gpu_timing,
-                    self.show_msaa_test,
-                );
+                let mut state = settings::SettingsState {
+                    frame_time_ms: self.frame_time_ms,
+                    render_stats: self.render_stats,
+                    vsync: self.vsync,
+                    show_grid: self.show_grid,
+                    show_xz_grid: self.show_xz_grid,
+                    snap_to_grid: self.snap_to_grid,
+                    grid_size: self.grid_size,
+                    scene_warnings: self.scene_warnings,
+                    theme: self.theme,
+                    reload_shaders_requested: self.reload_shaders_requested,
+                    msaa_samples: self.msaa_samples,
+                    max_msaa_samples: self.max_msaa_samples,
+                    msaa_changed: self.msaa_changed,
+                    show_physics_colliders: self.show_physics_colliders,
+                    pp_settings: self.postprocess_settings,
+                    gpu_timing: self.gpu_timing,
+                    show_msaa_test: self.show_msaa_test,
+                };
+                settings::settings_ui(ui, self.scene, &mut state);
             }
 
             Tab::Project => {

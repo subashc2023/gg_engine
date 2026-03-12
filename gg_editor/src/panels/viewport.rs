@@ -1,11 +1,11 @@
 use gg_engine::egui;
 use gg_engine::prelude::*;
 use transform_gizmo_egui::math::{DQuat, DVec3, Transform as GizmoTransform};
-use transform_gizmo_egui::{Gizmo, GizmoConfig, GizmoExt, GizmoOrientation};
+use transform_gizmo_egui::{GizmoConfig, GizmoExt, GizmoOrientation};
 
 use crate::gizmo::{gizmo_modes_for, mat4_to_f64, GizmoOperation};
 use crate::panels::content_browser::ContentBrowserPayload;
-use crate::panels::{tile_uv_max, tile_uv_min, TilesetPreviewInfo};
+use crate::panels::{tile_uv_max, tile_uv_min};
 use crate::selection::Selection;
 use crate::TilemapPaintState;
 
@@ -74,27 +74,28 @@ pub(crate) fn viewport_ui(
     ui: &mut egui::Ui,
     scene: &mut Scene,
     selection: &mut Selection,
-    viewport_size: &mut (u32, u32),
-    viewport_focused: &mut bool,
-    viewport_hovered: &mut bool,
-    fb_tex_id: Option<egui::TextureId>,
-    gizmo: &mut Gizmo,
-    gizmo_operation: &mut GizmoOperation,
-    editor_camera: &EditorCamera,
-    scene_fb: &mut Option<Framebuffer>,
-    hovered_entity: i32,
+    vs: &mut super::ViewportState<'_>,
     pending_open_path: &mut Option<std::path::PathBuf>,
     is_playing: bool,
     scene_dirty: &mut bool,
     undo_system: &mut crate::undo::UndoSystem,
-    gizmo_editing: &mut bool,
     tilemap_paint: &mut TilemapPaintState,
-    viewport_mouse_pos: &mut Option<(f32, f32)>,
-    tileset_preview: &Option<TilesetPreviewInfo>,
-    snap_to_grid: bool,
-    grid_size: f32,
-    gizmo_local: &mut bool,
 ) {
+    let viewport_size = &mut *vs.size;
+    let viewport_focused = &mut *vs.focused;
+    let viewport_hovered = &mut *vs.hovered;
+    let fb_tex_id = vs.fb_tex_id;
+    let gizmo = &mut *vs.gizmo;
+    let gizmo_operation = &mut *vs.gizmo_operation;
+    let editor_camera = vs.editor_camera;
+    let scene_fb = &mut *vs.scene_fb;
+    let hovered_entity = vs.hovered_entity;
+    let viewport_mouse_pos = &mut *vs.mouse_pos;
+    let tileset_preview = &vs.tileset_preview;
+    let snap_to_grid = vs.snap_to_grid;
+    let grid_size = vs.grid_size;
+    let gizmo_local = &mut *vs.gizmo_local;
+    let gizmo_editing = &mut *vs.gizmo_editing;
     let available = ui.available_size();
     if available.x > 0.0 && available.y > 0.0 {
         // Scale by DPI so the framebuffer renders at physical

@@ -336,6 +336,7 @@ impl Scene {
     /// `on_sound_finished()` Lua callbacks.
     #[cfg(feature = "lua-scripting")]
     pub(super) fn dispatch_sound_finished_events(&mut self) {
+        use super::lua_ops::ScriptEngineGuard;
         use super::script_glue::SceneScriptContext;
 
         let completed: Vec<u64> = match self.audio_engine.as_mut() {
@@ -347,28 +348,25 @@ impl Scene {
             return;
         }
 
-        let mut engine = match self.script_engine.take() {
+        let engine = match self.script_engine.take() {
             Some(e) => e,
             None => return,
         };
 
         let scene_ptr: *mut Scene = self;
+        let mut guard = ScriptEngineGuard::new(engine, scene_ptr);
 
         let ctx = SceneScriptContext {
             scene: scene_ptr,
             input: std::ptr::null(),
         };
-        engine.lua().set_app_data(ctx);
+        guard.engine_mut().lua().set_app_data(ctx);
 
         for uuid in &completed {
-            engine.call_entity_on_sound_finished(*uuid);
+            guard.engine_mut().call_entity_on_sound_finished(*uuid);
         }
 
-        engine.lua().remove_app_data::<SceneScriptContext>();
-
-        unsafe {
-            (*scene_ptr).script_engine = Some(engine);
-        }
+        // Guard drop restores engine and cleans up SceneScriptContext.
     }
 
     /// Drain completed sounds without Lua dispatch (when lua-scripting is disabled).

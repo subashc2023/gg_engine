@@ -262,15 +262,11 @@ impl Scene {
     // Lua dispatch helpers (with ScriptEngineGuard for P0-2 fix)
     // -----------------------------------------------------------------
 
-    /// Drain 3D collision events from the physics world and dispatch to Lua scripts.
+    /// Dispatch collision events (enter/exit) to Lua scripts for both entities
+    /// in each collision pair. Shared implementation for 2D and 3D physics.
     #[cfg(feature = "lua-scripting")]
-    pub(super) fn dispatch_collision_events_3d(&mut self) {
+    fn dispatch_collision_pairs(&mut self, events: Vec<(u64, u64, bool)>) {
         use super::script_glue::SceneScriptContext;
-
-        let events: Vec<(u64, u64, bool)> = match self.physics_world_3d.as_ref() {
-            Some(physics) => physics.drain_collision_events(),
-            None => return,
-        };
 
         if events.is_empty() {
             return;
@@ -307,6 +303,16 @@ impl Scene {
         // Guard drop restores engine and cleans up SceneScriptContext.
     }
 
+    /// Drain 3D collision events and dispatch to Lua scripts.
+    #[cfg(feature = "lua-scripting")]
+    pub(super) fn dispatch_collision_events_3d(&mut self) {
+        let events = match self.physics_world_3d.as_ref() {
+            Some(physics) => physics.drain_collision_events(),
+            None => return,
+        };
+        self.dispatch_collision_pairs(events);
+    }
+
     /// Call `on_fixed_update(dt)` on all loaded Lua scripts.
     ///
     /// Uses the take-modify-replace pattern with [`ScriptEngineGuard`] to ensure
@@ -317,7 +323,6 @@ impl Scene {
         #[cfg(feature = "lua-scripting")]
         use super::LuaScriptComponent;
 
-        // --- Setup phase (uses &mut self) ---
         let uuids: Vec<u64> = self
             .world
             .query::<(&IdComponent, &LuaScriptComponent)>()
@@ -335,16 +340,7 @@ impl Scene {
             None => return,
         };
 
-        // SAFETY: Convert &mut self to raw pointer before Lua dispatch.
-        // Lua callbacks dereference ctx.scene to access Scene (ECS, physics, etc.).
-        // Under Rust's aliasing model, using &mut self after callbacks write through
-        // *mut Scene is UB. By switching to the raw pointer and never using `self`
-        // again, we ensure a single provenance chain for all Scene accesses.
-        // The ScriptEngine is taken out of Scene, so &mut engine does not alias.
         let scene_ptr: *mut Scene = self;
-
-        // --- Dispatch phase (uses scene_ptr, never self) ---
-        // ScriptEngineGuard ensures the engine is restored even on panic.
         let mut guard = ScriptEngineGuard::new(engine, scene_ptr);
 
         let ctx = SceneScriptContext {
@@ -359,7 +355,6 @@ impl Scene {
                 .call_entity_on_fixed_update(*uuid, fixed_dt);
         }
 
-        // Guard drop restores engine and cleans up SceneScriptContext.
         drop(guard);
 
         unsafe {
@@ -367,64 +362,14 @@ impl Scene {
         }
     }
 
-    /// Drain collision events from the physics world and dispatch to Lua scripts.
-    ///
-    /// Calls `on_collision_enter(other_uuid)` and `on_collision_exit(other_uuid)`
-    /// on both entities in each collision pair.
+    /// Drain 2D collision events and dispatch to Lua scripts.
     #[cfg(feature = "lua-scripting")]
     pub(super) fn dispatch_collision_events(&mut self) {
-        use super::script_glue::SceneScriptContext;
-
-        // --- Setup phase (uses &mut self) ---
-        // Drain events from physics.
-        let events: Vec<(u64, u64, bool)> = match self.physics_world.as_ref() {
+        let events = match self.physics_world.as_ref() {
             Some(physics) => physics.drain_collision_events(),
             None => return,
         };
-
-        if events.is_empty() {
-            return;
-        }
-
-        let engine = match self.script_engine.take() {
-            Some(e) => e,
-            None => return,
-        };
-
-        // SAFETY: Convert &mut self to raw pointer before Lua dispatch.
-        // Lua callbacks dereference ctx.scene to access Scene (ECS, physics, etc.).
-        // Under Rust's aliasing model, using &mut self after callbacks write through
-        // *mut Scene is UB. By switching to the raw pointer and never using `self`
-        // again, we ensure a single provenance chain for all Scene accesses.
-        // The ScriptEngine is taken out of Scene, so &mut engine does not alias.
-        let scene_ptr: *mut Scene = self;
-
-        // --- Dispatch phase (uses scene_ptr, never self) ---
-        // ScriptEngineGuard ensures the engine is restored even on panic.
-        let mut guard = ScriptEngineGuard::new(engine, scene_ptr);
-
-        let ctx = SceneScriptContext {
-            scene: scene_ptr,
-            input: std::ptr::null(),
-        };
-        guard.engine_mut().lua().set_app_data(ctx);
-
-        for (uuid_a, uuid_b, started) in &events {
-            let callback = if *started {
-                "on_collision_enter"
-            } else {
-                "on_collision_exit"
-            };
-            // Notify both entities.
-            guard
-                .engine_mut()
-                .call_entity_collision(*uuid_a, callback, *uuid_b);
-            guard
-                .engine_mut()
-                .call_entity_collision(*uuid_b, callback, *uuid_a);
-        }
-
-        // Guard drop restores engine and cleans up SceneScriptContext.
+        self.dispatch_collision_pairs(events);
     }
 
     // -----------------------------------------------------------------

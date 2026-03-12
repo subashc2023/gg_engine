@@ -140,7 +140,7 @@ impl Scene {
         for bs in body_entities {
             // Create rapier rigid body.
             let mut body_builder =
-                rapier2d::dynamics::RigidBodyBuilder::new(bs.body_type.to_rapier())
+                rapier2d::dynamics::RigidBodyBuilder::new(bs.body_type.to_rapier_2d())
                     .translation(na::Vector2::new(bs.translation.x, bs.translation.y))
                     .rotation(bs.rotation.to_euler(glam::EulerRot::XYZ).2)
                     .gravity_scale(bs.gravity_scale)
@@ -458,7 +458,7 @@ impl Scene {
             .and_then(|rb| rb.runtime_body);
         if let (Some(handle), Some(ref mut physics)) = (body_handle, &mut self.physics_world) {
             if let Some(body) = physics.bodies.get_mut(handle) {
-                body.set_body_type(body_type.to_rapier(), true);
+                body.set_body_type(body_type.to_rapier_2d(), true);
             }
         }
         // Update the component field to stay in sync.

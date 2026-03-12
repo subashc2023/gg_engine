@@ -142,7 +142,7 @@ impl Scene {
             let rapier_rot = na::UnitQuaternion::new_normalize(na::Quaternion::new(w, x, y, z));
 
             let mut body_builder =
-                rapier3d::dynamics::RigidBodyBuilder::new(bs.body_type.to_rapier())
+                rapier3d::dynamics::RigidBodyBuilder::new(bs.body_type.to_rapier_3d())
                     .translation(na::Vector3::new(
                         bs.translation.x,
                         bs.translation.y,
@@ -458,7 +458,7 @@ impl Scene {
             .and_then(|rb| rb.runtime_body);
         if let (Some(handle), Some(ref mut physics)) = (body_handle, &mut self.physics_world_3d) {
             if let Some(body) = physics.bodies.get_mut(handle) {
-                body.set_body_type(body_type.to_rapier(), true);
+                body.set_body_type(body_type.to_rapier_3d(), true);
             }
         }
         if let Ok(mut rb) = self.world.get::<&mut RigidBody3DComponent>(entity.handle()) {

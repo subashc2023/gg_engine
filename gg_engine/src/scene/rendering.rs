@@ -227,30 +227,32 @@ impl Scene {
     /// Dispatch `on_animation_finished(clip_name)` Lua callbacks.
     #[cfg(feature = "lua-scripting")]
     fn dispatch_animation_finished_events(&mut self, events: &[(u64, String, String)]) {
+        use super::lua_ops::ScriptEngineGuard;
         use super::script_glue::SceneScriptContext;
 
-        let mut engine = match self.script_engine.take() {
+        let engine = match self.script_engine.take() {
             Some(e) => e,
             None => return,
         };
 
         let scene_ptr: *mut Scene = self;
+        let mut guard = ScriptEngineGuard::new(engine, scene_ptr);
 
         let ctx = SceneScriptContext {
             scene: scene_ptr,
             input: std::ptr::null(),
         };
-        engine.lua().set_app_data(ctx);
+        guard.engine_mut().lua().set_app_data(ctx);
 
         for (uuid, clip_name, _) in events {
-            engine.call_entity_callback_str(*uuid, "on_animation_finished", clip_name.clone());
+            guard.engine_mut().call_entity_callback_str(
+                *uuid,
+                "on_animation_finished",
+                clip_name.clone(),
+            );
         }
 
-        engine.lua().remove_app_data::<SceneScriptContext>();
-
-        unsafe {
-            (*scene_ptr).script_engine = Some(engine);
-        }
+        // Guard drop restores engine and cleans up SceneScriptContext.
     }
 
     // -----------------------------------------------------------------

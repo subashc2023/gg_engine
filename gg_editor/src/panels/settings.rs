@@ -6,29 +6,57 @@ use crate::{GpuTimingSnapshot, PostProcessSettings};
 
 const GRID_SIZE_OPTIONS: &[f32] = &[0.1, 0.25, 0.5, 1.0, 2.0, 5.0, 10.0];
 
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn settings_ui(
-    ui: &mut egui::Ui,
-    scene: &Scene,
-    frame_time_ms: f32,
-    render_stats: Renderer2DStats,
-    vsync: &mut bool,
-    _hovered_entity: i32,
-    show_grid: &mut bool,
-    show_xz_grid: &mut bool,
-    snap_to_grid: &mut bool,
-    grid_size: &mut f32,
-    scene_warnings: &[String],
-    theme: &mut EditorTheme,
-    reload_shaders_requested: &mut bool,
-    msaa_samples: &mut MsaaSamples,
-    max_msaa_samples: MsaaSamples,
-    msaa_changed: &mut bool,
-    show_physics_colliders: &mut bool,
-    pp_settings: &mut PostProcessSettings,
-    gpu_timing: &mut GpuTimingSnapshot,
-    show_msaa_test: &mut bool,
-) {
+/// Bundled state for the Settings panel, reducing parameter count.
+pub(crate) struct SettingsState<'a> {
+    pub frame_time_ms: f32,
+    pub render_stats: Renderer2DStats,
+    pub vsync: &'a mut bool,
+    pub show_grid: &'a mut bool,
+    pub show_xz_grid: &'a mut bool,
+    pub snap_to_grid: &'a mut bool,
+    pub grid_size: &'a mut f32,
+    pub scene_warnings: &'a [String],
+    pub theme: &'a mut EditorTheme,
+    pub reload_shaders_requested: &'a mut bool,
+    pub msaa_samples: &'a mut MsaaSamples,
+    pub max_msaa_samples: MsaaSamples,
+    pub msaa_changed: &'a mut bool,
+    pub show_physics_colliders: &'a mut bool,
+    pub pp_settings: &'a mut PostProcessSettings,
+    pub gpu_timing: &'a mut GpuTimingSnapshot,
+    pub show_msaa_test: &'a mut bool,
+}
+
+pub(crate) fn settings_ui(ui: &mut egui::Ui, scene: &Scene, state: &mut SettingsState<'_>) {
+    let SettingsState {
+        frame_time_ms,
+        render_stats,
+        vsync,
+        show_grid,
+        show_xz_grid,
+        snap_to_grid,
+        grid_size,
+        scene_warnings,
+        theme,
+        reload_shaders_requested,
+        msaa_samples,
+        max_msaa_samples,
+        msaa_changed,
+        show_physics_colliders,
+        pp_settings,
+        gpu_timing,
+        show_msaa_test,
+    } = state;
+    let frame_time_ms = *frame_time_ms;
+    let render_stats = *render_stats;
+    let max_msaa_samples = *max_msaa_samples;
+    // Rebind double-references from destructuring `&mut SettingsState`.
+    let msaa_samples = &mut **msaa_samples;
+    let msaa_changed = &mut **msaa_changed;
+    let theme = &mut **theme;
+    let reload_shaders_requested = &mut **reload_shaders_requested;
+    let grid_size = &mut **grid_size;
+    let scene_warnings = *scene_warnings;
     ui.heading("Renderer");
     ui.separator();
 

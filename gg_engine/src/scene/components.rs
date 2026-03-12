@@ -368,24 +368,32 @@ impl Default for TextComponent {
 }
 
 // ---------------------------------------------------------------------------
-// 2D Physics Components
+// Shared Physics Types
 // ---------------------------------------------------------------------------
 
-/// Body type for a 2D rigid body.
+/// Body type for a rigid body (shared between 2D and 3D).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub enum RigidBody2DType {
+pub enum RigidBodyType {
     #[default]
     Static,
     Dynamic,
     Kinematic,
 }
 
-impl RigidBody2DType {
-    pub(crate) fn to_rapier(self) -> rapier2d::dynamics::RigidBodyType {
+impl RigidBodyType {
+    pub(crate) fn to_rapier_2d(self) -> rapier2d::dynamics::RigidBodyType {
         match self {
             Self::Static => rapier2d::dynamics::RigidBodyType::Fixed,
             Self::Dynamic => rapier2d::dynamics::RigidBodyType::Dynamic,
             Self::Kinematic => rapier2d::dynamics::RigidBodyType::KinematicPositionBased,
+        }
+    }
+
+    pub(crate) fn to_rapier_3d(self) -> rapier3d::dynamics::RigidBodyType {
+        match self {
+            Self::Static => rapier3d::dynamics::RigidBodyType::Fixed,
+            Self::Dynamic => rapier3d::dynamics::RigidBodyType::Dynamic,
+            Self::Kinematic => rapier3d::dynamics::RigidBodyType::KinematicPositionBased,
         }
     }
 
@@ -408,6 +416,13 @@ impl RigidBody2DType {
         }
     }
 }
+
+/// Backward-compatible alias for 2D rigid body type.
+pub type RigidBody2DType = RigidBodyType;
+
+// ---------------------------------------------------------------------------
+// 2D Physics Components
+// ---------------------------------------------------------------------------
 
 /// 2D rigid body attached to an entity for physics simulation.
 ///
@@ -582,43 +597,8 @@ impl Default for CircleCollider2DComponent {
 // 3D Physics Components
 // ---------------------------------------------------------------------------
 
-/// Body type for a 3D rigid body.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub enum RigidBody3DType {
-    #[default]
-    Static,
-    Dynamic,
-    Kinematic,
-}
-
-impl RigidBody3DType {
-    pub(crate) fn to_rapier(self) -> rapier3d::dynamics::RigidBodyType {
-        match self {
-            Self::Static => rapier3d::dynamics::RigidBodyType::Fixed,
-            Self::Dynamic => rapier3d::dynamics::RigidBodyType::Dynamic,
-            Self::Kinematic => rapier3d::dynamics::RigidBodyType::KinematicPositionBased,
-        }
-    }
-
-    /// Parse a body type from a case-insensitive string (for Lua scripts).
-    pub fn from_str_loose(s: &str) -> Option<Self> {
-        match s.to_ascii_lowercase().as_str() {
-            "static" | "fixed" => Some(Self::Static),
-            "dynamic" => Some(Self::Dynamic),
-            "kinematic" => Some(Self::Kinematic),
-            _ => None,
-        }
-    }
-
-    /// Human-readable label.
-    pub fn label(self) -> &'static str {
-        match self {
-            Self::Static => "Static",
-            Self::Dynamic => "Dynamic",
-            Self::Kinematic => "Kinematic",
-        }
-    }
-}
+/// Backward-compatible alias for 3D rigid body type.
+pub type RigidBody3DType = RigidBodyType;
 
 /// 3D rigid body attached to an entity for physics simulation.
 ///

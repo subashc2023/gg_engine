@@ -209,54 +209,15 @@ pub(crate) fn draw_box_collider2d_component(
                 }
             });
 
-            ui.horizontal(|ui| {
-                ui.label("Density");
-                changed |= ui
-                    .add(
-                        egui::DragValue::new(&mut density)
-                            .speed(0.01)
-                            .range(0.0..=f32::MAX),
-                    )
-                    .changed();
-            });
-
-            ui.horizontal(|ui| {
-                ui.label("Friction");
-                changed |= ui
-                    .add(
-                        egui::DragValue::new(&mut friction)
-                            .speed(0.01)
-                            .range(0.0..=1.0),
-                    )
-                    .changed();
-            });
-
-            ui.horizontal(|ui| {
-                ui.label("Restitution");
-                changed |= ui
-                    .add(
-                        egui::DragValue::new(&mut restitution)
-                            .speed(0.01)
-                            .range(0.0..=1.0),
-                    )
-                    .changed();
-            });
-
-            ui.horizontal(|ui| {
-                ui.label("Collision Layer");
-                changed |= ui
-                    .add(egui::DragValue::new(&mut collision_layer).hexadecimal(8, false, true))
-                    .changed();
-            });
-
-            ui.horizontal(|ui| {
-                ui.label("Collision Mask");
-                changed |= ui
-                    .add(egui::DragValue::new(&mut collision_mask).hexadecimal(8, false, true))
-                    .changed();
-            });
-
-            changed |= ui.checkbox(&mut is_sensor, "Is Sensor (Trigger)").changed();
+            changed |= draw_collider_material_ui(
+                ui,
+                &mut density,
+                &mut friction,
+                &mut restitution,
+                &mut collision_layer,
+                &mut collision_mask,
+                &mut is_sensor,
+            );
 
             if changed {
                 if let Some(mut bc) = scene.get_component_mut::<BoxCollider2DComponent>(entity) {
@@ -355,54 +316,15 @@ pub(crate) fn draw_circle_collider2d_component(
                     .changed();
             });
 
-            ui.horizontal(|ui| {
-                ui.label("Density");
-                changed |= ui
-                    .add(
-                        egui::DragValue::new(&mut density)
-                            .speed(0.01)
-                            .range(0.0..=f32::MAX),
-                    )
-                    .changed();
-            });
-
-            ui.horizontal(|ui| {
-                ui.label("Friction");
-                changed |= ui
-                    .add(
-                        egui::DragValue::new(&mut friction)
-                            .speed(0.01)
-                            .range(0.0..=1.0),
-                    )
-                    .changed();
-            });
-
-            ui.horizontal(|ui| {
-                ui.label("Restitution");
-                changed |= ui
-                    .add(
-                        egui::DragValue::new(&mut restitution)
-                            .speed(0.01)
-                            .range(0.0..=1.0),
-                    )
-                    .changed();
-            });
-
-            ui.horizontal(|ui| {
-                ui.label("Collision Layer");
-                changed |= ui
-                    .add(egui::DragValue::new(&mut collision_layer).hexadecimal(8, false, true))
-                    .changed();
-            });
-
-            ui.horizontal(|ui| {
-                ui.label("Collision Mask");
-                changed |= ui
-                    .add(egui::DragValue::new(&mut collision_mask).hexadecimal(8, false, true))
-                    .changed();
-            });
-
-            changed |= ui.checkbox(&mut is_sensor, "Is Sensor (Trigger)").changed();
+            changed |= draw_collider_material_ui(
+                ui,
+                &mut density,
+                &mut friction,
+                &mut restitution,
+                &mut collision_layer,
+                &mut collision_mask,
+                &mut is_sensor,
+            );
 
             if changed {
                 if let Some(mut cc) = scene.get_component_mut::<CircleCollider2DComponent>(entity) {

@@ -10,6 +10,7 @@ pub mod native_script;
 mod physics_2d;
 mod physics_3d;
 mod physics_3d_ops;
+mod physics_common;
 mod physics_ops;
 mod rendering;
 mod runtime;
@@ -32,9 +33,10 @@ pub use components::{
     CircleCollider2DComponent, CircleRendererComponent, DirectionalLightComponent, IdComponent,
     MeshPrimitive, MeshRendererComponent, MeshSource, NativeScriptComponent,
     ParticleEmitterComponent, PointLightComponent, RelationshipComponent, RigidBody2DComponent,
-    RigidBody2DType, RigidBody3DComponent, RigidBody3DType, SphereCollider3DComponent,
-    SpriteRendererComponent, TagComponent, TextComponent, TilemapComponent, TransformComponent,
-    UIAnchorComponent, TILE_FLIP_H, TILE_FLIP_V, TILE_ID_MASK,
+    RigidBody2DType, RigidBody3DComponent, RigidBody3DType, RigidBodyType,
+    SphereCollider3DComponent, SpriteRendererComponent, TagComponent, TextComponent,
+    TilemapComponent, TransformComponent, UIAnchorComponent, TILE_FLIP_H, TILE_FLIP_V,
+    TILE_ID_MASK,
 };
 pub use entity::Entity;
 pub use native_script::NativeScript;

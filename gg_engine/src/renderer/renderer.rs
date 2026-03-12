@@ -69,6 +69,68 @@ const QUAD_TEX_COORDS: [[f32; 2]; 4] = [
     [0.0, 1.0], // bottom-left
 ];
 
+// ---------------------------------------------------------------------------
+// Renderer sub-structs (P2-I8 decomposition)
+// ---------------------------------------------------------------------------
+
+/// 3D mesh pipeline state: lazily-created pipelines, wireframe toggle,
+/// and offscreen render pass metadata.
+pub(crate) struct Mesh3DState {
+    pub pipeline: Option<Arc<Pipeline>>,
+    pub offscreen_pipeline: Option<Arc<Pipeline>>,
+    pub use_offscreen: bool,
+    pub wireframe_pipeline: Option<Arc<Pipeline>>,
+    pub wireframe_offscreen_pipeline: Option<Arc<Pipeline>>,
+    pub wireframe_mode: WireframeMode,
+    pub wireframe_active: bool,
+    pub offscreen_render_pass: Option<vk::RenderPass>,
+    pub offscreen_color_attachment_count: u32,
+    pub offscreen_sample_count: vk::SampleCountFlags,
+}
+
+impl Mesh3DState {
+    fn new() -> Self {
+        Self {
+            pipeline: None,
+            offscreen_pipeline: None,
+            use_offscreen: false,
+            wireframe_pipeline: None,
+            wireframe_offscreen_pipeline: None,
+            wireframe_mode: WireframeMode::Off,
+            wireframe_active: false,
+            offscreen_render_pass: None,
+            offscreen_color_attachment_count: 0,
+            offscreen_sample_count: vk::SampleCountFlags::TYPE_1,
+        }
+    }
+}
+
+/// Shadow mapping state: shadow map system, depth-only pipelines, and
+/// quality / debug settings.
+pub(crate) struct ShadowState {
+    pub map: Option<ShadowMapSystem>,
+    pub pipeline: Option<Arc<Pipeline>>,
+    pub pipeline_front: Option<Arc<Pipeline>>,
+    pub alpha_pipeline: Option<Arc<Pipeline>>,
+    pub active_layout: Option<vk::PipelineLayout>,
+    pub debug_mode: i32,
+    pub quality: i32,
+}
+
+impl ShadowState {
+    fn new() -> Self {
+        Self {
+            map: None,
+            pipeline: None,
+            pipeline_front: None,
+            alpha_pipeline: None,
+            active_layout: None,
+            debug_mode: 0,
+            quality: 3,
+        }
+    }
+}
+
 /// High-level renderer. Owns the `RendererAPI` and the current frame's
 /// `DrawContext`. Provides `begin_scene` / `end_scene` / `submit` for
 /// structured draw call recording, and factory methods for creating
@@ -130,41 +192,14 @@ pub struct Renderer {
     // Maximum MSAA sample count supported by the GPU.
     max_msaa_samples: vk::SampleCountFlags,
 
-    // Lazily initialized default 3D mesh pipelines (used by Scene::render_scene).
-    mesh3d_pipeline: Option<Arc<Pipeline>>,
-    mesh3d_offscreen_pipeline: Option<Arc<Pipeline>>,
-    mesh3d_use_offscreen: bool,
+    // 3D mesh pipelines, wireframe, and offscreen pass info.
+    mesh3d: Mesh3DState,
 
-    // Wireframe 3D mesh pipeline variants (PolygonMode::LINE).
-    mesh3d_wireframe_pipeline: Option<Arc<Pipeline>>,
-    mesh3d_wireframe_offscreen_pipeline: Option<Arc<Pipeline>>,
-
-    // Current wireframe rendering mode.
-    wireframe_mode: WireframeMode,
-    // Tracks whether wireframe is active for the current draw pass
-    // (set by set_wireframe_active, used by mesh3d_pipeline).
-    wireframe_active: bool,
-
-    // Offscreen render pass info (stored when offscreen pipelines are created).
-    offscreen_render_pass: Option<vk::RenderPass>,
-    offscreen_color_attachment_count: u32,
-    offscreen_sample_count: vk::SampleCountFlags,
-
-    // Shadow mapping system (lazily initialized).
-    shadow_map: Option<ShadowMapSystem>,
-    shadow_pipeline: Option<Arc<Pipeline>>, // back-face cull (default)
-    shadow_pipeline_front: Option<Arc<Pipeline>>, // front-face cull variant
-    shadow_alpha_pipeline: Option<Arc<Pipeline>>, // alpha-tested variant
-    // Pipeline layout currently bound by `begin_shadow_pass` (back-cull or front-cull).
-    active_shadow_layout: Option<vk::PipelineLayout>,
+    // Shadow mapping system and pipelines.
+    shadow: ShadowState,
 
     // GPU timestamp profiler.
     gpu_profiler: Option<GpuProfiler>,
-
-    // Shadow cascade debug visualization mode (0 = off, written to LightGpuData.counts.w).
-    shadow_debug_mode: i32,
-    // Shadow quality tier (0=Low 4-tap, 1=Medium 9-tap, 2=High 16-tap, 3=Ultra PCSS).
-    shadow_quality: i32,
 
     // Post-processing pipeline (lazily initialized when scene framebuffer is available).
     postprocess: Option<PostProcessPipeline>,
@@ -268,25 +303,10 @@ impl Renderer {
             transfer_batch,
             gpu_particles: None,
             max_msaa_samples: vk_ctx.max_msaa_samples(),
-            mesh3d_pipeline: None,
-            mesh3d_offscreen_pipeline: None,
-            mesh3d_use_offscreen: false,
-            mesh3d_wireframe_pipeline: None,
-            mesh3d_wireframe_offscreen_pipeline: None,
-            wireframe_mode: WireframeMode::Off,
-            wireframe_active: false,
-            offscreen_render_pass: None,
-            offscreen_color_attachment_count: 0,
-            offscreen_sample_count: vk::SampleCountFlags::TYPE_1,
-            shadow_map: None,
-            shadow_pipeline: None,
-            shadow_pipeline_front: None,
-            shadow_alpha_pipeline: None,
-            active_shadow_layout: None,
+            mesh3d: Mesh3DState::new(),
+            shadow: ShadowState::new(),
             gpu_profiler: None,
             postprocess: None,
-            shadow_debug_mode: 0,
-            shadow_quality: 3, // Ultra (PCSS) by default
         })
     }
 
@@ -427,7 +447,8 @@ impl Renderer {
     ) -> EngineResult<Arc<Pipeline>> {
         self.ensure_shadow_map()?;
         let shadow_ds_layout = self
-            .shadow_map
+            .shadow
+            .map
             .as_ref()
             .expect("Shadow map system just initialized")
             .ds_layout();
@@ -638,12 +659,12 @@ impl Renderer {
         samples: vk::SampleCountFlags,
     ) -> EngineResult<()> {
         // Store offscreen render pass info for lazy 3D pipeline creation.
-        self.offscreen_render_pass = Some(render_pass);
-        self.offscreen_color_attachment_count = color_attachment_count;
-        self.offscreen_sample_count = samples;
+        self.mesh3d.offscreen_render_pass = Some(render_pass);
+        self.mesh3d.offscreen_color_attachment_count = color_attachment_count;
+        self.mesh3d.offscreen_sample_count = samples;
         // Invalidate cached offscreen mesh3d pipelines (render pass may have changed).
-        self.mesh3d_offscreen_pipeline = None;
-        self.mesh3d_wireframe_offscreen_pipeline = None;
+        self.mesh3d.offscreen_pipeline = None;
+        self.mesh3d.wireframe_offscreen_pipeline = None;
 
         if let Some(data) = &mut self.renderer_2d {
             data.create_offscreen_pipeline(
@@ -660,7 +681,7 @@ impl Renderer {
 
     /// Return the current offscreen render pass (if any).
     pub fn offscreen_render_pass(&self) -> Option<vk::RenderPass> {
-        self.offscreen_render_pass
+        self.mesh3d.offscreen_render_pass
     }
 
     /// Return the maximum MSAA sample count supported by the GPU.
@@ -696,8 +717,8 @@ impl Renderer {
     pub fn upload_lights(&self, env: &LightEnvironment) {
         if let Some(ctx) = self.draw_context {
             let mut gpu_data = env.to_gpu_data();
-            gpu_data.counts[3] = self.shadow_debug_mode;
-            gpu_data.shadow_settings[0] = self.shadow_quality;
+            gpu_data.counts[3] = self.shadow.debug_mode;
+            gpu_data.shadow_settings[0] = self.shadow.quality;
             self.lighting
                 .write_ubo(&gpu_data, ctx.current_frame, ctx.viewport_index);
         }
@@ -709,7 +730,7 @@ impl Renderer {
     /// render pass, and descriptor sets on first call (256 MB GPU allocation).
     /// Subsequent calls are no-ops.
     pub fn ensure_shadow_map(&mut self) -> EngineResult<()> {
-        if self.shadow_map.is_some() {
+        if self.shadow.map.is_some() {
             return Ok(());
         }
         let sm = ShadowMapSystem::new(
@@ -722,7 +743,7 @@ impl Renderer {
             self.command_pool,
             self.graphics_queue,
         )?;
-        self.shadow_map = Some(sm);
+        self.shadow.map = Some(sm);
         Ok(())
     }
 
@@ -735,9 +756,9 @@ impl Renderer {
     /// Ensure the shadow pipeline variant for the given cull mode exists.
     fn init_shadow_pipeline_variant(&mut self, front_face_cull: bool) -> EngineResult<()> {
         let slot = if front_face_cull {
-            &self.shadow_pipeline_front
+            &self.shadow.pipeline_front
         } else {
-            &self.shadow_pipeline
+            &self.shadow.pipeline
         };
         if slot.is_some() {
             return Ok(());
@@ -745,7 +766,8 @@ impl Renderer {
 
         self.ensure_shadow_map()?;
         let sm = self
-            .shadow_map
+            .shadow
+            .map
             .as_ref()
             .expect("Shadow map system just initialized");
 
@@ -772,16 +794,16 @@ impl Renderer {
             label, sm.width(), sm.height());
 
         if front_face_cull {
-            self.shadow_pipeline_front = Some(pipeline);
+            self.shadow.pipeline_front = Some(pipeline);
         } else {
-            self.shadow_pipeline = Some(pipeline);
+            self.shadow.pipeline = Some(pipeline);
         }
         Ok(())
     }
 
     /// Returns `true` if the shadow pipeline is ready for rendering.
     pub fn has_shadow_pipeline(&self) -> bool {
-        self.shadow_pipeline.is_some()
+        self.shadow.pipeline.is_some()
     }
 
     /// Begin the shadow depth-only render pass for a specific cascade.
@@ -799,14 +821,14 @@ impl Renderer {
         front_face_cull: bool,
     ) {
         // Ensure the requested pipeline variant exists.
-        if front_face_cull && self.shadow_pipeline_front.is_none() {
+        if front_face_cull && self.shadow.pipeline_front.is_none() {
             if let Err(e) = self.init_shadow_pipeline_variant(true) {
                 log::error!("Failed to create front-cull shadow pipeline: {e}");
                 return;
             }
         }
 
-        let sm = match self.shadow_map.as_ref() {
+        let sm = match self.shadow.map.as_ref() {
             Some(sm) => sm,
             None => {
                 log::error!("Shadow pass requested but shadow map not initialized");
@@ -814,9 +836,9 @@ impl Renderer {
             }
         };
         let pipeline = if front_face_cull {
-            self.shadow_pipeline_front.as_ref()
+            self.shadow.pipeline_front.as_ref()
         } else {
-            self.shadow_pipeline.as_ref()
+            self.shadow.pipeline.as_ref()
         }
         .expect("Shadow pipeline not initialized");
 
@@ -868,7 +890,7 @@ impl Renderer {
             );
 
             // Bind shadow pipeline and record its layout for submit_shadow.
-            self.active_shadow_layout = Some(pipeline.layout());
+            self.shadow.active_layout = Some(pipeline.layout());
             self.device.cmd_bind_pipeline(
                 cmd_buf,
                 vk::PipelineBindPoint::GRAPHICS,
@@ -901,7 +923,8 @@ impl Renderer {
         cmd_buf: vk::CommandBuffer,
     ) {
         let layout = self
-            .active_shadow_layout
+            .shadow
+            .active_layout
             .expect("submit_shadow called outside begin/end_shadow_pass");
 
         unsafe {
@@ -932,7 +955,7 @@ impl Renderer {
 
     /// End the shadow depth-only render pass.
     pub fn end_shadow_pass(&mut self, cmd_buf: vk::CommandBuffer) {
-        self.active_shadow_layout = None;
+        self.shadow.active_layout = None;
         unsafe {
             self.device.cmd_end_render_pass(cmd_buf);
         }
@@ -940,12 +963,13 @@ impl Renderer {
 
     /// Lazily create the alpha-tested shadow pipeline.
     pub fn init_shadow_alpha_pipeline(&mut self) -> EngineResult<()> {
-        if self.shadow_alpha_pipeline.is_some() {
+        if self.shadow.alpha_pipeline.is_some() {
             return Ok(());
         }
         self.ensure_shadow_map()?;
         let sm = self
-            .shadow_map
+            .shadow
+            .map
             .as_ref()
             .expect("Shadow map system just initialized");
 
@@ -970,13 +994,13 @@ impl Renderer {
         )?);
 
         log::info!(target: "gg_engine", "Shadow alpha pipeline created");
-        self.shadow_alpha_pipeline = Some(pipeline);
+        self.shadow.alpha_pipeline = Some(pipeline);
         Ok(())
     }
 
     /// Returns `true` if the alpha-tested shadow pipeline is ready.
     pub fn has_shadow_alpha_pipeline(&self) -> bool {
-        self.shadow_alpha_pipeline.is_some()
+        self.shadow.alpha_pipeline.is_some()
     }
 
     /// Bind the alpha-tested shadow pipeline within a shadow render pass.
@@ -988,7 +1012,8 @@ impl Renderer {
         current_frame: usize,
     ) {
         let pipeline = self
-            .shadow_alpha_pipeline
+            .shadow
+            .alpha_pipeline
             .as_ref()
             .expect("Shadow alpha pipeline not initialized");
 
@@ -1037,7 +1062,8 @@ impl Renderer {
         cmd_buf: vk::CommandBuffer,
     ) {
         let pipeline = self
-            .shadow_alpha_pipeline
+            .shadow
+            .alpha_pipeline
             .as_ref()
             .expect("Shadow alpha pipeline not initialized");
 
@@ -1087,14 +1113,14 @@ impl Renderer {
         if let Some(data) = &mut self.renderer_2d {
             data.set_use_offscreen(use_offscreen);
         }
-        self.mesh3d_use_offscreen = use_offscreen;
+        self.mesh3d.use_offscreen = use_offscreen;
     }
 
     /// Set the wireframe rendering mode.
     pub fn set_wireframe_mode(&mut self, mode: WireframeMode) {
-        self.wireframe_mode = mode;
+        self.mesh3d.wireframe_mode = mode;
         let wireframe = mode == WireframeMode::WireOnly;
-        self.wireframe_active = wireframe;
+        self.mesh3d.wireframe_active = wireframe;
         if let Some(data) = &mut self.renderer_2d {
             data.set_wireframe(wireframe);
         }
@@ -1102,13 +1128,13 @@ impl Renderer {
 
     /// Get the current wireframe rendering mode.
     pub fn wireframe_mode(&self) -> WireframeMode {
-        self.wireframe_mode
+        self.mesh3d.wireframe_mode
     }
 
     /// Temporarily enable/disable wireframe for both 2D and 3D renderers.
     /// Used for the overlay pass (render filled, then wireframe on top).
     pub fn set_wireframe_active(&mut self, wireframe: bool) {
-        self.wireframe_active = wireframe;
+        self.mesh3d.wireframe_active = wireframe;
         if let Some(data) = &mut self.renderer_2d {
             data.set_wireframe(wireframe);
         }
@@ -2129,17 +2155,17 @@ impl Renderer {
     /// Set the shadow cascade debug visualization mode (0 = off, 1-6 = debug views).
     /// Written to `LightGpuData.counts.w` and read by `mesh3d.glsl`.
     pub fn set_shadow_debug_mode(&mut self, mode: i32) {
-        self.shadow_debug_mode = mode;
+        self.shadow.debug_mode = mode;
     }
 
     /// Set the shadow quality tier (0=Low 4-tap, 1=Medium 9-tap, 2=High 16-tap, 3=Ultra PCSS).
     pub fn set_shadow_quality(&mut self, quality: i32) {
-        self.shadow_quality = quality.clamp(0, 3);
+        self.shadow.quality = quality.clamp(0, 3);
     }
 
     /// Current shadow quality tier (0=Low, 1=Medium, 2=High, 3=Ultra PCSS).
     pub fn shadow_quality(&self) -> i32 {
-        self.shadow_quality
+        self.shadow.quality
     }
 
     /// Set the camera near/far clip planes (used for contact shadow depth linearization).
@@ -2334,7 +2360,7 @@ impl Renderer {
             );
 
             // Set 4: shadow map (if initialized).
-            if let Some(ref sm) = self.shadow_map {
+            if let Some(ref sm) = self.shadow.map {
                 let shadow_ds = sm.descriptor_set(ctx.current_frame, ctx.viewport_index);
                 device.cmd_bind_descriptor_sets(
                     cmd,
@@ -2462,7 +2488,7 @@ impl Renderer {
     /// depth testing, and opaque blending. Automatically selects the
     /// offscreen or swapchain variant based on `use_offscreen_pipeline()`.
     pub fn mesh3d_pipeline(&mut self) -> EngineResult<Arc<Pipeline>> {
-        self.mesh3d_pipeline_inner(self.wireframe_active)
+        self.mesh3d_pipeline_inner(self.mesh3d.wireframe_active)
     }
 
     /// Get the wireframe variant of the mesh3d pipeline (for overlay pass).
@@ -2482,17 +2508,17 @@ impl Renderer {
         // Ensure shadow map system is initialized (needed for descriptor set layout).
         self.ensure_shadow_map()?;
 
-        if self.mesh3d_use_offscreen {
+        if self.mesh3d.use_offscreen {
             // Select the appropriate cached pipeline.
             let cached = if wireframe {
-                &self.mesh3d_wireframe_offscreen_pipeline
+                &self.mesh3d.wireframe_offscreen_pipeline
             } else {
-                &self.mesh3d_offscreen_pipeline
+                &self.mesh3d.offscreen_pipeline
             };
             if let Some(ref pipeline) = cached {
                 return Ok(Arc::clone(pipeline));
             }
-            let offscreen_rp = self.offscreen_render_pass.ok_or_else(|| {
+            let offscreen_rp = self.mesh3d.offscreen_render_pass.ok_or_else(|| {
                 EngineError::Gpu("No offscreen render pass set for mesh3d pipeline".to_string())
             })?;
             let shader = self.create_shader(
@@ -2502,7 +2528,8 @@ impl Renderer {
             )?;
             let vertex_layout = super::mesh::Mesh::vertex_layout();
             let shadow_ds_layout = self
-                .shadow_map
+                .shadow
+                .map
                 .as_ref()
                 .expect("Shadow map system just initialized")
                 .ds_layout();
@@ -2521,22 +2548,22 @@ impl Renderer {
                 super::CullMode::Back,
                 super::DepthConfig::STANDARD_3D,
                 super::BlendMode::Opaque,
-                self.offscreen_color_attachment_count,
+                self.mesh3d.offscreen_color_attachment_count,
                 self.pipeline_cache,
-                self.offscreen_sample_count,
+                self.mesh3d.offscreen_sample_count,
                 wireframe,
             )?);
             if wireframe {
-                self.mesh3d_wireframe_offscreen_pipeline = Some(Arc::clone(&pipeline));
+                self.mesh3d.wireframe_offscreen_pipeline = Some(Arc::clone(&pipeline));
             } else {
-                self.mesh3d_offscreen_pipeline = Some(Arc::clone(&pipeline));
+                self.mesh3d.offscreen_pipeline = Some(Arc::clone(&pipeline));
             }
             Ok(pipeline)
         } else {
             let cached = if wireframe {
-                &self.mesh3d_wireframe_pipeline
+                &self.mesh3d.wireframe_pipeline
             } else {
-                &self.mesh3d_pipeline
+                &self.mesh3d.pipeline
             };
             if let Some(ref pipeline) = cached {
                 return Ok(Arc::clone(pipeline));
@@ -2548,7 +2575,8 @@ impl Renderer {
             )?;
             let vertex_layout = super::mesh::Mesh::vertex_layout();
             let shadow_ds_layout = self
-                .shadow_map
+                .shadow
+                .map
                 .as_ref()
                 .expect("Shadow map system just initialized")
                 .ds_layout();
@@ -2573,9 +2601,9 @@ impl Renderer {
                 wireframe,
             )?);
             if wireframe {
-                self.mesh3d_wireframe_pipeline = Some(Arc::clone(&pipeline));
+                self.mesh3d.wireframe_pipeline = Some(Arc::clone(&pipeline));
             } else {
-                self.mesh3d_pipeline = Some(Arc::clone(&pipeline));
+                self.mesh3d.pipeline = Some(Arc::clone(&pipeline));
             }
             Ok(pipeline)
         }
@@ -2656,11 +2684,11 @@ impl Drop for Renderer {
         // Drop GPU profiler (owns query pools).
         drop(self.gpu_profiler.take());
         // Drop shadow pipelines before shadow map (pipelines reference render pass).
-        drop(self.shadow_pipeline.take());
-        drop(self.shadow_pipeline_front.take());
-        drop(self.shadow_alpha_pipeline.take());
+        drop(self.shadow.pipeline.take());
+        drop(self.shadow.pipeline_front.take());
+        drop(self.shadow.alpha_pipeline.take());
         // Drop shadow map system (owns descriptor set layouts, render pass, image).
-        drop(self.shadow_map.take());
+        drop(self.shadow.map.take());
         unsafe {
             self.device
                 .destroy_pipeline_cache(self.pipeline_cache, None);
