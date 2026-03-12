@@ -2,6 +2,7 @@ use std::path::Path;
 
 use super::buffer::as_bytes;
 use super::{BufferElement, BufferLayout, ShaderDataType, VertexArray};
+use crate::error::{EngineError, EngineResult};
 use crate::renderer::Renderer;
 
 // ---------------------------------------------------------------------------
@@ -41,7 +42,7 @@ impl Mesh {
     }
 
     /// Upload mesh data to the GPU, returning a ready-to-draw `VertexArray`.
-    pub fn upload(&self, renderer: &mut Renderer) -> Result<VertexArray, String> {
+    pub fn upload(&self, renderer: &mut Renderer) -> EngineResult<VertexArray> {
         let vertex_bytes = unsafe { as_bytes(&self.vertices) };
         let mut vb = renderer.create_vertex_buffer(vertex_bytes)?;
         vb.set_layout(Self::vertex_layout());
@@ -232,9 +233,9 @@ impl Mesh {
 // ---------------------------------------------------------------------------
 
 /// Load all meshes from a glTF / GLB file.
-pub fn load_gltf(path: &Path) -> Result<Vec<Mesh>, String> {
+pub fn load_gltf(path: &Path) -> EngineResult<Vec<Mesh>> {
     let (document, buffers, _images) = gltf::import(path)
-        .map_err(|e| format!("Failed to load glTF '{}': {}", path.display(), e))?;
+        .map_err(|e| EngineError::Gpu(format!("Failed to load glTF '{}': {}", path.display(), e)))?;
 
     let mut meshes = Vec::new();
 
@@ -244,7 +245,7 @@ pub fn load_gltf(path: &Path) -> Result<Vec<Mesh>, String> {
 
             let positions: Vec<[f32; 3]> = reader
                 .read_positions()
-                .ok_or_else(|| format!("Mesh '{}' primitive has no positions", mesh.index()))?
+                .ok_or_else(|| EngineError::Gpu(format!("Mesh '{}' primitive has no positions", mesh.index())))?
                 .collect();
 
             let vert_count = positions.len();
@@ -305,7 +306,7 @@ pub fn load_gltf(path: &Path) -> Result<Vec<Mesh>, String> {
     }
 
     if meshes.is_empty() {
-        return Err(format!("No meshes found in '{}'", path.display()));
+        return Err(EngineError::Gpu(format!("No meshes found in '{}'", path.display())));
     }
 
     log::info!("Loaded {} mesh(es) from '{}'", meshes.len(), path.display());

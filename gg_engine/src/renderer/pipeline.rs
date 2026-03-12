@@ -5,6 +5,7 @@ use super::material::BlendMode;
 use super::shader::Shader;
 use super::vertex_array::VertexArray;
 
+use crate::error::{EngineError, EngineResult};
 use crate::profiling::ProfileTimer;
 
 // ---------------------------------------------------------------------------
@@ -224,14 +225,14 @@ fn create_and_wrap_pipeline(
     pipeline_info: &vk::GraphicsPipelineCreateInfo<'_>,
     pipeline_cache: vk::PipelineCache,
     pipeline_layout: vk::PipelineLayout,
-) -> Result<Pipeline, String> {
+) -> EngineResult<Pipeline> {
     let pipeline =
         unsafe { device.create_graphics_pipelines(pipeline_cache, &[*pipeline_info], None) }
             .map_err(|(_, e)| {
                 unsafe {
                     device.destroy_pipeline_layout(pipeline_layout, None);
                 }
-                format!("Failed to create graphics pipeline: {e}")
+                EngineError::Gpu(format!("Failed to create graphics pipeline: {e}"))
             })?[0];
 
     Ok(Pipeline {
@@ -269,7 +270,7 @@ pub(crate) fn create_pipeline(
     pipeline_cache: vk::PipelineCache,
     samples: vk::SampleCountFlags,
     wireframe: bool,
-) -> Result<Pipeline, String> {
+) -> EngineResult<Pipeline> {
     let _timer = ProfileTimer::new("Pipeline::create");
     let entry_point = c"main";
 
@@ -364,7 +365,7 @@ pub(crate) fn create_pipeline(
         .push_constant_ranges(push_constant_ranges)
         .set_layouts(&all_layouts);
     let pipeline_layout = unsafe { device.create_pipeline_layout(&layout_info, None) }
-        .map_err(|e| format!("Failed to create pipeline layout: {e}"))?;
+        .map_err(|e| EngineError::Gpu(format!("Failed to create pipeline layout: {e}")))?;
 
     let pipeline_info = vk::GraphicsPipelineCreateInfo::default()
         .stages(&shader_stages)
@@ -400,7 +401,7 @@ pub(crate) fn create_batch_pipeline(
     pipeline_cache: vk::PipelineCache,
     samples: vk::SampleCountFlags,
     wireframe: bool,
-) -> Result<Pipeline, String> {
+) -> EngineResult<Pipeline> {
     let _timer = ProfileTimer::new("Pipeline::create_batch");
     let entry_point = c"main";
 
@@ -454,7 +455,7 @@ pub(crate) fn create_batch_pipeline(
 
     let layout_info = vk::PipelineLayoutCreateInfo::default().set_layouts(&all_layouts);
     let pipeline_layout = unsafe { device.create_pipeline_layout(&layout_info, None) }
-        .map_err(|e| format!("Failed to create batch pipeline layout: {e}"))?;
+        .map_err(|e| EngineError::Gpu(format!("Failed to create batch pipeline layout: {e}")))?;
 
     let pipeline_info = vk::GraphicsPipelineCreateInfo::default()
         .stages(&shader_stages)
@@ -494,7 +495,7 @@ pub(crate) fn create_instanced_batch_pipeline(
     pipeline_cache: vk::PipelineCache,
     samples: vk::SampleCountFlags,
     wireframe: bool,
-) -> Result<Pipeline, String> {
+) -> EngineResult<Pipeline> {
     let _timer = ProfileTimer::new("Pipeline::create_instanced_batch");
     let entry_point = c"main";
 
@@ -552,7 +553,7 @@ pub(crate) fn create_instanced_batch_pipeline(
 
     let layout_info = vk::PipelineLayoutCreateInfo::default().set_layouts(&all_layouts);
     let pipeline_layout = unsafe { device.create_pipeline_layout(&layout_info, None) }
-        .map_err(|e| format!("Failed to create instanced batch pipeline layout: {e}"))?;
+        .map_err(|e| EngineError::Gpu(format!("Failed to create instanced batch pipeline layout: {e}")))?;
 
     let pipeline_info = vk::GraphicsPipelineCreateInfo::default()
         .stages(&shader_stages)
@@ -587,7 +588,7 @@ pub(crate) fn create_line_batch_pipeline(
     color_attachment_count: u32,
     pipeline_cache: vk::PipelineCache,
     samples: vk::SampleCountFlags,
-) -> Result<Pipeline, String> {
+) -> EngineResult<Pipeline> {
     let _timer = ProfileTimer::new("Pipeline::create_line_batch");
     let entry_point = c"main";
 
@@ -647,7 +648,7 @@ pub(crate) fn create_line_batch_pipeline(
 
     let layout_info = vk::PipelineLayoutCreateInfo::default().set_layouts(&all_layouts);
     let pipeline_layout = unsafe { device.create_pipeline_layout(&layout_info, None) }
-        .map_err(|e| format!("Failed to create line batch pipeline layout: {e}"))?;
+        .map_err(|e| EngineError::Gpu(format!("Failed to create line batch pipeline layout: {e}")))?;
 
     let pipeline_info = vk::GraphicsPipelineCreateInfo::default()
         .stages(&shader_stages)
@@ -718,7 +719,7 @@ pub(crate) fn create_3d_pipeline(
     pipeline_cache: vk::PipelineCache,
     samples: vk::SampleCountFlags,
     wireframe: bool,
-) -> Result<Pipeline, String> {
+) -> EngineResult<Pipeline> {
     let _timer = ProfileTimer::new("Pipeline::create_3d");
     let entry_point = c"main";
 
@@ -804,7 +805,7 @@ pub(crate) fn create_3d_pipeline(
         .set_layouts(&all_layouts)
         .push_constant_ranges(&push_ranges);
     let pipeline_layout = unsafe { device.create_pipeline_layout(&layout_info, None) }
-        .map_err(|e| format!("Failed to create 3D pipeline layout: {e}"))?;
+        .map_err(|e| EngineError::Gpu(format!("Failed to create 3D pipeline layout: {e}")))?;
 
     let pipeline_info = vk::GraphicsPipelineCreateInfo::default()
         .stages(&shader_stages)

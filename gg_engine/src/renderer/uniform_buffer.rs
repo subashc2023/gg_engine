@@ -5,6 +5,7 @@ use glam::Mat4;
 
 use super::buffer::create_buffer_with_allocation;
 use super::gpu_allocation::{GpuAllocation, GpuAllocator};
+use crate::error::EngineResult;
 
 // ---------------------------------------------------------------------------
 // CameraData — the data written to the camera UBO each frame
@@ -42,7 +43,7 @@ impl UniformBuffer {
         allocator: &Arc<Mutex<GpuAllocator>>,
         device: &ash::Device,
         size: usize,
-    ) -> Result<Self, String> {
+    ) -> EngineResult<Self> {
         let mut buffers = [vk::Buffer::null(); TOTAL_SLOTS];
         let mut allocations: [Option<GpuAllocation>; TOTAL_SLOTS] = std::array::from_fn(|_| None);
 

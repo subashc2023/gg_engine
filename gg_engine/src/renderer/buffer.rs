@@ -3,6 +3,7 @@ use std::sync::{Arc, Mutex};
 use ash::vk;
 
 use super::gpu_allocation::{GpuAllocation, GpuAllocator, MemoryLocation};
+use crate::error::{EngineError, EngineResult};
 use crate::profiling::ProfileTimer;
 
 // ---------------------------------------------------------------------------
@@ -244,7 +245,7 @@ impl VertexBuffer {
         allocator: &Arc<Mutex<GpuAllocator>>,
         device: &ash::Device,
         data: &[u8],
-    ) -> Result<Self, String> {
+    ) -> EngineResult<Self> {
         let _timer = ProfileTimer::new("VertexBuffer::new");
         let size = data.len() as vk::DeviceSize;
 
@@ -311,7 +312,7 @@ impl IndexBuffer {
         allocator: &Arc<Mutex<GpuAllocator>>,
         device: &ash::Device,
         indices: &[u32],
-    ) -> Result<Self, String> {
+    ) -> EngineResult<Self> {
         let _timer = ProfileTimer::new("IndexBuffer::new");
         let size = std::mem::size_of_val(indices) as vk::DeviceSize;
 
@@ -388,7 +389,7 @@ impl DynamicVertexBuffer {
         device: &ash::Device,
         capacity: usize,
         layout: BufferLayout,
-    ) -> Result<Self, String> {
+    ) -> EngineResult<Self> {
         let (buffer, allocation) = create_buffer_with_allocation(
             allocator,
             device,
@@ -456,14 +457,14 @@ pub(super) fn create_buffer_with_allocation(
     size: vk::DeviceSize,
     usage: vk::BufferUsageFlags,
     name: &str,
-) -> Result<(vk::Buffer, GpuAllocation), String> {
+) -> EngineResult<(vk::Buffer, GpuAllocation)> {
     let buffer_info = vk::BufferCreateInfo::default()
         .size(size)
         .usage(usage)
         .sharing_mode(vk::SharingMode::EXCLUSIVE);
 
     let buffer = unsafe { device.create_buffer(&buffer_info, None) }
-        .map_err(|e| format!("Failed to create {name} buffer: {e}"))?;
+        .map_err(|e| EngineError::Gpu(format!("Failed to create {name} buffer: {e}")))?;
 
     let allocation = GpuAllocator::allocate_for_buffer(
         allocator,
@@ -484,14 +485,14 @@ pub(super) fn create_buffer_with_location(
     usage: vk::BufferUsageFlags,
     name: &str,
     location: MemoryLocation,
-) -> Result<(vk::Buffer, GpuAllocation), String> {
+) -> EngineResult<(vk::Buffer, GpuAllocation)> {
     let buffer_info = vk::BufferCreateInfo::default()
         .size(size)
         .usage(usage)
         .sharing_mode(vk::SharingMode::EXCLUSIVE);
 
     let buffer = unsafe { device.create_buffer(&buffer_info, None) }
-        .map_err(|e| format!("Failed to create {name} buffer: {e}"))?;
+        .map_err(|e| EngineError::Gpu(format!("Failed to create {name} buffer: {e}")))?;
 
     let allocation = GpuAllocator::allocate_for_buffer(allocator, device, buffer, name, location)?;
 
@@ -503,7 +504,7 @@ pub(super) fn create_staging_buffer(
     allocator: &Arc<Mutex<GpuAllocator>>,
     device: &ash::Device,
     data: &[u8],
-) -> Result<(vk::Buffer, GpuAllocation), String> {
+) -> EngineResult<(vk::Buffer, GpuAllocation)> {
     let size = data.len() as vk::DeviceSize;
 
     let (buffer, allocation) = create_buffer_with_allocation(

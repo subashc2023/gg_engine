@@ -6,6 +6,7 @@ use super::gpu_allocation::{GpuAllocation, GpuAllocator, MemoryLocation};
 use super::pipeline::Pipeline;
 use super::shader::Shader;
 
+use crate::error::{EngineError, EngineResult};
 use crate::profiling::ProfileTimer;
 
 // ---------------------------------------------------------------------------
@@ -233,7 +234,7 @@ impl PostProcessPipeline {
         pipeline_cache: vk::PipelineCache,
         width: u32,
         height: u32,
-    ) -> Result<Self, String> {
+    ) -> EngineResult<Self> {
         let _timer = ProfileTimer::new("PostProcessPipeline::new");
 
         // Use 16-bit float for all internal images — preserves HDR range through
@@ -258,7 +259,7 @@ impl PostProcessPipeline {
                 None,
             )
         }
-        .map_err(|e| format!("Failed to create PP descriptor set layout: {e}"))?;
+        .map_err(|e| EngineError::Gpu(format!("Failed to create PP descriptor set layout: {e}")))?;
 
         // --- Descriptor pool ---
         // bloom mips + output + scene + contact_shadowed + shadow_temp + depth + msaa_depth + resolved_depth + normal
@@ -276,7 +277,7 @@ impl PostProcessPipeline {
                 None,
             )
         }
-        .map_err(|e| format!("Failed to create PP descriptor pool: {e}"))?;
+        .map_err(|e| EngineError::Gpu(format!("Failed to create PP descriptor pool: {e}")))?;
 
         // --- Linear sampler ---
         let linear_sampler = unsafe {
@@ -291,7 +292,7 @@ impl PostProcessPipeline {
                 None,
             )
         }
-        .map_err(|e| format!("Failed to create PP linear sampler: {e}"))?;
+        .map_err(|e| EngineError::Gpu(format!("Failed to create PP linear sampler: {e}")))?;
 
         // --- Create intermediate images ---
         let mut bloom_mips = Vec::with_capacity(BLOOM_MIP_LEVELS);
@@ -423,7 +424,7 @@ impl PostProcessPipeline {
                         None,
                     )
                 }
-                .map_err(|e| format!("Failed to create depth sampler: {e}"))?,
+                .map_err(|e| EngineError::Gpu(format!("Failed to create depth sampler: {e}")))?,
             )
         } else {
             None
@@ -608,7 +609,7 @@ impl PostProcessPipeline {
         scene_normal_view: Option<vk::ImageView>,
         width: u32,
         height: u32,
-    ) -> Result<(), String> {
+    ) -> EngineResult<()> {
         if width == self.width && height == self.height {
             // Size unchanged but input views may have changed (e.g. MSAA
             // framebuffer recreation at the same dimensions). Update only
@@ -870,7 +871,7 @@ impl PostProcessPipeline {
         scene_depth_view: Option<vk::ImageView>,
         msaa_depth_view: Option<vk::ImageView>,
         scene_normal_view: Option<vk::ImageView>,
-    ) -> Result<(), String> {
+    ) -> EngineResult<()> {
         unsafe {
             let _ = self.device.device_wait_idle();
         }
@@ -925,7 +926,7 @@ impl PostProcessPipeline {
                         None,
                     )
                 }
-                .map_err(|e| format!("Failed to create depth sampler: {e}"))?,
+                .map_err(|e| EngineError::Gpu(format!("Failed to create depth sampler: {e}")))?,
             );
         }
         let depth_samp = self.depth_sampler.unwrap_or(self.linear_sampler);
@@ -1142,7 +1143,7 @@ impl PostProcessPipeline {
     pub(crate) fn reload_shaders(
         &mut self,
         compiled: &[(String, super::shader_compiler::CompiledShader)],
-    ) -> Result<u32, String> {
+    ) -> EngineResult<u32> {
         let mut count = 0u32;
 
         for (name, cs) in compiled {
@@ -2089,7 +2090,7 @@ fn create_render_pass(
     device: &ash::Device,
     format: vk::Format,
     load_op: vk::AttachmentLoadOp,
-) -> Result<vk::RenderPass, String> {
+) -> EngineResult<vk::RenderPass> {
     let attachment = vk::AttachmentDescription::default()
         .format(format)
         .samples(vk::SampleCountFlags::TYPE_1)
@@ -2136,7 +2137,7 @@ fn create_render_pass(
         .dependencies(&dependencies);
 
     unsafe { device.create_render_pass(&create_info, None) }
-        .map_err(|e| format!("Failed to create PP render pass: {e}"))
+        .map_err(|e| EngineError::Gpu(format!("Failed to create PP render pass: {e}")))
 }
 
 /// Create a post-processing intermediate image with framebuffer and descriptor set.
@@ -2151,7 +2152,7 @@ fn create_pp_image(
     format: vk::Format,
     width: u32,
     height: u32,
-) -> Result<PostProcessImage, String> {
+) -> EngineResult<PostProcessImage> {
     // Create image.
     let image_info = vk::ImageCreateInfo::default()
         .image_type(vk::ImageType::TYPE_2D)
@@ -2170,7 +2171,7 @@ fn create_pp_image(
         .samples(vk::SampleCountFlags::TYPE_1);
 
     let image = unsafe { device.create_image(&image_info, None) }
-        .map_err(|e| format!("Failed to create PP image: {e}"))?;
+        .map_err(|e| EngineError::Gpu(format!("Failed to create PP image: {e}")))?;
 
     let allocation = GpuAllocator::allocate_for_image(
         allocator,
@@ -2194,7 +2195,7 @@ fn create_pp_image(
         });
 
     let image_view = unsafe { device.create_image_view(&view_info, None) }
-        .map_err(|e| format!("Failed to create PP image view: {e}"))?;
+        .map_err(|e| EngineError::Gpu(format!("Failed to create PP image view: {e}")))?;
 
     // Framebuffer.
     let fb_info = vk::FramebufferCreateInfo::default()
@@ -2205,7 +2206,7 @@ fn create_pp_image(
         .layers(1);
 
     let framebuffer = unsafe { device.create_framebuffer(&fb_info, None) }
-        .map_err(|e| format!("Failed to create PP framebuffer: {e}"))?;
+        .map_err(|e| EngineError::Gpu(format!("Failed to create PP framebuffer: {e}")))?;
 
     // Descriptor set.
     let descriptor_set = allocate_and_write_ds(device, ds_pool, ds_layout, sampler, image_view)?;
@@ -2235,7 +2236,7 @@ fn create_pp_image_reuse_ds(
     format: vk::Format,
     width: u32,
     height: u32,
-) -> Result<PostProcessImage, String> {
+) -> EngineResult<PostProcessImage> {
     let image_info = vk::ImageCreateInfo::default()
         .image_type(vk::ImageType::TYPE_2D)
         .extent(vk::Extent3D {
@@ -2253,7 +2254,7 @@ fn create_pp_image_reuse_ds(
         .samples(vk::SampleCountFlags::TYPE_1);
 
     let image = unsafe { device.create_image(&image_info, None) }
-        .map_err(|e| format!("Failed to create PP image: {e}"))?;
+        .map_err(|e| EngineError::Gpu(format!("Failed to create PP image: {e}")))?;
 
     let allocation = GpuAllocator::allocate_for_image(
         allocator,
@@ -2276,7 +2277,7 @@ fn create_pp_image_reuse_ds(
         });
 
     let image_view = unsafe { device.create_image_view(&view_info, None) }
-        .map_err(|e| format!("Failed to create PP image view: {e}"))?;
+        .map_err(|e| EngineError::Gpu(format!("Failed to create PP image view: {e}")))?;
 
     let fb_info = vk::FramebufferCreateInfo::default()
         .render_pass(render_pass)
@@ -2286,7 +2287,7 @@ fn create_pp_image_reuse_ds(
         .layers(1);
 
     let framebuffer = unsafe { device.create_framebuffer(&fb_info, None) }
-        .map_err(|e| format!("Failed to create PP framebuffer: {e}"))?;
+        .map_err(|e| EngineError::Gpu(format!("Failed to create PP framebuffer: {e}")))?;
 
     // Update the existing descriptor set to point to the new image view.
     update_ds(device, existing_ds, sampler, image_view);
@@ -2332,14 +2333,14 @@ fn allocate_and_write_ds(
     layout: vk::DescriptorSetLayout,
     sampler: vk::Sampler,
     image_view: vk::ImageView,
-) -> Result<vk::DescriptorSet, String> {
+) -> EngineResult<vk::DescriptorSet> {
     let layouts = [layout];
     let alloc_info = vk::DescriptorSetAllocateInfo::default()
         .descriptor_pool(pool)
         .set_layouts(&layouts);
 
     let ds = unsafe { device.allocate_descriptor_sets(&alloc_info) }
-        .map_err(|e| format!("Failed to allocate PP descriptor set: {e}"))?[0];
+        .map_err(|e| EngineError::Gpu(format!("Failed to allocate PP descriptor set: {e}")))?[0];
 
     let image_info = vk::DescriptorImageInfo::default()
         .sampler(sampler)
@@ -2367,14 +2368,14 @@ fn allocate_and_write_ds_with_layout(
     sampler: vk::Sampler,
     image_view: vk::ImageView,
     image_layout: vk::ImageLayout,
-) -> Result<vk::DescriptorSet, String> {
+) -> EngineResult<vk::DescriptorSet> {
     let layouts = [layout];
     let alloc_info = vk::DescriptorSetAllocateInfo::default()
         .descriptor_pool(pool)
         .set_layouts(&layouts);
 
     let ds = unsafe { device.allocate_descriptor_sets(&alloc_info) }
-        .map_err(|e| format!("Failed to allocate PP descriptor set: {e}"))?[0];
+        .map_err(|e| EngineError::Gpu(format!("Failed to allocate PP descriptor set: {e}")))?[0];
 
     let image_info = vk::DescriptorImageInfo::default()
         .sampler(sampler)
@@ -2403,7 +2404,7 @@ fn create_fullscreen_pipeline(
     push_constant_size: u32,
     additive_blend: bool,
     pipeline_cache: vk::PipelineCache,
-) -> Result<Pipeline, String> {
+) -> EngineResult<Pipeline> {
     let entry_point = c"main";
 
     let stages = [
@@ -2480,7 +2481,7 @@ fn create_fullscreen_pipeline(
         .push_constant_ranges(push_ranges);
 
     let pipeline_layout = unsafe { device.create_pipeline_layout(&layout_info, None) }
-        .map_err(|e| format!("Failed to create PP pipeline layout: {e}"))?;
+        .map_err(|e| EngineError::Gpu(format!("Failed to create PP pipeline layout: {e}")))?;
 
     let pipeline_info = vk::GraphicsPipelineCreateInfo::default()
         .stages(&stages)
@@ -2502,7 +2503,7 @@ fn create_fullscreen_pipeline(
                 unsafe {
                     device.destroy_pipeline_layout(pipeline_layout, None);
                 }
-                format!("Failed to create PP pipeline: {e}")
+                EngineError::Gpu(format!("Failed to create PP pipeline: {e}"))
             })?[0];
 
     Ok(Pipeline::from_raw(

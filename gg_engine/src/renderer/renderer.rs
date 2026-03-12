@@ -31,6 +31,7 @@ use super::texture::{Texture2D, TransferBatch};
 use super::vertex_array::VertexArray;
 use super::VulkanContext;
 
+use crate::error::{EngineError, EngineResult};
 use crate::profiling::ProfileTimer;
 use crate::scene::{CircleRendererComponent, SpriteRendererComponent, TextComponent};
 
@@ -177,7 +178,7 @@ impl Renderer {
         command_pool: vk::CommandPool,
         color_format: vk::Format,
         depth_format: vk::Format,
-    ) -> Result<Self, String> {
+    ) -> EngineResult<Self> {
         let device = vk_ctx.device();
         let api = RendererAPI::Vulkan(VulkanRendererAPI::new(device));
 
@@ -203,7 +204,7 @@ impl Renderer {
             .max_sets(total_sets)
             .flags(vk::DescriptorPoolCreateFlags::FREE_DESCRIPTOR_SET);
         let descriptor_pool = unsafe { device.create_descriptor_pool(&pool_info, None) }
-            .map_err(|e| format!("Failed to create descriptor pool: {e}"))?;
+            .map_err(|e| EngineError::Gpu(format!("Failed to create descriptor pool: {e}")))?;
 
         // Create descriptor set layout: binding 0 = combined image sampler, fragment stage.
         let binding = vk::DescriptorSetLayoutBinding::default()
@@ -215,16 +216,19 @@ impl Renderer {
             vk::DescriptorSetLayoutCreateInfo::default().bindings(std::slice::from_ref(&binding));
         let texture_descriptor_set_layout =
             unsafe { device.create_descriptor_set_layout(&layout_info, None) }
-                .map_err(|e| format!("Failed to create descriptor set layout: {e}"))?;
+                .map_err(|e| EngineError::Gpu(format!("Failed to create descriptor set layout: {e}")))?;
 
         // Camera UBO: descriptor set layout, per-slot buffers, descriptor sets.
-        let camera = CameraSystem::new(allocator, device, descriptor_pool)?;
+        let camera =
+            CameraSystem::new(allocator, device, descriptor_pool)?;
 
         // Material UBO: descriptor set layout, per-slot buffers, descriptor sets.
-        let material_library = MaterialLibrary::new(allocator, device, descriptor_pool)?;
+        let material_library =
+            MaterialLibrary::new(allocator, device, descriptor_pool)?;
 
         // Lighting UBO: descriptor set layout, per-slot buffers, descriptor sets.
-        let lighting = LightingSystem::new(allocator, device, descriptor_pool)?;
+        let lighting =
+            LightingSystem::new(allocator, device, descriptor_pool)?;
 
         // Shadow map system: depth image, render pass, UBO, descriptor sets.
         let shadow_map = ShadowMapSystem::new(
@@ -246,7 +250,7 @@ impl Renderer {
             vk::PipelineCacheCreateInfo::default().initial_data(&cache_data)
         };
         let pipeline_cache = unsafe { device.create_pipeline_cache(&cache_create_info, None) }
-            .map_err(|e| format!("Failed to create pipeline cache: {e}"))?;
+            .map_err(|e| EngineError::Gpu(format!("Failed to create pipeline cache: {e}")))?;
 
         let transfer_batch = TransferBatch::new(device, command_pool, vk_ctx.graphics_queue());
 
@@ -337,24 +341,21 @@ impl Renderer {
         name: &str,
         vert_spv: &[u8],
         frag_spv: &[u8],
-    ) -> Result<Arc<Shader>, String> {
-        Ok(Arc::new(Shader::new(
-            &self.device,
-            name,
-            vert_spv,
-            frag_spv,
-        )?))
+    ) -> EngineResult<Arc<Shader>> {
+        Ok(Arc::new(
+            Shader::new(&self.device, name, vert_spv, frag_spv)?,
+        ))
     }
 
     /// Create a GPU vertex buffer from raw byte data.
     ///
     /// Use [`as_bytes`](super::as_bytes) to convert typed vertex slices.
-    pub fn create_vertex_buffer(&self, data: &[u8]) -> Result<VertexBuffer, String> {
+    pub fn create_vertex_buffer(&self, data: &[u8]) -> EngineResult<VertexBuffer> {
         VertexBuffer::new(&self.allocator, &self.device, data)
     }
 
     /// Create a GPU index buffer from u32 indices.
-    pub fn create_index_buffer(&self, indices: &[u32]) -> Result<IndexBuffer, String> {
+    pub fn create_index_buffer(&self, indices: &[u32]) -> EngineResult<IndexBuffer> {
         IndexBuffer::new(&self.allocator, &self.device, indices)
     }
 
@@ -375,7 +376,7 @@ impl Renderer {
         va: &VertexArray,
         has_material_color: bool,
         blend_enable: bool,
-    ) -> Result<Arc<Pipeline>, String> {
+    ) -> EngineResult<Arc<Pipeline>> {
         Ok(Arc::new(pipeline::create_pipeline(
             &self.device,
             shader,
@@ -398,7 +399,7 @@ impl Renderer {
         &self,
         shader: &Shader,
         va: &VertexArray,
-    ) -> Result<Arc<Pipeline>, String> {
+    ) -> EngineResult<Arc<Pipeline>> {
         Ok(Arc::new(pipeline::create_pipeline(
             &self.device,
             shader,
@@ -431,7 +432,7 @@ impl Renderer {
         blend_mode: super::BlendMode,
         color_attachment_count: u32,
         msaa: super::MsaaSamples,
-    ) -> Result<Arc<Pipeline>, String> {
+    ) -> EngineResult<Arc<Pipeline>> {
         let shadow_ds_layout = self
             .shadow_map
             .as_ref()
@@ -477,7 +478,7 @@ impl Renderer {
         width: u32,
         height: u32,
         pixels: &[u8],
-    ) -> Result<Texture2D, String> {
+    ) -> EngineResult<Texture2D> {
         let mut texture =
             Texture2D::from_rgba8(&self.resources(), &self.allocator, width, height, pixels)?;
         if let Some(data) = &self.renderer_2d {
@@ -494,7 +495,7 @@ impl Renderer {
         height: u32,
         pixels: &[u8],
         spec: TextureSpecification,
-    ) -> Result<Texture2D, String> {
+    ) -> EngineResult<Texture2D> {
         let mut texture = Texture2D::from_rgba8_with_spec(
             &self.resources(),
             &self.allocator,
@@ -537,7 +538,7 @@ impl Renderer {
     /// Upload a texture from pre-loaded CPU data (async path).
     /// Records the staging copy into the internal [`TransferBatch`] — call
     /// [`flush_transfers`] before rendering to submit the batch.
-    pub fn upload_texture(&mut self, data: &TextureCpuData) -> Result<Texture2D, String> {
+    pub fn upload_texture(&mut self, data: &TextureCpuData) -> EngineResult<Texture2D> {
         let res = super::RendererResources {
             device: &self.device,
             graphics_queue: self.graphics_queue,
@@ -562,7 +563,7 @@ impl Renderer {
 
     /// Upload a font from pre-generated CPU data (async path).
     /// Records the atlas upload into the internal [`TransferBatch`].
-    pub fn upload_font(&mut self, data: FontCpuData) -> Result<Font, String> {
+    pub fn upload_font(&mut self, data: FontCpuData) -> EngineResult<Font> {
         let res = super::RendererResources {
             device: &self.device,
             graphics_queue: self.graphics_queue,
@@ -612,7 +613,7 @@ impl Renderer {
     }
 
     /// Create an offscreen framebuffer for rendering to a texture.
-    pub fn create_framebuffer(&self, spec: FramebufferSpec) -> Result<Framebuffer, String> {
+    pub fn create_framebuffer(&self, spec: FramebufferSpec) -> EngineResult<Framebuffer> {
         Framebuffer::new(&self.resources(), &self.allocator, spec)
     }
 
@@ -642,7 +643,7 @@ impl Renderer {
         render_pass: vk::RenderPass,
         color_attachment_count: u32,
         samples: vk::SampleCountFlags,
-    ) -> Result<(), String> {
+    ) -> EngineResult<()> {
         // Store offscreen render pass info for lazy 3D pipeline creation.
         self.offscreen_render_pass = Some(render_pass);
         self.offscreen_color_attachment_count = color_attachment_count;
@@ -714,12 +715,12 @@ impl Renderer {
     /// Lazily create the shadow depth-only pipeline. The shadow map system
     /// itself is created eagerly in `Renderer::new` (needed for descriptor
     /// set layout at pipeline creation time).
-    pub fn init_shadow_pipeline(&mut self) -> Result<(), String> {
+    pub fn init_shadow_pipeline(&mut self) -> EngineResult<()> {
         self.init_shadow_pipeline_variant(false)
     }
 
     /// Ensure the shadow pipeline variant for the given cull mode exists.
-    fn init_shadow_pipeline_variant(&mut self, front_face_cull: bool) -> Result<(), String> {
+    fn init_shadow_pipeline_variant(&mut self, front_face_cull: bool) -> EngineResult<()> {
         let slot = if front_face_cull {
             &self.shadow_pipeline_front
         } else {
@@ -739,14 +740,16 @@ impl Renderer {
             super::shaders::SHADOW_VERT_SPV,
             super::shaders::SHADOW_FRAG_SPV,
         )?;
-        let pipeline = Arc::new(shadow_map::create_shadow_pipeline(
-            &self.device,
-            &shader,
-            sm.render_pass(),
-            sm.camera_ds_layout(),
-            self.pipeline_cache,
-            front_face_cull,
-        )?);
+        let pipeline = Arc::new(
+            shadow_map::create_shadow_pipeline(
+                &self.device,
+                &shader,
+                sm.render_pass(),
+                sm.camera_ds_layout(),
+                self.pipeline_cache,
+                front_face_cull,
+            )?,
+        );
 
         let label = if front_face_cull {
             "front-cull"
@@ -921,7 +924,7 @@ impl Renderer {
     }
 
     /// Lazily create the alpha-tested shadow pipeline.
-    pub fn init_shadow_alpha_pipeline(&mut self) -> Result<(), String> {
+    pub fn init_shadow_alpha_pipeline(&mut self) -> EngineResult<()> {
         if self.shadow_alpha_pipeline.is_some() {
             return Ok(());
         }
@@ -942,13 +945,15 @@ impl Renderer {
             .map(|r2d| r2d.bindless_ds_layout())
             .unwrap_or(self.texture_descriptor_set_layout);
 
-        let pipeline = Arc::new(shadow_map::create_shadow_alpha_pipeline(
-            &self.device,
-            &shader,
-            sm.render_pass(),
-            bindless_layout,
-            self.pipeline_cache,
-        )?);
+        let pipeline = Arc::new(
+            shadow_map::create_shadow_alpha_pipeline(
+                &self.device,
+                &shader,
+                sm.render_pass(),
+                bindless_layout,
+                self.pipeline_cache,
+            )?,
+        );
 
         log::info!(target: "gg_engine", "Shadow alpha pipeline created");
         self.shadow_alpha_pipeline = Some(pipeline);
@@ -1129,7 +1134,7 @@ impl Renderer {
         scene_normal_view: Option<vk::ImageView>,
         width: u32,
         height: u32,
-    ) -> Result<(), String> {
+    ) -> EngineResult<()> {
         self.postprocess = Some(PostProcessPipeline::new(
             &self.device,
             &self.allocator,
@@ -1156,7 +1161,7 @@ impl Renderer {
         scene_normal_view: Option<vk::ImageView>,
         width: u32,
         height: u32,
-    ) -> Result<(), String> {
+    ) -> EngineResult<()> {
         if let Some(pp) = &mut self.postprocess {
             pp.resize(
                 &self.allocator,
@@ -1194,12 +1199,12 @@ impl Renderer {
     /// Compiles `.glsl` files with `glslc` at runtime, creates new shader
     /// modules, and rebuilds all pipelines. Waits for GPU idle before
     /// swapping. On failure, returns an error string and keeps old pipelines.
-    pub fn reload_shaders(&mut self, shader_dir: &std::path::Path) -> Result<u32, String> {
+    pub fn reload_shaders(&mut self, shader_dir: &std::path::Path) -> EngineResult<u32> {
         if let Some(data) = &mut self.renderer_2d {
             unsafe {
                 self.device
                     .device_wait_idle()
-                    .map_err(|e| format!("device_wait_idle failed: {e}"))?;
+                    .map_err(|e| EngineError::Gpu(format!("device_wait_idle failed: {e}")))?;
             }
             let (mut count, compiled) = data.reload_shaders(shader_dir)?;
 
@@ -1210,7 +1215,7 @@ impl Renderer {
 
             Ok(count)
         } else {
-            Err("2D renderer not initialized".to_string())
+            Err(EngineError::Gpu("2D renderer not initialized".to_string()))
         }
     }
 
@@ -1219,7 +1224,7 @@ impl Renderer {
     /// Initialize built-in 2D rendering resources (batch pipeline,
     /// dynamic VBs, static IB, bindless descriptor sets, 1×1 white
     /// default texture). Called once by the engine after Vulkan is ready.
-    pub(crate) fn init_2d(&mut self) -> Result<(), String> {
+    pub(crate) fn init_2d(&mut self) -> EngineResult<()> {
         let _timer = ProfileTimer::new("Renderer::init_2d");
         let white_texture = self.create_texture_from_rgba8(1, 1, &[255, 255, 255, 255])?;
         let data = Renderer2DData::new(
@@ -2404,16 +2409,16 @@ impl Renderer {
     /// Uses the built-in `mesh3d` shader with backface culling, standard
     /// depth testing, and opaque blending. Automatically selects the
     /// offscreen or swapchain variant based on `use_offscreen_pipeline()`.
-    pub fn mesh3d_pipeline(&mut self) -> Result<Arc<Pipeline>, String> {
+    pub fn mesh3d_pipeline(&mut self) -> EngineResult<Arc<Pipeline>> {
         self.mesh3d_pipeline_inner(self.wireframe_active)
     }
 
     /// Get the wireframe variant of the mesh3d pipeline (for overlay pass).
-    pub fn mesh3d_wireframe_pipeline(&mut self) -> Result<Arc<Pipeline>, String> {
+    pub fn mesh3d_wireframe_pipeline(&mut self) -> EngineResult<Arc<Pipeline>> {
         self.mesh3d_pipeline_inner(true)
     }
 
-    fn mesh3d_pipeline_inner(&mut self, wireframe: bool) -> Result<Arc<Pipeline>, String> {
+    fn mesh3d_pipeline_inner(&mut self, wireframe: bool) -> EngineResult<Arc<Pipeline>> {
         // Use the bindless texture descriptor set layout (from Renderer2DData)
         // so that 3D meshes can sample from the shared bindless texture array.
         let bindless_layout = self
@@ -2434,7 +2439,7 @@ impl Renderer {
             }
             let offscreen_rp = self
                 .offscreen_render_pass
-                .ok_or("No offscreen render pass set for mesh3d pipeline")?;
+                .ok_or_else(|| EngineError::Gpu("No offscreen render pass set for mesh3d pipeline".to_string()))?;
             let shader = self.create_shader(
                 "mesh3d",
                 super::shaders::MESH3D_VERT_SPV,
@@ -2530,7 +2535,7 @@ impl Renderer {
 
     /// Create a GPU-driven particle system with the given maximum particle count.
     /// Uses a compute shader for simulation and instanced rendering for drawing.
-    pub fn create_gpu_particle_system(&mut self, max_particles: u32) -> Result<(), String> {
+    pub fn create_gpu_particle_system(&mut self, max_particles: u32) -> EngineResult<()> {
         let system = GpuParticleSystem::new(
             &self.allocator,
             &self.device,

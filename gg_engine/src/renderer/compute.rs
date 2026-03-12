@@ -1,5 +1,6 @@
 use ash::vk;
 
+use crate::error::{EngineError, EngineResult};
 use crate::profiling::ProfileTimer;
 
 // ---------------------------------------------------------------------------
@@ -12,10 +13,10 @@ pub(crate) struct ComputeShader {
 }
 
 impl ComputeShader {
-    pub fn new(device: &ash::Device, name: &str, comp_spv: &[u8]) -> Result<Self, String> {
+    pub fn new(device: &ash::Device, name: &str, comp_spv: &[u8]) -> EngineResult<Self> {
         let _timer = ProfileTimer::new("ComputeShader::new");
         let module = create_shader_module(device, comp_spv)
-            .map_err(|e| format!("Failed to create compute shader module for '{name}': {e}"))?;
+            .map_err(|e| EngineError::Gpu(format!("Failed to create compute shader module for '{name}': {e}")))?;
 
         log::info!(target: "gg_engine", "Compute shader '{name}' created");
 
@@ -77,7 +78,7 @@ pub(crate) fn create_compute_pipeline(
     descriptor_set_layouts: &[vk::DescriptorSetLayout],
     push_constant_size: u32,
     pipeline_cache: vk::PipelineCache,
-) -> Result<ComputePipeline, String> {
+) -> EngineResult<ComputePipeline> {
     let _timer = ProfileTimer::new("create_compute_pipeline");
 
     let push_constant_range = vk::PushConstantRange {
@@ -96,7 +97,7 @@ pub(crate) fn create_compute_pipeline(
         .push_constant_ranges(&push_ranges);
 
     let layout = unsafe { device.create_pipeline_layout(&layout_info, None) }
-        .map_err(|e| format!("Failed to create compute pipeline layout: {e}"))?;
+        .map_err(|e| EngineError::Gpu(format!("Failed to create compute pipeline layout: {e}")))?;
 
     let entry_point = c"main";
     let stage = vk::PipelineShaderStageCreateInfo::default()
@@ -110,7 +111,7 @@ pub(crate) fn create_compute_pipeline(
 
     let pipelines =
         unsafe { device.create_compute_pipelines(pipeline_cache, &[create_info], None) }
-            .map_err(|(_pipelines, e)| format!("Failed to create compute pipeline: {e}"))?;
+            .map_err(|(_pipelines, e)| EngineError::Gpu(format!("Failed to create compute pipeline: {e}")))?;
 
     Ok(ComputePipeline {
         pipeline: pipelines[0],

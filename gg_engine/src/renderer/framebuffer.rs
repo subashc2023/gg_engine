@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 
 use super::gpu_allocation::{GpuAllocation, GpuAllocator, MemoryLocation};
 use super::RendererResources;
+use crate::error::{EngineError, EngineResult};
 
 // ---------------------------------------------------------------------------
 // MsaaSamples — public MSAA configuration enum
@@ -278,7 +279,7 @@ impl Framebuffer {
         res: &RendererResources<'_>,
         allocator: &Arc<Mutex<GpuAllocator>>,
         spec: FramebufferSpec,
-    ) -> Result<Self, String> {
+    ) -> EngineResult<Self> {
         let device = res.device;
         let descriptor_pool = res.descriptor_pool;
         let descriptor_set_layout = res.texture_ds_layout;
@@ -442,7 +443,7 @@ impl Framebuffer {
     /// Resize the framebuffer. Skips if the size hasn't changed.
     /// The descriptor set handle is reused (updated in-place), so the
     /// egui TextureId remains valid.
-    pub fn resize(&mut self, width: u32, height: u32) -> Result<(), String> {
+    pub fn resize(&mut self, width: u32, height: u32) -> EngineResult<()> {
         if self.spec.width == width && self.spec.height == height {
             return Ok(());
         }
@@ -869,7 +870,7 @@ fn create_offscreen_render_pass(
     color_format: vk::Format,
     depth_format: vk::Format,
     sample_count: vk::SampleCountFlags,
-) -> Result<vk::RenderPass, String> {
+) -> EngineResult<vk::RenderPass> {
     let msaa = sample_count != vk::SampleCountFlags::TYPE_1;
 
     let mut attachment_descriptions = Vec::new();
@@ -977,7 +978,7 @@ fn create_offscreen_render_pass(
             .dependencies(std::slice::from_ref(&dependency));
 
         unsafe { device.create_render_pass(&render_pass_info, None) }
-            .map_err(|e| format!("Failed to create MSAA offscreen render pass: {e}"))
+            .map_err(|e| EngineError::Gpu(format!("Failed to create MSAA offscreen render pass: {e}")))
     } else {
         // --- Non-MSAA path (unchanged) ---
         for (i, cs) in color_specs.iter().enumerate() {
@@ -1051,7 +1052,7 @@ fn create_offscreen_render_pass(
             .dependencies(std::slice::from_ref(&dependency));
 
         unsafe { device.create_render_pass(&render_pass_info, None) }
-            .map_err(|e| format!("Failed to create offscreen render pass: {e}"))
+            .map_err(|e| EngineError::Gpu(format!("Failed to create offscreen render pass: {e}")))
     }
 }
 
@@ -1062,7 +1063,7 @@ fn create_color_attachment(
     vk_format: vk::Format,
     fb_format: FramebufferTextureFormat,
     samples: vk::SampleCountFlags,
-) -> Result<ColorAttachment, String> {
+) -> EngineResult<ColorAttachment> {
     let is_msaa = samples != vk::SampleCountFlags::TYPE_1;
 
     // MSAA images only need COLOR_ATTACHMENT (transient, never sampled/read back).
@@ -1094,7 +1095,7 @@ fn create_color_attachment(
         .samples(samples);
 
     let image = unsafe { device.create_image(&image_info, None) }
-        .map_err(|e| format!("Failed to create FB color image: {e}"))?;
+        .map_err(|e| EngineError::Gpu(format!("Failed to create FB color image: {e}")))?;
 
     let allocation =
         GpuAllocator::allocate_for_image(allocator, device, image, label, MemoryLocation::GpuOnly)?;
@@ -1112,7 +1113,7 @@ fn create_color_attachment(
         });
 
     let view = unsafe { device.create_image_view(&view_info, None) }
-        .map_err(|e| format!("Failed to create FB color image view: {e}"))?;
+        .map_err(|e| EngineError::Gpu(format!("Failed to create FB color image view: {e}")))?;
 
     Ok(ColorAttachment {
         image,
@@ -1128,7 +1129,7 @@ fn create_depth_attachment(
     spec: &FramebufferSpec,
     vk_format: vk::Format,
     samples: vk::SampleCountFlags,
-) -> Result<DepthAttachment, String> {
+) -> EngineResult<DepthAttachment> {
     let is_msaa = samples != vk::SampleCountFlags::TYPE_1;
     let label = if is_msaa { "FB_MSAA_Depth" } else { "FB_Depth" };
 
@@ -1152,7 +1153,7 @@ fn create_depth_attachment(
         .samples(samples);
 
     let image = unsafe { device.create_image(&image_info, None) }
-        .map_err(|e| format!("Failed to create FB depth image: {e}"))?;
+        .map_err(|e| EngineError::Gpu(format!("Failed to create FB depth image: {e}")))?;
 
     let allocation =
         GpuAllocator::allocate_for_image(allocator, device, image, label, MemoryLocation::GpuOnly)?;
@@ -1170,7 +1171,7 @@ fn create_depth_attachment(
         });
 
     let view = unsafe { device.create_image_view(&view_info, None) }
-        .map_err(|e| format!("Failed to create FB depth image view: {e}"))?;
+        .map_err(|e| EngineError::Gpu(format!("Failed to create FB depth image view: {e}")))?;
 
     Ok(DepthAttachment {
         image,
@@ -1179,7 +1180,7 @@ fn create_depth_attachment(
     })
 }
 
-fn create_sampler(device: &ash::Device) -> Result<vk::Sampler, String> {
+fn create_sampler(device: &ash::Device) -> EngineResult<vk::Sampler> {
     let sampler_info = vk::SamplerCreateInfo::default()
         .mag_filter(vk::Filter::LINEAR)
         .min_filter(vk::Filter::LINEAR)
@@ -1196,7 +1197,7 @@ fn create_sampler(device: &ash::Device) -> Result<vk::Sampler, String> {
         .max_lod(0.0);
 
     unsafe { device.create_sampler(&sampler_info, None) }
-        .map_err(|e| format!("Failed to create FB sampler: {e}"))
+        .map_err(|e| EngineError::Gpu(format!("Failed to create FB sampler: {e}")))
 }
 
 /// Build the vk::Framebuffer with attachment views in render pass order.
@@ -1211,7 +1212,7 @@ fn create_vk_framebuffer_msaa(
     msaa_color_attachments: &[ColorAttachment],
     msaa_depth_attachment: Option<&DepthAttachment>,
     spec: &FramebufferSpec,
-) -> Result<vk::Framebuffer, String> {
+) -> EngineResult<vk::Framebuffer> {
     let mut views: Vec<vk::ImageView> = Vec::new();
 
     if !msaa_color_attachments.is_empty() {
@@ -1243,21 +1244,21 @@ fn create_vk_framebuffer_msaa(
         .layers(1);
 
     unsafe { device.create_framebuffer(&fb_info, None) }
-        .map_err(|e| format!("Failed to create offscreen framebuffer: {e}"))
+        .map_err(|e| EngineError::Gpu(format!("Failed to create offscreen framebuffer: {e}")))
 }
 
 fn allocate_descriptor_set(
     device: &ash::Device,
     pool: vk::DescriptorPool,
     layout: vk::DescriptorSetLayout,
-) -> Result<vk::DescriptorSet, String> {
+) -> EngineResult<vk::DescriptorSet> {
     let layouts = [layout];
     let alloc_info = vk::DescriptorSetAllocateInfo::default()
         .descriptor_pool(pool)
         .set_layouts(&layouts);
 
     let ds_vec = unsafe { device.allocate_descriptor_sets(&alloc_info) }
-        .map_err(|e| format!("Failed to allocate FB descriptor set: {e}"))?;
+        .map_err(|e| EngineError::Gpu(format!("Failed to allocate FB descriptor set: {e}")))?;
     Ok(ds_vec[0])
 }
 
@@ -1266,7 +1267,7 @@ fn allocate_descriptor_set(
 fn create_readback_staging_buffer(
     allocator: &Arc<Mutex<GpuAllocator>>,
     device: &ash::Device,
-) -> Result<(vk::Buffer, GpuAllocation), String> {
+) -> EngineResult<(vk::Buffer, GpuAllocation)> {
     let size = (2 * std::mem::size_of::<i32>()) as u64;
 
     let buf_info = vk::BufferCreateInfo::default()
@@ -1275,7 +1276,7 @@ fn create_readback_staging_buffer(
         .sharing_mode(vk::SharingMode::EXCLUSIVE);
 
     let buffer = unsafe { device.create_buffer(&buf_info, None) }
-        .map_err(|e| format!("Failed to create readback buffer: {e}"))?;
+        .map_err(|e| EngineError::Gpu(format!("Failed to create readback buffer: {e}")))?;
 
     let allocation = GpuAllocator::allocate_for_buffer(
         allocator,

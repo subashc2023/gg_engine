@@ -595,7 +595,7 @@ fn create_depth_resources(
         "SwapchainDepth",
         MemoryLocation::GpuOnly,
     )
-    .map_err(SwapchainError::DepthMemoryAllocation)?;
+    .map_err(|e| SwapchainError::DepthMemoryAllocation(e.to_string()))?;
 
     let view_info = vk::ImageViewCreateInfo::default()
         .image(depth_image)

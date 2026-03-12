@@ -6,6 +6,7 @@ use glam::Mat4;
 use super::gpu_allocation::GpuAllocator;
 use super::uniform_buffer::{CameraData, UniformBuffer};
 use super::{MAX_FRAMES_IN_FLIGHT, MAX_VIEWPORTS};
+use crate::error::{EngineError, EngineResult};
 
 /// Manages the per-frame per-viewport camera UBO (view-projection matrix + time).
 ///
@@ -28,7 +29,7 @@ impl CameraSystem {
         allocator: &Arc<Mutex<GpuAllocator>>,
         device: &ash::Device,
         descriptor_pool: vk::DescriptorPool,
-    ) -> Result<Self, String> {
+    ) -> EngineResult<Self> {
         // Descriptor set layout: binding 0, UNIFORM_BUFFER, vertex + fragment stages.
         // Fragment stage needed for cascade shadow map depth comparison (camera VP).
         let ubo_binding = vk::DescriptorSetLayoutBinding::default()
@@ -39,7 +40,7 @@ impl CameraSystem {
         let ubo_layout_info = vk::DescriptorSetLayoutCreateInfo::default()
             .bindings(std::slice::from_ref(&ubo_binding));
         let ds_layout = unsafe { device.create_descriptor_set_layout(&ubo_layout_info, None) }
-            .map_err(|e| format!("Failed to create camera UBO descriptor set layout: {e}"))?;
+            .map_err(|e| EngineError::Gpu(format!("Failed to create camera UBO descriptor set layout: {e}")))?;
 
         // UBO buffers (one per frame × viewport slot).
         let camera_ubo = UniformBuffer::new(allocator, device, CameraData::SIZE)?;
@@ -51,7 +52,7 @@ impl CameraSystem {
             .descriptor_pool(descriptor_pool)
             .set_layouts(&layouts);
         let descriptor_sets = unsafe { device.allocate_descriptor_sets(&ds_alloc_info) }
-            .map_err(|e| format!("Failed to allocate camera UBO descriptor sets: {e}"))?;
+            .map_err(|e| EngineError::Gpu(format!("Failed to allocate camera UBO descriptor sets: {e}")))?;
 
         // Write each descriptor set pointing to its UBO buffer.
         for (i, &ds) in descriptor_sets.iter().enumerate() {

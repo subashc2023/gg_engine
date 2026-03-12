@@ -6,6 +6,7 @@ use super::gpu_allocation::GpuAllocator;
 use super::msdf;
 use super::texture::{Texture2D, TextureSpecification, TransferBatch};
 use super::RendererResources;
+use crate::error::{EngineError, EngineResult};
 use crate::profiling::ProfileTimer;
 
 // ---------------------------------------------------------------------------
@@ -50,14 +51,14 @@ pub struct FontCpuData {
 
 /// Load a TTF font file, parse it, generate MSDF glyphs, and pack the atlas.
 /// Returns CPU-only data — no Vulkan calls. Safe to call on a background thread.
-pub(crate) fn generate_font_cpu_data(path: &Path) -> Result<FontCpuData, String> {
+pub(crate) fn generate_font_cpu_data(path: &Path) -> EngineResult<FontCpuData> {
     let _timer = ProfileTimer::new("generate_font_cpu_data");
 
     let font_data = std::fs::read(path)
-        .map_err(|e| format!("Failed to read font '{}': {e}", path.display()))?;
+        .map_err(|e| EngineError::Gpu(format!("Failed to read font '{}': {e}", path.display())))?;
 
     let face = ttf_parser::Face::parse(&font_data, 0)
-        .map_err(|e| format!("Failed to parse font '{}': {e}", path.display()))?;
+        .map_err(|e| EngineError::Gpu(format!("Failed to parse font '{}': {e}", path.display())))?;
 
     let units_per_em = face.units_per_em() as f64;
     let ascender = face.ascender() as f64 / units_per_em;
@@ -340,7 +341,7 @@ impl Font {
         res: &RendererResources<'_>,
         allocator: &Arc<Mutex<GpuAllocator>>,
         data: FontCpuData,
-    ) -> Result<Self, String> {
+    ) -> EngineResult<Self> {
         let atlas_texture = Texture2D::from_rgba8_with_spec(
             res,
             allocator,
@@ -369,7 +370,7 @@ impl Font {
         allocator: &Arc<Mutex<GpuAllocator>>,
         data: FontCpuData,
         batch: &mut TransferBatch,
-    ) -> Result<Self, String> {
+    ) -> EngineResult<Self> {
         let atlas_texture = Texture2D::from_rgba8_with_spec_batched(
             res,
             allocator,

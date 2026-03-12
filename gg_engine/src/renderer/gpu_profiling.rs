@@ -1,6 +1,7 @@
 use ash::vk::{self, Handle};
 
 use super::MAX_FRAMES_IN_FLIGHT;
+use crate::error::{EngineError, EngineResult};
 
 /// Maximum number of sequential timestamp markers per frame.
 const MAX_TIMESTAMPS: u32 = 16;
@@ -37,7 +38,7 @@ pub struct GpuProfiler {
 }
 
 impl GpuProfiler {
-    pub fn new(device: &ash::Device, timestamp_period_ns: f32) -> Result<Self, String> {
+    pub fn new(device: &ash::Device, timestamp_period_ns: f32) -> EngineResult<Self> {
         let mut query_pools = [vk::QueryPool::null(); MAX_FRAMES_IN_FLIGHT];
 
         for pool in &mut query_pools {
@@ -46,7 +47,7 @@ impl GpuProfiler {
                 .query_count(MAX_TIMESTAMPS);
 
             *pool = unsafe { device.create_query_pool(&create_info, None) }
-                .map_err(|e| format!("Failed to create GPU timestamp query pool: {e}"))?;
+                .map_err(|e| EngineError::Gpu(format!("Failed to create GPU timestamp query pool: {e}")))?;
         }
 
         Ok(Self {

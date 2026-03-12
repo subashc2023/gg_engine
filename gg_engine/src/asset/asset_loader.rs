@@ -4,6 +4,7 @@ use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 
+use crate::error::EngineResult;
 use crate::renderer::{
     generate_font_cpu_data, FontCpuData, Texture2D, TextureCpuData, TextureSpecification,
 };
@@ -221,6 +222,7 @@ fn worker_thread_fn(rx: Arc<Mutex<Receiver<LoadRequest>>>, tx: Sender<LoadResult
             Ok(LoadRequest::Texture { handle, path, spec }) => {
                 let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                     Texture2D::load_cpu_data(&path, spec)
+                        .map_err(|e| e.to_string())
                 }));
                 let data = match result {
                     Ok(data) => data,
@@ -233,7 +235,7 @@ fn worker_thread_fn(rx: Arc<Mutex<Receiver<LoadRequest>>>, tx: Sender<LoadResult
                     generate_font_cpu_data(&path)
                 }));
                 let data = match result {
-                    Ok(data) => data,
+                    Ok(data) => data.map_err(|e| e.to_string()),
                     Err(_) => Err(format!("Panic while loading font: {}", path.display())),
                 };
                 let _ = tx.send(LoadResult::Font { font_key, data });
@@ -243,7 +245,7 @@ fn worker_thread_fn(rx: Arc<Mutex<Receiver<LoadRequest>>>, tx: Sender<LoadResult
                     load_gltf_merged(&path)
                 }));
                 let data = match result {
-                    Ok(data) => data,
+                    Ok(data) => data.map_err(|e| e.to_string()),
                     Err(_) => Err(format!("Panic while loading mesh: {}", path.display())),
                 };
                 let _ = tx.send(LoadResult::Mesh { handle, data });
@@ -253,7 +255,7 @@ fn worker_thread_fn(rx: Arc<Mutex<Receiver<LoadRequest>>>, tx: Sender<LoadResult
 }
 
 /// Load a glTF/GLB file and merge all primitives into a single [`Mesh`].
-fn load_gltf_merged(path: &std::path::Path) -> Result<crate::renderer::Mesh, String> {
+fn load_gltf_merged(path: &std::path::Path) -> EngineResult<crate::renderer::Mesh> {
     let meshes = crate::renderer::load_gltf(path)?;
     if meshes.len() == 1 {
         // Common case: avoid merge overhead.

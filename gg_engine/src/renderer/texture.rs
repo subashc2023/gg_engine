@@ -7,6 +7,7 @@ use super::buffer::create_staging_buffer;
 use super::gpu_allocation::{GpuAllocation, GpuAllocator, MemoryLocation};
 use super::RendererResources;
 
+use crate::error::{EngineError, EngineResult};
 use crate::profiling::ProfileTimer;
 
 // ---------------------------------------------------------------------------
@@ -58,7 +59,7 @@ impl TransferBatch {
     }
 
     /// Ensure a command buffer is being recorded. Allocates one lazily.
-    fn ensure_active(&mut self) -> Result<(), String> {
+    fn ensure_active(&mut self) -> EngineResult<()> {
         if self.active_cmd_buf.is_some() {
             return Ok(());
         }
@@ -68,7 +69,7 @@ impl TransferBatch {
             .command_buffer_count(1);
 
         let cmd_buf = unsafe { self.device.allocate_command_buffers(&alloc_info) }
-            .map_err(|e| format!("Failed to allocate transfer command buffer: {e}"))?[0];
+            .map_err(|e| EngineError::Gpu(format!("Failed to allocate transfer command buffer: {e}")))?[0];
 
         let begin_info = vk::CommandBufferBeginInfo::default()
             .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT);
@@ -76,7 +77,7 @@ impl TransferBatch {
         unsafe {
             self.device
                 .begin_command_buffer(cmd_buf, &begin_info)
-                .map_err(|e| format!("Failed to begin transfer command buffer: {e}"))?;
+                .map_err(|e| EngineError::Gpu(format!("Failed to begin transfer command buffer: {e}")))?;
         }
 
         self.active_cmd_buf = Some(cmd_buf);
@@ -96,7 +97,7 @@ impl TransferBatch {
         width: u32,
         height: u32,
         mip_levels: u32,
-    ) -> Result<(), String> {
+    ) -> EngineResult<()> {
         self.ensure_active()?;
         let cmd_buf = self.active_cmd_buf.unwrap();
 
@@ -157,7 +158,7 @@ impl TransferBatch {
     }
 
     /// Submit the active command buffer with a fence. No-op if nothing recorded.
-    pub fn submit(&mut self) -> Result<(), String> {
+    pub fn submit(&mut self) -> EngineResult<()> {
         let cmd_buf = match self.active_cmd_buf.take() {
             Some(cb) => cb,
             None => return Ok(()),
@@ -165,18 +166,18 @@ impl TransferBatch {
 
         let fence_info = vk::FenceCreateInfo::default();
         let fence = unsafe { self.device.create_fence(&fence_info, None) }
-            .map_err(|e| format!("Failed to create transfer fence: {e}"))?;
+            .map_err(|e| EngineError::Gpu(format!("Failed to create transfer fence: {e}")))?;
 
         unsafe {
             self.device
                 .end_command_buffer(cmd_buf)
-                .map_err(|e| format!("Failed to end transfer command buffer: {e}"))?;
+                .map_err(|e| EngineError::Gpu(format!("Failed to end transfer command buffer: {e}")))?;
 
             let cmd_bufs = [cmd_buf];
             let submit_info = vk::SubmitInfo::default().command_buffers(&cmd_bufs);
             self.device
                 .queue_submit(self.graphics_queue, &[submit_info], fence)
-                .map_err(|e| format!("Failed to submit transfer batch: {e}"))?;
+                .map_err(|e| EngineError::Gpu(format!("Failed to submit transfer batch: {e}")))?;
         }
 
         let staging = std::mem::take(&mut self.active_staging);
@@ -440,9 +441,9 @@ impl Texture2D {
     pub(crate) fn load_cpu_data(
         path: &Path,
         spec: TextureSpecification,
-    ) -> Result<TextureCpuData, String> {
+    ) -> EngineResult<TextureCpuData> {
         let img = image::open(path)
-            .map_err(|e| format!("Failed to load texture '{}': {e}", path.display()))?;
+            .map_err(|e| EngineError::Gpu(format!("Failed to load texture '{}': {e}", path.display())))?;
         let rgba = img.to_rgba8();
         let (width, height) = rgba.dimensions();
         Ok(TextureCpuData {
@@ -489,7 +490,7 @@ impl Texture2D {
         width: u32,
         height: u32,
         pixels: &[u8],
-    ) -> Result<Self, String> {
+    ) -> EngineResult<Self> {
         Self::from_rgba8_with_spec(
             res,
             allocator,
@@ -508,7 +509,7 @@ impl Texture2D {
         height: u32,
         pixels: &[u8],
         spec: &TextureSpecification,
-    ) -> Result<Self, String> {
+    ) -> EngineResult<Self> {
         let _timer = ProfileTimer::new("Texture2D::from_rgba8_with_spec");
         let image_size = (width * height * 4) as vk::DeviceSize;
         assert_eq!(pixels.len() as vk::DeviceSize, image_size);
@@ -673,7 +674,7 @@ impl Texture2D {
         allocator: &Arc<Mutex<GpuAllocator>>,
         data: &TextureCpuData,
         batch: &mut TransferBatch,
-    ) -> Result<Self, String> {
+    ) -> EngineResult<Self> {
         Self::from_rgba8_with_spec_batched(
             res,
             allocator,
@@ -699,7 +700,7 @@ impl Texture2D {
         pixels: &[u8],
         spec: &TextureSpecification,
         batch: &mut TransferBatch,
-    ) -> Result<Self, String> {
+    ) -> EngineResult<Self> {
         let _timer = ProfileTimer::new("Texture2D::from_rgba8_with_spec_batched");
         let image_size = (width * height * 4) as vk::DeviceSize;
         assert_eq!(pixels.len() as vk::DeviceSize, image_size);
@@ -774,18 +775,18 @@ impl Texture2D {
         data: &[u8],
         format: ImageFormat,
         spec: &TextureSpecification,
-    ) -> Result<Self, String> {
+    ) -> EngineResult<Self> {
         if !format.is_compressed() {
-            return Err("from_compressed requires a compressed ImageFormat".to_string());
+            return Err(EngineError::Gpu("from_compressed requires a compressed ImageFormat".to_string()));
         }
 
         let expected_size = format.data_size(width, height);
         if data.len() as u64 != expected_size {
-            return Err(format!(
+            return Err(EngineError::Gpu(format!(
                 "Compressed data size mismatch: expected {} bytes, got {}",
                 expected_size,
                 data.len()
-            ));
+            )));
         }
 
         let device = res.device;
@@ -813,7 +814,7 @@ impl Texture2D {
             .samples(vk::SampleCountFlags::TYPE_1);
 
         let image = unsafe { device.create_image(&image_info, None) }
-            .map_err(|e| format!("Failed to create compressed texture image: {e}"))?;
+            .map_err(|e| EngineError::Gpu(format!("Failed to create compressed texture image: {e}")))?;
 
         let allocation = GpuAllocator::allocate_for_image(
             allocator,
@@ -936,14 +937,14 @@ fn execute_one_shot(
     command_pool: vk::CommandPool,
     queue: vk::Queue,
     record: impl FnOnce(vk::CommandBuffer),
-) -> Result<(), String> {
+) -> EngineResult<()> {
     let alloc_info = vk::CommandBufferAllocateInfo::default()
         .level(vk::CommandBufferLevel::PRIMARY)
         .command_pool(command_pool)
         .command_buffer_count(1);
 
     let cmd_buf = unsafe { device.allocate_command_buffers(&alloc_info) }
-        .map_err(|e| format!("Failed to allocate one-shot command buffer: {e}"))?[0];
+        .map_err(|e| EngineError::Gpu(format!("Failed to allocate one-shot command buffer: {e}")))?[0];
 
     let begin_info =
         vk::CommandBufferBeginInfo::default().flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT);
@@ -951,7 +952,7 @@ fn execute_one_shot(
     unsafe {
         device
             .begin_command_buffer(cmd_buf, &begin_info)
-            .map_err(|e| format!("Failed to begin one-shot command buffer: {e}"))?;
+            .map_err(|e| EngineError::Gpu(format!("Failed to begin one-shot command buffer: {e}")))?;
     }
 
     record(cmd_buf);
@@ -959,16 +960,16 @@ fn execute_one_shot(
     unsafe {
         device
             .end_command_buffer(cmd_buf)
-            .map_err(|e| format!("Failed to end one-shot command buffer: {e}"))?;
+            .map_err(|e| EngineError::Gpu(format!("Failed to end one-shot command buffer: {e}")))?;
 
         let cmd_bufs = [cmd_buf];
         let submit_info = vk::SubmitInfo::default().command_buffers(&cmd_bufs);
         device
             .queue_submit(queue, &[submit_info], vk::Fence::null())
-            .map_err(|e| format!("Failed to submit one-shot command buffer: {e}"))?;
+            .map_err(|e| EngineError::Gpu(format!("Failed to submit one-shot command buffer: {e}")))?;
         device
             .queue_wait_idle(queue)
-            .map_err(|e| format!("Failed to wait for queue idle: {e}"))?;
+            .map_err(|e| EngineError::Gpu(format!("Failed to wait for queue idle: {e}")))?;
 
         device.free_command_buffers(command_pool, &[cmd_buf]);
     }
@@ -983,7 +984,7 @@ fn create_texture_image(
     height: u32,
     mip_levels: u32,
     vk_format: vk::Format,
-) -> Result<(vk::Image, GpuAllocation), String> {
+) -> EngineResult<(vk::Image, GpuAllocation)> {
     let mut usage = vk::ImageUsageFlags::TRANSFER_DST | vk::ImageUsageFlags::SAMPLED;
     if mip_levels > 1 {
         usage |= vk::ImageUsageFlags::TRANSFER_SRC;
@@ -1005,7 +1006,7 @@ fn create_texture_image(
         .samples(vk::SampleCountFlags::TYPE_1);
 
     let image = unsafe { device.create_image(&image_info, None) }
-        .map_err(|e| format!("Failed to create texture image: {e}"))?;
+        .map_err(|e| EngineError::Gpu(format!("Failed to create texture image: {e}")))?;
 
     let allocation = GpuAllocator::allocate_for_image(
         allocator,
@@ -1027,7 +1028,7 @@ fn create_texture_view_sampler_ds(
     spec: &TextureSpecification,
     descriptor_pool: vk::DescriptorPool,
     descriptor_set_layout: vk::DescriptorSetLayout,
-) -> Result<(vk::ImageView, vk::Sampler, vk::DescriptorSet), String> {
+) -> EngineResult<(vk::ImageView, vk::Sampler, vk::DescriptorSet)> {
     // Image view.
     let view_info = vk::ImageViewCreateInfo::default()
         .image(image)
@@ -1042,7 +1043,7 @@ fn create_texture_view_sampler_ds(
         });
 
     let image_view = unsafe { device.create_image_view(&view_info, None) }
-        .map_err(|e| format!("Failed to create texture image view: {e}"))?;
+        .map_err(|e| EngineError::Gpu(format!("Failed to create texture image view: {e}")))?;
 
     // Sampler — use LINEAR mipmap interpolation when mipmaps are present
     // to avoid visible popping between mip levels.
@@ -1076,7 +1077,7 @@ fn create_texture_view_sampler_ds(
         });
 
     let sampler = unsafe { device.create_sampler(&sampler_info, None) }
-        .map_err(|e| format!("Failed to create texture sampler: {e}"))?;
+        .map_err(|e| EngineError::Gpu(format!("Failed to create texture sampler: {e}")))?;
 
     // Descriptor set.
     let layouts = [descriptor_set_layout];
@@ -1085,7 +1086,7 @@ fn create_texture_view_sampler_ds(
         .set_layouts(&layouts);
 
     let ds_vec = unsafe { device.allocate_descriptor_sets(&ds_alloc_info) }
-        .map_err(|e| format!("Failed to allocate texture descriptor set: {e}"))?;
+        .map_err(|e| EngineError::Gpu(format!("Failed to allocate texture descriptor set: {e}")))?;
     let descriptor_set = ds_vec[0];
 
     let image_info_ds = vk::DescriptorImageInfo::default()

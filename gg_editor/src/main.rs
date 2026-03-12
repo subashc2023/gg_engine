@@ -1191,8 +1191,9 @@ impl Application for GGEditor {
                     );
                 }
                 Err(e) => {
-                    error!("Shader hot-reload failed: {}", e);
-                    gg_engine::platform_utils::error_dialog("Shader Reload Error", &e);
+                    let msg = e.to_string();
+                    error!("Shader hot-reload failed: {}", msg);
+                    gg_engine::platform_utils::error_dialog("Shader Reload Error", &msg);
                 }
             }
         }

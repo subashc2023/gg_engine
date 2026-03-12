@@ -13,6 +13,7 @@ use super::pipeline::{self, Pipeline};
 use super::shader::Shader;
 use super::shader_compiler;
 use super::texture::Texture2D;
+use crate::error::{EngineError, EngineResult};
 use crate::profiling::ProfileTimer;
 use crate::shaders;
 use log::warn;
@@ -414,7 +415,7 @@ impl Renderer2DData {
         camera_ubo_ds_layout: vk::DescriptorSetLayout,
         white_texture: Texture2D,
         pipeline_cache: vk::PipelineCache,
-    ) -> Result<Self, String> {
+    ) -> EngineResult<Self> {
         let _timer = ProfileTimer::new("Renderer2D::init");
 
         // -- Quad Shaders --
@@ -595,7 +596,7 @@ impl Renderer2DData {
             .push_next(&mut binding_flags_info);
 
         let bindless_ds_layout = unsafe { device.create_descriptor_set_layout(&layout_info, None) }
-            .map_err(|e| format!("Failed to create bindless descriptor set layout: {e}"))?;
+            .map_err(|e| EngineError::Gpu(format!("Failed to create bindless descriptor set layout: {e}")))?;
 
         // -- Quad Pipeline (swapchain: 1 color attachment, no entity ID output) --
         let batch_pipeline = Arc::new(pipeline::create_batch_pipeline(
@@ -717,7 +718,7 @@ impl Renderer2DData {
             .pool_sizes(std::slice::from_ref(&pool_size))
             .max_sets(FRAMES_IN_FLIGHT as u32);
         let bindless_pool = unsafe { device.create_descriptor_pool(&pool_info, None) }
-            .map_err(|e| format!("Failed to create bindless descriptor pool: {e}"))?;
+            .map_err(|e| EngineError::Gpu(format!("Failed to create bindless descriptor pool: {e}")))?;
 
         // -- Allocate one descriptor set per frame-in-flight --
         let layouts = [bindless_ds_layout; FRAMES_IN_FLIGHT];
@@ -725,7 +726,7 @@ impl Renderer2DData {
             .descriptor_pool(bindless_pool)
             .set_layouts(&layouts);
         let ds_vec = unsafe { device.allocate_descriptor_sets(&ds_alloc_info) }
-            .map_err(|e| format!("Failed to allocate bindless descriptor sets: {e}"))?;
+            .map_err(|e| EngineError::Gpu(format!("Failed to allocate bindless descriptor sets: {e}")))?;
         assert_eq!(
             ds_vec.len(),
             FRAMES_IN_FLIGHT,
@@ -1289,7 +1290,7 @@ impl Renderer2DData {
         color_attachment_count: u32,
         pipeline_cache: vk::PipelineCache,
         samples: vk::SampleCountFlags,
-    ) -> Result<(), String> {
+    ) -> EngineResult<()> {
         self.offscreen_render_pass = Some(render_pass);
         self.offscreen_color_attachment_count = color_attachment_count;
         self.offscreen_sample_count = samples;
@@ -1312,7 +1313,7 @@ impl Renderer2DData {
         color_attachment_count: u32,
         pipeline_cache: vk::PipelineCache,
         samples: vk::SampleCountFlags,
-    ) -> Result<(), String> {
+    ) -> EngineResult<()> {
         // Quad offscreen pipeline (with bindless textures at set 1).
         self.quad_ps.offscreen_pipeline = Some(Arc::new(pipeline::create_batch_pipeline(
             device,
@@ -1444,19 +1445,19 @@ impl Renderer2DData {
     pub(super) fn reload_shaders(
         &mut self,
         shader_dir: &Path,
-    ) -> Result<(u32, Vec<(String, shader_compiler::CompiledShader)>), String> {
+    ) -> EngineResult<(u32, Vec<(String, shader_compiler::CompiledShader)>)> {
         let entries: Vec<_> = std::fs::read_dir(shader_dir)
-            .map_err(|e| format!("Cannot read shader dir '{}': {e}", shader_dir.display()))?
+            .map_err(|e| EngineError::Gpu(format!("Cannot read shader dir '{}': {e}", shader_dir.display())))?
             .filter_map(|e| e.ok())
             .map(|e| e.path())
             .filter(|p| p.extension().and_then(|e| e.to_str()) == Some("glsl"))
             .collect();
 
         if entries.is_empty() {
-            return Err(format!(
+            return Err(EngineError::Gpu(format!(
                 "No .glsl files found in '{}'",
                 shader_dir.display()
-            ));
+            )));
         }
 
         // Phase 1: Compile all shaders. If any fail, abort before touching state.
@@ -1468,7 +1469,7 @@ impl Renderer2DData {
         for path in &entries {
             let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
             let source = std::fs::read_to_string(path)
-                .map_err(|e| format!("Cannot read '{}': {e}", path.display()))?;
+                .map_err(|e| EngineError::Gpu(format!("Cannot read '{}': {e}", path.display())))?;
             if source.contains("#type compute") {
                 let result = shader_compiler::compile_compute_glsl(path)?;
                 compiled_compute.push((stem.to_string(), result));
