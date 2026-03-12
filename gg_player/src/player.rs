@@ -360,8 +360,7 @@ impl Application for GGPlayer {
             return;
         }
 
-        self.scene.on_update_physics(dt, Some(input));
-        self.scene.on_update_physics_3d(dt, Some(input));
+        self.scene.on_update_all_physics(dt, Some(input));
         self.scene.on_update_scripts(dt, input);
 
         #[cfg(feature = "lua-scripting")]

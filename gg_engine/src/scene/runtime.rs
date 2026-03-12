@@ -2,6 +2,8 @@ use super::{
     Entity, IdComponent, NativeScript, NativeScriptComponent, RigidBody2DComponent,
     RigidBody3DComponent, Scene, TransformComponent,
 };
+#[cfg(feature = "lua-scripting")]
+use super::lua_ops::ScriptEngineGuard;
 use crate::input::Input;
 use crate::timestep::Timestep;
 
@@ -87,59 +89,115 @@ impl Scene {
         self.on_physics_2d_stop();
     }
 
-    /// Step the physics simulation and write body transforms back to entities.
-    ///
-    /// When `input` is `Some`, script `on_fixed_update(dt)` callbacks (both
-    /// Lua and native) are interleaved with physics steps (play mode). When
-    /// `None`, only physics is stepped (simulate mode).
-    ///
-    /// Per fixed step: `reset_forces` → `on_fixed_update` → `snapshot` → `step_once`.
-    /// After the loop, interpolated transforms are written back for smooth
-    /// rendering.
-    pub fn on_update_physics(&mut self, dt: Timestep, input: Option<&Input>) {
-        let _timer = crate::profiling::ProfileTimer::new("Scene::on_update_physics");
+    // -----------------------------------------------------------------
+    // Unified physics update (P0-1 fix)
+    // -----------------------------------------------------------------
 
-        // Accumulate frame dt.
-        let Some(physics) = self.physics_world.as_mut() else {
+    /// Step both 2D and 3D physics together, calling script `on_fixed_update`
+    /// exactly once per substep.
+    ///
+    /// When `input` is `Some`, script callbacks (both Lua and native) are
+    /// interleaved with physics steps (play mode). When `None`, only physics
+    /// is stepped (simulate mode).
+    ///
+    /// Per fixed step: `reset_forces` → `on_fixed_update` → `snapshot` →
+    /// `step_once` → collision events. After the loop, interpolated transforms
+    /// are written back for smooth rendering.
+    pub fn on_update_all_physics(&mut self, dt: Timestep, input: Option<&Input>) {
+        let _timer = crate::profiling::ProfileTimer::new("Scene::on_update_all_physics");
+
+        let has_2d = self.physics_world.is_some();
+        let has_3d = self.physics_world_3d.is_some();
+
+        if !has_2d && !has_3d {
             return;
-        };
-        physics.accumulate(dt.seconds());
-        let fixed_dt = physics.fixed_timestep();
+        }
 
-        // Fixed-step loop: clear forces → scripts apply forces → snapshot → rapier step.
+        // Accumulate frame dt to both physics worlds.
+        if let Some(p) = self.physics_world.as_mut() {
+            p.accumulate(dt.seconds());
+        }
+        if let Some(p) = self.physics_world_3d.as_mut() {
+            p.accumulate(dt.seconds());
+        }
+
+        let fixed_dt = if let Some(p) = self.physics_world.as_ref() {
+            p.fixed_timestep()
+        } else {
+            self.physics_world_3d.as_ref().unwrap().fixed_timestep()
+        };
+
+        // Unified fixed-step loop.
         loop {
-            if !self.physics_world.as_ref().unwrap().can_step() {
+            let can_2d = self
+                .physics_world
+                .as_ref()
+                .map_or(false, |p| p.can_step());
+            let can_3d = self
+                .physics_world_3d
+                .as_ref()
+                .map_or(false, |p| p.can_step());
+
+            if !can_2d && !can_3d {
                 break;
             }
 
             // Clear accumulated forces before scripts add new ones.
             // rapier 0.22 does NOT auto-clear forces after step().
-            self.physics_world.as_mut().unwrap().reset_all_forces();
+            if can_2d {
+                self.physics_world.as_mut().unwrap().reset_all_forces();
+            }
+            if can_3d {
+                self.physics_world_3d.as_mut().unwrap().reset_all_forces();
+            }
 
-            // Run fixed-update scripts so impulses/forces are applied
-            // at the physics rate, not the render rate.
+            // Run fixed-update scripts ONCE per substep so impulses/forces are
+            // applied at the physics rate, not the render rate.
             if let Some(inp) = input {
                 #[cfg(feature = "lua-scripting")]
                 self.call_lua_fixed_update(fixed_dt, inp);
                 self.run_native_fixed_update(Timestep::from_seconds(fixed_dt), inp);
             }
 
-            let physics = self.physics_world.as_mut().unwrap();
-            physics.snapshot_transforms();
-            physics.step_once();
+            // Snapshot + step.
+            if can_2d {
+                let p = self.physics_world.as_mut().unwrap();
+                p.snapshot_transforms();
+                p.step_once();
+            }
+            if can_3d {
+                let p = self.physics_world_3d.as_mut().unwrap();
+                p.snapshot_transforms();
+                p.step_once();
+            }
 
             // Dispatch collision events to Lua scripts.
             #[cfg(feature = "lua-scripting")]
             if input.is_some() {
-                self.dispatch_collision_events();
+                if can_2d {
+                    self.dispatch_collision_events();
+                }
+                if can_3d {
+                    self.dispatch_collision_events_3d();
+                }
                 self.flush_pending_destroys();
             }
         }
 
+        // Write back interpolated transforms for smooth rendering.
+        if has_2d {
+            self.interpolate_2d_transforms();
+        }
+        if has_3d {
+            self.interpolate_3d_transforms();
+        }
+    }
+
+    /// Interpolate 2D rigid body transforms for smooth rendering.
+    fn interpolate_2d_transforms(&mut self) {
         let physics = self.physics_world.as_ref().unwrap();
         let alpha = physics.alpha();
 
-        // Write back interpolated transforms for smooth rendering.
         for (transform, rb) in self
             .world
             .query_mut::<(&mut TransformComponent, &RigidBody2DComponent)>()
@@ -170,47 +228,11 @@ impl Scene {
         }
     }
 
-    /// Step the 3D physics simulation and write body transforms back to entities.
-    ///
-    /// Same fixed-timestep accumulator pattern as [`on_update_physics`] but for
-    /// 3D rigid bodies. Scripts are interleaved when `input` is `Some` (play mode).
-    pub fn on_update_physics_3d(&mut self, dt: Timestep, input: Option<&Input>) {
-        let _timer = crate::profiling::ProfileTimer::new("Scene::on_update_physics_3d");
-
-        let Some(physics) = self.physics_world_3d.as_mut() else {
-            return;
-        };
-        physics.accumulate(dt.seconds());
-        let fixed_dt = physics.fixed_timestep();
-
-        loop {
-            if !self.physics_world_3d.as_ref().unwrap().can_step() {
-                break;
-            }
-
-            self.physics_world_3d.as_mut().unwrap().reset_all_forces();
-
-            if let Some(inp) = input {
-                #[cfg(feature = "lua-scripting")]
-                self.call_lua_fixed_update(fixed_dt, inp);
-                self.run_native_fixed_update(Timestep::from_seconds(fixed_dt), inp);
-            }
-
-            let physics = self.physics_world_3d.as_mut().unwrap();
-            physics.snapshot_transforms();
-            physics.step_once();
-
-            #[cfg(feature = "lua-scripting")]
-            if input.is_some() {
-                self.dispatch_collision_events_3d();
-                self.flush_pending_destroys();
-            }
-        }
-
+    /// Interpolate 3D rigid body transforms for smooth rendering.
+    fn interpolate_3d_transforms(&mut self) {
         let physics = self.physics_world_3d.as_ref().unwrap();
         let alpha = physics.alpha();
 
-        // Write back interpolated transforms for smooth rendering.
         for (transform, rb) in self
             .world
             .query_mut::<(&mut TransformComponent, &RigidBody3DComponent)>()
@@ -242,6 +264,10 @@ impl Scene {
         }
     }
 
+    // -----------------------------------------------------------------
+    // Lua dispatch helpers (with ScriptEngineGuard for P0-2 fix)
+    // -----------------------------------------------------------------
+
     /// Drain 3D collision events from the physics world and dispatch to Lua scripts.
     #[cfg(feature = "lua-scripting")]
     pub(super) fn dispatch_collision_events_3d(&mut self) {
@@ -256,18 +282,19 @@ impl Scene {
             return;
         }
 
-        let mut engine = match self.script_engine.take() {
+        let engine = match self.script_engine.take() {
             Some(e) => e,
             None => return,
         };
 
         let scene_ptr: *mut Scene = self;
+        let mut guard = ScriptEngineGuard::new(engine, scene_ptr);
 
         let ctx = SceneScriptContext {
             scene: scene_ptr,
             input: std::ptr::null(),
         };
-        engine.lua().set_app_data(ctx);
+        guard.engine_mut().lua().set_app_data(ctx);
 
         for (uuid_a, uuid_b, started) in &events {
             let callback = if *started {
@@ -275,20 +302,17 @@ impl Scene {
             } else {
                 "on_collision_exit"
             };
-            engine.call_entity_collision(*uuid_a, callback, *uuid_b);
-            engine.call_entity_collision(*uuid_b, callback, *uuid_a);
+            guard.engine_mut().call_entity_collision(*uuid_a, callback, *uuid_b);
+            guard.engine_mut().call_entity_collision(*uuid_b, callback, *uuid_a);
         }
 
-        engine.lua().remove_app_data::<SceneScriptContext>();
-
-        unsafe {
-            (*scene_ptr).script_engine = Some(engine);
-        }
+        // Guard drop restores engine and cleans up SceneScriptContext.
     }
 
     /// Call `on_fixed_update(dt)` on all loaded Lua scripts.
     ///
-    /// Uses the same take-modify-replace pattern as `on_update_lua_scripts`.
+    /// Uses the take-modify-replace pattern with [`ScriptEngineGuard`] to ensure
+    /// the engine is always restored, even on panic.
     #[cfg(feature = "lua-scripting")]
     pub(super) fn call_lua_fixed_update(&mut self, fixed_dt: f32, input: &Input) {
         use super::script_glue::SceneScriptContext;
@@ -308,7 +332,7 @@ impl Scene {
             return;
         }
 
-        let mut engine = match self.script_engine.take() {
+        let engine = match self.script_engine.take() {
             Some(e) => e,
             None => return,
         };
@@ -322,20 +346,23 @@ impl Scene {
         let scene_ptr: *mut Scene = self;
 
         // --- Dispatch phase (uses scene_ptr, never self) ---
+        // ScriptEngineGuard ensures the engine is restored even on panic.
+        let mut guard = ScriptEngineGuard::new(engine, scene_ptr);
+
         let ctx = SceneScriptContext {
             scene: scene_ptr,
             input: input as *const Input,
         };
-        engine.lua().set_app_data(ctx);
+        guard.engine_mut().lua().set_app_data(ctx);
 
         for uuid in &uuids {
-            engine.call_entity_on_fixed_update(*uuid, fixed_dt);
+            guard.engine_mut().call_entity_on_fixed_update(*uuid, fixed_dt);
         }
 
-        engine.lua().remove_app_data::<SceneScriptContext>();
+        // Guard drop restores engine and cleans up SceneScriptContext.
+        drop(guard);
 
         unsafe {
-            (*scene_ptr).script_engine = Some(engine);
             (*scene_ptr).flush_pending_destroys();
         }
     }
@@ -359,7 +386,7 @@ impl Scene {
             return;
         }
 
-        let mut engine = match self.script_engine.take() {
+        let engine = match self.script_engine.take() {
             Some(e) => e,
             None => return,
         };
@@ -373,11 +400,14 @@ impl Scene {
         let scene_ptr: *mut Scene = self;
 
         // --- Dispatch phase (uses scene_ptr, never self) ---
+        // ScriptEngineGuard ensures the engine is restored even on panic.
+        let mut guard = ScriptEngineGuard::new(engine, scene_ptr);
+
         let ctx = SceneScriptContext {
             scene: scene_ptr,
             input: std::ptr::null(),
         };
-        engine.lua().set_app_data(ctx);
+        guard.engine_mut().lua().set_app_data(ctx);
 
         for (uuid_a, uuid_b, started) in &events {
             let callback = if *started {
@@ -386,15 +416,15 @@ impl Scene {
                 "on_collision_exit"
             };
             // Notify both entities.
-            engine.call_entity_collision(*uuid_a, callback, *uuid_b);
-            engine.call_entity_collision(*uuid_b, callback, *uuid_a);
+            guard
+                .engine_mut()
+                .call_entity_collision(*uuid_a, callback, *uuid_b);
+            guard
+                .engine_mut()
+                .call_entity_collision(*uuid_b, callback, *uuid_a);
         }
 
-        engine.lua().remove_app_data::<SceneScriptContext>();
-
-        unsafe {
-            (*scene_ptr).script_engine = Some(engine);
-        }
+        // Guard drop restores engine and cleans up SceneScriptContext.
     }
 
     // -----------------------------------------------------------------

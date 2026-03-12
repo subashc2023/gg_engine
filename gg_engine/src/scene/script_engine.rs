@@ -123,14 +123,12 @@ impl ScriptEngine {
     const INSTRUCTION_LIMIT: u32 = 10_000_000;
 
     pub fn new() -> Self {
-        let lua = match Lua::new_with(script_stdlib(), LuaOptions::default()) {
-            Ok(l) => l,
-            Err(e) => {
-                log::error!("ScriptEngine: failed to create sandboxed Lua state: {e}");
-                // Fallback: this shouldn't happen since we only request safe libs.
-                Lua::new()
-            }
-        };
+        let lua = Lua::new_with(script_stdlib(), LuaOptions::default()).unwrap_or_else(|e| {
+            panic!(
+                "ScriptEngine: failed to create sandboxed Lua state \
+                 (requested libs: table, string, math, bit, jit): {e}"
+            )
+        });
 
         // Install an instruction count hook to prevent infinite loops.
         lua.set_hook(

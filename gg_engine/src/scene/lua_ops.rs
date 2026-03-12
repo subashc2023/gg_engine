@@ -7,6 +7,59 @@ use crate::timestep::Timestep;
 #[cfg(feature = "lua-scripting")]
 use super::LuaScriptComponent;
 
+// ---------------------------------------------------------------------------
+// RAII guard for ScriptEngine take-dispatch-replace pattern (P0-2 fix)
+// ---------------------------------------------------------------------------
+
+/// RAII guard that ensures a taken `ScriptEngine` is always restored to its
+/// `Scene`, even if a Lua callback triggers a panic caught by mlua.
+///
+/// On drop, cleans up any lingering [`SceneScriptContext`] app_data and writes
+/// the engine back to `(*scene_ptr).script_engine`.
+pub(super) struct ScriptEngineGuard {
+    engine: Option<ScriptEngine>,
+    scene_ptr: *mut Scene,
+}
+
+impl ScriptEngineGuard {
+    /// Create a new guard that will restore `engine` to `scene_ptr` on drop.
+    pub fn new(engine: ScriptEngine, scene_ptr: *mut Scene) -> Self {
+        Self {
+            engine: Some(engine),
+            scene_ptr,
+        }
+    }
+
+    /// Access the engine mutably.
+    pub fn engine_mut(&mut self) -> &mut ScriptEngine {
+        self.engine
+            .as_mut()
+            .expect("ScriptEngineGuard: engine already consumed")
+    }
+
+    /// Consume the guard without restoring the engine to the scene.
+    /// Used when the engine should be intentionally dropped (e.g. on stop).
+    pub fn into_engine(mut self) -> ScriptEngine {
+        self.engine
+            .take()
+            .expect("ScriptEngineGuard: engine already consumed")
+    }
+}
+
+impl Drop for ScriptEngineGuard {
+    fn drop(&mut self) {
+        if let Some(engine) = self.engine.take() {
+            // Clean up any lingering script context from app_data.
+            engine.lua().remove_app_data::<SceneScriptContext>();
+            // SAFETY: Restore engine to scene. The scene_ptr is valid for the
+            // lifetime of the Scene method that created this guard.
+            unsafe {
+                (*self.scene_ptr).script_engine = Some(engine);
+            }
+        }
+    }
+}
+
 impl Scene {
     // -----------------------------------------------------------------
     // Lua Scripting lifecycle
@@ -57,21 +110,20 @@ impl Scene {
         let scene_ptr: *mut Scene = self;
 
         // --- Dispatch phase (uses scene_ptr, never self) ---
+        // ScriptEngineGuard ensures the engine is restored even on panic.
+        let mut guard = ScriptEngineGuard::new(engine, scene_ptr);
+
         let ctx = SceneScriptContext {
             scene: scene_ptr,
             input: std::ptr::null(),
         };
-        engine.lua().set_app_data(ctx);
+        guard.engine_mut().lua().set_app_data(ctx);
 
         for uuid in &uuids {
-            engine.call_entity_on_create(*uuid);
+            guard.engine_mut().call_entity_on_create(*uuid);
         }
 
-        engine.lua().remove_app_data::<SceneScriptContext>();
-
-        unsafe {
-            (*scene_ptr).script_engine = Some(engine);
-        }
+        // Guard drop restores engine and cleans up SceneScriptContext.
     }
 
     /// Tear down the Lua script engine: call `on_destroy()` per entity,
@@ -80,7 +132,7 @@ impl Scene {
         let _timer = crate::profiling::ProfileTimer::new("Scene::on_lua_scripting_stop");
 
         // --- Setup phase (uses &mut self) ---
-        let mut engine = match self.script_engine.take() {
+        let engine = match self.script_engine.take() {
             Some(e) => e,
             None => {
                 // No engine — just reset loaded/failed flags.
@@ -103,18 +155,24 @@ impl Scene {
         let scene_ptr: *mut Scene = self;
 
         // --- Dispatch phase (uses scene_ptr, never self) ---
+        // Use guard for cleanup safety, then consume without restoring
+        // (engine is intentionally dropped on stop).
+        let mut guard = ScriptEngineGuard::new(engine, scene_ptr);
+
         let ctx = SceneScriptContext {
             scene: scene_ptr,
             input: std::ptr::null(),
         };
-        engine.lua().set_app_data(ctx);
+        guard.engine_mut().lua().set_app_data(ctx);
 
         for uuid in &uuids {
-            engine.call_entity_on_destroy(*uuid);
+            guard.engine_mut().call_entity_on_destroy(*uuid);
         }
 
-        // Clear context — engine is dropped after this block.
+        // Consume the guard and drop the engine (intentional — we're stopping).
+        let engine = guard.into_engine();
         engine.lua().remove_app_data::<SceneScriptContext>();
+        drop(engine);
 
         // Reset loaded/failed flags via raw pointer.
         unsafe {
@@ -213,6 +271,8 @@ impl Scene {
         let scene_ptr: *mut Scene = self;
 
         // --- Dispatch phase (uses scene_ptr, never self) ---
+        // ScriptEngineGuard ensures the engine is restored even on panic.
+        let mut guard = ScriptEngineGuard::new(engine, scene_ptr);
 
         // Call on_create for newly loaded scripts.
         if !unloaded.is_empty() {
@@ -220,19 +280,17 @@ impl Scene {
                 scene: scene_ptr,
                 input: input as *const Input,
             };
-            engine.lua().set_app_data(ctx);
+            guard.engine_mut().lua().set_app_data(ctx);
 
             for (_, uuid, _) in &unloaded {
-                engine.call_entity_on_create(*uuid);
+                guard.engine_mut().call_entity_on_create(*uuid);
             }
 
-            engine.lua().remove_app_data::<SceneScriptContext>();
+            guard.engine_mut().lua().remove_app_data::<SceneScriptContext>();
         }
 
         if uuids.is_empty() {
-            unsafe {
-                (*scene_ptr).script_engine = Some(engine);
-            }
+            // Guard drop restores engine.
             return;
         }
 
@@ -241,17 +299,17 @@ impl Scene {
             scene: scene_ptr,
             input: input as *const Input,
         };
-        engine.lua().set_app_data(ctx);
+        guard.engine_mut().lua().set_app_data(ctx);
 
         // Initialize deferred timer ops so Lua timer bindings work during scripts.
-        engine.init_pending_timer_ops();
+        guard.engine_mut().init_pending_timer_ops();
 
         for uuid in &uuids {
-            engine.call_entity_on_update(*uuid, dt.seconds());
+            guard.engine_mut().call_entity_on_update(*uuid, dt.seconds());
         }
 
         // Apply any timer creates/cancels that scripts requested.
-        engine.apply_pending_timer_ops();
+        guard.engine_mut().apply_pending_timer_ops();
 
         // Tick timers (set_timeout / set_interval).
         // Context must be active so timer callbacks can access the scene.
@@ -259,12 +317,13 @@ impl Scene {
             scene: scene_ptr,
             input: input as *const Input,
         };
-        engine.lua().set_app_data(timer_ctx);
-        engine.tick_timers(dt.seconds());
-        engine.lua().remove_app_data::<SceneScriptContext>();
+        guard.engine_mut().lua().set_app_data(timer_ctx);
+        guard.engine_mut().tick_timers(dt.seconds());
+
+        // Guard drop restores engine and cleans up SceneScriptContext.
+        drop(guard);
 
         unsafe {
-            (*scene_ptr).script_engine = Some(engine);
             (*scene_ptr).flush_pending_destroys();
         }
     }

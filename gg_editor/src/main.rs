@@ -1003,8 +1003,7 @@ impl Application for GGEditor {
                     } else {
                         dt
                     };
-                    self.scene.on_update_physics(physics_dt, None);
-                    self.scene.on_update_physics_3d(physics_dt, None);
+                    self.scene.on_update_all_physics(physics_dt, None);
                     self.scene.on_update_animations(physics_dt.seconds());
                     self.scene.update_spatial_audio();
                     if self.playback.step_frames > 0 {
@@ -1023,8 +1022,7 @@ impl Application for GGEditor {
                         dt
                     };
                     // Step physics + Lua fixed-update interleaved.
-                    self.scene.on_update_physics(step_dt, Some(input));
-                    self.scene.on_update_physics_3d(step_dt, Some(input));
+                    self.scene.on_update_all_physics(step_dt, Some(input));
                     // Run native scripts (e.g. CameraController) with up-to-date transforms.
                     self.scene.on_update_scripts(step_dt, input);
                     // Run Lua scripts.
