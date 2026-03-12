@@ -111,6 +111,9 @@ fn print_usage() {
     );
 }
 
+/// Embedded splash screen PNG (displayed while assets load).
+static SPLASH_PNG: &[u8] = include_bytes!("../splash.png");
+
 pub struct GGPlayer {
     project_name: String,
     scene: Scene,
@@ -121,6 +124,68 @@ pub struct GGPlayer {
     loading_started: bool,
     runtime_started: bool,
     present_mode: PresentMode,
+    /// Quit requested by Lua scripts.
+    quit_requested: bool,
+    /// Shadow quality to apply next frame (needs `&mut Renderer`).
+    pending_shadow_quality: Option<i32>,
+    /// Scenes awaiting GPU-safe deferred destruction after scene transitions.
+    pending_drop_scenes: Vec<Scene>,
+    /// Splash screen texture, created on attach, destroyed when runtime starts.
+    splash_texture: Option<Texture2D>,
+}
+
+impl GGPlayer {
+    /// Render the embedded splash image as a fullscreen quad.
+    fn render_splash(&self, renderer: &mut Renderer) {
+        if let Some(ref tex) = self.splash_texture {
+            // Orthographic projection: -1..1 on both axes, Vulkan Y-flip.
+            let mut proj = Mat4::orthographic_lh(-1.0, 1.0, -1.0, 1.0, -1.0, 1.0);
+            proj.y_axis.y *= -1.0;
+            renderer.set_view_projection(proj);
+
+            // Fullscreen quad: 2×2 world units fills the -1..1 viewport.
+            let transform = Mat4::from_scale(Vec3::new(2.0, 2.0, 1.0));
+            renderer.draw_textured_quad_transform(&transform, tex, 1.0, Vec4::ONE);
+            renderer.flush_all_batches();
+        }
+    }
+
+    /// Load a new scene, stopping the current runtime and starting the asset
+    /// loading pipeline for the replacement.
+    fn load_new_scene(&mut self, path: &str) {
+        info!("GGPlayer: loading scene '{}'", path);
+
+        // Stop current runtime (physics, scripts, audio).
+        self.scene.on_runtime_stop();
+
+        // Deserialize the new scene.
+        let mut new_scene = Scene::new();
+        if let Err(e) = SceneSerializer::deserialize(&mut new_scene, path) {
+            error!("Failed to load scene '{}': {}", path, e);
+            // Rollback — restart the current scene.
+            self.scene.on_runtime_start();
+            return;
+        }
+
+        // Carry current settings to the new scene.
+        new_scene.set_vsync_enabled(self.present_mode == PresentMode::Fifo);
+        new_scene.set_fullscreen_mode(self.scene.fullscreen_mode());
+        new_scene.set_shadow_quality_state(self.scene.shadow_quality());
+        new_scene.set_gui_scale(self.scene.gui_scale());
+        new_scene.set_cursor_mode(self.scene.cursor_mode());
+
+        // Swap scenes — old scene goes to deferred destroy.
+        let old = std::mem::replace(&mut self.scene, new_scene);
+        self.pending_drop_scenes.push(old);
+
+        // Reset loading pipeline.
+        self.scene
+            .on_viewport_resize(self.window_width, self.window_height);
+        self.loading_started = false;
+        self.runtime_started = false;
+
+        info!("GGPlayer: scene '{}' queued for loading", path);
+    }
 }
 
 impl Application for GGPlayer {
@@ -201,6 +266,10 @@ impl Application for GGPlayer {
             PresentMode::Mailbox
         };
 
+        // Seed initial settings state on the scene.
+        scene.set_vsync_enabled(config.vsync);
+        scene.set_cursor_mode(gg_engine::cursor::CursorMode::Confined);
+
         info!(
             "GGPlayer: loaded project '{}', scene '{}', {}x{}, vsync={}",
             project_name, path_str, config.width, config.height, config.vsync
@@ -215,7 +284,15 @@ impl Application for GGPlayer {
             loading_started: false,
             runtime_started: false,
             present_mode,
+            quit_requested: false,
+            pending_shadow_quality: None,
+            pending_drop_scenes: Vec::new(),
+            splash_texture: None,
         }
+    }
+
+    fn on_attach(&mut self, renderer: &mut Renderer) {
+        self.splash_texture = renderer.create_texture_from_memory(SPLASH_PNG);
     }
 
     fn window_config(&self) -> WindowConfig {
@@ -236,12 +313,20 @@ impl Application for GGPlayer {
         false
     }
 
+    fn should_exit(&self) -> bool {
+        self.quit_requested
+    }
+
     fn cursor_mode(&self) -> CursorMode {
         self.scene.cursor_mode()
     }
 
     fn requested_window_size(&self) -> Option<(u32, u32)> {
         self.scene.take_requested_window_size()
+    }
+
+    fn requested_fullscreen(&self) -> Option<FullscreenMode> {
+        self.scene.take_requested_fullscreen()
     }
 
     fn on_event(&mut self, event: &Event, _input: &Input) {
@@ -261,6 +346,8 @@ impl Application for GGPlayer {
                     PresentMode::Mailbox => PresentMode::Fifo,
                     _ => PresentMode::Mailbox,
                 };
+                self.scene
+                    .set_vsync_enabled(self.present_mode == PresentMode::Fifo);
                 info!("VSync toggled → {}", self.present_mode);
             }
             _ => {}
@@ -282,6 +369,36 @@ impl Application for GGPlayer {
 
         self.scene.on_update_animations(dt.seconds());
         self.scene.update_spatial_audio();
+
+        // --- Poll runtime setting requests from Lua scripts ---
+
+        // Quit.
+        if self.scene.take_requested_quit() {
+            self.quit_requested = true;
+        }
+
+        // VSync.
+        if let Some(vsync) = self.scene.take_requested_vsync() {
+            self.present_mode = if vsync {
+                PresentMode::Fifo
+            } else {
+                PresentMode::Mailbox
+            };
+            self.scene.set_vsync_enabled(vsync);
+            info!("VSync set via Lua → {}", self.present_mode);
+        }
+
+        // Shadow quality.
+        if let Some(quality) = self.scene.take_requested_shadow_quality() {
+            self.pending_shadow_quality = Some(quality);
+            self.scene.set_shadow_quality_state(quality);
+            info!("Shadow quality set via Lua → {}", quality);
+        }
+
+        // Scene loading (deferred — must be last so current frame finishes).
+        if let Some(path) = self.scene.take_requested_load_scene() {
+            self.load_new_scene(&path);
+        }
     }
 
     fn on_render_shadows(
@@ -300,6 +417,17 @@ impl Application for GGPlayer {
 
     fn on_render(&mut self, renderer: &mut Renderer) {
         profile_scope!("GGPlayer::on_render");
+
+        // GPU-safe deferred scene destruction after scene transitions.
+        if !self.pending_drop_scenes.is_empty() {
+            renderer.wait_gpu_idle();
+            self.pending_drop_scenes.clear();
+        }
+
+        // Apply pending shadow quality change (needs &mut Renderer).
+        if let Some(quality) = self.pending_shadow_quality.take() {
+            renderer.set_shadow_quality(quality);
+        }
 
         // First frame: set viewport and kick off async loading.
         if !self.loading_started {
@@ -339,11 +467,21 @@ impl Application for GGPlayer {
             if pending == 0 {
                 self.scene.on_runtime_start();
                 self.runtime_started = true;
+
+                // Release splash texture — no longer needed.
+                if let Some(tex) = self.splash_texture.take() {
+                    renderer.unregister_texture(&tex);
+                }
             }
         }
 
-        // Render through the scene's primary ECS camera.
-        self.scene.on_update_runtime(renderer);
+        if self.runtime_started {
+            // Render through the scene's primary ECS camera.
+            self.scene.on_update_runtime(renderer);
+        } else {
+            // Show splash screen while assets are loading.
+            self.render_splash(renderer);
+        }
     }
 }
 

@@ -507,6 +507,17 @@ impl Renderer {
         Ok(texture)
     }
 
+    /// Create a texture from in-memory image data (PNG, JPEG, etc.).
+    ///
+    /// Decodes the image bytes, converts to RGBA8, and uploads synchronously.
+    /// Useful for embedded splash screens via `include_bytes!`.
+    pub fn create_texture_from_memory(&self, bytes: &[u8]) -> Option<Texture2D> {
+        let img = image::load_from_memory(bytes).ok()?;
+        let rgba = img.to_rgba8();
+        let (w, h) = rgba.dimensions();
+        self.create_texture_from_rgba8(w, h, &rgba).ok()
+    }
+
     /// Load a font from a TTF file and generate an MSDF atlas.
     /// The atlas texture is registered in the bindless descriptor array.
     ///
@@ -2090,6 +2101,11 @@ impl Renderer {
     /// Set the shadow quality tier (0=Low 4-tap, 1=Medium 9-tap, 2=High 16-tap, 3=Ultra PCSS).
     pub fn set_shadow_quality(&mut self, quality: i32) {
         self.shadow_quality = quality.clamp(0, 3);
+    }
+
+    /// Current shadow quality tier (0=Low, 1=Medium, 2=High, 3=Ultra PCSS).
+    pub fn shadow_quality(&self) -> i32 {
+        self.shadow_quality
     }
 
     /// Set the camera near/far clip planes (used for contact shadow depth linearization).

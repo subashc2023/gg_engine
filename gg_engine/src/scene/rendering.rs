@@ -3,7 +3,8 @@ use super::{
     DirectionalLightComponent, Entity, IdComponent, InstancedSpriteAnimator, MeshPrimitive,
     MeshRendererComponent, MeshSource, ParticleEmitterComponent, PointLightComponent,
     RigidBody3DComponent, RigidBody3DType, Scene, SpriteAnimatorComponent, SpriteRendererComponent,
-    TextComponent, TilemapComponent, TransformComponent, TILE_FLIP_H, TILE_FLIP_V, TILE_ID_MASK,
+    TextComponent, TilemapComponent, TransformComponent, UIAnchorComponent, TILE_FLIP_H,
+    TILE_FLIP_V, TILE_ID_MASK,
 };
 use crate::renderer::shadow_map::{compute_cascade_vps, compute_directional_light_vp, ShadowCameraInfo};
 use crate::renderer::{Font, LightEnvironment, Mesh, Renderer, SubTexture2D};
@@ -717,6 +718,7 @@ impl Scene {
         // Extract frustum half-planes for entity-level frustum culling.
         let vp = renderer.view_projection();
         let frustum = super::spatial::Frustum2D::from_view_projection(&vp);
+        let gui_scale = self.gui_scale.get();
 
         // Collect all renderable entities with sort keys.
         // Sprites and circles are frustum-culled via AABB overlap test.
@@ -991,11 +993,28 @@ impl Scene {
                     renderer.draw_circle_component(&world_transform, &circle, handle.id() as i32);
                 }
                 2 => {
-                    // Text
+                    // Text — apply GUI scale to font size for UI-anchored entities.
                     let Ok(text) = self.world.get::<&TextComponent>(handle) else {
                         continue;
                     };
-                    renderer.draw_text_component(&world_transform, &text, handle.id() as i32);
+                    if gui_scale != 1.0
+                        && self.world.get::<&UIAnchorComponent>(handle).is_ok()
+                    {
+                        if let Some(font) = &text.font {
+                            renderer.draw_text_string(
+                                &text.text,
+                                &world_transform,
+                                font,
+                                text.font_size * gui_scale,
+                                text.color,
+                                text.line_spacing,
+                                text.kerning,
+                                handle.id() as i32,
+                            );
+                        }
+                    } else {
+                        renderer.draw_text_component(&world_transform, &text, handle.id() as i32);
+                    }
                 }
                 3 => {
                     // Tilemap — frustum culled + precomputed transforms.
@@ -1028,6 +1047,10 @@ impl Scene {
                     let margin_y = tilemap.margin.y;
                     let step_x = cell_w + tilemap.spacing.x;
                     let step_y = cell_h + tilemap.spacing.y;
+                    // Half-texel inset prevents tile seams caused by
+                    // floating-point UV precision at exact texel boundaries.
+                    let half_texel_u = 0.5 * inv_tw;
+                    let half_texel_v = 0.5 * inv_th;
 
                     // --- Frustum culling: visible tile range ---
                     // Use Frustum2D in tilemap local space to find visible tile
@@ -1072,10 +1095,10 @@ impl Scene {
                             let tex_row = (tile_id as u32) / tile_cols;
                             let px = margin_x + tex_col as f32 * step_x;
                             let py = margin_y + tex_row as f32 * step_y;
-                            let mut min_u = px * inv_tw;
-                            let mut min_v = py * inv_th;
-                            let mut max_u = (px + cell_w) * inv_tw;
-                            let mut max_v = (py + cell_h) * inv_th;
+                            let mut min_u = px * inv_tw + half_texel_u;
+                            let mut min_v = py * inv_th + half_texel_v;
+                            let mut max_u = (px + cell_w) * inv_tw - half_texel_u;
+                            let mut max_v = (py + cell_h) * inv_th - half_texel_v;
 
                             if flip_h {
                                 std::mem::swap(&mut min_u, &mut max_u);

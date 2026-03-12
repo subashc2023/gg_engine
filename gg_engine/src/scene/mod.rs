@@ -65,6 +65,23 @@ pub struct CullingStats {
     pub culled: u32,
 }
 
+/// Fullscreen mode for the player window.
+///
+/// Used by Lua scripts via `Engine.set_fullscreen()` / `Engine.get_fullscreen()`.
+/// The [`Application`](crate::Application) trait returns this from
+/// `requested_fullscreen()`, and the engine runner converts it to the appropriate
+/// winit type (including video mode enumeration for `Exclusive`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum FullscreenMode {
+    /// Normal windowed mode (no fullscreen).
+    #[default]
+    Windowed,
+    /// Borderless fullscreen (desktop resolution, instant alt-tab).
+    Borderless,
+    /// Exclusive fullscreen (dedicated video mode, best performance).
+    Exclusive,
+}
+
 /// A scene is a container for entities and their components.
 ///
 /// Internally wraps a [`hecs::World`], providing a focused API surface.
@@ -133,6 +150,27 @@ pub struct Scene {
     /// Window resize requested by scripts. Consumed (taken) each frame by the
     /// player/runtime. Physical pixels.
     requested_window_size: std::cell::Cell<Option<(u32, u32)>>,
+
+    // -- Runtime settings (Lua ↔ Player) ------------------------------------
+    /// VSync request from scripts. `Some(true)` = Fifo, `Some(false)` = Mailbox.
+    requested_vsync: Cell<Option<bool>>,
+    /// Fullscreen request from scripts.
+    requested_fullscreen: Cell<Option<FullscreenMode>>,
+    /// Shadow quality request from scripts. 0=Low, 1=Medium, 2=High, 3=Ultra.
+    requested_shadow_quality: Cell<Option<i32>>,
+    /// Quit request from scripts.
+    requested_quit: Cell<bool>,
+    /// Scene load request from scripts. Path relative to CWD (e.g. `"assets/scenes/foo.ggscene"`).
+    requested_load_scene: RefCell<Option<String>>,
+    /// Current VSync state — Cell for readback from `&self` context (Lua getters).
+    vsync_enabled: Cell<bool>,
+    /// Current fullscreen mode — Cell for readback from `&self` context.
+    fullscreen_mode: Cell<FullscreenMode>,
+    /// Current shadow quality tier (0–3) — Cell for readback from `&self` context.
+    shadow_quality_state: Cell<i32>,
+    /// Global GUI scale factor for UI-anchored entities. Multiplied into offsets
+    /// and text font sizes. Cell for readback from `&self` (Lua getters).
+    gui_scale: Cell<f32>,
 }
 
 /// Invokes `$callback!` with every cloneable component type.
@@ -249,6 +287,15 @@ impl Scene {
             shadow_cascade_cache: RefCell::new(None),
             cursor_mode: crate::cursor::CursorMode::Normal,
             requested_window_size: std::cell::Cell::new(None),
+            requested_vsync: Cell::new(None),
+            requested_fullscreen: Cell::new(None),
+            requested_shadow_quality: Cell::new(None),
+            requested_quit: Cell::new(false),
+            requested_load_scene: RefCell::new(None),
+            vsync_enabled: Cell::new(false),
+            fullscreen_mode: Cell::new(FullscreenMode::Windowed),
+            shadow_quality_state: Cell::new(3),
+            gui_scale: Cell::new(1.0),
         }
     }
 
@@ -496,6 +543,10 @@ impl Scene {
         // Copy audio volume settings.
         new_scene.master_volume = source.master_volume;
         new_scene.category_volumes = source.category_volumes;
+
+        // Copy runtime settings state.
+        new_scene.fullscreen_mode.set(source.fullscreen_mode.get());
+        new_scene.gui_scale.set(source.gui_scale.get());
 
         new_scene
     }
@@ -923,6 +974,97 @@ impl Scene {
         self.requested_window_size.take()
     }
 
+    // -- Runtime settings (Lua ↔ Player) ------------------------------------
+
+    /// Request a VSync change from scripts.
+    /// Also updates the tracked state optimistically for immediate readback.
+    pub fn request_vsync(&self, enabled: bool) {
+        self.requested_vsync.set(Some(enabled));
+        self.vsync_enabled.set(enabled);
+    }
+    /// Take (consume) the pending VSync request.
+    pub fn take_requested_vsync(&self) -> Option<bool> {
+        self.requested_vsync.take()
+    }
+    /// Current VSync state as reported by the player.
+    pub fn vsync_enabled(&self) -> bool {
+        self.vsync_enabled.get()
+    }
+    /// Update the tracked VSync state (called by the player after applying).
+    pub fn set_vsync_enabled(&self, val: bool) {
+        self.vsync_enabled.set(val);
+    }
+
+    /// Request a fullscreen mode change from scripts.
+    /// Also updates the tracked state optimistically for immediate readback.
+    pub fn request_fullscreen(&self, mode: FullscreenMode) {
+        self.requested_fullscreen.set(Some(mode));
+        self.fullscreen_mode.set(mode);
+    }
+    /// Take (consume) the pending fullscreen request.
+    pub fn take_requested_fullscreen(&self) -> Option<FullscreenMode> {
+        self.requested_fullscreen.take()
+    }
+    /// Current fullscreen mode.
+    pub fn fullscreen_mode(&self) -> FullscreenMode {
+        self.fullscreen_mode.get()
+    }
+    /// Update the tracked fullscreen mode (called by the player after applying).
+    pub fn set_fullscreen_mode(&self, mode: FullscreenMode) {
+        self.fullscreen_mode.set(mode);
+    }
+    /// Convenience: true if any fullscreen mode is active.
+    pub fn is_fullscreen(&self) -> bool {
+        self.fullscreen_mode.get() != FullscreenMode::Windowed
+    }
+
+    /// Request a shadow quality change from scripts. Clamped to 0–3.
+    /// Also updates the tracked state optimistically for immediate readback.
+    pub fn request_shadow_quality(&self, quality: i32) {
+        let clamped = quality.clamp(0, 3);
+        self.requested_shadow_quality.set(Some(clamped));
+        self.shadow_quality_state.set(clamped);
+    }
+    /// Take (consume) the pending shadow quality request.
+    pub fn take_requested_shadow_quality(&self) -> Option<i32> {
+        self.requested_shadow_quality.take()
+    }
+    /// Current shadow quality tier (0–3).
+    pub fn shadow_quality(&self) -> i32 {
+        self.shadow_quality_state.get()
+    }
+    /// Update the tracked shadow quality state (called by the player after applying).
+    pub fn set_shadow_quality_state(&self, val: i32) {
+        self.shadow_quality_state.set(val);
+    }
+
+    /// Current GUI scale factor (default 1.0).
+    pub fn gui_scale(&self) -> f32 {
+        self.gui_scale.get()
+    }
+    /// Set the GUI scale factor. Clamped to 0.5–2.0.
+    pub fn set_gui_scale(&self, scale: f32) {
+        self.gui_scale.set(scale.clamp(0.5, 2.0));
+    }
+
+    /// Request application exit from scripts.
+    pub fn request_quit(&self) {
+        self.requested_quit.set(true);
+    }
+    /// Take (consume) the pending quit request.
+    pub fn take_requested_quit(&self) -> bool {
+        self.requested_quit.replace(false)
+    }
+
+    /// Request a scene load from scripts. Path relative to CWD.
+    pub fn request_load_scene(&self, path: String) {
+        *self.requested_load_scene.borrow_mut() = Some(path);
+    }
+    /// Take (consume) the pending scene load request.
+    pub fn take_requested_load_scene(&self) -> Option<String> {
+        self.requested_load_scene.borrow_mut().take()
+    }
+
     /// Current viewport dimensions in physical pixels.
     pub fn viewport_size(&self) -> (u32, u32) {
         (self.viewport_width, self.viewport_height)
@@ -991,6 +1133,7 @@ impl Scene {
 
         // Collect updates (avoid borrow conflict: query borrows world immutably,
         // then we write back).
+        let gui_scale = self.gui_scale.get();
         let mut updates: Vec<(hecs::Entity, f32, f32)> = Vec::new();
         for (handle, anchor, _tc) in self
             .world
@@ -1000,10 +1143,11 @@ impl Scene {
             // anchor (0,0) = top-left, (1,1) = bottom-right.
             // World X: left = cam_x - half_w, right = cam_x + half_w.
             // World Y: top = cam_y + half_h, bottom = cam_y - half_h.
+            // Offsets are scaled by gui_scale for resolution-independent UI sizing.
             let world_x =
-                cam_pos.x + (-half_w + anchor.anchor.x * 2.0 * half_w) + anchor.offset.x;
+                cam_pos.x + (-half_w + anchor.anchor.x * 2.0 * half_w) + anchor.offset.x * gui_scale;
             let world_y =
-                cam_pos.y + (half_h - anchor.anchor.y * 2.0 * half_h) + anchor.offset.y;
+                cam_pos.y + (half_h - anchor.anchor.y * 2.0 * half_h) + anchor.offset.y * gui_scale;
             let _ = _tc; // only needed to ensure entity has a TransformComponent
             updates.push((handle, world_x, world_y));
         }
@@ -1014,6 +1158,32 @@ impl Scene {
                 tc.translation.y = y;
             }
         }
+    }
+
+    /// Return the primary camera's visible world-space rectangle as
+    /// `(center, half_w, half_h)`, or `None` if there is no primary camera.
+    ///
+    /// Useful for drawing a viewport bounds wireframe in the editor.
+    pub fn primary_camera_bounds(&self) -> Option<(glam::Vec3, f32, f32)> {
+        for (handle, cam, _tc) in self
+            .world
+            .query::<(hecs::Entity, &CameraComponent, &TransformComponent)>()
+            .iter()
+        {
+            if cam.primary {
+                let world = self.get_world_transform(Entity::new(handle));
+                let cam_pos = world.col(3).truncate();
+                let half_h = cam.camera.orthographic_size() * 0.5;
+                let aspect = if self.viewport_height > 0 {
+                    self.viewport_width as f32 / self.viewport_height as f32
+                } else {
+                    16.0 / 9.0
+                };
+                let half_w = half_h * aspect;
+                return Some((cam_pos, half_w, half_h));
+            }
+        }
+        None
     }
 }
 

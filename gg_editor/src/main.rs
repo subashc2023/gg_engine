@@ -1229,6 +1229,9 @@ impl Application for GGEditor {
                     self.editor_camera.near_clip(),
                     self.editor_camera.far_clip(),
                 );
+                // Apply UI anchors so anchored entities appear at their
+                // runtime positions in the editor viewport.
+                self.scene.apply_ui_anchors();
                 self.scene
                     .on_update_editor(&self.editor_camera.view_projection(), renderer);
             }
@@ -1238,6 +1241,7 @@ impl Application for GGEditor {
                     self.editor_camera.near_clip(),
                     self.editor_camera.far_clip(),
                 );
+                self.scene.apply_ui_anchors();
                 self.scene
                     .on_update_simulation(&self.editor_camera.view_projection(), renderer);
             }
@@ -1908,6 +1912,26 @@ impl GGEditor {
                 self.render_xz_grid(renderer);
             }
             renderer.set_line_width(prev_line_width);
+        }
+
+        // Viewport bounds rectangle — shows the primary camera's visible area
+        // so the user can see where UI-anchored elements will appear at runtime.
+        if self.playback.scene_state != SceneState::Play {
+            if let Some((center, half_w, half_h)) = self.scene.primary_camera_bounds() {
+                let prev_line_width = renderer.line_width();
+                renderer.set_line_width(1.0);
+                let bounds_color = Vec4::new(0.35, 0.65, 1.0, 0.5);
+                let z = -0.01; // slightly in front of grid
+                let tl = Vec3::new(center.x - half_w, center.y + half_h, z);
+                let tr = Vec3::new(center.x + half_w, center.y + half_h, z);
+                let br = Vec3::new(center.x + half_w, center.y - half_h, z);
+                let bl = Vec3::new(center.x - half_w, center.y - half_h, z);
+                renderer.draw_line(tl, tr, bounds_color, -1);
+                renderer.draw_line(tr, br, bounds_color, -1);
+                renderer.draw_line(br, bl, bounds_color, -1);
+                renderer.draw_line(bl, tl, bounds_color, -1);
+                renderer.set_line_width(prev_line_width);
+            }
         }
 
         // Physics collider visualization (uses world transforms for hierarchy support).

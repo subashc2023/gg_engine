@@ -480,6 +480,22 @@ pub fn register_all(lua: &Lua) -> LuaResult<()> {
         lua.create_function(lua_is_key_just_released)?,
     )?;
 
+    // Text color
+    engine.set("get_text_color", lua.create_function(lua_get_text_color)?)?;
+    engine.set("set_text_color", lua.create_function(lua_set_text_color)?)?;
+
+    // Runtime settings
+    engine.set("get_vsync", lua.create_function(lua_get_vsync)?)?;
+    engine.set("set_vsync", lua.create_function(lua_set_vsync)?)?;
+    engine.set("get_fullscreen", lua.create_function(lua_get_fullscreen)?)?;
+    engine.set("set_fullscreen", lua.create_function(lua_set_fullscreen)?)?;
+    engine.set("get_shadow_quality", lua.create_function(lua_get_shadow_quality)?)?;
+    engine.set("set_shadow_quality", lua.create_function(lua_set_shadow_quality)?)?;
+    engine.set("quit", lua.create_function(lua_quit)?)?;
+    engine.set("load_scene", lua.create_function(lua_load_scene)?)?;
+    engine.set("get_gui_scale", lua.create_function(lua_get_gui_scale)?)?;
+    engine.set("set_gui_scale", lua.create_function(lua_set_gui_scale)?)?;
+
     // Logging
     engine.set("log", lua.create_function(lua_log)?)?;
 
@@ -2299,6 +2315,167 @@ fn lua_get_window_size(lua: &Lua, _: ()) -> LuaResult<(u32, u32)> {
 }
 
 // ---------------------------------------------------------------------------
+// Text color
+// ---------------------------------------------------------------------------
+
+/// `Engine.get_text_color(entity_id)` → `(r, g, b, a)`.
+fn lua_get_text_color(lua: &Lua, entity_id: u64) -> LuaResult<(f32, f32, f32, f32)> {
+    with_entity(lua, entity_id, (1.0, 1.0, 1.0, 1.0), |scene, entity| {
+        scene
+            .get_component::<super::TextComponent>(entity)
+            .map(|tc| (tc.color.x, tc.color.y, tc.color.z, tc.color.w))
+            .unwrap_or((1.0, 1.0, 1.0, 1.0))
+    })
+}
+
+/// `Engine.set_text_color(entity_id, r, g, b, a)` — set text component color.
+fn lua_set_text_color(
+    lua: &Lua,
+    (entity_id, r, g, b, a): (u64, f32, f32, f32, f32),
+) -> LuaResult<()> {
+    with_entity_mut(lua, entity_id, (), |scene, entity| {
+        if let Some(mut tc) = scene.get_component_mut::<super::TextComponent>(entity) {
+            tc.color = glam::Vec4::new(r, g, b, a);
+        }
+    })
+}
+
+// ---------------------------------------------------------------------------
+// Runtime settings
+// ---------------------------------------------------------------------------
+
+/// `Engine.get_vsync()` → `bool`.
+fn lua_get_vsync(lua: &Lua, _: ()) -> LuaResult<bool> {
+    let ctx = match lua.app_data_mut::<SceneScriptContext>() {
+        Some(ctx) => ctx,
+        None => return Ok(false),
+    };
+    let scene = unsafe { ctx.scene() };
+    Ok(scene.vsync_enabled())
+}
+
+/// `Engine.set_vsync(enabled)` — request VSync on (`true` → Fifo) or off (`false` → Mailbox).
+fn lua_set_vsync(lua: &Lua, enabled: bool) -> LuaResult<()> {
+    let ctx = match lua.app_data_mut::<SceneScriptContext>() {
+        Some(ctx) => ctx,
+        None => return Ok(()),
+    };
+    let scene = unsafe { ctx.scene() };
+    scene.request_vsync(enabled);
+    Ok(())
+}
+
+/// `Engine.get_fullscreen()` → `"windowed"`, `"borderless"`, or `"exclusive"`.
+fn lua_get_fullscreen(lua: &Lua, _: ()) -> LuaResult<String> {
+    let ctx = match lua.app_data_mut::<SceneScriptContext>() {
+        Some(ctx) => ctx,
+        None => return Ok("windowed".to_string()),
+    };
+    let scene = unsafe { ctx.scene() };
+    Ok(match scene.fullscreen_mode() {
+        super::FullscreenMode::Windowed => "windowed",
+        super::FullscreenMode::Borderless => "borderless",
+        super::FullscreenMode::Exclusive => "exclusive",
+    }
+    .to_string())
+}
+
+/// `Engine.set_fullscreen(mode)` — `"windowed"`, `"borderless"`, or `"exclusive"`.
+fn lua_set_fullscreen(lua: &Lua, mode_str: String) -> LuaResult<()> {
+    let mode = match mode_str.as_str() {
+        "windowed" => super::FullscreenMode::Windowed,
+        "borderless" => super::FullscreenMode::Borderless,
+        "exclusive" => super::FullscreenMode::Exclusive,
+        _ => {
+            return Err(mlua::Error::runtime(format!(
+                "Invalid fullscreen mode '{}'. Expected 'windowed', 'borderless', or 'exclusive'.",
+                mode_str
+            )));
+        }
+    };
+    let ctx = match lua.app_data_mut::<SceneScriptContext>() {
+        Some(ctx) => ctx,
+        None => return Ok(()),
+    };
+    let scene = unsafe { ctx.scene() };
+    scene.request_fullscreen(mode);
+    Ok(())
+}
+
+/// `Engine.get_shadow_quality()` → `int` (0=Low, 1=Medium, 2=High, 3=Ultra).
+fn lua_get_shadow_quality(lua: &Lua, _: ()) -> LuaResult<i32> {
+    let ctx = match lua.app_data_mut::<SceneScriptContext>() {
+        Some(ctx) => ctx,
+        None => return Ok(3),
+    };
+    let scene = unsafe { ctx.scene() };
+    Ok(scene.shadow_quality())
+}
+
+/// `Engine.set_shadow_quality(level)` — 0=Low, 1=Medium, 2=High, 3=Ultra.
+fn lua_set_shadow_quality(lua: &Lua, quality: i32) -> LuaResult<()> {
+    if !(0..=3).contains(&quality) {
+        return Err(mlua::Error::runtime(format!(
+            "Shadow quality must be 0–3, got {}",
+            quality
+        )));
+    }
+    let ctx = match lua.app_data_mut::<SceneScriptContext>() {
+        Some(ctx) => ctx,
+        None => return Ok(()),
+    };
+    let scene = unsafe { ctx.scene() };
+    scene.request_shadow_quality(quality);
+    Ok(())
+}
+
+/// `Engine.quit()` — request application exit.
+fn lua_quit(lua: &Lua, _: ()) -> LuaResult<()> {
+    let ctx = match lua.app_data_mut::<SceneScriptContext>() {
+        Some(ctx) => ctx,
+        None => return Ok(()),
+    };
+    let scene = unsafe { ctx.scene() };
+    scene.request_quit();
+    Ok(())
+}
+
+/// `Engine.load_scene(path)` — request scene transition. Deferred to next frame.
+fn lua_load_scene(lua: &Lua, path: String) -> LuaResult<()> {
+    if path.is_empty() {
+        return Err(mlua::Error::runtime("Scene path cannot be empty"));
+    }
+    let ctx = match lua.app_data_mut::<SceneScriptContext>() {
+        Some(ctx) => ctx,
+        None => return Ok(()),
+    };
+    let scene = unsafe { ctx.scene() };
+    scene.request_load_scene(path);
+    Ok(())
+}
+
+/// `Engine.get_gui_scale()` → `number` (default 1.0).
+fn lua_get_gui_scale(lua: &Lua, _: ()) -> LuaResult<f32> {
+    let ctx = match lua.app_data_mut::<SceneScriptContext>() {
+        Some(ctx) => ctx,
+        None => return Ok(1.0),
+    };
+    let scene = unsafe { ctx.scene() };
+    Ok(scene.gui_scale())
+}
+
+/// `Engine.set_gui_scale(scale)` — clamped to 0.5–2.0.
+fn lua_set_gui_scale(lua: &Lua, scale: f32) -> LuaResult<()> {
+    let ctx = match lua.app_data_mut::<SceneScriptContext>() {
+        Some(ctx) => ctx,
+        None => return Ok(()),
+    };
+    let scene = unsafe { ctx.scene() };
+    scene.set_gui_scale(scale);
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
 // UI Anchor
 // ---------------------------------------------------------------------------
 
@@ -2536,6 +2713,22 @@ mod tests {
         assert!(engine.get::<LuaFunction>("get_window_size").is_ok());
         assert!(engine.get::<LuaFunction>("set_ui_anchor").is_ok());
         assert!(engine.get::<LuaFunction>("get_ui_anchor").is_ok());
+
+        // Text color
+        assert!(engine.get::<LuaFunction>("get_text_color").is_ok());
+        assert!(engine.get::<LuaFunction>("set_text_color").is_ok());
+
+        // Runtime settings
+        assert!(engine.get::<LuaFunction>("get_vsync").is_ok());
+        assert!(engine.get::<LuaFunction>("set_vsync").is_ok());
+        assert!(engine.get::<LuaFunction>("get_fullscreen").is_ok());
+        assert!(engine.get::<LuaFunction>("set_fullscreen").is_ok());
+        assert!(engine.get::<LuaFunction>("get_shadow_quality").is_ok());
+        assert!(engine.get::<LuaFunction>("set_shadow_quality").is_ok());
+        assert!(engine.get::<LuaFunction>("quit").is_ok());
+        assert!(engine.get::<LuaFunction>("load_scene").is_ok());
+        assert!(engine.get::<LuaFunction>("get_gui_scale").is_ok());
+        assert!(engine.get::<LuaFunction>("set_gui_scale").is_ok());
     }
 
     #[test]

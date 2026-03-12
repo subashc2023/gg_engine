@@ -171,6 +171,14 @@ pub trait Application {
         None
     }
 
+    /// Requested fullscreen mode change. Polled each frame.
+    /// `Some(mode)` requests a transition; `None` means no change.
+    /// The engine runner handles winit conversion, including video mode
+    /// enumeration for [`FullscreenMode::Exclusive`].
+    fn requested_fullscreen(&self) -> Option<crate::scene::FullscreenMode> {
+        None
+    }
+
     /// Return the scene framebuffer if this app renders to an offscreen target.
     /// When `Some`, the engine uses a dual-pass flow: offscreen scene pass + swapchain egui pass.
     fn scene_framebuffer(&self) -> Option<&Framebuffer> {
@@ -772,6 +780,55 @@ impl<T: Application> ApplicationHandler for EngineRunner<T> {
             if let Some((w, h)) = self.app.requested_window_size() {
                 if let Some(window) = &self.window {
                     let _ = window.request_inner_size(winit::dpi::PhysicalSize::new(w, h));
+                }
+            }
+
+            // Apply fullscreen mode changes from scripts.
+            if let Some(fs_mode) = self.app.requested_fullscreen() {
+                if let Some(window) = &self.window {
+                    use crate::scene::FullscreenMode;
+                    let winit_mode = match fs_mode {
+                        FullscreenMode::Windowed => None,
+                        FullscreenMode::Borderless => {
+                            Some(winit::window::Fullscreen::Borderless(None))
+                        }
+                        FullscreenMode::Exclusive => {
+                            // Find the best video mode matching the current window size.
+                            let video_mode = window.current_monitor().and_then(|monitor| {
+                                let target = window.inner_size();
+                                let mut best: Option<winit::monitor::VideoModeHandle> = None;
+                                for mode in monitor.video_modes() {
+                                    let s = mode.size();
+                                    if s.width == target.width && s.height == target.height {
+                                        best = Some(match best {
+                                            Some(prev)
+                                                if mode.refresh_rate_millihertz()
+                                                    > prev.refresh_rate_millihertz() =>
+                                            {
+                                                mode
+                                            }
+                                            Some(prev) => prev,
+                                            None => mode,
+                                        });
+                                    }
+                                }
+                                best
+                            });
+                            match video_mode {
+                                Some(mode) => {
+                                    Some(winit::window::Fullscreen::Exclusive(mode))
+                                }
+                                None => {
+                                    log::warn!(
+                                        "No matching video mode for exclusive fullscreen; \
+                                         falling back to borderless"
+                                    );
+                                    Some(winit::window::Fullscreen::Borderless(None))
+                                }
+                            }
+                        }
+                    };
+                    window.set_fullscreen(winit_mode);
                 }
             }
         }
