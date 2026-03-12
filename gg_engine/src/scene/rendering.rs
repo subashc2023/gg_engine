@@ -1610,8 +1610,12 @@ impl Scene {
     /// Use this for **runtime** rendering where the scene's own ECS camera
     /// drives the view. For editor rendering with an external camera, use
     /// [`on_update_editor`](Self::on_update_editor).
-    pub fn on_update_runtime(&self, renderer: &mut Renderer) {
+    pub fn on_update_runtime(&mut self, renderer: &mut Renderer) {
         let _timer = crate::profiling::ProfileTimer::new("Scene::on_update_runtime");
+
+        // Reposition UI-anchored entities before computing world transforms.
+        self.apply_ui_anchors();
+
         // Find the primary camera entity.
         let mut main_camera_vp: Option<glam::Mat4> = None;
         let mut cam_position = glam::Vec3::ZERO;

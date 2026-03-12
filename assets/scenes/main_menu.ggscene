@@ -1,0 +1,289 @@
+Version: 2
+Scene: Main Menu
+Entities:
+# ── Camera ────────────────────────────────────────────────────
+- Entity: 1000
+  TagComponent:
+    Tag: Camera
+  TransformComponent:
+    Translation:
+    - 0.0
+    - 0.0
+    - 0.0
+    Rotation:
+    - 0.0
+    - 0.0
+    - 0.0
+    Scale:
+    - 1.0
+    - 1.0
+    - 1.0
+  CameraComponent:
+    Camera:
+      ProjectionType: 1
+      PerspectiveFOV: 0.7853982
+      PerspectiveNear: 0.01
+      PerspectiveFar: 1000.0
+      OrthographicSize: 10.0
+      OrthographicNear: -1.0
+      OrthographicFar: 1.0
+    Primary: true
+    FixedAspectRatio: false
+
+# ── Background ────────────────────────────────────────────────
+- Entity: 1001
+  TagComponent:
+    Tag: Background
+  TransformComponent:
+    Translation:
+    - 0.0
+    - 0.0
+    - 0.9
+    Rotation:
+    - 0.0
+    - 0.0
+    - 0.0
+    Scale:
+    - 25.0
+    - 15.0
+    - 1.0
+  SpriteRendererComponent:
+    Color:
+    - 0.08
+    - 0.08
+    - 0.12
+    - 1.0
+    TilingFactor: 1.0
+    SortingLayer: -10
+
+# ── Game Manager (Lua script) ─────────────────────────────────
+- Entity: 1002
+  TagComponent:
+    Tag: GameManager
+  TransformComponent:
+    Translation:
+    - 0.0
+    - 0.0
+    - 0.0
+    Rotation:
+    - 0.0
+    - 0.0
+    - 0.0
+    Scale:
+    - 1.0
+    - 1.0
+    - 1.0
+  LuaScriptComponent:
+    ScriptPath: assets/scripts/main_menu.lua
+
+# ── Title ─────────────────────────────────────────────────────
+- Entity: 1010
+  TagComponent:
+    Tag: TitleText
+  TransformComponent:
+    Translation:
+    - 0.0
+    - 0.0
+    - 0.0
+    Rotation:
+    - 0.0
+    - 0.0
+    - 0.0
+    Scale:
+    - 1.0
+    - 1.0
+    - 1.0
+  TextComponent:
+    Text: GGEngine Feature Test
+    FontPath: assets/fonts/JetBrainsMono-Regular.ttf
+    FontSize: 0.7
+    Color:
+    - 1.0
+    - 1.0
+    - 1.0
+    - 1.0
+    LineSpacing: 1.0
+    Kerning: 0.0
+  UIAnchorComponent:
+    Anchor:
+    - 0.0
+    - 0.0
+    Offset:
+    - 0.5
+    - -1.0
+
+# ── Decorative accent bar ────────────────────────────────────
+- Entity: 1060
+  TagComponent:
+    Tag: AccentBar
+  TransformComponent:
+    Translation:
+    - 0.0
+    - 0.0
+    - 0.1
+    Rotation:
+    - 0.0
+    - 0.0
+    - 0.0
+    Scale:
+    - 16.0
+    - 0.04
+    - 1.0
+  SpriteRendererComponent:
+    Color:
+    - 0.3
+    - 0.6
+    - 1.0
+    - 1.0
+    TilingFactor: 1.0
+  UIAnchorComponent:
+    Anchor:
+    - 0.0
+    - 0.0
+    Offset:
+    - 8.5
+    - -2.0
+
+# ── Status (updated by Lua) ──────────────────────────────────
+- Entity: 1020
+  TagComponent:
+    Tag: StatusText
+  TransformComponent:
+    Translation:
+    - 0.0
+    - 0.0
+    - 0.0
+    Rotation:
+    - 0.0
+    - 0.0
+    - 0.0
+    Scale:
+    - 1.0
+    - 1.0
+    - 1.0
+  TextComponent:
+    Text: "Loading..."
+    FontPath: assets/fonts/JetBrainsMono-Regular.ttf
+    FontSize: 0.35
+    Color:
+    - 0.3
+    - 1.0
+    - 0.4
+    - 1.0
+    LineSpacing: 1.3
+    Kerning: 0.0
+  UIAnchorComponent:
+    Anchor:
+    - 0.0
+    - 0.0
+    Offset:
+    - 0.5
+    - -2.5
+
+# ── Cursor mode info (updated by Lua) ────────────────────────
+- Entity: 1030
+  TagComponent:
+    Tag: CursorInfoText
+  TransformComponent:
+    Translation:
+    - 0.0
+    - 0.0
+    - 0.0
+    Rotation:
+    - 0.0
+    - 0.0
+    - 0.0
+    Scale:
+    - 1.0
+    - 1.0
+    - 1.0
+  TextComponent:
+    Text: " "
+    FontPath: assets/fonts/JetBrainsMono-Regular.ttf
+    FontSize: 0.3
+    Color:
+    - 0.6
+    - 0.8
+    - 1.0
+    - 1.0
+    LineSpacing: 1.3
+    Kerning: 0.0
+  UIAnchorComponent:
+    Anchor:
+    - 0.0
+    - 0.0
+    Offset:
+    - 0.5
+    - -4.8
+
+# ── Mouse telemetry (updated by Lua) ─────────────────────────
+- Entity: 1040
+  TagComponent:
+    Tag: MouseInfoText
+  TransformComponent:
+    Translation:
+    - 0.0
+    - 0.0
+    - 0.0
+    Rotation:
+    - 0.0
+    - 0.0
+    - 0.0
+    Scale:
+    - 1.0
+    - 1.0
+    - 1.0
+  TextComponent:
+    Text: "Mouse pos: (0, 0)"
+    FontPath: assets/fonts/JetBrainsMono-Regular.ttf
+    FontSize: 0.3
+    Color:
+    - 0.8
+    - 0.8
+    - 0.8
+    - 1.0
+    LineSpacing: 1.0
+    Kerning: 0.0
+  UIAnchorComponent:
+    Anchor:
+    - 0.0
+    - 1.0
+    Offset:
+    - 0.5
+    - 0.8
+
+# ── Resolution info (updated by Lua) ─────────────────────────
+- Entity: 1050
+  TagComponent:
+    Tag: ResolutionInfoText
+  TransformComponent:
+    Translation:
+    - 0.0
+    - 0.0
+    - 0.0
+    Rotation:
+    - 0.0
+    - 0.0
+    - 0.0
+    Scale:
+    - 1.0
+    - 1.0
+    - 1.0
+  TextComponent:
+    Text: " "
+    FontPath: assets/fonts/JetBrainsMono-Regular.ttf
+    FontSize: 0.3
+    Color:
+    - 0.8
+    - 0.8
+    - 0.8
+    - 1.0
+    LineSpacing: 1.0
+    Kerning: 0.0
+  UIAnchorComponent:
+    Anchor:
+    - 1.0
+    - 1.0
+    Offset:
+    - -5.0
+    - 0.8

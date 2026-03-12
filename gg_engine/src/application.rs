@@ -9,6 +9,7 @@ use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::keyboard::PhysicalKey;
 use winit::window::{Window, WindowAttributes};
 
+use crate::cursor::{self, CursorMode, SoftwareCursor};
 use crate::events::{Event, KeyCode, KeyEvent, MouseButton, MouseEvent, WindowEvent};
 use crate::input::Input;
 use crate::layer::LayerStack;
@@ -142,6 +143,34 @@ pub trait Application {
         true
     }
 
+    /// Cursor grab and visibility mode. Polled each frame; changes are applied
+    /// immediately to the window.
+    ///
+    /// - [`CursorMode::Normal`] — OS cursor visible, no grab (default).
+    /// - [`CursorMode::Confined`] — OS cursor hidden, software cursor rendered,
+    ///   mouse confined to window. Use for games with a visible custom cursor.
+    /// - [`CursorMode::Locked`] — OS cursor hidden and locked in place, raw
+    ///   deltas only. Use for FPS camera / mouse look.
+    fn cursor_mode(&self) -> CursorMode {
+        CursorMode::Normal
+    }
+
+    /// Custom software cursor appearance for [`CursorMode::Confined`] mode.
+    ///
+    /// Return `Some` to replace the default arrow cursor with a custom texture.
+    /// The texture must be registered via [`egui_user_textures()`](Self::egui_user_textures).
+    /// Return `None` (default) to use the built-in arrow cursor.
+    fn software_cursor(&self) -> Option<SoftwareCursor> {
+        None
+    }
+
+    /// Requested window resize (physical pixels). Polled each frame; when
+    /// `Some((w, h))`, the engine calls `window.request_inner_size()`.
+    /// Consumed after reading (use a `Cell` or similar one-shot pattern).
+    fn requested_window_size(&self) -> Option<(u32, u32)> {
+        None
+    }
+
     /// Return the scene framebuffer if this app renders to an offscreen target.
     /// When `Some`, the engine uses a dual-pass flow: offscreen scene pass + swapchain egui pass.
     fn scene_framebuffer(&self) -> Option<&Framebuffer> {
@@ -250,6 +279,10 @@ struct EngineRunner<T: Application> {
     input: Input,
     window_config: WindowConfig,
     current_present_mode: PresentMode,
+    current_cursor_mode: CursorMode,
+    /// Software cursor position in logical pixels, tracked via raw mouse deltas.
+    /// Independent of OS cursor to avoid platform quirks with hidden/confined cursors.
+    software_cursor_pos: (f64, f64),
     default_camera: OrthographicCamera,
     last_frame_time: Instant,
     /// Exponential moving average of frame dt for smooth camera/movement.
@@ -516,6 +549,24 @@ impl<T: Application> ApplicationHandler for EngineRunner<T> {
     ) {
         if let winit::event::DeviceEvent::MouseMotion { delta: (dx, dy) } = event {
             self.input.accumulate_mouse_delta(dx, dy);
+
+            // Update software cursor position from raw deltas (reliable even
+            // when the OS cursor is hidden/confined).
+            if self.current_cursor_mode == CursorMode::Confined {
+                let (cx, cy) = self.software_cursor_pos;
+                // Get logical window size for clamping.
+                let (max_x, max_y) = if let Some(window) = &self.window {
+                    let size = window.inner_size();
+                    let scale = window.scale_factor();
+                    (size.width as f64 / scale, size.height as f64 / scale)
+                } else {
+                    (1280.0, 720.0)
+                };
+                self.software_cursor_pos = (
+                    (cx + dx).clamp(0.0, max_x),
+                    (cy + dy).clamp(0.0, max_y),
+                );
+            }
         }
     }
 
@@ -553,6 +604,17 @@ impl<T: Application> ApplicationHandler for EngineRunner<T> {
             }
             winit::event::WindowEvent::CursorMoved { position, .. } => {
                 self.input.set_mouse_position(position.x, position.y);
+                // Keep software cursor position in sync when in Normal mode,
+                // so it starts at the right place when switching to Confined.
+                if self.current_cursor_mode != CursorMode::Confined {
+                    let scale = self
+                        .window
+                        .as_ref()
+                        .map(|w| w.scale_factor())
+                        .unwrap_or(1.0);
+                    self.software_cursor_pos =
+                        (position.x / scale, position.y / scale);
+                }
             }
             winit::event::WindowEvent::MouseInput { state, button, .. } => {
                 if let Some(btn) = map_mouse_button(*button) {
@@ -567,6 +629,20 @@ impl<T: Application> ApplicationHandler for EngineRunner<T> {
                     // Clear all pressed keys/buttons on focus loss to prevent
                     // "stuck" keys when the user Alt+Tabs away while holding keys.
                     self.input.clear_all();
+                    // Release cursor grab on focus loss so the user can interact
+                    // with other windows. The mode is re-applied on focus gain.
+                    if self.current_cursor_mode != CursorMode::Normal {
+                        if let Some(window) = &self.window {
+                            apply_cursor_mode(window, CursorMode::Normal);
+                        }
+                    }
+                } else {
+                    // Re-apply cursor mode on focus gain.
+                    if self.current_cursor_mode != CursorMode::Normal {
+                        if let Some(window) = &self.window {
+                            apply_cursor_mode(window, self.current_cursor_mode);
+                        }
+                    }
                 }
                 // Dispatch focus event to application.
                 let focus_event = Event::Window(WindowEvent::Focused(*focused));
@@ -664,11 +740,40 @@ impl<T: Application> ApplicationHandler for EngineRunner<T> {
         }
 
         if !self.minimized {
+            // In Confined mode, CursorMoved events may stop on Windows when the
+            // OS cursor is hidden. Sync the Input mouse position from our
+            // delta-tracked software cursor so scripts see correct values.
+            if self.current_cursor_mode == CursorMode::Confined {
+                let scale = self
+                    .window
+                    .as_ref()
+                    .map(|w| w.scale_factor())
+                    .unwrap_or(1.0);
+                let (lx, ly) = self.software_cursor_pos;
+                self.input.set_mouse_position(lx * scale, ly * scale);
+            }
+
             {
                 let _timer = ProfileTimer::new("LayerStack::on_update");
                 self.layers.update_all(dt, &self.input);
             }
             self.app.on_update(dt, &self.input);
+
+            // Apply cursor mode changes (after on_update so app logic takes effect this frame).
+            let desired_cursor = self.app.cursor_mode();
+            if desired_cursor != self.current_cursor_mode {
+                if let Some(window) = &self.window {
+                    apply_cursor_mode(window, desired_cursor);
+                }
+                self.current_cursor_mode = desired_cursor;
+            }
+
+            // Apply window resize requests from scripts.
+            if let Some((w, h)) = self.app.requested_window_size() {
+                if let Some(window) = &self.window {
+                    let _ = window.request_inner_size(winit::dpi::PhysicalSize::new(w, h));
+                }
+            }
         }
 
         // Render egui frame — requires all graphics resources.
@@ -706,9 +811,23 @@ impl<T: Application> ApplicationHandler for EngineRunner<T> {
             let egui_ctx = &self.egui_ctx;
             let app = &mut self.app;
             let window_ref = Arc::clone(window);
+            // Capture cursor state before the closure borrows `app` mutably.
+            let cursor_mode = self.current_cursor_mode;
+            // Use delta-tracked software cursor position (already in logical pixels).
+            let cursor_pos = self.software_cursor_pos;
+            let custom_cursor = app.software_cursor();
             let full_output = egui_ctx.run(raw_input, |ctx| {
                 let _timer = ProfileTimer::new("Application::on_egui");
                 app.on_egui(ctx, &window_ref);
+
+                // Draw software cursor on top of everything in Confined mode.
+                if cursor_mode == CursorMode::Confined {
+                    if let Some(ref sc) = custom_cursor {
+                        cursor::draw_custom_cursor(ctx, cursor_pos, sc);
+                    } else {
+                        cursor::draw_default_cursor(ctx, cursor_pos);
+                    }
+                }
             });
 
             // Check if the application requested an exit (e.g. custom close button).
@@ -1505,6 +1624,8 @@ pub fn run<T: Application>() {
         input: Input::new(),
         window_config,
         current_present_mode,
+        current_cursor_mode: CursorMode::Normal,
+        software_cursor_pos: (0.0, 0.0),
         default_camera,
         last_frame_time: Instant::now(),
         smoothed_dt: 1.0 / 60.0,
@@ -1723,5 +1844,37 @@ fn map_mouse_button(button: winit::event::MouseButton) -> Option<MouseButton> {
         winit::event::MouseButton::Back => Some(MouseButton::Back),
         winit::event::MouseButton::Forward => Some(MouseButton::Forward),
         winit::event::MouseButton::Other(_) => None, // ignore unknown buttons
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Cursor mode
+// ---------------------------------------------------------------------------
+
+/// Apply a [`CursorMode`] to the winit window (grab + visibility).
+fn apply_cursor_mode(window: &Window, mode: CursorMode) {
+    use winit::window::CursorGrabMode;
+    match mode {
+        CursorMode::Normal => {
+            let _ = window.set_cursor_grab(CursorGrabMode::None);
+            window.set_cursor_visible(true);
+        }
+        CursorMode::Confined => {
+            // Confine cursor to window; fall back to no grab if unsupported.
+            if window
+                .set_cursor_grab(CursorGrabMode::Confined)
+                .is_err()
+            {
+                let _ = window.set_cursor_grab(CursorGrabMode::None);
+            }
+            window.set_cursor_visible(false);
+        }
+        CursorMode::Locked => {
+            // Lock cursor (best for raw deltas); fall back to Confined.
+            if window.set_cursor_grab(CursorGrabMode::Locked).is_err() {
+                let _ = window.set_cursor_grab(CursorGrabMode::Confined);
+            }
+            window.set_cursor_visible(false);
+        }
     }
 }

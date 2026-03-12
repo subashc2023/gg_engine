@@ -236,6 +236,14 @@ impl Application for GGPlayer {
         false
     }
 
+    fn cursor_mode(&self) -> CursorMode {
+        self.scene.cursor_mode()
+    }
+
+    fn requested_window_size(&self) -> Option<(u32, u32)> {
+        self.scene.take_requested_window_size()
+    }
+
     fn on_event(&mut self, event: &Event, _input: &Input) {
         match event {
             Event::Window(WindowEvent::Resize { width, height }) => {

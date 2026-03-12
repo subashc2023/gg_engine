@@ -442,6 +442,34 @@ pub fn register_all(lua: &Lua) -> LuaResult<()> {
     engine.set("set_gravity", lua.create_function(lua_set_gravity)?)?;
     engine.set("get_gravity", lua.create_function(lua_get_gravity)?)?;
 
+    // Cursor
+    engine.set(
+        "set_cursor_mode",
+        lua.create_function(lua_set_cursor_mode)?,
+    )?;
+    engine.set(
+        "get_cursor_mode",
+        lua.create_function(lua_get_cursor_mode)?,
+    )?;
+    engine.set(
+        "set_window_size",
+        lua.create_function(lua_set_window_size)?,
+    )?;
+    engine.set(
+        "get_window_size",
+        lua.create_function(lua_get_window_size)?,
+    )?;
+
+    // UI Anchor
+    engine.set(
+        "set_ui_anchor",
+        lua.create_function(lua_set_ui_anchor)?,
+    )?;
+    engine.set(
+        "get_ui_anchor",
+        lua.create_function(lua_get_ui_anchor)?,
+    )?;
+
     // Time
     engine.set("get_time", lua.create_function(lua_get_time)?)?;
     engine.set("delta_time", lua.create_function(lua_delta_time)?)?;
@@ -2204,6 +2232,129 @@ fn lua_get_gravity(lua: &Lua, _: ()) -> LuaResult<(f32, f32)> {
 }
 
 // ---------------------------------------------------------------------------
+// Cursor
+// ---------------------------------------------------------------------------
+
+/// `Engine.set_cursor_mode(mode)` — set the cursor mode.
+///
+/// `mode` is a string: `"normal"`, `"confined"`, or `"locked"`.
+fn lua_set_cursor_mode(lua: &Lua, mode_str: String) -> LuaResult<()> {
+    let mode = match mode_str.as_str() {
+        "normal" => crate::cursor::CursorMode::Normal,
+        "confined" => crate::cursor::CursorMode::Confined,
+        "locked" => crate::cursor::CursorMode::Locked,
+        _ => {
+            return Err(mlua::Error::runtime(format!(
+                "Invalid cursor mode '{}'. Expected 'normal', 'confined', or 'locked'.",
+                mode_str
+            )));
+        }
+    };
+    with_scene_mut(lua, (), |scene| scene.set_cursor_mode(mode))
+}
+
+/// `Engine.get_cursor_mode()` → string (`"normal"`, `"confined"`, or `"locked"`).
+fn lua_get_cursor_mode(lua: &Lua, _: ()) -> LuaResult<String> {
+    let ctx = match lua.app_data_mut::<SceneScriptContext>() {
+        Some(ctx) => ctx,
+        None => return Ok("normal".to_string()),
+    };
+    let scene = unsafe { ctx.scene() };
+    let s = match scene.cursor_mode() {
+        crate::cursor::CursorMode::Normal => "normal",
+        crate::cursor::CursorMode::Confined => "confined",
+        crate::cursor::CursorMode::Locked => "locked",
+    };
+    Ok(s.to_string())
+}
+
+// ---------------------------------------------------------------------------
+// Window size
+// ---------------------------------------------------------------------------
+
+/// `Engine.set_window_size(w, h)` — request a window resize (physical pixels).
+fn lua_set_window_size(lua: &Lua, (w, h): (u32, u32)) -> LuaResult<()> {
+    if w < 320 || h < 240 {
+        return Err(mlua::Error::runtime(
+            "Window size too small (min 320x240)",
+        ));
+    }
+    let ctx = match lua.app_data_mut::<SceneScriptContext>() {
+        Some(ctx) => ctx,
+        None => return Ok(()),
+    };
+    let scene = unsafe { ctx.scene() };
+    scene.request_window_size(w, h);
+    Ok(())
+}
+
+/// `Engine.get_window_size()` → `(width, height)` in physical pixels.
+fn lua_get_window_size(lua: &Lua, _: ()) -> LuaResult<(u32, u32)> {
+    let ctx = match lua.app_data_mut::<SceneScriptContext>() {
+        Some(ctx) => ctx,
+        None => return Ok((0, 0)),
+    };
+    let scene = unsafe { ctx.scene() };
+    Ok(scene.viewport_size())
+}
+
+// ---------------------------------------------------------------------------
+// UI Anchor
+// ---------------------------------------------------------------------------
+
+/// `Engine.set_ui_anchor(entity_id, anchor_x, anchor_y, offset_x, offset_y)`.
+///
+/// Adds or updates a UIAnchorComponent on the entity. Anchor is 0-1 normalized
+/// ((0,0) = top-left, (1,1) = bottom-right). Offset is in world units.
+fn lua_set_ui_anchor(
+    lua: &Lua,
+    (entity_id, ax, ay, ox, oy): (u64, f32, f32, f32, f32),
+) -> LuaResult<()> {
+    let mut ctx = match lua.app_data_mut::<SceneScriptContext>() {
+        Some(ctx) => ctx,
+        None => return Ok(()),
+    };
+    let scene = unsafe { ctx.scene_mut() };
+    let entity = match scene.find_entity_by_uuid(entity_id) {
+        Some(e) => e,
+        None => return Ok(()),
+    };
+    if scene.has_component::<super::UIAnchorComponent>(entity) {
+        if let Some(mut ua) = scene.get_component_mut::<super::UIAnchorComponent>(entity) {
+            ua.anchor = glam::Vec2::new(ax, ay);
+            ua.offset = glam::Vec2::new(ox, oy);
+        }
+    } else {
+        scene.add_component(
+            entity,
+            super::UIAnchorComponent {
+                anchor: glam::Vec2::new(ax, ay),
+                offset: glam::Vec2::new(ox, oy),
+            },
+        );
+    }
+    Ok(())
+}
+
+/// `Engine.get_ui_anchor(entity_id)` → `(anchor_x, anchor_y, offset_x, offset_y)` or `(nil)`.
+fn lua_get_ui_anchor(lua: &Lua, entity_id: u64) -> LuaResult<(Option<f32>, Option<f32>, Option<f32>, Option<f32>)> {
+    let ctx = match lua.app_data_mut::<SceneScriptContext>() {
+        Some(ctx) => ctx,
+        None => return Ok((None, None, None, None)),
+    };
+    let scene = unsafe { ctx.scene() };
+    let entity = match scene.find_entity_by_uuid(entity_id) {
+        Some(e) => e,
+        None => return Ok((None, None, None, None)),
+    };
+    let ua = match scene.get_component::<super::UIAnchorComponent>(entity) {
+        Some(ua) => ua,
+        None => return Ok((None, None, None, None)),
+    };
+    Ok((Some(ua.anchor.x), Some(ua.anchor.y), Some(ua.offset.x), Some(ua.offset.y)))
+}
+
+// ---------------------------------------------------------------------------
 // Time
 // ---------------------------------------------------------------------------
 
@@ -2377,6 +2528,14 @@ mod tests {
         assert!(engine.get::<LuaFunction>("create_ball_joint_3d").is_ok());
         assert!(engine.get::<LuaFunction>("create_prismatic_joint_3d").is_ok());
         assert!(engine.get::<LuaFunction>("remove_joint_3d").is_ok());
+        // Cursor
+        assert!(engine.get::<LuaFunction>("set_cursor_mode").is_ok());
+        assert!(engine.get::<LuaFunction>("get_cursor_mode").is_ok());
+        // Window
+        assert!(engine.get::<LuaFunction>("set_window_size").is_ok());
+        assert!(engine.get::<LuaFunction>("get_window_size").is_ok());
+        assert!(engine.get::<LuaFunction>("set_ui_anchor").is_ok());
+        assert!(engine.get::<LuaFunction>("get_ui_anchor").is_ok());
     }
 
     #[test]

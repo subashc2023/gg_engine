@@ -21,7 +21,7 @@ use crate::scene::{
     ParticleEmitterComponent, PointLightComponent, RelationshipComponent, RigidBody2DComponent,
     RigidBody2DType, RigidBody3DComponent, RigidBody3DType, Scene, SphereCollider3DComponent,
     SpriteAnimatorComponent, SpriteRendererComponent, TagComponent, TextComponent,
-    TilemapComponent, TransformComponent, TransitionCondition,
+    TilemapComponent, TransformComponent, TransitionCondition, UIAnchorComponent,
 };
 
 /// Default value for collision layer/mask fields — all bits set (collides with everything).
@@ -237,6 +237,12 @@ struct EntityData {
         default
     )]
     ambient_light: Option<AmbientLightData>,
+    #[serde(
+        rename = "UIAnchorComponent",
+        skip_serializing_if = "Option::is_none",
+        default
+    )]
+    ui_anchor: Option<UIAnchorData>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -941,6 +947,14 @@ fn default_point_light_radius() -> f32 {
     10.0
 }
 
+#[derive(Serialize, Deserialize)]
+struct UIAnchorData {
+    #[serde(rename = "Anchor")]
+    anchor: [f32; 2],
+    #[serde(rename = "Offset", default)]
+    offset: [f32; 2],
+}
+
 fn has_no_relationships(r: &Option<RelationshipData>) -> bool {
     match r {
         None => true,
@@ -1591,6 +1605,12 @@ impl SceneSerializer {
                     color: al.color.into(),
                     intensity: al.intensity,
                 }),
+            ui_anchor: scene
+                .get_component::<UIAnchorComponent>(entity)
+                .map(|ua| UIAnchorData {
+                    anchor: ua.anchor.into(),
+                    offset: ua.offset.into(),
+                }),
         }
     }
 
@@ -2086,6 +2106,17 @@ impl SceneSerializer {
                 AmbientLightComponent {
                     color: Vec3::from(al.color),
                     intensity: al.intensity,
+                },
+            );
+        }
+
+        // UIAnchorComponent
+        if let Some(ref ua) = entity_data.ui_anchor {
+            scene.add_component(
+                entity,
+                UIAnchorComponent {
+                    anchor: Vec2::from(ua.anchor),
+                    offset: Vec2::from(ua.offset),
                 },
             );
         }

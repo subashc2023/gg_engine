@@ -1,5 +1,6 @@
 mod application;
 pub mod asset;
+pub mod cursor;
 pub mod error;
 pub mod events;
 mod input;
@@ -26,6 +27,7 @@ pub type Scope<T> = Box<T>;
 
 pub use application::{run, Application, WindowConfig};
 pub use ash;
+pub use cursor::{CursorMode, SoftwareCursor};
 pub use asset::{AssetHandle, AssetMetadata, AssetRegistry, AssetType, EditorAssetManager};
 pub use egui;
 pub use error::{EngineError, EngineResult};
@@ -63,8 +65,8 @@ pub use scene::{
     PointLightComponent, RelationshipComponent, RigidBody2DComponent, RigidBody2DType,
     RigidBody3DComponent, RigidBody3DType, Scene, SceneSerializer, SphereCollider3DComponent,
     SpriteAnimatorComponent, SpriteRendererComponent, TagComponent, TextComponent,
-    TilemapComponent, TransformComponent, TransitionCondition, TILE_FLIP_H, TILE_FLIP_V,
-    TILE_ID_MASK,
+    TilemapComponent, TransformComponent, TransitionCondition, UIAnchorComponent, TILE_FLIP_H,
+    TILE_FLIP_V, TILE_ID_MASK,
 };
 #[cfg(feature = "lua-scripting")]
 pub use scene::{LuaScriptComponent, ScriptEngine, ScriptFieldValue};
@@ -113,14 +115,15 @@ pub mod prelude {
         PointLightComponent, RelationshipComponent, RigidBody2DComponent, RigidBody2DType,
         RigidBody3DComponent, RigidBody3DType, Scene, SceneSerializer, SphereCollider3DComponent,
         SpriteAnimatorComponent, SpriteRendererComponent, TagComponent, TextComponent,
-        TilemapComponent, TransformComponent, TransitionCondition, TILE_FLIP_H, TILE_FLIP_V,
-        TILE_ID_MASK,
+        TilemapComponent, TransformComponent, TransitionCondition, UIAnchorComponent, TILE_FLIP_H,
+        TILE_FLIP_V, TILE_ID_MASK,
     };
     #[cfg(feature = "lua-scripting")]
     pub use crate::scene::{LuaScriptComponent, ScriptEngine, ScriptFieldValue};
     pub use crate::timestep::Timestep;
     pub use crate::ui_theme::BOLD_FONT;
     pub use crate::uuid::Uuid;
+    pub use crate::cursor::{CursorMode, SoftwareCursor};
     pub use crate::{profile_scope, run, Application, Ref, Scope, WindowConfig};
     pub use glam::{Mat3, Mat4, Quat, Vec2, Vec3, Vec4};
     pub use log::{debug, error, info, trace, warn};

@@ -34,8 +34,8 @@ pub use components::{
     MeshRendererComponent, MeshSource, NativeScriptComponent, ParticleEmitterComponent,
     PointLightComponent, RelationshipComponent, RigidBody2DComponent, RigidBody2DType,
     RigidBody3DComponent, RigidBody3DType, SphereCollider3DComponent, SpriteRendererComponent,
-    TagComponent, TextComponent, TilemapComponent, TransformComponent, TILE_FLIP_H, TILE_FLIP_V,
-    TILE_ID_MASK,
+    TagComponent, TextComponent, TilemapComponent, TransformComponent, UIAnchorComponent,
+    TILE_FLIP_H, TILE_FLIP_V, TILE_ID_MASK,
 };
 pub use entity::Entity;
 pub use native_script::NativeScript;
@@ -127,6 +127,12 @@ pub struct Scene {
     /// Stashed cascade VP matrices + split depths + shadow_distance + texel_sizes
     /// from `render_shadow_pass`, consumed by `render_meshes` for the `LightEnvironment`.
     shadow_cascade_cache: RefCell<Option<([glam::Mat4; 4], [f32; 3], f32, [f32; 4])>>,
+    /// Cursor mode requested by scripts. Read by the player/runtime each frame
+    /// and applied via the [`Application::cursor_mode()`] trait method.
+    cursor_mode: crate::cursor::CursorMode,
+    /// Window resize requested by scripts. Consumed (taken) each frame by the
+    /// player/runtime. Physical pixels.
+    requested_window_size: std::cell::Cell<Option<(u32, u32)>>,
 }
 
 /// Invokes `$callback!` with every cloneable component type.
@@ -161,6 +167,7 @@ macro_rules! for_each_cloneable_component {
             DirectionalLightComponent,
             PointLightComponent,
             AmbientLightComponent,
+            UIAnchorComponent,
         );
     };
 }
@@ -207,6 +214,7 @@ macro_rules! for_each_addable_component {
             ),
             ($crate::scene::PointLightComponent, "Point Light"),
             ($crate::scene::AmbientLightComponent, "Ambient Light"),
+            ($crate::scene::UIAnchorComponent, "UI Anchor"),
         );
     };
 }
@@ -239,6 +247,8 @@ impl Scene {
             master_volume: 1.0,
             category_volumes: [1.0; AudioCategory::COUNT],
             shadow_cascade_cache: RefCell::new(None),
+            cursor_mode: crate::cursor::CursorMode::Normal,
+            requested_window_size: std::cell::Cell::new(None),
         }
     }
 
@@ -890,6 +900,34 @@ impl Scene {
         self.last_dt
     }
 
+    /// Current cursor mode requested by scripts within this scene.
+    pub fn cursor_mode(&self) -> crate::cursor::CursorMode {
+        self.cursor_mode
+    }
+
+    /// Set the cursor mode from game logic (scripts, native or Lua).
+    ///
+    /// The player/runtime reads this each frame and applies it to the window.
+    pub fn set_cursor_mode(&mut self, mode: crate::cursor::CursorMode) {
+        self.cursor_mode = mode;
+    }
+
+    /// Request a window resize from scripts. The value is consumed (taken) once
+    /// per frame by the runtime. Physical pixels.
+    pub fn request_window_size(&self, width: u32, height: u32) {
+        self.requested_window_size.set(Some((width, height)));
+    }
+
+    /// Take (consume) the pending window resize request, if any.
+    pub fn take_requested_window_size(&self) -> Option<(u32, u32)> {
+        self.requested_window_size.take()
+    }
+
+    /// Current viewport dimensions in physical pixels.
+    pub fn viewport_size(&self) -> (u32, u32) {
+        (self.viewport_width, self.viewport_height)
+    }
+
     /// Notify the scene that the viewport (or framebuffer) dimensions changed.
     ///
     /// Iterates all [`CameraComponent`]s whose `fixed_aspect_ratio` is `false`
@@ -908,6 +946,72 @@ impl Scene {
         for camera in self.world.query_mut::<&mut CameraComponent>() {
             if !camera.fixed_aspect_ratio {
                 camera.camera.set_viewport_size(width, height);
+            }
+        }
+    }
+
+    // -----------------------------------------------------------------
+    // UI Anchor Layout
+    // -----------------------------------------------------------------
+
+    /// Reposition all entities with a [`UIAnchorComponent`] so they stick
+    /// to a screen-relative anchor point.
+    ///
+    /// Call this each frame before rendering. The method finds the primary
+    /// camera, computes the visible world-space rectangle from its
+    /// orthographic size and aspect ratio, and writes each anchored
+    /// entity's `TransformComponent::translation` (X, Y only — Z preserved).
+    pub fn apply_ui_anchors(&mut self) {
+        // Find primary camera transform + projection params.
+        let mut cam_info: Option<(glam::Vec3, f32, f32)> = None; // (position, half_w, half_h)
+        for (handle, cam, _tc) in self
+            .world
+            .query::<(hecs::Entity, &CameraComponent, &TransformComponent)>()
+            .iter()
+        {
+            if cam.primary {
+                let world = self.get_world_transform(Entity::new(handle));
+                let cam_pos = world.col(3).truncate();
+                let half_h = cam.camera.orthographic_size() * 0.5;
+                let aspect = if self.viewport_height > 0 {
+                    self.viewport_width as f32 / self.viewport_height as f32
+                } else {
+                    16.0 / 9.0
+                };
+                let half_w = half_h * aspect;
+                cam_info = Some((cam_pos, half_w, half_h));
+                break;
+            }
+        }
+
+        let (cam_pos, half_w, half_h) = match cam_info {
+            Some(info) => info,
+            None => return, // No primary camera — nothing to anchor.
+        };
+
+        // Collect updates (avoid borrow conflict: query borrows world immutably,
+        // then we write back).
+        let mut updates: Vec<(hecs::Entity, f32, f32)> = Vec::new();
+        for (handle, anchor, _tc) in self
+            .world
+            .query::<(hecs::Entity, &UIAnchorComponent, &TransformComponent)>()
+            .iter()
+        {
+            // anchor (0,0) = top-left, (1,1) = bottom-right.
+            // World X: left = cam_x - half_w, right = cam_x + half_w.
+            // World Y: top = cam_y + half_h, bottom = cam_y - half_h.
+            let world_x =
+                cam_pos.x + (-half_w + anchor.anchor.x * 2.0 * half_w) + anchor.offset.x;
+            let world_y =
+                cam_pos.y + (half_h - anchor.anchor.y * 2.0 * half_h) + anchor.offset.y;
+            let _ = _tc; // only needed to ensure entity has a TransformComponent
+            updates.push((handle, world_x, world_y));
+        }
+
+        for (handle, x, y) in updates {
+            if let Ok(mut tc) = self.world.get::<&mut TransformComponent>(handle) {
+                tc.translation.x = x;
+                tc.translation.y = y;
             }
         }
     }
@@ -1252,7 +1356,7 @@ mod tests {
         }
         for_each_cloneable_component!(count_types);
         // Update this constant when adding or removing cloneable components.
-        const EXPECTED_COUNT: usize = 24;
+        const EXPECTED_COUNT: usize = 25;
         assert_eq!(
             MACRO_COUNT, EXPECTED_COUNT,
             "for_each_cloneable_component! has {} types but expected {}. \

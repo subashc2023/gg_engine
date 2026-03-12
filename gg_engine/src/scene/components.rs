@@ -1378,6 +1378,42 @@ impl Default for AmbientLightComponent {
 }
 
 // ---------------------------------------------------------------------------
+// UI Anchor Component
+// ---------------------------------------------------------------------------
+
+/// UI anchor for screen-relative entity positioning.
+///
+/// When attached to an entity, the entity's [`TransformComponent`] position is
+/// overwritten each frame to match a screen-relative anchor point plus a
+/// world-unit offset. This makes UI text and sprites stick to screen edges
+/// regardless of camera position or window size.
+///
+/// Anchor coordinates use **screen-space convention**:
+/// - `(0, 0)` = **top-left** of the visible area
+/// - `(1, 1)` = **bottom-right**
+/// - `(0.5, 0.5)` = center
+///
+/// Offset is in **world units** (same units as [`TransformComponent`]).
+///
+/// The Z component of `TransformComponent::translation` is preserved.
+#[derive(Clone, Debug)]
+pub struct UIAnchorComponent {
+    /// Normalized anchor point on screen. (0,0) = top-left, (1,1) = bottom-right.
+    pub anchor: Vec2,
+    /// Offset from the anchor point in world units.
+    pub offset: Vec2,
+}
+
+impl Default for UIAnchorComponent {
+    fn default() -> Self {
+        Self {
+            anchor: Vec2::new(0.5, 0.5),
+            offset: Vec2::ZERO,
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Lua Scripting Component
 // ---------------------------------------------------------------------------
 

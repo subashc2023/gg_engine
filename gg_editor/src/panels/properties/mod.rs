@@ -8,6 +8,7 @@ mod scripting;
 mod sprite;
 mod text;
 mod tilemap;
+mod ui_anchor;
 
 #[cfg(feature = "lua-scripting")]
 pub(crate) use scripting::clear_field_cache;
@@ -855,6 +856,19 @@ fn draw_components(
     ) {
         undo_system.record(scene, "Remove Tilemap");
         scene.remove_component::<TilemapComponent>(entity);
+        *scene_dirty = true;
+    }
+
+    if ui_anchor::draw_ui_anchor_component(
+        ui,
+        scene,
+        entity,
+        &bold_family,
+        scene_dirty,
+        undo_system,
+    ) {
+        undo_system.record(scene, "Remove UI Anchor");
+        scene.remove_component::<UIAnchorComponent>(entity);
         *scene_dirty = true;
     }
 

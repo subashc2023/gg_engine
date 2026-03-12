@@ -1,3 +1,4 @@
+mod cursor_test;
 mod jobs_stress;
 mod sandbox2d;
 mod sandbox3d;
@@ -8,12 +9,14 @@ use gg_engine::prelude::*;
 enum Mode {
     TwoD,
     ThreeD,
+    Cursor,
 }
 
 struct Sandbox {
     mode: Mode,
     sandbox_2d: sandbox2d::Sandbox2D,
     sandbox_3d: sandbox3d::Sandbox3D,
+    cursor_test: cursor_test::CursorTest,
     last_dt: f32,
 }
 
@@ -23,6 +26,7 @@ impl Application for Sandbox {
             mode: Mode::TwoD,
             sandbox_2d: sandbox2d::Sandbox2D::new(),
             sandbox_3d: sandbox3d::Sandbox3D::new(),
+            cursor_test: cursor_test::CursorTest::new(),
             last_dt: 0.0,
         }
     }
@@ -45,7 +49,7 @@ impl Application for Sandbox {
     fn camera(&self) -> Option<&OrthographicCamera> {
         match self.mode {
             Mode::TwoD => self.sandbox_2d.camera(),
-            Mode::ThreeD => None,
+            Mode::ThreeD | Mode::Cursor => None,
         }
     }
 
@@ -53,6 +57,14 @@ impl Application for Sandbox {
         match self.mode {
             Mode::TwoD => [0.1, 0.1, 0.1, 1.0],
             Mode::ThreeD => self.sandbox_3d.clear_color(),
+            Mode::Cursor => [0.12, 0.12, 0.15, 1.0],
+        }
+    }
+
+    fn cursor_mode(&self) -> CursorMode {
+        match self.mode {
+            Mode::Cursor => self.cursor_test.cursor_mode,
+            _ => CursorMode::Normal,
         }
     }
 
@@ -60,6 +72,7 @@ impl Application for Sandbox {
         match self.mode {
             Mode::TwoD => self.sandbox_2d.on_event(event, input),
             Mode::ThreeD => self.sandbox_3d.on_event(event, input),
+            Mode::Cursor => self.cursor_test.on_event(event, input),
         }
     }
 
@@ -68,6 +81,7 @@ impl Application for Sandbox {
         match self.mode {
             Mode::TwoD => self.sandbox_2d.on_update(dt, input),
             Mode::ThreeD => self.sandbox_3d.on_update(dt, input),
+            Mode::Cursor => self.cursor_test.on_update(dt, input),
         }
     }
 
@@ -87,6 +101,7 @@ impl Application for Sandbox {
         match self.mode {
             Mode::TwoD => self.sandbox_2d.on_render(renderer),
             Mode::ThreeD => self.sandbox_3d.on_render(renderer),
+            Mode::Cursor => self.cursor_test.on_render(renderer),
         }
     }
 
@@ -108,12 +123,14 @@ impl Application for Sandbox {
                 ui.label("Mode:");
                 ui.selectable_value(&mut self.mode, Mode::TwoD, "2D");
                 ui.selectable_value(&mut self.mode, Mode::ThreeD, "3D");
+                ui.selectable_value(&mut self.mode, Mode::Cursor, "Cursor");
             });
         });
 
         match self.mode {
             Mode::TwoD => self.sandbox_2d.on_egui(ctx, window),
             Mode::ThreeD => self.sandbox_3d.on_egui(ctx, window),
+            Mode::Cursor => self.cursor_test.on_egui(ctx, window),
         }
     }
 }
