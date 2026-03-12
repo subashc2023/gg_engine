@@ -62,6 +62,10 @@ rayon = "1.10"
 # Error handling
 thiserror = "2"
 
+# Synchronization
+parking_lot = "0.12"
+static_assertions = "1"
+
 # Misc
 rfd = "0.15"
 rand = "0.9"

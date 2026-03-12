@@ -38,8 +38,9 @@ impl Scene {
 
         if let Some(ref mut engine) = self.audio_engine {
             for (uuid, path, volume, pitch, looping, streaming, category) in auto_play {
-                let effective =
-                    volume * self.category_volumes[category as usize] * self.master_volume;
+                let effective = volume
+                    * self.core.category_volumes[category as usize]
+                    * self.core.master_volume;
                 engine.play_sound(uuid, &path, effective, pitch, looping, streaming);
             }
         }

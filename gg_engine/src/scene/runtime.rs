@@ -193,6 +193,7 @@ impl Scene {
         let alpha = physics.alpha();
 
         for (transform, rb) in self
+            .core
             .world
             .query_mut::<(&mut TransformComponent, &RigidBody2DComponent)>()
         {
@@ -228,6 +229,7 @@ impl Scene {
         let alpha = physics.alpha();
 
         for (transform, rb) in self
+            .core
             .world
             .query_mut::<(&mut TransformComponent, &RigidBody3DComponent)>()
         {

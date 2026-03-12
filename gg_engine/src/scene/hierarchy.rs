@@ -1,10 +1,10 @@
 use super::{
-    Entity, IdComponent, RelationshipComponent, RigidBody2DComponent, Scene, TagComponent,
+    Entity, IdComponent, RelationshipComponent, RigidBody2DComponent, SceneCore, TagComponent,
     TransformComponent,
 };
 use std::collections::HashMap;
 
-impl Scene {
+impl SceneCore {
     // -----------------------------------------------------------------
     // Hierarchy (parent-child relationships)
     // -----------------------------------------------------------------
@@ -200,7 +200,7 @@ impl Scene {
     pub(super) fn build_world_transform_cache(&self) {
         // --- Dirty detection: compare current transforms against cached snapshots ---
         let needs_rebuild = {
-            let snapshots = self.transform_snapshots.borrow();
+            let snapshots = self.transform_snapshots.read();
             if snapshots.len() != self.world.len() as usize {
                 true
             } else {
@@ -240,8 +240,8 @@ impl Scene {
         {
             snapshots.insert(handle, (tc.get_transform(), rel.parent));
         }
-        *self.transform_snapshots.borrow_mut() = snapshots;
-        *self.transform_cache.borrow_mut() = cache;
+        *self.transform_snapshots.write() = snapshots;
+        *self.transform_cache.write() = cache;
     }
 
     /// Full world-transform rebuild (parallel or sequential depending on entity count).
@@ -270,7 +270,7 @@ impl Scene {
             .world
             .query::<(
                 hecs::Entity,
-                &IdComponent,
+                &super::IdComponent,
                 &TransformComponent,
                 &RelationshipComponent,
             )>()

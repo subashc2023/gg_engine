@@ -659,6 +659,7 @@ impl Scene {
     /// referenced by in-flight command buffers.
     pub fn invalidate_mesh(&mut self, entity: super::Entity) {
         if let Ok(mut comp) = self
+            .core
             .world
             .get::<&mut MeshRendererComponent>(entity.handle())
         {
@@ -668,10 +669,10 @@ impl Scene {
             if let Some(old_va) = comp.vertex_array.take() {
                 // Defer destruction: the old buffers may still be in use by
                 // a previously submitted command buffer.
-                if self.va_graveyard.is_empty() {
-                    self.va_graveyard.push_back(Vec::new());
+                if self.core.va_graveyard.is_empty() {
+                    self.core.va_graveyard.push_back(Vec::new());
                 }
-                self.va_graveyard.back_mut().unwrap().push(old_va);
+                self.core.va_graveyard.back_mut().unwrap().push(old_va);
             }
         }
     }
@@ -718,13 +719,13 @@ impl Scene {
             crate::profile_scope!("Scene::build_world_transform_cache");
             self.build_world_transform_cache();
         }
-        let wt_ref = self.transform_cache.borrow();
+        let wt_ref = self.transform_cache.read();
         let wt_cache = &*wt_ref;
 
         // Extract frustum half-planes for entity-level frustum culling.
         let vp = renderer.view_projection();
         let frustum = super::spatial::Frustum2D::from_view_projection(&vp);
-        let gui_scale = self.gui_scale.get();
+        let gui_scale = self.gui_scale();
 
         // Collect all renderable entities with sort keys.
         // Sprites and circles are frustum-culled via AABB overlap test.
@@ -811,11 +812,11 @@ impl Scene {
             });
         }
 
-        self.culling_stats.set(super::CullingStats {
+        *self.culling_stats.lock() = super::CullingStats {
             total_cullable,
             rendered: total_cullable - culled,
             culled,
-        });
+        };
 
         // --- Text & tilemaps (sequential, usually few) ---
         let mut renderables = sprite_renderables;
@@ -1399,7 +1400,7 @@ impl Scene {
         // Stash cascade data for the main pass lighting upload.
         // Use the effective shadow_far (not the component's shadow_distance)
         // so the shader's distance fade matches where cascades actually end.
-        self.shadow_cascade_cache.borrow_mut().replace((
+        self.shadow_cascade_cache.write().replace((
             cascade_vps,
             split_depths,
             effective_shadow_far,
@@ -1516,8 +1517,7 @@ impl Scene {
 
         // Check for cascade VP data stashed by a prior render_shadow_pass call.
         if light_env.shadow_cascade_vps.is_none() {
-            if let Some((vps, splits, dist, tsizes)) = self.shadow_cascade_cache.borrow_mut().take()
-            {
+            if let Some((vps, splits, dist, tsizes)) = self.shadow_cascade_cache.write().take() {
                 light_env.shadow_cascade_vps = Some(vps);
                 light_env.cascade_split_depths = splits;
                 light_env.shadow_distance = dist;

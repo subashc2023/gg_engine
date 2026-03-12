@@ -176,7 +176,11 @@ impl Scene {
 
         // Reset loaded/failed flags via raw pointer.
         unsafe {
-            for lsc in (*scene_ptr).world.query_mut::<&mut LuaScriptComponent>() {
+            for lsc in (*scene_ptr)
+                .core
+                .world
+                .query_mut::<&mut LuaScriptComponent>()
+            {
                 lsc.loaded = false;
                 lsc.load_failed = false;
             }
