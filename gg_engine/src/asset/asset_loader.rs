@@ -221,8 +221,7 @@ fn worker_thread_fn(rx: Arc<Mutex<Receiver<LoadRequest>>>, tx: Sender<LoadResult
             Ok(LoadRequest::Shutdown) | Err(_) => return,
             Ok(LoadRequest::Texture { handle, path, spec }) => {
                 let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    Texture2D::load_cpu_data(&path, spec)
-                        .map_err(|e| e.to_string())
+                    Texture2D::load_cpu_data(&path, spec).map_err(|e| e.to_string())
                 }));
                 let data = match result {
                     Ok(data) => data,

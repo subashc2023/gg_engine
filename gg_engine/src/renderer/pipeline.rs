@@ -552,8 +552,12 @@ pub(crate) fn create_instanced_batch_pipeline(
     let all_layouts = prepare_descriptor_layouts(camera_ubo_ds_layout, descriptor_set_layouts);
 
     let layout_info = vk::PipelineLayoutCreateInfo::default().set_layouts(&all_layouts);
-    let pipeline_layout = unsafe { device.create_pipeline_layout(&layout_info, None) }
-        .map_err(|e| EngineError::Gpu(format!("Failed to create instanced batch pipeline layout: {e}")))?;
+    let pipeline_layout =
+        unsafe { device.create_pipeline_layout(&layout_info, None) }.map_err(|e| {
+            EngineError::Gpu(format!(
+                "Failed to create instanced batch pipeline layout: {e}"
+            ))
+        })?;
 
     let pipeline_info = vk::GraphicsPipelineCreateInfo::default()
         .stages(&shader_stages)
@@ -647,8 +651,10 @@ pub(crate) fn create_line_batch_pipeline(
     let all_layouts = [camera_ubo_ds_layout];
 
     let layout_info = vk::PipelineLayoutCreateInfo::default().set_layouts(&all_layouts);
-    let pipeline_layout = unsafe { device.create_pipeline_layout(&layout_info, None) }
-        .map_err(|e| EngineError::Gpu(format!("Failed to create line batch pipeline layout: {e}")))?;
+    let pipeline_layout =
+        unsafe { device.create_pipeline_layout(&layout_info, None) }.map_err(|e| {
+            EngineError::Gpu(format!("Failed to create line batch pipeline layout: {e}"))
+        })?;
 
     let pipeline_info = vk::GraphicsPipelineCreateInfo::default()
         .stages(&shader_stages)
@@ -789,15 +795,15 @@ pub(crate) fn create_3d_pipeline(
     let all_layouts =
         prepare_descriptor_layouts(camera_ubo_ds_layout, extra_descriptor_set_layouts);
 
-    // Push constants: both stages declare the same 116-byte block in SPIR-V.
-    // Vertex accesses: model matrix (64) + entity_id (4) = bytes [0, 68).
-    // Fragment accesses: material properties + albedo_tex_index = bytes [68, 116).
-    // A single range with VERTEX | FRAGMENT covers the full block per Vulkan spec
-    // (each stage's range must contain the entire block declared in that stage).
+    // Push constants: both stages declare the same 164-byte block in SPIR-V.
+    // Layout: mat4 model (64) + mat3 normal_matrix (48) + entity_id (4) +
+    //         metallic/roughness/emissive_strength (12) + albedo_color (16) +
+    //         emissive_color (16) + albedo_tex_index (4) = 164 bytes.
+    // A single range with VERTEX | FRAGMENT covers the full block per Vulkan spec.
     let push_range = vk::PushConstantRange {
         stage_flags: vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT,
         offset: 0,
-        size: 116,
+        size: 164,
     };
     let push_ranges = [push_range];
 

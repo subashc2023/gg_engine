@@ -15,8 +15,11 @@ pub(crate) struct ComputeShader {
 impl ComputeShader {
     pub fn new(device: &ash::Device, name: &str, comp_spv: &[u8]) -> EngineResult<Self> {
         let _timer = ProfileTimer::new("ComputeShader::new");
-        let module = create_shader_module(device, comp_spv)
-            .map_err(|e| EngineError::Gpu(format!("Failed to create compute shader module for '{name}': {e}")))?;
+        let module = create_shader_module(device, comp_spv).map_err(|e| {
+            EngineError::Gpu(format!(
+                "Failed to create compute shader module for '{name}': {e}"
+            ))
+        })?;
 
         log::info!(target: "gg_engine", "Compute shader '{name}' created");
 
@@ -110,8 +113,9 @@ pub(crate) fn create_compute_pipeline(
         .layout(layout);
 
     let pipelines =
-        unsafe { device.create_compute_pipelines(pipeline_cache, &[create_info], None) }
-            .map_err(|(_pipelines, e)| EngineError::Gpu(format!("Failed to create compute pipeline: {e}")))?;
+        unsafe { device.create_compute_pipelines(pipeline_cache, &[create_info], None) }.map_err(
+            |(_pipelines, e)| EngineError::Gpu(format!("Failed to create compute pipeline: {e}")),
+        )?;
 
     Ok(ComputePipeline {
         pipeline: pipelines[0],

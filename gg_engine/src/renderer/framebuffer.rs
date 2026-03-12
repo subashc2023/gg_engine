@@ -977,8 +977,9 @@ fn create_offscreen_render_pass(
             .subpasses(std::slice::from_ref(&subpass))
             .dependencies(std::slice::from_ref(&dependency));
 
-        unsafe { device.create_render_pass(&render_pass_info, None) }
-            .map_err(|e| EngineError::Gpu(format!("Failed to create MSAA offscreen render pass: {e}")))
+        unsafe { device.create_render_pass(&render_pass_info, None) }.map_err(|e| {
+            EngineError::Gpu(format!("Failed to create MSAA offscreen render pass: {e}"))
+        })
     } else {
         // --- Non-MSAA path (unchanged) ---
         for (i, cs) in color_specs.iter().enumerate() {

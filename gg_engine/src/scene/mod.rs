@@ -807,9 +807,10 @@ impl Scene {
     /// cells give more precise culling but use more memory. A good default
     /// is 16.0 for typical 2D scenes.
     pub fn rebuild_spatial_grid(&mut self, cell_size: f32) {
-        let wt_cache = self.build_world_transform_cache();
+        self.build_world_transform_cache();
+        let wt_ref = self.transform_cache.borrow();
         let mut grid = SpatialGrid::new(cell_size);
-        for (&handle, wt) in &wt_cache {
+        for (&handle, wt) in &*wt_ref {
             let aabb = Aabb2D::from_unit_quad_transform(wt);
             grid.insert(handle, &aabb);
         }
@@ -874,9 +875,10 @@ impl Scene {
     /// world-space AABB. Other 3D entities without mesh bounds use a
     /// unit-cube AABB from their world transform.
     pub fn rebuild_spatial_grid_3d(&mut self, cell_size: f32) {
-        let wt_cache = self.build_world_transform_cache();
+        self.build_world_transform_cache();
+        let wt_ref = self.transform_cache.borrow();
         let mut grid = SpatialGrid3D::new(cell_size);
-        for (&handle, wt) in wt_cache.iter() {
+        for (&handle, wt) in wt_ref.iter() {
             // Use mesh local bounds if available, otherwise unit cube.
             let aabb = if let Ok(mesh) = self.world.get::<&MeshRendererComponent>(handle) {
                 if let Some(ref bounds) = mesh.local_bounds {

@@ -27,10 +27,16 @@ impl Shader {
         frag_spv: &[u8],
     ) -> EngineResult<Self> {
         let _timer = ProfileTimer::new("Shader::new");
-        let vert_module = create_shader_module(device, vert_spv)
-            .map_err(|e| EngineError::Gpu(format!("Failed to create vertex shader module for '{name}': {e}")))?;
-        let frag_module = create_shader_module(device, frag_spv)
-            .map_err(|e| EngineError::Gpu(format!("Failed to create fragment shader module for '{name}': {e}")))?;
+        let vert_module = create_shader_module(device, vert_spv).map_err(|e| {
+            EngineError::Gpu(format!(
+                "Failed to create vertex shader module for '{name}': {e}"
+            ))
+        })?;
+        let frag_module = create_shader_module(device, frag_spv).map_err(|e| {
+            EngineError::Gpu(format!(
+                "Failed to create fragment shader module for '{name}': {e}"
+            ))
+        })?;
 
         log::info!(target: "gg_engine", "Shader '{name}' created");
 

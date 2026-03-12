@@ -8,6 +8,7 @@ layout(set = 0, binding = 0) uniform CameraBuffer {
 
 layout(push_constant) uniform PushConstants {
     mat4 u_model;
+    mat3 u_normal_matrix;  // CPU-precomputed inverse-transpose of upper-left 3x3
     int u_entity_id;
     float u_metallic;
     float u_roughness;
@@ -33,9 +34,8 @@ layout(location = 4) out flat int v_entity_id;
 void main() {
     vec4 world_pos = push.u_model * vec4(a_position, 1.0);
     v_world_position = world_pos.xyz;
-    // Transform normal to world space using the inverse-transpose of the
-    // upper-left 3x3 model matrix. This handles non-uniform scale correctly.
-    v_normal = transpose(inverse(mat3(push.u_model))) * a_normal;
+    // Normal matrix precomputed on CPU (inverse-transpose of model 3x3).
+    v_normal = push.u_normal_matrix * a_normal;
     v_uv = a_uv;
     v_color = a_color;
 #ifdef OFFSCREEN
@@ -58,6 +58,7 @@ layout(set = 0, binding = 0) uniform CameraBuffer {
 // Material properties passed via push constants (per-draw).
 layout(push_constant) uniform PushConstants {
     mat4 u_model;
+    mat3 u_normal_matrix;  // CPU-precomputed inverse-transpose of upper-left 3x3
     int u_entity_id;
     float u_metallic;
     float u_roughness;

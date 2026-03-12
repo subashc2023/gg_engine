@@ -40,7 +40,11 @@ impl CameraSystem {
         let ubo_layout_info = vk::DescriptorSetLayoutCreateInfo::default()
             .bindings(std::slice::from_ref(&ubo_binding));
         let ds_layout = unsafe { device.create_descriptor_set_layout(&ubo_layout_info, None) }
-            .map_err(|e| EngineError::Gpu(format!("Failed to create camera UBO descriptor set layout: {e}")))?;
+            .map_err(|e| {
+                EngineError::Gpu(format!(
+                    "Failed to create camera UBO descriptor set layout: {e}"
+                ))
+            })?;
 
         // UBO buffers (one per frame × viewport slot).
         let camera_ubo = UniformBuffer::new(allocator, device, CameraData::SIZE)?;
@@ -51,8 +55,12 @@ impl CameraSystem {
         let ds_alloc_info = vk::DescriptorSetAllocateInfo::default()
             .descriptor_pool(descriptor_pool)
             .set_layouts(&layouts);
-        let descriptor_sets = unsafe { device.allocate_descriptor_sets(&ds_alloc_info) }
-            .map_err(|e| EngineError::Gpu(format!("Failed to allocate camera UBO descriptor sets: {e}")))?;
+        let descriptor_sets =
+            unsafe { device.allocate_descriptor_sets(&ds_alloc_info) }.map_err(|e| {
+                EngineError::Gpu(format!(
+                    "Failed to allocate camera UBO descriptor sets: {e}"
+                ))
+            })?;
 
         // Write each descriptor set pointing to its UBO buffer.
         for (i, &ds) in descriptor_sets.iter().enumerate() {

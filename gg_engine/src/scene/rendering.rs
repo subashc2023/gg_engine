@@ -712,10 +712,12 @@ impl Scene {
         renderer.set_scene_time((self.global_time - gpu_time_epoch) as f32);
 
         // Pre-compute world transforms for all entities once.
-        let wt_cache = {
+        {
             crate::profile_scope!("Scene::build_world_transform_cache");
-            self.build_world_transform_cache()
-        };
+            self.build_world_transform_cache();
+        }
+        let wt_ref = self.transform_cache.borrow();
+        let wt_cache = &*wt_ref;
 
         // Extract frustum half-planes for entity-level frustum culling.
         let vp = renderer.view_projection();
@@ -1562,6 +1564,9 @@ impl Scene {
                 return;
             }
         };
+
+        // Bind pipeline + shared descriptor sets (0, 1, 3, 4) once for all meshes.
+        renderer.bind_3d_shared_sets(&pipeline);
 
         let default_handle = renderer.material_library().default_handle();
 

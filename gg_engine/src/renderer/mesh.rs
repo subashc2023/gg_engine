@@ -234,8 +234,9 @@ impl Mesh {
 
 /// Load all meshes from a glTF / GLB file.
 pub fn load_gltf(path: &Path) -> EngineResult<Vec<Mesh>> {
-    let (document, buffers, _images) = gltf::import(path)
-        .map_err(|e| EngineError::Gpu(format!("Failed to load glTF '{}': {}", path.display(), e)))?;
+    let (document, buffers, _images) = gltf::import(path).map_err(|e| {
+        EngineError::Gpu(format!("Failed to load glTF '{}': {}", path.display(), e))
+    })?;
 
     let mut meshes = Vec::new();
 
@@ -245,7 +246,12 @@ pub fn load_gltf(path: &Path) -> EngineResult<Vec<Mesh>> {
 
             let positions: Vec<[f32; 3]> = reader
                 .read_positions()
-                .ok_or_else(|| EngineError::Gpu(format!("Mesh '{}' primitive has no positions", mesh.index())))?
+                .ok_or_else(|| {
+                    EngineError::Gpu(format!(
+                        "Mesh '{}' primitive has no positions",
+                        mesh.index()
+                    ))
+                })?
                 .collect();
 
             let vert_count = positions.len();
@@ -306,7 +312,10 @@ pub fn load_gltf(path: &Path) -> EngineResult<Vec<Mesh>> {
     }
 
     if meshes.is_empty() {
-        return Err(EngineError::Gpu(format!("No meshes found in '{}'", path.display())));
+        return Err(EngineError::Gpu(format!(
+            "No meshes found in '{}'",
+            path.display()
+        )));
     }
 
     log::info!("Loaded {} mesh(es) from '{}'", meshes.len(), path.display());

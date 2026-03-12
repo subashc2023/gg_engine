@@ -1,7 +1,7 @@
 //! Integration tests for Scene — hierarchy, physics, serialization, and runtime settings.
 
-use glam::{Quat, Vec2, Vec3};
 use gg_engine::prelude::*;
+use glam::{Quat, Vec2, Vec3};
 
 /// Helper: create a dynamic rigid body entity with a box collider.
 fn spawn_dynamic_box(scene: &mut Scene, pos: Vec3) -> Entity {
@@ -48,7 +48,9 @@ fn hierarchy_set_parent_links_both_directions() {
     let rel = scene.get_component::<RelationshipComponent>(child).unwrap();
     assert_eq!(rel.parent, Some(parent_uuid));
 
-    let rel_p = scene.get_component::<RelationshipComponent>(parent).unwrap();
+    let rel_p = scene
+        .get_component::<RelationshipComponent>(parent)
+        .unwrap();
     assert!(rel_p.children.contains(&child_uuid));
 }
 
@@ -73,11 +75,15 @@ fn hierarchy_world_transform_propagation() {
     let child = scene.create_entity();
 
     {
-        let mut tc = scene.get_component_mut::<TransformComponent>(parent).unwrap();
+        let mut tc = scene
+            .get_component_mut::<TransformComponent>(parent)
+            .unwrap();
         tc.translation = Vec3::new(10.0, 0.0, 0.0);
     }
     {
-        let mut tc = scene.get_component_mut::<TransformComponent>(child).unwrap();
+        let mut tc = scene
+            .get_component_mut::<TransformComponent>(child)
+            .unwrap();
         tc.translation = Vec3::new(5.0, 0.0, 0.0);
     }
     scene.set_parent(child, parent, false);
@@ -95,11 +101,15 @@ fn hierarchy_detach_preserves_world_transform() {
     let child = scene.create_entity();
 
     {
-        let mut tc = scene.get_component_mut::<TransformComponent>(parent).unwrap();
+        let mut tc = scene
+            .get_component_mut::<TransformComponent>(parent)
+            .unwrap();
         tc.translation = Vec3::new(10.0, 0.0, 0.0);
     }
     {
-        let mut tc = scene.get_component_mut::<TransformComponent>(child).unwrap();
+        let mut tc = scene
+            .get_component_mut::<TransformComponent>(child)
+            .unwrap();
         tc.translation = Vec3::new(5.0, 0.0, 0.0);
     }
     scene.set_parent(child, parent, false);
@@ -138,15 +148,21 @@ fn hierarchy_multiple_children_world_transforms() {
     let child_b = scene.create_entity();
 
     {
-        let mut tc = scene.get_component_mut::<TransformComponent>(parent).unwrap();
+        let mut tc = scene
+            .get_component_mut::<TransformComponent>(parent)
+            .unwrap();
         tc.translation = Vec3::new(10.0, 0.0, 0.0);
     }
     {
-        let mut tc = scene.get_component_mut::<TransformComponent>(child_a).unwrap();
+        let mut tc = scene
+            .get_component_mut::<TransformComponent>(child_a)
+            .unwrap();
         tc.translation = Vec3::new(1.0, 0.0, 0.0);
     }
     {
-        let mut tc = scene.get_component_mut::<TransformComponent>(child_b).unwrap();
+        let mut tc = scene
+            .get_component_mut::<TransformComponent>(child_b)
+            .unwrap();
         tc.translation = Vec3::new(0.0, 5.0, 0.0);
     }
     scene.set_parent(child_a, parent, false);
@@ -196,7 +212,11 @@ fn physics_2d_gravity_affects_dynamic_body() {
     }
 
     let vel = scene.get_linear_velocity(e).unwrap();
-    assert!(vel.y < 0.0, "gravity should produce downward velocity, got {}", vel.y);
+    assert!(
+        vel.y < 0.0,
+        "gravity should produce downward velocity, got {}",
+        vel.y
+    );
 }
 
 #[test]
@@ -213,7 +233,11 @@ fn physics_2d_set_gravity() {
     }
 
     let vel = scene.get_linear_velocity(e).unwrap();
-    assert!(vel.y.abs() < 0.001, "zero gravity should produce no velocity, got {}", vel.y);
+    assert!(
+        vel.y.abs() < 0.001,
+        "zero gravity should produce no velocity, got {}",
+        vel.y
+    );
 }
 
 #[test]
@@ -280,11 +304,14 @@ fn serialize_deserialize_complex_scene() {
         tc.rotation = Quat::from_rotation_z(std::f32::consts::FRAC_PI_4);
         tc.scale = Vec3::new(2.0, 2.0, 1.0);
     }
-    scene.add_component(e1, SpriteRendererComponent {
-        color: glam::Vec4::new(1.0, 0.0, 0.0, 1.0),
-        tiling_factor: 2.5,
-        ..Default::default()
-    });
+    scene.add_component(
+        e1,
+        SpriteRendererComponent {
+            color: glam::Vec4::new(1.0, 0.0, 0.0, 1.0),
+            tiling_factor: 2.5,
+            ..Default::default()
+        },
+    );
     let mut rb = RigidBody2DComponent::default();
     rb.body_type = RigidBody2DType::Dynamic;
     rb.fixed_rotation = true;
@@ -302,20 +329,26 @@ fn serialize_deserialize_complex_scene() {
 
     // Entity with circle + camera.
     let e2 = scene.create_entity_with_tag("CircleCamera");
-    scene.add_component(e2, CircleRendererComponent {
-        color: glam::Vec4::new(0.0, 1.0, 0.0, 0.5),
-        thickness: 0.8,
-        fade: 0.05,
-        ..Default::default()
-    });
+    scene.add_component(
+        e2,
+        CircleRendererComponent {
+            color: glam::Vec4::new(0.0, 1.0, 0.0, 0.5),
+            thickness: 0.8,
+            fade: 0.05,
+            ..Default::default()
+        },
+    );
     scene.add_component(e2, CameraComponent::default());
 
     // Entity with UI anchor.
     let e3 = scene.create_entity_with_tag("UIElement");
-    scene.add_component(e3, UIAnchorComponent {
-        anchor: Vec2::new(0.5, 0.0),
-        offset: Vec2::new(0.0, 50.0),
-    });
+    scene.add_component(
+        e3,
+        UIAnchorComponent {
+            anchor: Vec2::new(0.5, 0.0),
+            offset: Vec2::new(0.0, 50.0),
+        },
+    );
 
     // Parent-child relationship.
     scene.set_parent(e2, e1, false);
@@ -337,7 +370,9 @@ fn serialize_deserialize_complex_scene() {
     assert!((tc.translation - Vec3::new(1.0, 2.0, 3.0)).length() < 0.001);
     assert!((tc.scale - Vec3::new(2.0, 2.0, 1.0)).length() < 0.001);
 
-    let sprite = loaded.get_component::<SpriteRendererComponent>(le1).unwrap();
+    let sprite = loaded
+        .get_component::<SpriteRendererComponent>(le1)
+        .unwrap();
     assert!((sprite.tiling_factor - 2.5).abs() < 0.001);
 
     let rb = loaded.get_component::<RigidBody2DComponent>(le1).unwrap();
@@ -375,7 +410,11 @@ fn serialize_preserves_hierarchy_tree() {
     scene.set_parent(grandchild, child_a, false);
 
     let root_uuid = scene.get_component::<IdComponent>(root).unwrap().id.raw();
-    let gc_uuid = scene.get_component::<IdComponent>(grandchild).unwrap().id.raw();
+    let gc_uuid = scene
+        .get_component::<IdComponent>(grandchild)
+        .unwrap()
+        .id
+        .raw();
 
     let yaml = SceneSerializer::serialize_to_string(&scene).unwrap();
     let mut loaded = Scene::new();
@@ -403,7 +442,10 @@ fn serialize_deserialize_idempotent() {
     SceneSerializer::deserialize_from_string(&mut loaded, &yaml1).unwrap();
 
     let yaml2 = SceneSerializer::serialize_to_string(&loaded).unwrap();
-    assert_eq!(yaml1, yaml2, "double round-trip should produce identical YAML");
+    assert_eq!(
+        yaml1, yaml2,
+        "double round-trip should produce identical YAML"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -507,7 +549,10 @@ fn settings_request_take_roundtrip() {
 
     // Fullscreen
     scene.request_fullscreen(FullscreenMode::Borderless);
-    assert_eq!(scene.take_requested_fullscreen(), Some(FullscreenMode::Borderless));
+    assert_eq!(
+        scene.take_requested_fullscreen(),
+        Some(FullscreenMode::Borderless)
+    );
     assert!(scene.take_requested_fullscreen().is_none());
 
     // Shadow quality
@@ -527,7 +572,10 @@ fn settings_request_take_roundtrip() {
 
     // Scene load
     scene.request_load_scene("Level2.ggscene".to_string());
-    assert_eq!(scene.take_requested_load_scene(), Some("Level2.ggscene".to_string()));
+    assert_eq!(
+        scene.take_requested_load_scene(),
+        Some("Level2.ggscene".to_string())
+    );
     assert!(scene.take_requested_load_scene().is_none());
 }
 
@@ -554,14 +602,18 @@ fn spatial_grid_2d_query() {
 
     let inside = scene.create_entity_with_tag("Inside");
     {
-        let mut tc = scene.get_component_mut::<TransformComponent>(inside).unwrap();
+        let mut tc = scene
+            .get_component_mut::<TransformComponent>(inside)
+            .unwrap();
         tc.translation = Vec3::new(5.0, 5.0, 0.0);
     }
     scene.add_component(inside, SpriteRendererComponent::default());
 
     let outside = scene.create_entity_with_tag("Outside");
     {
-        let mut tc = scene.get_component_mut::<TransformComponent>(outside).unwrap();
+        let mut tc = scene
+            .get_component_mut::<TransformComponent>(outside)
+            .unwrap();
         tc.translation = Vec3::new(100.0, 100.0, 0.0);
     }
     scene.add_component(outside, SpriteRendererComponent::default());

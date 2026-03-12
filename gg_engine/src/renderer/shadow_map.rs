@@ -136,9 +136,7 @@ impl ShadowMapSystem {
         }
 
         // --- Light VP UBO (64 bytes = mat4) ---
-        let light_vp_ubo =
-            UniformBuffer::new(allocator, device, std::mem::size_of::<[f32; 16]>())
-?;
+        let light_vp_ubo = UniformBuffer::new(allocator, device, std::mem::size_of::<[f32; 16]>())?;
 
         // --- Shadow camera descriptor set layout (for shadow pass, set 0) ---
         //     binding 0: UBO (light VP matrix), vertex stage
@@ -152,7 +150,9 @@ impl ShadowMapSystem {
         let shadow_camera_ds_layout =
             unsafe { device.create_descriptor_set_layout(&shadow_camera_layout_info, None) }
                 .map_err(|e| {
-                    EngineError::Gpu(format!("Failed to create shadow camera descriptor set layout: {e}"))
+                    EngineError::Gpu(format!(
+                        "Failed to create shadow camera descriptor set layout: {e}"
+                    ))
                 })?;
 
         // --- Shadow map descriptor set layout (for main pass, set 4) ---
@@ -173,8 +173,13 @@ impl ShadowMapSystem {
         let shadow_ds_layout_info =
             vk::DescriptorSetLayoutCreateInfo::default().bindings(&shadow_bindings);
         let shadow_ds_layout =
-            unsafe { device.create_descriptor_set_layout(&shadow_ds_layout_info, None) }
-                .map_err(|e| EngineError::Gpu(format!("Failed to create shadow map descriptor set layout: {e}")))?;
+            unsafe { device.create_descriptor_set_layout(&shadow_ds_layout_info, None) }.map_err(
+                |e| {
+                    EngineError::Gpu(format!(
+                        "Failed to create shadow map descriptor set layout: {e}"
+                    ))
+                },
+            )?;
 
         // --- Allocate descriptor sets ---
         let total_slots = MAX_FRAMES_IN_FLIGHT * MAX_VIEWPORTS;
@@ -185,8 +190,11 @@ impl ShadowMapSystem {
             .descriptor_pool(descriptor_pool)
             .set_layouts(&camera_layouts);
         let shadow_camera_descriptor_sets =
-            unsafe { device.allocate_descriptor_sets(&camera_alloc_info) }
-                .map_err(|e| EngineError::Gpu(format!("Failed to allocate shadow camera descriptor sets: {e}")))?;
+            unsafe { device.allocate_descriptor_sets(&camera_alloc_info) }.map_err(|e| {
+                EngineError::Gpu(format!(
+                    "Failed to allocate shadow camera descriptor sets: {e}"
+                ))
+            })?;
 
         // Write UBO to each shadow camera descriptor set
         for (i, &ds) in shadow_camera_descriptor_sets.iter().enumerate() {
@@ -210,8 +218,11 @@ impl ShadowMapSystem {
             .descriptor_pool(descriptor_pool)
             .set_layouts(&sampler_layouts);
         let shadow_descriptor_sets =
-            unsafe { device.allocate_descriptor_sets(&sampler_alloc_info) }
-                .map_err(|e| EngineError::Gpu(format!("Failed to allocate shadow map descriptor sets: {e}")))?;
+            unsafe { device.allocate_descriptor_sets(&sampler_alloc_info) }.map_err(|e| {
+                EngineError::Gpu(format!(
+                    "Failed to allocate shadow map descriptor sets: {e}"
+                ))
+            })?;
 
         // Write shadow map array image to each descriptor set (both bindings).
         for &ds in &shadow_descriptor_sets {
@@ -380,8 +391,9 @@ impl ShadowMapSystem {
                     base_array_layer: i as u32,
                     layer_count: 1,
                 });
-            *view = unsafe { device.create_image_view(&view_info, None) }
-                .map_err(|e| EngineError::Gpu(format!("Failed to create shadow layer {i} image view: {e}")))?;
+            *view = unsafe { device.create_image_view(&view_info, None) }.map_err(|e| {
+                EngineError::Gpu(format!("Failed to create shadow layer {i} image view: {e}"))
+            })?;
         }
 
         // Full-array view (TYPE_2D_ARRAY) — used for sampling in the main pass.
@@ -396,8 +408,10 @@ impl ShadowMapSystem {
                 base_array_layer: 0,
                 layer_count: NUM_SHADOW_CASCADES as u32,
             });
-        let array_view = unsafe { device.create_image_view(&array_view_info, None) }
-            .map_err(|e| EngineError::Gpu(format!("Failed to create shadow array image view: {e}")))?;
+        let array_view =
+            unsafe { device.create_image_view(&array_view_info, None) }.map_err(|e| {
+                EngineError::Gpu(format!("Failed to create shadow array image view: {e}"))
+            })?;
 
         Ok((depth_image, depth_allocation, layer_views, array_view))
     }
@@ -417,8 +431,9 @@ impl ShadowMapSystem {
             .command_pool(command_pool)
             .command_buffer_count(1);
 
-        let cmd_buf = unsafe { device.allocate_command_buffers(&alloc_info) }
-            .map_err(|e| EngineError::Gpu(format!("Failed to allocate one-shot command buffer: {e}")))?[0];
+        let cmd_buf = unsafe { device.allocate_command_buffers(&alloc_info) }.map_err(|e| {
+            EngineError::Gpu(format!("Failed to allocate one-shot command buffer: {e}"))
+        })?[0];
 
         let begin_info = vk::CommandBufferBeginInfo::default()
             .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT);
@@ -426,7 +441,9 @@ impl ShadowMapSystem {
         unsafe {
             device
                 .begin_command_buffer(cmd_buf, &begin_info)
-                .map_err(|e| EngineError::Gpu(format!("Failed to begin one-shot command buffer: {e}")))?;
+                .map_err(|e| {
+                    EngineError::Gpu(format!("Failed to begin one-shot command buffer: {e}"))
+                })?;
 
             let barrier = vk::ImageMemoryBarrier::default()
                 .old_layout(vk::ImageLayout::UNDEFINED)
@@ -454,15 +471,17 @@ impl ShadowMapSystem {
                 &[barrier],
             );
 
-            device
-                .end_command_buffer(cmd_buf)
-                .map_err(|e| EngineError::Gpu(format!("Failed to end one-shot command buffer: {e}")))?;
+            device.end_command_buffer(cmd_buf).map_err(|e| {
+                EngineError::Gpu(format!("Failed to end one-shot command buffer: {e}"))
+            })?;
 
             let cmd_bufs = [cmd_buf];
             let submit_info = vk::SubmitInfo::default().command_buffers(&cmd_bufs);
             device
                 .queue_submit(queue, &[submit_info], vk::Fence::null())
-                .map_err(|e| EngineError::Gpu(format!("Failed to submit layout transition: {e}")))?;
+                .map_err(|e| {
+                    EngineError::Gpu(format!("Failed to submit layout transition: {e}"))
+                })?;
             device
                 .queue_wait_idle(queue)
                 .map_err(|e| EngineError::Gpu(format!("Failed to wait for queue idle: {e}")))?;
@@ -1070,8 +1089,12 @@ pub(crate) fn create_shadow_alpha_pipeline(
     let layout_info = vk::PipelineLayoutCreateInfo::default()
         .set_layouts(&ds_layouts)
         .push_constant_ranges(std::slice::from_ref(&push_constant_range));
-    let pipeline_layout = unsafe { device.create_pipeline_layout(&layout_info, None) }
-        .map_err(|e| EngineError::Gpu(format!("Failed to create shadow alpha pipeline layout: {e}")))?;
+    let pipeline_layout =
+        unsafe { device.create_pipeline_layout(&layout_info, None) }.map_err(|e| {
+            EngineError::Gpu(format!(
+                "Failed to create shadow alpha pipeline layout: {e}"
+            ))
+        })?;
 
     let pipeline_info = vk::GraphicsPipelineCreateInfo::default()
         .stages(&shader_stages)

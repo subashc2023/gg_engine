@@ -279,9 +279,10 @@ impl GpuParticleSystem {
                 .stage_flags(vk::ShaderStageFlags::COMPUTE),
         ];
         let ds_layout_info = vk::DescriptorSetLayoutCreateInfo::default().bindings(&bindings);
-        let compute_ds_layout =
-            unsafe { device.create_descriptor_set_layout(&ds_layout_info, None) }
-                .map_err(|e| EngineError::Gpu(format!("Failed to create compute DS layout: {e}")))?;
+        let compute_ds_layout = unsafe {
+            device.create_descriptor_set_layout(&ds_layout_info, None)
+        }
+        .map_err(|e| EngineError::Gpu(format!("Failed to create compute DS layout: {e}")))?;
 
         // -- Descriptor pool --
         let pool_size = vk::DescriptorPoolSize {
@@ -291,16 +292,19 @@ impl GpuParticleSystem {
         let pool_info = vk::DescriptorPoolCreateInfo::default()
             .pool_sizes(std::slice::from_ref(&pool_size))
             .max_sets(FRAMES as u32);
-        let compute_ds_pool = unsafe { device.create_descriptor_pool(&pool_info, None) }
-            .map_err(|e| EngineError::Gpu(format!("Failed to create compute descriptor pool: {e}")))?;
+        let compute_ds_pool =
+            unsafe { device.create_descriptor_pool(&pool_info, None) }.map_err(|e| {
+                EngineError::Gpu(format!("Failed to create compute descriptor pool: {e}"))
+            })?;
 
         // -- Allocate descriptor sets --
         let layouts = [compute_ds_layout; FRAMES];
         let ds_alloc_info = vk::DescriptorSetAllocateInfo::default()
             .descriptor_pool(compute_ds_pool)
             .set_layouts(&layouts);
-        let ds_vec = unsafe { device.allocate_descriptor_sets(&ds_alloc_info) }
-            .map_err(|e| EngineError::Gpu(format!("Failed to allocate compute descriptor sets: {e}")))?;
+        let ds_vec = unsafe { device.allocate_descriptor_sets(&ds_alloc_info) }.map_err(|e| {
+            EngineError::Gpu(format!("Failed to allocate compute descriptor sets: {e}"))
+        })?;
         let compute_ds = [ds_vec[0], ds_vec[1]];
 
         // -- Write descriptor sets --

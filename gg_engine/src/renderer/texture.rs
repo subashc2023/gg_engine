@@ -68,8 +68,10 @@ impl TransferBatch {
             .command_pool(self.command_pool)
             .command_buffer_count(1);
 
-        let cmd_buf = unsafe { self.device.allocate_command_buffers(&alloc_info) }
-            .map_err(|e| EngineError::Gpu(format!("Failed to allocate transfer command buffer: {e}")))?[0];
+        let cmd_buf =
+            unsafe { self.device.allocate_command_buffers(&alloc_info) }.map_err(|e| {
+                EngineError::Gpu(format!("Failed to allocate transfer command buffer: {e}"))
+            })?[0];
 
         let begin_info = vk::CommandBufferBeginInfo::default()
             .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT);
@@ -77,7 +79,9 @@ impl TransferBatch {
         unsafe {
             self.device
                 .begin_command_buffer(cmd_buf, &begin_info)
-                .map_err(|e| EngineError::Gpu(format!("Failed to begin transfer command buffer: {e}")))?;
+                .map_err(|e| {
+                    EngineError::Gpu(format!("Failed to begin transfer command buffer: {e}"))
+                })?;
         }
 
         self.active_cmd_buf = Some(cmd_buf);
@@ -169,9 +173,9 @@ impl TransferBatch {
             .map_err(|e| EngineError::Gpu(format!("Failed to create transfer fence: {e}")))?;
 
         unsafe {
-            self.device
-                .end_command_buffer(cmd_buf)
-                .map_err(|e| EngineError::Gpu(format!("Failed to end transfer command buffer: {e}")))?;
+            self.device.end_command_buffer(cmd_buf).map_err(|e| {
+                EngineError::Gpu(format!("Failed to end transfer command buffer: {e}"))
+            })?;
 
             let cmd_bufs = [cmd_buf];
             let submit_info = vk::SubmitInfo::default().command_buffers(&cmd_bufs);
@@ -442,8 +446,9 @@ impl Texture2D {
         path: &Path,
         spec: TextureSpecification,
     ) -> EngineResult<TextureCpuData> {
-        let img = image::open(path)
-            .map_err(|e| EngineError::Gpu(format!("Failed to load texture '{}': {e}", path.display())))?;
+        let img = image::open(path).map_err(|e| {
+            EngineError::Gpu(format!("Failed to load texture '{}': {e}", path.display()))
+        })?;
         let rgba = img.to_rgba8();
         let (width, height) = rgba.dimensions();
         Ok(TextureCpuData {
@@ -777,7 +782,9 @@ impl Texture2D {
         spec: &TextureSpecification,
     ) -> EngineResult<Self> {
         if !format.is_compressed() {
-            return Err(EngineError::Gpu("from_compressed requires a compressed ImageFormat".to_string()));
+            return Err(EngineError::Gpu(
+                "from_compressed requires a compressed ImageFormat".to_string(),
+            ));
         }
 
         let expected_size = format.data_size(width, height);
@@ -813,8 +820,9 @@ impl Texture2D {
             .sharing_mode(vk::SharingMode::EXCLUSIVE)
             .samples(vk::SampleCountFlags::TYPE_1);
 
-        let image = unsafe { device.create_image(&image_info, None) }
-            .map_err(|e| EngineError::Gpu(format!("Failed to create compressed texture image: {e}")))?;
+        let image = unsafe { device.create_image(&image_info, None) }.map_err(|e| {
+            EngineError::Gpu(format!("Failed to create compressed texture image: {e}"))
+        })?;
 
         let allocation = GpuAllocator::allocate_for_image(
             allocator,
@@ -943,8 +951,9 @@ fn execute_one_shot(
         .command_pool(command_pool)
         .command_buffer_count(1);
 
-    let cmd_buf = unsafe { device.allocate_command_buffers(&alloc_info) }
-        .map_err(|e| EngineError::Gpu(format!("Failed to allocate one-shot command buffer: {e}")))?[0];
+    let cmd_buf = unsafe { device.allocate_command_buffers(&alloc_info) }.map_err(|e| {
+        EngineError::Gpu(format!("Failed to allocate one-shot command buffer: {e}"))
+    })?[0];
 
     let begin_info =
         vk::CommandBufferBeginInfo::default().flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT);
@@ -952,7 +961,9 @@ fn execute_one_shot(
     unsafe {
         device
             .begin_command_buffer(cmd_buf, &begin_info)
-            .map_err(|e| EngineError::Gpu(format!("Failed to begin one-shot command buffer: {e}")))?;
+            .map_err(|e| {
+                EngineError::Gpu(format!("Failed to begin one-shot command buffer: {e}"))
+            })?;
     }
 
     record(cmd_buf);
@@ -966,7 +977,9 @@ fn execute_one_shot(
         let submit_info = vk::SubmitInfo::default().command_buffers(&cmd_bufs);
         device
             .queue_submit(queue, &[submit_info], vk::Fence::null())
-            .map_err(|e| EngineError::Gpu(format!("Failed to submit one-shot command buffer: {e}")))?;
+            .map_err(|e| {
+                EngineError::Gpu(format!("Failed to submit one-shot command buffer: {e}"))
+            })?;
         device
             .queue_wait_idle(queue)
             .map_err(|e| EngineError::Gpu(format!("Failed to wait for queue idle: {e}")))?;

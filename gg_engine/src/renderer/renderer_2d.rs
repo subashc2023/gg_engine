@@ -596,7 +596,11 @@ impl Renderer2DData {
             .push_next(&mut binding_flags_info);
 
         let bindless_ds_layout = unsafe { device.create_descriptor_set_layout(&layout_info, None) }
-            .map_err(|e| EngineError::Gpu(format!("Failed to create bindless descriptor set layout: {e}")))?;
+            .map_err(|e| {
+                EngineError::Gpu(format!(
+                    "Failed to create bindless descriptor set layout: {e}"
+                ))
+            })?;
 
         // -- Quad Pipeline (swapchain: 1 color attachment, no entity ID output) --
         let batch_pipeline = Arc::new(pipeline::create_batch_pipeline(
@@ -717,16 +721,19 @@ impl Renderer2DData {
             .flags(vk::DescriptorPoolCreateFlags::UPDATE_AFTER_BIND)
             .pool_sizes(std::slice::from_ref(&pool_size))
             .max_sets(FRAMES_IN_FLIGHT as u32);
-        let bindless_pool = unsafe { device.create_descriptor_pool(&pool_info, None) }
-            .map_err(|e| EngineError::Gpu(format!("Failed to create bindless descriptor pool: {e}")))?;
+        let bindless_pool =
+            unsafe { device.create_descriptor_pool(&pool_info, None) }.map_err(|e| {
+                EngineError::Gpu(format!("Failed to create bindless descriptor pool: {e}"))
+            })?;
 
         // -- Allocate one descriptor set per frame-in-flight --
         let layouts = [bindless_ds_layout; FRAMES_IN_FLIGHT];
         let ds_alloc_info = vk::DescriptorSetAllocateInfo::default()
             .descriptor_pool(bindless_pool)
             .set_layouts(&layouts);
-        let ds_vec = unsafe { device.allocate_descriptor_sets(&ds_alloc_info) }
-            .map_err(|e| EngineError::Gpu(format!("Failed to allocate bindless descriptor sets: {e}")))?;
+        let ds_vec = unsafe { device.allocate_descriptor_sets(&ds_alloc_info) }.map_err(|e| {
+            EngineError::Gpu(format!("Failed to allocate bindless descriptor sets: {e}"))
+        })?;
         assert_eq!(
             ds_vec.len(),
             FRAMES_IN_FLIGHT,
@@ -1447,7 +1454,12 @@ impl Renderer2DData {
         shader_dir: &Path,
     ) -> EngineResult<(u32, Vec<(String, shader_compiler::CompiledShader)>)> {
         let entries: Vec<_> = std::fs::read_dir(shader_dir)
-            .map_err(|e| EngineError::Gpu(format!("Cannot read shader dir '{}': {e}", shader_dir.display())))?
+            .map_err(|e| {
+                EngineError::Gpu(format!(
+                    "Cannot read shader dir '{}': {e}",
+                    shader_dir.display()
+                ))
+            })?
             .filter_map(|e| e.ok())
             .map(|e| e.path())
             .filter(|p| p.extension().and_then(|e| e.to_str()) == Some("glsl"))

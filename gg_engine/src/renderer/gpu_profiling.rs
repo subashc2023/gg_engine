@@ -46,8 +46,9 @@ impl GpuProfiler {
                 .query_type(vk::QueryType::TIMESTAMP)
                 .query_count(MAX_TIMESTAMPS);
 
-            *pool = unsafe { device.create_query_pool(&create_info, None) }
-                .map_err(|e| EngineError::Gpu(format!("Failed to create GPU timestamp query pool: {e}")))?;
+            *pool = unsafe { device.create_query_pool(&create_info, None) }.map_err(|e| {
+                EngineError::Gpu(format!("Failed to create GPU timestamp query pool: {e}"))
+            })?;
         }
 
         Ok(Self {

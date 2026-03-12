@@ -214,33 +214,22 @@ impl Renderer {
             .stage_flags(vk::ShaderStageFlags::FRAGMENT);
         let layout_info =
             vk::DescriptorSetLayoutCreateInfo::default().bindings(std::slice::from_ref(&binding));
-        let texture_descriptor_set_layout =
-            unsafe { device.create_descriptor_set_layout(&layout_info, None) }
-                .map_err(|e| EngineError::Gpu(format!("Failed to create descriptor set layout: {e}")))?;
+        let texture_descriptor_set_layout = unsafe {
+            device.create_descriptor_set_layout(&layout_info, None)
+        }
+        .map_err(|e| EngineError::Gpu(format!("Failed to create descriptor set layout: {e}")))?;
 
         // Camera UBO: descriptor set layout, per-slot buffers, descriptor sets.
-        let camera =
-            CameraSystem::new(allocator, device, descriptor_pool)?;
+        let camera = CameraSystem::new(allocator, device, descriptor_pool)?;
 
         // Material UBO: descriptor set layout, per-slot buffers, descriptor sets.
-        let material_library =
-            MaterialLibrary::new(allocator, device, descriptor_pool)?;
+        let material_library = MaterialLibrary::new(allocator, device, descriptor_pool)?;
 
         // Lighting UBO: descriptor set layout, per-slot buffers, descriptor sets.
-        let lighting =
-            LightingSystem::new(allocator, device, descriptor_pool)?;
+        let lighting = LightingSystem::new(allocator, device, descriptor_pool)?;
 
-        // Shadow map system: depth image, render pass, UBO, descriptor sets.
-        let shadow_map = ShadowMapSystem::new(
-            allocator,
-            device,
-            descriptor_pool,
-            depth_format,
-            shadow_map::DEFAULT_SHADOW_MAP_SIZE,
-            shadow_map::DEFAULT_SHADOW_MAP_SIZE,
-            command_pool,
-            vk_ctx.graphics_queue(),
-        )?;
+        // Shadow map system: deferred until first 3D pipeline or shadow pass.
+        // Avoids 256 MB GPU allocation (4 cascades × 4096²) for 2D-only scenes.
 
         // -- Pipeline cache (load from disk if available) --
         let cache_data = Self::load_pipeline_cache_data();
@@ -289,7 +278,7 @@ impl Renderer {
             offscreen_render_pass: None,
             offscreen_color_attachment_count: 0,
             offscreen_sample_count: vk::SampleCountFlags::TYPE_1,
-            shadow_map: Some(shadow_map),
+            shadow_map: None,
             shadow_pipeline: None,
             shadow_pipeline_front: None,
             shadow_alpha_pipeline: None,
@@ -342,9 +331,12 @@ impl Renderer {
         vert_spv: &[u8],
         frag_spv: &[u8],
     ) -> EngineResult<Arc<Shader>> {
-        Ok(Arc::new(
-            Shader::new(&self.device, name, vert_spv, frag_spv)?,
-        ))
+        Ok(Arc::new(Shader::new(
+            &self.device,
+            name,
+            vert_spv,
+            frag_spv,
+        )?))
     }
 
     /// Create a GPU vertex buffer from raw byte data.
@@ -424,7 +416,7 @@ impl Renderer {
     /// entity ID attachments.
     #[allow(clippy::too_many_arguments)]
     pub fn create_3d_pipeline(
-        &self,
+        &mut self,
         shader: &Shader,
         vertex_layout: &super::BufferLayout,
         cull_mode: super::CullMode,
@@ -433,10 +425,11 @@ impl Renderer {
         color_attachment_count: u32,
         msaa: super::MsaaSamples,
     ) -> EngineResult<Arc<Pipeline>> {
+        self.ensure_shadow_map()?;
         let shadow_ds_layout = self
             .shadow_map
             .as_ref()
-            .expect("Shadow map system not initialized")
+            .expect("Shadow map system just initialized")
             .ds_layout();
         Ok(Arc::new(pipeline::create_3d_pipeline(
             &self.device,
@@ -712,9 +705,29 @@ impl Renderer {
 
     // -- Shadow Mapping ------------------------------------------------------
 
-    /// Lazily create the shadow depth-only pipeline. The shadow map system
-    /// itself is created eagerly in `Renderer::new` (needed for descriptor
-    /// set layout at pipeline creation time).
+    /// Ensure the shadow map system is initialized. Creates depth images,
+    /// render pass, and descriptor sets on first call (256 MB GPU allocation).
+    /// Subsequent calls are no-ops.
+    pub fn ensure_shadow_map(&mut self) -> EngineResult<()> {
+        if self.shadow_map.is_some() {
+            return Ok(());
+        }
+        let sm = ShadowMapSystem::new(
+            &self.allocator,
+            &self.device,
+            self.descriptor_pool,
+            self.depth_format,
+            shadow_map::DEFAULT_SHADOW_MAP_SIZE,
+            shadow_map::DEFAULT_SHADOW_MAP_SIZE,
+            self.command_pool,
+            self.graphics_queue,
+        )?;
+        self.shadow_map = Some(sm);
+        Ok(())
+    }
+
+    /// Lazily create the shadow depth-only pipeline. Also initializes the
+    /// shadow map system (depth images, render pass) if not yet created.
     pub fn init_shadow_pipeline(&mut self) -> EngineResult<()> {
         self.init_shadow_pipeline_variant(false)
     }
@@ -730,26 +743,25 @@ impl Renderer {
             return Ok(());
         }
 
+        self.ensure_shadow_map()?;
         let sm = self
             .shadow_map
             .as_ref()
-            .expect("Shadow map system not initialized");
+            .expect("Shadow map system just initialized");
 
         let shader = self.create_shader(
             "shadow",
             super::shaders::SHADOW_VERT_SPV,
             super::shaders::SHADOW_FRAG_SPV,
         )?;
-        let pipeline = Arc::new(
-            shadow_map::create_shadow_pipeline(
-                &self.device,
-                &shader,
-                sm.render_pass(),
-                sm.camera_ds_layout(),
-                self.pipeline_cache,
-                front_face_cull,
-            )?,
-        );
+        let pipeline = Arc::new(shadow_map::create_shadow_pipeline(
+            &self.device,
+            &shader,
+            sm.render_pass(),
+            sm.camera_ds_layout(),
+            self.pipeline_cache,
+            front_face_cull,
+        )?);
 
         let label = if front_face_cull {
             "front-cull"
@@ -794,10 +806,13 @@ impl Renderer {
             }
         }
 
-        let sm = self
-            .shadow_map
-            .as_ref()
-            .expect("Shadow map not initialized");
+        let sm = match self.shadow_map.as_ref() {
+            Some(sm) => sm,
+            None => {
+                log::error!("Shadow pass requested but shadow map not initialized");
+                return;
+            }
+        };
         let pipeline = if front_face_cull {
             self.shadow_pipeline_front.as_ref()
         } else {
@@ -928,10 +943,11 @@ impl Renderer {
         if self.shadow_alpha_pipeline.is_some() {
             return Ok(());
         }
+        self.ensure_shadow_map()?;
         let sm = self
             .shadow_map
             .as_ref()
-            .expect("Shadow map system not initialized");
+            .expect("Shadow map system just initialized");
 
         let shader = self.create_shader(
             "shadow_alpha",
@@ -945,15 +961,13 @@ impl Renderer {
             .map(|r2d| r2d.bindless_ds_layout())
             .unwrap_or(self.texture_descriptor_set_layout);
 
-        let pipeline = Arc::new(
-            shadow_map::create_shadow_alpha_pipeline(
-                &self.device,
-                &shader,
-                sm.render_pass(),
-                bindless_layout,
-                self.pipeline_cache,
-            )?,
-        );
+        let pipeline = Arc::new(shadow_map::create_shadow_alpha_pipeline(
+            &self.device,
+            &shader,
+            sm.render_pass(),
+            bindless_layout,
+            self.pipeline_cache,
+        )?);
 
         log::info!(target: "gg_engine", "Shadow alpha pipeline created");
         self.shadow_alpha_pipeline = Some(pipeline);
@@ -2252,19 +2266,13 @@ impl Renderer {
         );
     }
 
-    /// Submit a 3D draw call: binds camera UBO (set 0), pushes model
-    /// transform, optionally binds material UBO (set 2), draws indexed.
-    pub fn submit_3d(
-        &self,
-        pipeline: &Pipeline,
-        vertex_array: &VertexArray,
-        transform: &Mat4,
-        material_handle: Option<&super::MaterialHandle>,
-        entity_id: i32,
-    ) {
+    /// Bind the pipeline and shared descriptor sets (0, 1, 3, 4) for 3D mesh
+    /// rendering. Call once before a batch of [`submit_3d`] calls to avoid
+    /// redundant rebinding of sets that are identical across all draws.
+    pub fn bind_3d_shared_sets(&self, pipeline: &Pipeline) {
         let ctx = self
             .draw_context
-            .expect("Renderer::submit_3d called outside begin_scene/end_scene");
+            .expect("Renderer::bind_3d_shared_sets called outside begin_scene/end_scene");
 
         let cmd = ctx.cmd_buf;
         let device = &self.device;
@@ -2299,59 +2307,7 @@ impl Renderer {
                 );
             }
 
-            // Push model transform (offset 0, 64 bytes) + entity_id (offset 64, 4 bytes).
-            let mut push_data = [0u8; 68];
-            let transform_bytes = std::slice::from_raw_parts(
-                transform as *const Mat4 as *const u8,
-                std::mem::size_of::<Mat4>(),
-            );
-            push_data[..64].copy_from_slice(transform_bytes);
-            push_data[64..68].copy_from_slice(&entity_id.to_ne_bytes());
-            device.cmd_push_constants(
-                cmd,
-                pipeline.layout(),
-                vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT,
-                0,
-                &push_data,
-            );
-
-            // Material: push properties at offset 68 (48 bytes).
-            // This ensures each draw call gets its own material data embedded in the
-            // command stream, unlike the UBO which is shared across all draws.
-            let mat_handle = material_handle
-                .cloned()
-                .unwrap_or_else(|| self.material_library.default_handle());
-            if let Some(mat) = self.material_library.get(&mat_handle) {
-                let albedo_tex_index: i32 = mat
-                    .albedo_texture
-                    .as_ref()
-                    .map(|t| t.bindless_index() as i32)
-                    .unwrap_or(-1);
-                // 11 floats (44 bytes) of material data + 1 int (4 bytes) texture index = 48 bytes.
-                let mut frag_data = [0u32; 12];
-                frag_data[0] = mat.metallic.to_bits();
-                frag_data[1] = mat.roughness.to_bits();
-                frag_data[2] = mat.emissive_strength.to_bits();
-                frag_data[3] = mat.albedo_color.x.to_bits();
-                frag_data[4] = mat.albedo_color.y.to_bits();
-                frag_data[5] = mat.albedo_color.z.to_bits();
-                frag_data[6] = mat.albedo_color.w.to_bits();
-                frag_data[7] = mat.emissive_color.x.to_bits();
-                frag_data[8] = mat.emissive_color.y.to_bits();
-                frag_data[9] = mat.emissive_color.z.to_bits();
-                frag_data[10] = 0; // padding (.w of emissive_color vec4)
-                frag_data[11] = albedo_tex_index as u32;
-                let frag_bytes = std::slice::from_raw_parts(frag_data.as_ptr() as *const u8, 48);
-                device.cmd_push_constants(
-                    cmd,
-                    pipeline.layout(),
-                    vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT,
-                    68,
-                    frag_bytes,
-                );
-            }
-
-            // Set 2: material descriptor set (still bound for pipeline layout compatibility).
+            // Set 2: material descriptor set (for pipeline layout compatibility).
             let material_ds = self
                 .material_library
                 .descriptor_set(ctx.current_frame, ctx.viewport_index);
@@ -2387,6 +2343,102 @@ impl Renderer {
                     4,
                     &[shadow_ds],
                     &[],
+                );
+            }
+        }
+    }
+
+    /// Submit a 3D draw call: pushes model transform + CPU-precomputed normal
+    /// matrix, pushes material properties, draws indexed.
+    ///
+    /// Call [`bind_3d_shared_sets`](Self::bind_3d_shared_sets) once before a
+    /// batch of these calls to bind the pipeline and shared descriptor sets.
+    pub fn submit_3d(
+        &self,
+        pipeline: &Pipeline,
+        vertex_array: &VertexArray,
+        transform: &Mat4,
+        material_handle: Option<&super::MaterialHandle>,
+        entity_id: i32,
+    ) {
+        let ctx = self
+            .draw_context
+            .expect("Renderer::submit_3d called outside begin_scene/end_scene");
+
+        let cmd = ctx.cmd_buf;
+        let device = &self.device;
+
+        unsafe {
+            // Push model transform (64 bytes) + normal matrix (48 bytes) + entity_id (4 bytes)
+            // = 116 bytes at offset 0.
+            let mut push_data = [0u8; 116];
+            let transform_bytes = std::slice::from_raw_parts(
+                transform as *const Mat4 as *const u8,
+                std::mem::size_of::<Mat4>(),
+            );
+            push_data[..64].copy_from_slice(transform_bytes);
+
+            // Normal matrix: inverse-transpose of upper-left 3x3 (handles non-uniform scale).
+            // Precomputed on CPU to avoid per-vertex inverse() in the shader.
+            // GLSL mat3 in push constants: 3 columns, each vec3 padded to 16 bytes.
+            let nm = glam::Mat3::from_mat4(*transform).inverse().transpose();
+            let col0 = Vec4::new(nm.x_axis.x, nm.x_axis.y, nm.x_axis.z, 0.0);
+            let col1 = Vec4::new(nm.y_axis.x, nm.y_axis.y, nm.y_axis.z, 0.0);
+            let col2 = Vec4::new(nm.z_axis.x, nm.z_axis.y, nm.z_axis.z, 0.0);
+            push_data[64..80].copy_from_slice(std::slice::from_raw_parts(
+                &col0 as *const Vec4 as *const u8,
+                16,
+            ));
+            push_data[80..96].copy_from_slice(std::slice::from_raw_parts(
+                &col1 as *const Vec4 as *const u8,
+                16,
+            ));
+            push_data[96..112].copy_from_slice(std::slice::from_raw_parts(
+                &col2 as *const Vec4 as *const u8,
+                16,
+            ));
+
+            push_data[112..116].copy_from_slice(&entity_id.to_ne_bytes());
+            device.cmd_push_constants(
+                cmd,
+                pipeline.layout(),
+                vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT,
+                0,
+                &push_data,
+            );
+
+            // Material: push properties at offset 116 (48 bytes).
+            // Each draw call gets its own material data embedded in the command stream.
+            let mat_handle = material_handle
+                .cloned()
+                .unwrap_or_else(|| self.material_library.default_handle());
+            if let Some(mat) = self.material_library.get(&mat_handle) {
+                let albedo_tex_index: i32 = mat
+                    .albedo_texture
+                    .as_ref()
+                    .map(|t| t.bindless_index() as i32)
+                    .unwrap_or(-1);
+                // 3 floats + vec4 + vec4 + int = 4+4+4+16+16+4 = 48 bytes.
+                let mut frag_data = [0u32; 12];
+                frag_data[0] = mat.metallic.to_bits();
+                frag_data[1] = mat.roughness.to_bits();
+                frag_data[2] = mat.emissive_strength.to_bits();
+                frag_data[3] = mat.albedo_color.x.to_bits();
+                frag_data[4] = mat.albedo_color.y.to_bits();
+                frag_data[5] = mat.albedo_color.z.to_bits();
+                frag_data[6] = mat.albedo_color.w.to_bits();
+                frag_data[7] = mat.emissive_color.x.to_bits();
+                frag_data[8] = mat.emissive_color.y.to_bits();
+                frag_data[9] = mat.emissive_color.z.to_bits();
+                frag_data[10] = 0; // padding (.w of emissive_color vec4)
+                frag_data[11] = albedo_tex_index as u32;
+                let frag_bytes = std::slice::from_raw_parts(frag_data.as_ptr() as *const u8, 48);
+                device.cmd_push_constants(
+                    cmd,
+                    pipeline.layout(),
+                    vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT,
+                    116,
+                    frag_bytes,
                 );
             }
         }
@@ -2427,6 +2479,9 @@ impl Renderer {
             .map(|r2d| r2d.bindless_ds_layout())
             .unwrap_or(self.texture_descriptor_set_layout);
 
+        // Ensure shadow map system is initialized (needed for descriptor set layout).
+        self.ensure_shadow_map()?;
+
         if self.mesh3d_use_offscreen {
             // Select the appropriate cached pipeline.
             let cached = if wireframe {
@@ -2437,9 +2492,9 @@ impl Renderer {
             if let Some(ref pipeline) = cached {
                 return Ok(Arc::clone(pipeline));
             }
-            let offscreen_rp = self
-                .offscreen_render_pass
-                .ok_or_else(|| EngineError::Gpu("No offscreen render pass set for mesh3d pipeline".to_string()))?;
+            let offscreen_rp = self.offscreen_render_pass.ok_or_else(|| {
+                EngineError::Gpu("No offscreen render pass set for mesh3d pipeline".to_string())
+            })?;
             let shader = self.create_shader(
                 "mesh3d",
                 super::shaders::MESH3D_VERT_SPV,
@@ -2449,7 +2504,7 @@ impl Renderer {
             let shadow_ds_layout = self
                 .shadow_map
                 .as_ref()
-                .expect("Shadow map system not initialized")
+                .expect("Shadow map system just initialized")
                 .ds_layout();
             let pipeline = Arc::new(pipeline::create_3d_pipeline(
                 &self.device,
@@ -2495,7 +2550,7 @@ impl Renderer {
             let shadow_ds_layout = self
                 .shadow_map
                 .as_ref()
-                .expect("Shadow map system not initialized")
+                .expect("Shadow map system just initialized")
                 .ds_layout();
             let pipeline = Arc::new(pipeline::create_3d_pipeline(
                 &self.device,

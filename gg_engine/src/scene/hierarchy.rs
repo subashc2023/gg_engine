@@ -197,7 +197,7 @@ impl Scene {
     ///
     /// For scenes above [`PAR_THRESHOLD`](crate::jobs::parallel::PAR_THRESHOLD),
     /// root subtrees are processed in parallel via rayon.
-    pub(super) fn build_world_transform_cache(&self) -> HashMap<hecs::Entity, glam::Mat4> {
+    pub(super) fn build_world_transform_cache(&self) {
         // --- Dirty detection: compare current transforms against cached snapshots ---
         let needs_rebuild = {
             let snapshots = self.transform_snapshots.borrow();
@@ -225,7 +225,7 @@ impl Scene {
         };
 
         if !needs_rebuild {
-            return self.transform_cache.borrow().clone();
+            return;
         }
 
         // --- Full rebuild ---
@@ -241,8 +241,7 @@ impl Scene {
             snapshots.insert(handle, (tc.get_transform(), rel.parent));
         }
         *self.transform_snapshots.borrow_mut() = snapshots;
-        *self.transform_cache.borrow_mut() = cache.clone();
-        cache
+        *self.transform_cache.borrow_mut() = cache;
     }
 
     /// Full world-transform rebuild (parallel or sequential depending on entity count).

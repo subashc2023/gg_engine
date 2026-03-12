@@ -45,9 +45,9 @@ impl GpuAllocator {
     ) -> EngineResult<GpuAllocation> {
         let mem_req = unsafe { device.get_buffer_memory_requirements(buffer) };
         let allocation = {
-            let mut alloc = allocator
-                .lock()
-                .map_err(|_| EngineError::Gpu(format!("GPU allocator mutex poisoned (buffer '{name}')")))?;
+            let mut alloc = allocator.lock().map_err(|_| {
+                EngineError::Gpu(format!("GPU allocator mutex poisoned (buffer '{name}')"))
+            })?;
             alloc
                 .inner
                 .allocate(&gpu_allocator::vulkan::AllocationCreateDesc {
@@ -57,13 +57,19 @@ impl GpuAllocator {
                     linear: true,
                     allocation_scheme: gpu_allocator::vulkan::AllocationScheme::GpuAllocatorManaged,
                 })
-                .map_err(|e| EngineError::Gpu(format!("Failed to allocate buffer memory for '{name}': {e}")))?
+                .map_err(|e| {
+                    EngineError::Gpu(format!(
+                        "Failed to allocate buffer memory for '{name}': {e}"
+                    ))
+                })?
         };
 
         unsafe {
             device
                 .bind_buffer_memory(buffer, allocation.memory(), allocation.offset())
-                .map_err(|e| EngineError::Gpu(format!("Failed to bind buffer memory for '{name}': {e}")))?;
+                .map_err(|e| {
+                    EngineError::Gpu(format!("Failed to bind buffer memory for '{name}': {e}"))
+                })?;
         }
 
         Ok(GpuAllocation {
@@ -82,9 +88,9 @@ impl GpuAllocator {
     ) -> EngineResult<GpuAllocation> {
         let mem_req = unsafe { device.get_image_memory_requirements(image) };
         let allocation = {
-            let mut alloc = allocator
-                .lock()
-                .map_err(|_| EngineError::Gpu(format!("GPU allocator mutex poisoned (image '{name}')")))?;
+            let mut alloc = allocator.lock().map_err(|_| {
+                EngineError::Gpu(format!("GPU allocator mutex poisoned (image '{name}')"))
+            })?;
             alloc
                 .inner
                 .allocate(&gpu_allocator::vulkan::AllocationCreateDesc {
@@ -94,13 +100,17 @@ impl GpuAllocator {
                     linear: false,
                     allocation_scheme: gpu_allocator::vulkan::AllocationScheme::GpuAllocatorManaged,
                 })
-                .map_err(|e| EngineError::Gpu(format!("Failed to allocate image memory for '{name}': {e}")))?
+                .map_err(|e| {
+                    EngineError::Gpu(format!("Failed to allocate image memory for '{name}': {e}"))
+                })?
         };
 
         unsafe {
             device
                 .bind_image_memory(image, allocation.memory(), allocation.offset())
-                .map_err(|e| EngineError::Gpu(format!("Failed to bind image memory for '{name}': {e}")))?;
+                .map_err(|e| {
+                    EngineError::Gpu(format!("Failed to bind image memory for '{name}': {e}"))
+                })?;
         }
 
         Ok(GpuAllocation {

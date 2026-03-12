@@ -268,6 +268,9 @@ impl Sandbox3D {
 
         let mat_handle = self.material_handle.as_ref();
 
+        // Bind shared descriptor sets once before all 3D draws.
+        renderer.bind_3d_shared_sets(pipeline);
+
         // Ground plane (scaled up).
         if let Some(va) = &self.plane_va {
             let model = Mat4::from_scale_rotation_translation(
