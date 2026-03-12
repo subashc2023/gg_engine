@@ -86,6 +86,7 @@ impl PhysicsWorld3D {
     /// Snapshot current body positions/rotations as "previous" for interpolation.
     /// Call this *before* `step_once()`.
     pub(crate) fn snapshot_transforms(&mut self) {
+        self.prev_transforms.clear();
         for (handle, body) in self.bodies.iter() {
             let pos = *body.translation();
             let rot = *body.rotation();

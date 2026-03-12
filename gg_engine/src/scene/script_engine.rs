@@ -471,6 +471,22 @@ impl ScriptEngine {
             },
         );
 
+        // Register a stub Engine table so scripts that reference Engine.* at file
+        // scope don't crash during field discovery. Any method call returns nil.
+        if let Ok(stub) = lua.create_table() {
+            if let Ok(meta) = lua.create_table() {
+                let _ = meta.set(
+                    "__index",
+                    lua.create_function(|lua, (_t, _k): (LuaValue, LuaValue)| {
+                        lua.create_function(|_, _: mlua::MultiValue| Ok(LuaValue::Nil))
+                    })
+                    .unwrap_or_else(|_| lua.create_function(|_, _: ()| Ok(())).unwrap()),
+                );
+                stub.set_metatable(Some(meta));
+            }
+            let _ = lua.globals().set("Engine", stub);
+        }
+
         if let Err(e) = lua.load(&source).exec() {
             log::warn!(
                 "ScriptEngine::discover_fields: error executing '{}': {}",

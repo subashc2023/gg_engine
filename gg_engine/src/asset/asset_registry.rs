@@ -53,6 +53,12 @@ impl AssetRegistry {
 
     pub fn insert(&mut self, handle: AssetHandle, metadata: AssetMetadata) {
         let normalized_path = metadata.file_path.replace('\\', "/");
+        // Remove stale path_index entry if this handle already exists with a different path.
+        if let Some(old_meta) = self.assets.get(&handle) {
+            if old_meta.file_path != normalized_path {
+                self.path_index.remove(&old_meta.file_path);
+            }
+        }
         self.path_index.insert(normalized_path.clone(), handle);
         self.assets.insert(
             handle,
@@ -403,6 +409,10 @@ mod tests {
 
         assert_eq!(reg.len(), 1);
         assert_eq!(reg.get(&handle).unwrap().file_path, "new.png");
+        // Old path should no longer resolve to this handle.
+        assert_eq!(reg.find_by_path("old.png"), None);
+        // New path should resolve correctly.
+        assert_eq!(reg.find_by_path("new.png"), Some(handle));
     }
 
     #[test]

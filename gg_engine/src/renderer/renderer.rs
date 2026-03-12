@@ -154,6 +154,8 @@ pub struct Renderer {
     shadow_pipeline: Option<Arc<Pipeline>>, // back-face cull (default)
     shadow_pipeline_front: Option<Arc<Pipeline>>, // front-face cull variant
     shadow_alpha_pipeline: Option<Arc<Pipeline>>, // alpha-tested variant
+    // Pipeline layout currently bound by `begin_shadow_pass` (back-cull or front-cull).
+    active_shadow_layout: Option<vk::PipelineLayout>,
 
     // GPU timestamp profiler.
     gpu_profiler: Option<GpuProfiler>,
@@ -287,6 +289,7 @@ impl Renderer {
             shadow_pipeline: None,
             shadow_pipeline_front: None,
             shadow_alpha_pipeline: None,
+            active_shadow_layout: None,
             gpu_profiler: None,
             postprocess: None,
             shadow_debug_mode: 0,
@@ -846,7 +849,8 @@ impl Renderer {
                 }],
             );
 
-            // Bind shadow pipeline.
+            // Bind shadow pipeline and record its layout for submit_shadow.
+            self.active_shadow_layout = Some(pipeline.layout());
             self.device.cmd_bind_pipeline(
                 cmd_buf,
                 vk::PipelineBindPoint::GRAPHICS,
@@ -878,10 +882,9 @@ impl Renderer {
         transform: &Mat4,
         cmd_buf: vk::CommandBuffer,
     ) {
-        let pipeline = self
-            .shadow_pipeline
-            .as_ref()
-            .expect("Shadow pipeline not initialized");
+        let layout = self
+            .active_shadow_layout
+            .expect("submit_shadow called outside begin/end_shadow_pass");
 
         unsafe {
             // Push model matrix at offset 64 (after the light VP at offset 0).
@@ -891,7 +894,7 @@ impl Renderer {
             );
             self.device.cmd_push_constants(
                 cmd_buf,
-                pipeline.layout(),
+                layout,
                 vk::ShaderStageFlags::VERTEX,
                 64, // offset: light VP is [0..64], model is [64..128]
                 transform_bytes,
@@ -910,7 +913,8 @@ impl Renderer {
     }
 
     /// End the shadow depth-only render pass.
-    pub fn end_shadow_pass(&self, cmd_buf: vk::CommandBuffer) {
+    pub fn end_shadow_pass(&mut self, cmd_buf: vk::CommandBuffer) {
+        self.active_shadow_layout = None;
         unsafe {
             self.device.cmd_end_render_pass(cmd_buf);
         }
