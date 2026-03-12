@@ -1,6 +1,6 @@
 # GGEngine
 
-A 2D game engine written in Rust with a Vulkan rendering backend. Build scenes in a visual editor, script gameplay in Lua, and ship standalone builds.
+A 2D/3D game engine written in Rust with a Vulkan rendering backend. Build scenes in a visual editor, script gameplay in Lua, and ship standalone builds.
 
 ![GGEngine Editor](gg_docs/public/editor.png)
 
@@ -15,6 +15,10 @@ A 2D game engine written in Rust with a Vulkan rendering backend. Build scenes i
 **Lua Scripting** via LuaJIT with per-entity isolated environments, hot reload on save, configurable fields exposed in the editor, collision callbacks, and timers.
 
 **2D Physics** powered by [rapier2d](https://rapier.rs/) with rigid bodies, box/circle colliders, collision layers, fixed-timestep simulation, and interpolation.
+
+**3D Rendering** with glTF/GLB mesh loading, Blinn-Phong lighting (directional, point, ambient), PBR materials, cascaded shadow maps (4 cascades) with quality tiers (PCF to PCSS), and post-processing (bloom, tone mapping, color grading, contact shadows).
+
+**3D Physics** powered by [rapier3d](https://rapier.rs/) with rigid bodies, box/sphere/capsule colliders, collision events, and joints.
 
 **Vulkan Renderer** with bindless textures (4096 slots), batched quads/circles/lines/text, GPU particle system (compute shader), instanced sprite rendering with GPU-driven animation, and runtime shader hot-reload.
 
@@ -86,9 +90,9 @@ cargo clippy --all-targets          # Lint
 |-------|-------------|
 | **Viewport** | Scene view with transform gizmos, grid, mouse picking, tilemap painting |
 | **Scene Hierarchy** | Entity tree with drag-and-drop reparenting and search |
-| **Properties** | Component inspector -- sprites, physics, audio, scripting, animation, tilemaps |
+| **Properties** | Component inspector -- sprites, meshes, physics, lighting, audio, scripting, animation, tilemaps, UI anchors |
 | **Content Browser** | File/asset browser with import, drag-and-drop, and right-click menus |
-| **Settings** | Renderer stats, VSync, physics collider viz, grid, shader reload, theme |
+| **Settings** | Renderer stats, VSync, shadow quality, post-processing, GPU timing, physics collider viz, grid, shader reload, theme |
 | **Animation Timeline** | Sprite sheet clip editor with frame ruler, playhead, and pick mode |
 | **Game Viewport** | Game camera preview (no gizmos or picking) |
 | **Console** | Color-coded log viewer with level filtering |
@@ -158,12 +162,16 @@ The `fields` table is editable per-entity in the Properties panel -- override va
 | **Transform** | `get_translation`, `set_translation`, `get_rotation`, `set_rotation`, `get_scale`, `set_scale` |
 | **Input** | `is_key_down`, `is_key_pressed`, `is_mouse_button_down`, `is_mouse_button_pressed`, `get_mouse_position` |
 | **Physics** | `apply_impulse`, `apply_force`, `get_linear_velocity`, `set_linear_velocity`, `get_angular_velocity`, `set_angular_velocity` |
+| **Physics 3D** | `apply_impulse_3d`, `apply_force_3d`, `get_linear_velocity_3d`, `set_linear_velocity_3d`, `raycast_3d` |
 | **Entity** | `create_entity`, `destroy_entity`, `find_entity_by_name`, `get_entity_name`, `has_component` |
 | **Hierarchy** | `set_parent`, `detach_from_parent`, `get_parent`, `get_children` |
 | **Animation** | `play_animation`, `stop_animation`, `is_animation_playing`, `set_animation_speed` |
 | **Audio** | `play_sound`, `stop_sound`, `set_volume`, `set_panning` |
 | **Tilemap** | `set_tile`, `get_tile`, `TILE_FLIP_H`, `TILE_FLIP_V` |
 | **Timers** | `set_timeout`, `set_interval`, `clear_timer` |
+| **Cursor** | `set_cursor_mode`, `get_cursor_mode`, `get_window_size` |
+| **UI Anchors** | `set_ui_anchor`, `get_ui_anchor` |
+| **Settings** | `get_vsync`, `set_vsync`, `get_fullscreen`, `set_fullscreen`, `set_shadow_quality`, `set_gui_scale`, `quit`, `load_scene` |
 | **Math** | `vector_dot`, `vector_cross`, `vector_normalize` |
 | **Cross-Entity** | `get_script_field`, `set_script_field` |
 
@@ -204,10 +212,10 @@ gg_player.exe MyGame.ggproject --width 1920 --height 1080 --vsync
 
 | Crate | Type | Lines | Description |
 |-------|------|-------|-------------|
-| `gg_engine` | lib | ~28,300 | Core engine -- Vulkan renderer, ECS, physics, scripting, audio, assets, jobs |
-| `gg_editor` | bin | ~12,100 | Scene editor -- dockable panels, gizmos, content browser, animation timeline |
-| `gg_player` | bin | ~350 | Standalone game runtime -- loads `.ggproject`, runs start scene |
-| `gg_sandbox` | bin | ~630 | Testing sandbox for engine features and jobs stress tests |
+| `gg_engine` | lib | ~44,000 | Core engine -- Vulkan renderer, ECS, 2D/3D physics, scripting, audio, assets, jobs |
+| `gg_editor` | bin | ~15,000 | Scene editor -- dockable panels, gizmos, content browser, animation timeline |
+| `gg_player` | bin | ~520 | Standalone game runtime -- loads `.ggproject`, runs start scene |
+| `gg_sandbox` | bin | ~1,040 | Testing sandbox for engine features, 3D scenes, and stress tests |
 | `gg_tools` | bin | ~460 | CLI for analyzing Chrome Tracing JSON profiles (+ flame graph SVG) |
 
 ### Project Structure
@@ -215,9 +223,9 @@ gg_player.exe MyGame.ggproject --width 1920 --height 1080 --vsync
 ```
 GGEngine/
 ├── gg_engine/src/
-│   ├── renderer/          # Vulkan rendering (context, swapchain, batching, textures, cameras, text, particles)
-│   │   └── shaders/       # GLSL sources (auto-compiled to SPIR-V)
-│   ├── scene/             # ECS, components, physics, audio, Lua scripting, animation, hierarchy
+│   ├── renderer/          # Vulkan rendering (context, swapchain, batching, textures, 3D meshes, lighting, shadows, post-processing)
+│   │   └── shaders/       # GLSL sources (auto-compiled to SPIR-V, 16 shaders)
+│   ├── scene/             # ECS, components, 2D/3D physics, audio, Lua scripting, animation, hierarchy
 │   ├── asset/             # UUID-based asset system (registry, manager, async loader)
 │   └── jobs/              # Multi-threaded job system (thread pool, parallel helpers, command buffer)
 ├── gg_editor/src/

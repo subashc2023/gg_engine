@@ -44,6 +44,9 @@ Client apps implement the `Application` trait and launch via `run::<T>()`. The `
 | `on_render_viewport(renderer, index)` | Per-viewport render callback |
 | `egui_user_textures() -> Vec<u64>` | Register framebuffer textures for egui display |
 | `receive_egui_user_textures(map)` | Receive egui TextureId mappings for registered textures |
+| `cursor_mode()` | Return current CursorMode for the window (polled each frame) |
+| `software_cursor()` | Return custom SoftwareCursor for Confined mode |
+| `requested_fullscreen()` | Handle fullscreen mode change requests from scripts |
 
 ### Lifecycle
 
@@ -176,6 +179,42 @@ particles.on_render(&mut renderer);
 - Round-robin cycling (overwrites oldest particles when full)
 - Velocity damping, rotation, color/size interpolation from life fraction
 - Renders at z = -0.1 to -0.15 (in front of z=0 scene)
+
+## Cursor Management
+
+**File:** `gg_engine/src/cursor.rs`
+
+Three cursor modes for different gameplay needs:
+
+| Mode | OS Cursor | Grab | Software Cursor | Use Case |
+|------|-----------|------|-----------------|----------|
+| `Normal` | Visible | None | No | Editor UI, menus |
+| `Confined` | Hidden | Confined | Yes (arrow or custom) | RTS, strategy, in-game UI |
+| `Locked` | Hidden | Locked | No | FPS camera, flight sim |
+
+### CursorMode
+
+```rust
+enum CursorMode {
+    Normal,    // OS cursor visible, no grab (default)
+    Confined,  // OS cursor hidden, software cursor rendered, confined to window
+    Locked,    // OS cursor hidden and locked, raw deltas only
+}
+```
+
+Set via `Scene::set_cursor_mode()`, read by the player/runtime each frame. Lua: `Engine.set_cursor_mode("normal"|"confined"|"locked")`.
+
+### SoftwareCursor
+
+```rust
+struct SoftwareCursor {
+    pub texture: egui::TextureId,  // egui texture to draw
+    pub size: egui::Vec2,          // display size in logical pixels
+    pub hotspot: egui::Vec2,       // click point offset from top-left
+}
+```
+
+Custom cursor for `Confined` mode. When not provided, a built-in 16x32 pixel-art arrow cursor is rendered. The default cursor is generated at runtime via `generate_cursor_image()` and cached in egui's persistent data.
 
 ## Platform Utilities
 

@@ -27,6 +27,7 @@ pub(crate) fn settings_ui(
     show_physics_colliders: &mut bool,
     pp_settings: &mut PostProcessSettings,
     gpu_timing: &mut GpuTimingSnapshot,
+    show_msaa_test: &mut bool,
 ) {
     ui.heading("Renderer");
     ui.separator();
@@ -71,6 +72,22 @@ pub(crate) fn settings_ui(
                 }
             }
         });
+
+    // MSAA diagnostic info.
+    ui.label(
+        egui::RichText::new(format!(
+            "Active: {} (device max: {})",
+            msaa_samples, max_msaa_samples
+        ))
+        .small()
+        .weak(),
+    );
+    ui.checkbox(show_msaa_test, "MSAA Test Pattern")
+        .on_hover_text(
+            "Draw diagonal lines at the origin to verify MSAA.\n\
+             Without MSAA: obvious stairstepping.\n\
+             With MSAA: smooth anti-aliased lines.",
+        );
 
     ui.add_space(4.0);
     if ui

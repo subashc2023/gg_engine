@@ -236,6 +236,37 @@ These functions access entity environments directly from the Lua-side registry t
 | `set_volume` | `(entity_id, volume)` | — | `volume` is `f32` (0.0 = silent, 1.0 = full) |
 | `set_panning` | `(entity_id, panning)` | — | `panning` is `f32` (-1.0 = left, 0.0 = center, 1.0 = right) |
 
+### Cursor & Window
+
+| Function | Signature | Returns | Notes |
+|----------|-----------|---------|-------|
+| `set_cursor_mode` | `(mode)` | — | `"normal"`, `"confined"`, or `"locked"` |
+| `get_cursor_mode` | `()` | `string` | Current cursor mode |
+| `get_window_size` | `()` | `(width, height)` | Physical pixel dimensions |
+| `set_window_size` | `(width, height)` | — | Request window resize |
+
+### UI Anchors
+
+| Function | Signature | Returns | Notes |
+|----------|-----------|---------|-------|
+| `set_ui_anchor` | `(entity_id, ax, ay, ox, oy)` | — | Adds/updates UIAnchorComponent. Anchor 0-1, offset in world units |
+| `get_ui_anchor` | `(entity_id)` | `(ax, ay, ox, oy)` or `nil` | Returns anchor and offset values |
+
+### Runtime Settings
+
+| Function | Signature | Returns | Notes |
+|----------|-----------|---------|-------|
+| `get_vsync` | `()` | `bool` | Current VSync state |
+| `set_vsync` | `(enabled)` | — | Request VSync toggle (Fifo/Mailbox) |
+| `get_fullscreen` | `()` | `string` | `"windowed"`, `"borderless"`, or `"exclusive"` |
+| `set_fullscreen` | `(mode)` | — | `"windowed"`, `"borderless"`, or `"exclusive"` |
+| `get_shadow_quality` | `()` | `int` | 0=Low, 1=Medium, 2=High, 3=Ultra |
+| `set_shadow_quality` | `(level)` | — | 0-3, errors on out of range |
+| `get_gui_scale` | `()` | `number` | Current GUI scale factor |
+| `set_gui_scale` | `(factor)` | — | Set GUI scale (affects UI anchors) |
+| `quit` | `()` | — | Request application exit |
+| `load_scene` | `(path)` | — | Request scene transition (deferred) |
+
 ### Tilemap
 
 | Function / Constant | Signature | Returns | Notes |
@@ -322,6 +353,16 @@ Accepted names for `Engine.has_component()` (case-sensitive):
 | `"LuaScript"` | `LuaScriptComponent` |
 | `"Tilemap"` | `TilemapComponent` |
 | `"AudioSource"` / `"Audio"` | `AudioSourceComponent` |
+| `"UIAnchor"` | `UIAnchorComponent` |
+| `"MeshRenderer"` | `MeshRendererComponent` |
+| `"RigidBody3D"` | `RigidBody3DComponent` |
+| `"BoxCollider3D"` | `BoxCollider3DComponent` |
+| `"SphereCollider3D"` | `SphereCollider3DComponent` |
+| `"CapsuleCollider3D"` | `CapsuleCollider3DComponent` |
+| `"DirectionalLight"` | `DirectionalLightComponent` |
+| `"PointLight"` | `PointLightComponent` |
+| `"AmbientLight"` | `AmbientLightComponent` |
+| `"ParticleEmitter"` | `ParticleEmitterComponent` |
 
 ## Field Override System
 

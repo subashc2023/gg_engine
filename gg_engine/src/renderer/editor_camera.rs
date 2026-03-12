@@ -300,20 +300,29 @@ impl EditorCamera {
     /// Mouse look in fly mode — rotate in place by pinning the camera position
     /// and moving the focal point to stay in front.
     fn fly_look(&mut self, delta: Vec2) {
-        let pos = self.position();
-        self.target_yaw -= delta.x;
-        self.target_pitch -= delta.y;
-        self.target_pitch = self.target_pitch.clamp(-1.5, 1.5);
-        // Recompute target focal point so camera stays at `pos` after rotation.
-        // Use target orientation to compute where the focal point should end up.
-        let target_orient = Quat::from_euler(
+        // Derive the target camera position from target values (not smoothed values)
+        // to avoid a feedback loop where smoothing shifts position() each frame,
+        // causing target_focal_point to drift even with zero mouse input.
+        let prev_orient = Quat::from_euler(
             glam::EulerRot::YXZ,
             -self.target_yaw,
             -self.target_pitch,
             0.0,
         );
-        let target_forward = target_orient * Vec3::Z;
-        self.target_focal_point = pos + target_forward * self.distance;
+        let target_pos = self.target_focal_point - (prev_orient * Vec3::Z) * self.distance;
+
+        self.target_yaw -= delta.x;
+        self.target_pitch -= delta.y;
+        self.target_pitch = self.target_pitch.clamp(-1.5, 1.5);
+
+        // Recompute target focal point so camera stays at `target_pos` after rotation.
+        let new_orient = Quat::from_euler(
+            glam::EulerRot::YXZ,
+            -self.target_yaw,
+            -self.target_pitch,
+            0.0,
+        );
+        self.target_focal_point = target_pos + (new_orient * Vec3::Z) * self.distance;
     }
 
     /// WASD + QE movement in fly mode.

@@ -134,6 +134,8 @@ When a project is loaded, the engine sets the current working directory (`CWD`) 
 | `textures_loaded` | `bool` | Whether first-frame asset init has run |
 | `runtime_started` | `bool` | Whether `on_runtime_start` has been called |
 | `present_mode` | `PresentMode` | Current VSync mode (toggleable at runtime) |
+| `fullscreen_mode` | `FullscreenMode` | Current fullscreen state (Windowed/Borderless/Exclusive) |
+| `shadow_quality` | `i32` | Current shadow quality tier (0-3) |
 
 ### Initialization Sequence
 
@@ -159,7 +161,7 @@ Textures and the runtime are not initialized in `new()` because the Vulkan rende
 
 Each frame after initialization:
 
-- **`on_update(dt, input)`**: Runs physics (`on_update_physics`), Lua scripts (`on_update_lua_scripts` when the `lua-scripting` feature is enabled), and animations (`on_update_animations`).
+- **`on_update(dt, input)`**: Runs physics (`on_update_physics`), Lua scripts (`on_update_lua_scripts` when the `lua-scripting` feature is enabled), and animations (`on_update_animations`). Polls scene for runtime setting requests (VSync, fullscreen, shadow quality, window resize, quit, scene load) and applies them.
 - **`on_render(renderer)`**: Renders the scene through the ECS camera via `scene.on_update_runtime(renderer)`.
 - **`on_event(event, input)`**: Handles window resize and the `V` key for VSync toggling.
 
@@ -229,6 +231,33 @@ dist/
 - **VSync toggle**: Press `V` at runtime to switch between Mailbox (no VSync) and Fifo (VSync). The current mode is logged to the console.
 - **Window decorations**: Enabled (standard OS title bar). The player does not use the custom title bar that the editor uses.
 - **Viewport resize**: Handled via `on_event`, updating both the stored dimensions and the scene's viewport.
+
+### Runtime Settings Pipeline
+
+The player polls `Scene` each frame for setting change requests from Lua scripts:
+
+| Request | Player Response |
+|---------|----------------|
+| `take_requested_vsync()` | Toggles PresentMode (Fifo/Mailbox), recreates swapchain |
+| `take_requested_fullscreen()` | Switches window mode (Windowed/Borderless/Exclusive) |
+| `take_requested_shadow_quality()` | Updates renderer shadow quality tier |
+| `take_requested_window_size()` | Resizes window to physical pixel dimensions |
+| `take_requested_quit()` | Exits the application |
+| `take_requested_load_scene()` | Stops runtime, loads new scene, restarts |
+
+Fullscreen modes:
+- **Windowed** -- standard OS window with decorations
+- **Borderless** -- borderless fullscreen at desktop resolution
+- **Exclusive** -- true fullscreen with video mode enumeration
+
+### Cursor Management
+
+The player reads `scene.cursor_mode()` each frame and applies it to the winit window:
+- **Normal** -- OS cursor visible, no grab
+- **Confined** -- OS cursor hidden, confined to window, software cursor rendered in egui
+- **Locked** -- OS cursor hidden and locked in place (raw deltas only)
+
+Custom software cursors can be provided via `Application::software_cursor()`.
 
 ### Differences from Editor
 

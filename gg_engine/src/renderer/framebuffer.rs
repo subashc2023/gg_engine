@@ -54,15 +54,18 @@ impl MsaaSamples {
     }
 
     /// Return all sample counts up to and including the device maximum.
+    /// `max` can be either a single flag (e.g. TYPE_8 from `max_msaa_samples()`)
+    /// or a full bitmask — both are handled correctly.
     pub fn available_up_to(max: vk::SampleCountFlags) -> Vec<MsaaSamples> {
+        let max_raw = max.as_raw();
         let mut result = vec![MsaaSamples::S1];
-        if max.contains(vk::SampleCountFlags::TYPE_2) {
+        if max_raw >= vk::SampleCountFlags::TYPE_2.as_raw() {
             result.push(MsaaSamples::S2);
         }
-        if max.contains(vk::SampleCountFlags::TYPE_4) {
+        if max_raw >= vk::SampleCountFlags::TYPE_4.as_raw() {
             result.push(MsaaSamples::S4);
         }
-        if max.contains(vk::SampleCountFlags::TYPE_8) {
+        if max_raw >= vk::SampleCountFlags::TYPE_8.as_raw() {
             result.push(MsaaSamples::S8);
         }
         result

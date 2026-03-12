@@ -189,6 +189,7 @@ pub(crate) struct EditorTabViewer<'a> {
     pub(crate) hierarchy_action: &'a mut Option<scene_hierarchy::HierarchyExternalAction>,
     pub(crate) postprocess_settings: &'a mut PostProcessSettings,
     pub(crate) gpu_timing: &'a mut GpuTimingSnapshot,
+    pub(crate) show_msaa_test: &'a mut bool,
 }
 
 impl EditorTabViewer<'_> {
@@ -320,6 +321,7 @@ impl egui_dock::TabViewer for EditorTabViewer<'_> {
                     self.show_physics_colliders,
                     self.postprocess_settings,
                     self.gpu_timing,
+                    self.show_msaa_test,
                 );
             }
 

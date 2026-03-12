@@ -81,6 +81,24 @@ Parent-child relationships are tracked via `RelationshipComponent` using entity 
 | `on_viewport_resize(w, h)` | Updates all non-fixed-aspect-ratio camera projections |
 | `find_asset_references(asset_handle)` | Returns `Vec<(String, &str)>` of `(entity_name, component_kind)` pairs referencing the asset. Scans `SpriteRendererComponent::texture_handle`, `TilemapComponent::texture_handle`, and `AudioSourceComponent::audio_handle`. |
 
+### Runtime Settings
+
+Scene exposes a request/take pattern for dynamic settings controlled by Lua scripts:
+
+| Method | Description |
+|--------|-------------|
+| `request_window_size(w, h)` | Request window resize (physical pixels) |
+| `take_requested_window_size()` | Consume pending resize request |
+| `request_vsync(bool)` | Request VSync toggle |
+| `request_fullscreen(mode)` | Request fullscreen mode change |
+| `request_shadow_quality(0-3)` | Request shadow quality tier |
+| `set_gui_scale(factor)` / `gui_scale()` | Set/get global GUI scale (affects UI anchors) |
+| `set_cursor_mode(mode)` / `cursor_mode()` | Set/get cursor mode (Normal/Confined/Locked) |
+| `request_quit()` | Request application exit |
+| `request_load_scene(path)` | Request scene transition (deferred) |
+
+`FullscreenMode` enum: `Windowed`, `Borderless`, `Exclusive`.
+
 ### Rendering
 
 Three render paths:
@@ -536,6 +554,25 @@ struct LuaScriptComponent {
 ```
 
 Lua script attached to an entity. Feature-gated behind `lua-scripting`. The `script_path` points to a `.lua` file relative to the project root. `field_overrides` stores editor-set values applied before `on_create()`. The `loaded` flag is reset on clone (same pattern as physics handles).
+
+### UIAnchorComponent
+
+```rust
+struct UIAnchorComponent {
+    /// Normalized anchor point on screen. (0,0) = top-left, (1,1) = bottom-right.
+    pub anchor: Vec2,
+    /// Offset from the anchor point in world units.
+    pub offset: Vec2,
+}
+```
+
+Screen-relative positioning component for UI elements (HUD, menus, health bars). The anchor point maps to a position on the primary camera's viewport, and the offset displaces from that point in world units. `Scene::apply_ui_anchors()` repositions entities each frame based on the current camera.
+
+Default: `anchor` (0.5, 0.5) = center, `offset` (0, 0).
+
+Editor preset buttons: TL (0,0), TC (0.5,0), TR (1,0), CL (0,1), C (0.5,0.5), CR (1,0.5), BL (0,1), BC (0.5,1), BR (1,1).
+
+GUI scale (`Scene::gui_scale()`) multiplies offsets for resolution-independent sizing.
 
 ## Native Scripting
 

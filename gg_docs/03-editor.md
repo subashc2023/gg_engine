@@ -122,6 +122,10 @@ The Properties panel has been split into sub-modules for better organization:
 | `audio.rs` | AudioSourceComponent |
 | `tilemap.rs` | TilemapComponent |
 | `scripting.rs` | NativeScriptComponent, LuaScriptComponent |
+| `mesh.rs` | MeshRendererComponent (3D mesh/primitive, materials) |
+| `lighting.rs` | DirectionalLightComponent, PointLightComponent, AmbientLightComponent |
+| `particles.rs` | ParticleEmitterComponent (GPU particles) |
+| `ui_anchor.rs` | UIAnchorComponent (screen-relative positioning) |
 
 #### Component Inspector
 
@@ -141,10 +145,16 @@ The Properties panel has been split into sub-modules for better organization:
 | **Tilemap** | Grid width/height, tile size (X/Y), tileset columns, cell size, spacing, margin, tileset texture (drag-drop), tile palette with visual preview grid, eraser, flip H/V toggles |
 | **Lua Script** | Script path (file picker + drag-and-drop), field overrides with live editing in play mode |
 | **Native Script** | Display-only (runtime-only component) |
+| **Mesh Renderer** | Mesh source (Primitive/Asset), primitive type combo or glTF file picker, color, mesh info display |
+| **Directional Light** | Color, intensity, cast shadows checkbox, shadow distance |
+| **Point Light** | Color, intensity, radius |
+| **Ambient Light** | Color, intensity |
+| **Particle Emitter** | Emission rate, lifetime range, particle properties |
+| **UI Anchor** | Anchor X/Y (0-1 drag), offset X/Y, preset buttons (TL/TC/TR/CL/C/CR/BL/BC/BR) |
 
 - Removable components have a right-click context menu on the header for "Remove Component"
 - **Add Component** button (blue, inline with tag field) offers:
-  - Camera, Sprite Renderer, Circle Renderer, Sprite Animator, Text, Rigidbody 2D, Box Collider 2D, Circle Collider 2D, Tilemap, Audio Source, Lua Script
+  - Camera, Sprite Renderer, Circle Renderer, Sprite Animator, Text, Rigidbody 2D, Box Collider 2D, Circle Collider 2D, Tilemap, Audio Source, Lua Script, Mesh Renderer, Directional Light, Point Light, Ambient Light, Particle Emitter, UI Anchor, Rigidbody 3D, Box Collider 3D, Sphere Collider 3D, Capsule Collider 3D
 - All property changes that start from drag interactions use coalesced undo (begin_edit/end_edit)
 - Texture and audio file buttons accept drag-and-drop from the Content Browser with visual highlight feedback
 
@@ -230,6 +240,18 @@ Search field below the mode toggle filters entries by name (case-insensitive sub
   - Hovered entity name (resolved from entity ID)
 - **Warnings** section (shown when scene warnings exist):
   - Warning messages with yellow "!" indicator
+- **Post-Processing** section:
+  - Bloom: threshold, intensity, radius sliders
+  - Tonemapping: mode selector (None/ACES/Reinhard)
+  - Color grading: exposure, contrast, saturation sliders
+  - Contact shadows: distance, thickness, intensity, step count controls
+- **Shadow Quality** section:
+  - Quality combo box (Low/Medium/High/Ultra)
+- **GPU Timing** section:
+  - Toggle checkbox to enable GPU timestamp profiling
+  - Per-section ms display (Particles, Shadows, Scene, PostProcess, Egui)
+- **MSAA** section:
+  - Sample count selector
 
 ### Project
 

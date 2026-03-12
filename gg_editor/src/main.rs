@@ -246,6 +246,8 @@ struct UiState {
     wireframe_mode: WireframeMode,
     /// Post-processing output texture registered with egui.
     pp_output_egui_tex_id: Option<egui::TextureId>,
+    /// Draw MSAA test pattern (diagonal lines) to verify anti-aliasing.
+    show_msaa_test: bool,
 }
 
 // ---------------------------------------------------------------------------
@@ -447,6 +449,7 @@ impl Application for GGEditor {
                 msaa_changed: false,
                 wireframe_mode: WireframeMode::Off,
                 pp_output_egui_tex_id: None,
+                show_msaa_test: false,
             },
             viewport: ViewportInfo {
                 scene_fb: None,
@@ -1250,6 +1253,11 @@ impl Application for GGEditor {
             }
         }
 
+        // MSAA test pattern: diagonal lines at various angles to verify anti-aliasing.
+        if self.ui.show_msaa_test {
+            self.draw_msaa_test_pattern(renderer);
+        }
+
         // Wireframe overlay: draw dark outlines on top of shaded geometry.
         if wf_mode == WireframeMode::Overlay {
             self.draw_wireframe_overlay(renderer);
@@ -1571,6 +1579,7 @@ impl Application for GGEditor {
                 hierarchy_action: &mut hierarchy_action,
                 postprocess_settings: &mut self.postprocess_settings,
                 gpu_timing: &mut self.gpu_timing,
+                show_msaa_test: &mut self.ui.show_msaa_test,
             };
 
             egui_dock::DockArea::new(&mut self.ui.dock_state)
@@ -1832,6 +1841,55 @@ impl GGEditor {
     }
 
     /// Draw dark wireframe outlines on top of shaded geometry (Shaded Wireframe mode).
+    /// Draw a test pattern of diagonal lines to visually verify MSAA.
+    /// Without MSAA these lines show obvious stairstepping; with MSAA
+    /// they should appear smooth.
+    fn draw_msaa_test_pattern(&self, renderer: &Renderer) {
+        let white = Vec4::new(1.0, 1.0, 1.0, 1.0);
+        let red = Vec4::new(1.0, 0.2, 0.2, 1.0);
+        let green = Vec4::new(0.2, 1.0, 0.2, 1.0);
+        let blue = Vec4::new(0.3, 0.5, 1.0, 1.0);
+        let yellow = Vec4::new(1.0, 1.0, 0.2, 1.0);
+        let z = 0.0;
+
+        // Fan of lines at different angles from origin — each angle
+        // produces a different aliasing pattern.
+        let center = Vec3::new(0.0, 0.0, z);
+        let radius = 3.0;
+        let line_count = 16;
+        for i in 0..line_count {
+            let angle = std::f32::consts::PI * i as f32 / line_count as f32;
+            let dx = radius * angle.cos();
+            let dy = radius * angle.sin();
+            let color = match i % 4 {
+                0 => white,
+                1 => red,
+                2 => green,
+                _ => blue,
+            };
+            renderer.draw_line(center, Vec3::new(dx, dy, z), color, -1);
+        }
+
+        // A few rotated rectangles (thin quads drawn as line loops) to
+        // show edge aliasing clearly.
+        for i in 0..6 {
+            let angle = std::f32::consts::PI * i as f32 / 6.0;
+            let c = angle.cos();
+            let s = angle.sin();
+            let hw = 2.0;
+            let hh = 0.01; // Very thin — almost a line
+            let corners = [
+                Vec3::new(hw * c - hh * s, hw * s + hh * c, z),
+                Vec3::new(-hw * c - hh * s, -hw * s + hh * c, z),
+                Vec3::new(-hw * c + hh * s, -hw * s - hh * c, z),
+                Vec3::new(hw * c + hh * s, hw * s - hh * c, z),
+            ];
+            for j in 0..4 {
+                renderer.draw_line(corners[j], corners[(j + 1) % 4], yellow, -1);
+            }
+        }
+    }
+
     fn draw_wireframe_overlay(&self, renderer: &mut Renderer) {
         let wire_color = Vec4::new(0.0, 0.0, 0.0, 0.6);
         let prev_line_width = renderer.line_width();

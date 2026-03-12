@@ -131,6 +131,17 @@ renderer.reload_shaders(shader_dir: &Path) -> Result<u32, String>
 | `instance.glsl` | Instanced sprite rendering with GPU animation (offscreen, 2 outputs) |
 | `instance_swapchain.glsl` | Instanced sprite rendering with GPU animation (swapchain, 1 output) |
 | `particle_sim.glsl` | GPU particle simulation (compute shader) |
+| `mesh3d.glsl` | 3D mesh rendering with Blinn-Phong lighting, shadows, quality tiers |
+| `shadow.glsl` | Shadow depth pass (push constant model matrix + light VP) |
+| `shadow_alpha.glsl` | Shadow depth pass with alpha testing for transparent geometry |
+| `bloom_downsample.glsl` | Bloom downsample (4-tap bilinear + brightness threshold) |
+| `bloom_upsample.glsl` | Bloom upsample (3x3 tent filter, additive blend) |
+| `postprocess_composite.glsl` | Final composite: tone mapping (None/ACES/Reinhard) + color grading |
+| `contact_shadows.glsl` | Screen-space contact shadows via ray marching from depth buffer |
+| `bilateral_blur.glsl` | Edge-preserving bilateral blur |
+| `depth_resolve.glsl` | MSAA depth resolve |
+
+Shaders now use `#ifdef OFFSCREEN` for dual compilation instead of separate `_swapchain` files.
 
 Legacy shaders exist in `shaders/legacy/` but are unused: `flat_color.glsl`, `texture.glsl`, `triangle.glsl`.
 
@@ -642,3 +653,35 @@ end_scene()
   ├── flush_circles()
   └── flush_lines()
 ```
+
+## Shadow Mapping
+
+**File:** `renderer/shadow_map.rs`
+
+Cascaded shadow maps (CSM) with 4 cascades for directional lights.
+
+### Architecture
+
+- D32_SFLOAT depth images (4096x4096 per cascade), 2-layer array texture
+- Comparison sampler (`sampler2DShadow`) with `CLAMP_TO_BORDER` + `FLOAT_OPAQUE_WHITE`
+- Depth-only render pass with front-face culling + depth bias
+- Per-cascade framebuffers, rendered sequentially
+- Push constant model matrix for each mesh (replaced UBO for per-cascade correctness)
+- Camera-frustum-fitted cascade splits via `compute_cascade_splits()`
+
+### Shadow Quality Tiers
+
+| Tier | Name | PCF Method | Description |
+|------|------|-----------|-------------|
+| 0 | Low | 4-tap PCF | Fastest, blocky shadows |
+| 1 | Medium | 9-tap PCF | Balanced quality |
+| 2 | High | 16-tap PCF | Smooth shadows |
+| 3 | Ultra | PCSS | Percentage-Closer Soft Shadows with variable penumbra |
+
+Shadow quality is stored on `Renderer` (`shadow_quality: i32`), default 3 (Ultra). Settable at runtime via `Renderer::set_shadow_quality()` or Lua `Engine.set_shadow_quality(0-3)`.
+
+### Shaders
+
+- `shadow.glsl` — vertex-only depth pass, push constant model matrix
+- `shadow_alpha.glsl` — depth pass with alpha testing for transparent/masked geometry
+- `mesh3d.glsl` — reads shadow map at descriptor set 4, applies quality-tiered PCF
