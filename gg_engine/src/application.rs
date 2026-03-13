@@ -1257,6 +1257,9 @@ fn render_frame<T: Application>(
         profiler.timestamp(cmd_buf, current_frame, "Shadows");
     }
 
+    // Reset the bone palette write offset for this frame (before shadows and scene).
+    renderer.begin_bone_frame(current_frame);
+
     // Shadow pass (before any render pass — uses its own depth-only render pass).
     app.on_render_shadows(renderer, cmd_buf, current_frame);
 

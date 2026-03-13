@@ -1,0 +1,5 @@
+# Increase main-thread stack size to 8 MB (default is 1 MB on Windows).
+# The deeply-nested winit resumed() callback + Vulkan renderer init
+# exceeds the default in debug builds.
+[target.x86_64-pc-windows-msvc]
+rustflags = ["-C", "link-args=/STACK:8388608"]

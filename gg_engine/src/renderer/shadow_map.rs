@@ -943,8 +943,8 @@ pub(crate) fn create_shadow_pipeline(
         .front_face(vk::FrontFace::COUNTER_CLOCKWISE)
         .line_width(1.0)
         .depth_bias_enable(true)
-        .depth_bias_constant_factor(0.0)
-        .depth_bias_slope_factor(2.0);
+        .depth_bias_constant_factor(0.75)
+        .depth_bias_slope_factor(1.25);
 
     let multisampling = vk::PipelineMultisampleStateCreateInfo::default()
         .rasterization_samples(vk::SampleCountFlags::TYPE_1);
@@ -999,6 +999,129 @@ pub(crate) fn create_shadow_pipeline(
         pipeline_layout,
         device.clone(),
     ))
+}
+
+/// Create a depth-only pipeline for the skinned shadow pass.
+///
+/// Same as the regular shadow pipeline but uses the skinned mesh vertex layout
+/// (with bone indices/weights) and includes the bone SSBO descriptor set at set 0.
+/// Push constants: light VP (64) + model (64) + bone_offset (4) = 132 bytes.
+///
+/// Uses front-face culling to eliminate self-shadow acne (matches the regular
+/// shadow pipeline's `front_face_cull=true` variant).
+pub(crate) fn create_skinned_shadow_pipeline(
+    device: &ash::Device,
+    shader: &Shader,
+    render_pass: vk::RenderPass,
+    bone_ds_layout: vk::DescriptorSetLayout,
+    pipeline_cache: vk::PipelineCache,
+) -> EngineResult<Pipeline> {
+    let entry_point = c"main";
+
+    let vert_stage = vk::PipelineShaderStageCreateInfo::default()
+        .stage(vk::ShaderStageFlags::VERTEX)
+        .module(shader.vert_module())
+        .name(entry_point);
+
+    let frag_stage = vk::PipelineShaderStageCreateInfo::default()
+        .stage(vk::ShaderStageFlags::FRAGMENT)
+        .module(shader.frag_module())
+        .name(entry_point);
+
+    let shader_stages = [vert_stage, frag_stage];
+
+    let vertex_layout = super::mesh::SkinnedMesh::vertex_layout();
+    let binding = vertex_layout.vk_binding_description(0);
+    let attributes = vertex_layout.vk_attribute_descriptions(0);
+    let bindings = [binding];
+
+    let vertex_input = vk::PipelineVertexInputStateCreateInfo::default()
+        .vertex_binding_descriptions(&bindings)
+        .vertex_attribute_descriptions(&attributes);
+
+    let input_assembly = vk::PipelineInputAssemblyStateCreateInfo::default()
+        .topology(vk::PrimitiveTopology::TRIANGLE_LIST)
+        .primitive_restart_enable(false);
+
+    let dynamic_states = [vk::DynamicState::VIEWPORT, vk::DynamicState::SCISSOR];
+    let dynamic_state =
+        vk::PipelineDynamicStateCreateInfo::default().dynamic_states(&dynamic_states);
+
+    let viewport_state = vk::PipelineViewportStateCreateInfo::default()
+        .viewport_count(1)
+        .scissor_count(1);
+
+    // Skinned meshes keep glTF's native CCW winding (no index flip).
+    // With FrontFace::CW, light-facing triangles (appearing CCW in clip)
+    // are classified as BACK, kept by CullMode::FRONT. Away-from-light
+    // triangles (CW in clip) are classified as FRONT and culled.
+    // Higher bias than the regular shadow pipeline because linear blend
+    // skinning slightly distorts normals, making receiver-side normal
+    // bias less effective on thin/complex skinned geometry.
+    let rasterizer = vk::PipelineRasterizationStateCreateInfo::default()
+        .polygon_mode(vk::PolygonMode::FILL)
+        .cull_mode(vk::CullModeFlags::FRONT)
+        .front_face(vk::FrontFace::CLOCKWISE)
+        .line_width(1.0)
+        .depth_bias_enable(true)
+        .depth_bias_constant_factor(4.0)
+        .depth_bias_slope_factor(3.0);
+
+    let multisampling = vk::PipelineMultisampleStateCreateInfo::default()
+        .rasterization_samples(vk::SampleCountFlags::TYPE_1);
+
+    let depth_stencil = vk::PipelineDepthStencilStateCreateInfo::default()
+        .depth_test_enable(true)
+        .depth_write_enable(true)
+        .depth_compare_op(vk::CompareOp::LESS_OR_EQUAL)
+        .depth_bounds_test_enable(false)
+        .stencil_test_enable(false);
+
+    let color_blending = vk::PipelineColorBlendStateCreateInfo::default();
+
+    // Push constants: light VP (64) + model (64) + bone_offset (4) = 132 bytes.
+    let push_constant_range = vk::PushConstantRange {
+        stage_flags: vk::ShaderStageFlags::VERTEX,
+        offset: 0,
+        size: 132,
+    };
+
+    // Descriptor set 0: bone palette SSBO.
+    let ds_layouts = [bone_ds_layout];
+    let layout_info = vk::PipelineLayoutCreateInfo::default()
+        .set_layouts(&ds_layouts)
+        .push_constant_ranges(std::slice::from_ref(&push_constant_range));
+    let pipeline_layout = unsafe { device.create_pipeline_layout(&layout_info, None) }
+        .map_err(|e| {
+            EngineError::Gpu(format!(
+                "Failed to create skinned shadow pipeline layout: {e}"
+            ))
+        })?;
+
+    let pipeline_info = vk::GraphicsPipelineCreateInfo::default()
+        .stages(&shader_stages)
+        .vertex_input_state(&vertex_input)
+        .input_assembly_state(&input_assembly)
+        .viewport_state(&viewport_state)
+        .rasterization_state(&rasterizer)
+        .multisample_state(&multisampling)
+        .depth_stencil_state(&depth_stencil)
+        .color_blend_state(&color_blending)
+        .dynamic_state(&dynamic_state)
+        .layout(pipeline_layout)
+        .render_pass(render_pass)
+        .subpass(0);
+
+    let pipeline =
+        unsafe { device.create_graphics_pipelines(pipeline_cache, &[pipeline_info], None) }
+            .map_err(|(_, e)| {
+                unsafe {
+                    device.destroy_pipeline_layout(pipeline_layout, None);
+                }
+                EngineError::Gpu(format!("Failed to create skinned shadow pipeline: {e}"))
+            })?[0];
+
+    Ok(Pipeline::from_raw(pipeline, pipeline_layout, device.clone()))
 }
 
 /// Create an alpha-tested depth pipeline for the shadow pass.
@@ -1058,8 +1181,8 @@ pub(crate) fn create_shadow_alpha_pipeline(
         .front_face(vk::FrontFace::COUNTER_CLOCKWISE)
         .line_width(1.0)
         .depth_bias_enable(true)
-        .depth_bias_constant_factor(0.0)
-        .depth_bias_slope_factor(2.0);
+        .depth_bias_constant_factor(0.75)
+        .depth_bias_slope_factor(1.25);
 
     let multisampling = vk::PipelineMultisampleStateCreateInfo::default()
         .rasterization_samples(vk::SampleCountFlags::TYPE_1);

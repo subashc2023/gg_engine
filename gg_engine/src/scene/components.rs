@@ -1125,16 +1125,30 @@ pub enum MeshPrimitive {
     Cube,
     Sphere,
     Plane,
+    Cylinder,
+    Cone,
+    Torus,
+    Capsule,
 }
 
 impl MeshPrimitive {
     /// Local-space axis-aligned bounding box as `(min, max)` corners.
     pub fn local_bounds(self) -> (Vec3, Vec3) {
         match self {
-            Self::Cube | Self::Sphere => (Vec3::splat(-0.5), Vec3::splat(0.5)),
+            Self::Cube | Self::Sphere | Self::Cylinder | Self::Cone => {
+                (Vec3::splat(-0.5), Vec3::splat(0.5))
+            }
             Self::Plane => {
                 // Flat on XZ, Y = 0.
                 (Vec3::new(-0.5, 0.0, -0.5), Vec3::new(0.5, 0.0, 0.5))
+            }
+            Self::Torus => {
+                // major 0.35 + minor 0.15 = 0.5 radius, minor height.
+                (Vec3::new(-0.5, -0.15, -0.5), Vec3::new(0.5, 0.15, 0.5))
+            }
+            Self::Capsule => {
+                // radius 0.25, total height 1.0.
+                (Vec3::new(-0.25, -0.5, -0.25), Vec3::new(0.25, 0.5, 0.25))
             }
         }
     }
@@ -1305,9 +1319,12 @@ impl Default for DirectionalLightComponent {
         Self {
             color: Vec3::ONE,
             intensity: 1.0,
-            cast_shadows: false,
+            cast_shadows: true,
             shadow_distance: 100.0,
-            shadow_cull_front_faces: false,
+            // Front-face culling in the shadow pass renders back faces into
+            // the shadow map, placing depths behind lit surfaces. This
+            // eliminates self-shadow acne without needing excessive bias.
+            shadow_cull_front_faces: true,
         }
     }
 }
@@ -1390,6 +1407,98 @@ impl Default for UIAnchorComponent {
             anchor: Vec2::new(0.5, 0.5),
             offset: Vec2::ZERO,
         }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Skeletal Animation Component
+// ---------------------------------------------------------------------------
+
+/// Skeletal animation state attached to an entity that also has a
+/// [`MeshRendererComponent`]. Holds a shared skeleton + clips (loaded from
+/// glTF) and per-entity playback state.
+///
+/// The skeleton and clips are shared via `Arc` so that duplicate entities
+/// referencing the same glTF asset don't duplicate bone data.
+pub struct SkeletalAnimationComponent {
+    /// Shared skeleton (joint hierarchy + inverse-bind matrices).
+    pub skeleton: crate::Ref<crate::renderer::skeleton::Skeleton>,
+    /// Shared animation clips extracted from the glTF asset.
+    pub clips: Vec<crate::renderer::skeleton::SkeletalAnimationClip>,
+    /// Index of the currently playing clip, or `None` if stopped.
+    pub current_clip: Option<usize>,
+    /// Playback time within the current clip (seconds).
+    pub playback_time: f32,
+    /// Playback speed multiplier (1.0 = normal, 0.5 = half, 2.0 = double).
+    pub speed: f32,
+    /// Whether the current clip loops.
+    pub looping: bool,
+    /// Whether animation is actively playing.
+    pub playing: bool,
+    /// Runtime-only: the uploaded skinned mesh vertex array.
+    pub(crate) skinned_vertex_array: Option<crate::renderer::VertexArray>,
+    /// Runtime-only: the loaded skinned mesh data (shared via Arc).
+    pub(crate) loaded_skinned_mesh: Option<crate::Ref<crate::renderer::SkinnedMesh>>,
+}
+
+impl Clone for SkeletalAnimationComponent {
+    fn clone(&self) -> Self {
+        Self {
+            skeleton: self.skeleton.clone(),
+            clips: self.clips.clone(),
+            current_clip: self.current_clip,
+            playback_time: self.playback_time,
+            speed: self.speed,
+            looping: self.looping,
+            playing: self.playing,
+            skinned_vertex_array: None,     // Runtime-only, not copied.
+            loaded_skinned_mesh: self.loaded_skinned_mesh.clone(), // Arc clone.
+        }
+    }
+}
+
+impl SkeletalAnimationComponent {
+    /// Create from glTF skin data (skeleton + clips + mesh).
+    pub fn from_gltf_skin_data(data: &crate::renderer::GltfSkinData) -> Self {
+        Self {
+            skeleton: crate::Ref::new(data.skeleton.clone()),
+            clips: data.clips.clone(),
+            current_clip: if data.clips.is_empty() { None } else { Some(0) },
+            playback_time: 0.0,
+            speed: 1.0,
+            looping: true,
+            playing: !data.clips.is_empty(),
+            skinned_vertex_array: None,
+            loaded_skinned_mesh: Some(crate::Ref::new(data.mesh.clone())),
+        }
+    }
+
+    /// Play a clip by index.
+    pub fn play(&mut self, clip_index: usize) {
+        if clip_index < self.clips.len() {
+            self.current_clip = Some(clip_index);
+            self.playback_time = 0.0;
+            self.playing = true;
+        }
+    }
+
+    /// Play a clip by name.
+    pub fn play_by_name(&mut self, name: &str) {
+        if let Some(idx) = self.clips.iter().position(|c| c.name == name) {
+            self.play(idx);
+        }
+    }
+
+    /// Stop playback (freeze at current pose).
+    pub fn stop(&mut self) {
+        self.playing = false;
+    }
+
+    /// Get the name of the currently playing clip.
+    pub fn current_clip_name(&self) -> Option<&str> {
+        self.current_clip
+            .and_then(|i| self.clips.get(i))
+            .map(|c| c.name.as_str())
     }
 }
 

@@ -2,9 +2,9 @@ use super::{
     AmbientLightComponent, AnimationControllerComponent, CircleRendererComponent,
     DirectionalLightComponent, Entity, IdComponent, InstancedSpriteAnimator, MeshPrimitive,
     MeshRendererComponent, MeshSource, ParticleEmitterComponent, PointLightComponent,
-    RigidBody3DComponent, RigidBody3DType, Scene, SpriteAnimatorComponent, SpriteRendererComponent,
-    TextComponent, TilemapComponent, TransformComponent, UIAnchorComponent, TILE_FLIP_H,
-    TILE_FLIP_V, TILE_ID_MASK,
+    RigidBody3DComponent, RigidBody3DType, Scene, SkeletalAnimationComponent,
+    SpriteAnimatorComponent, SpriteRendererComponent, TextComponent, TilemapComponent,
+    TransformComponent, UIAnchorComponent, TILE_FLIP_H, TILE_FLIP_V, TILE_ID_MASK,
 };
 use crate::renderer::shadow_map::{
     compute_cascade_vps, compute_directional_light_vp, ShadowCameraInfo,
@@ -141,6 +141,31 @@ impl Scene {
                 let default = anim.default_clip.clone();
                 anim.playing = false;
                 finished_events.push((id_comp.id.raw(), clip_name, default));
+            }
+        }
+
+        // Phase 2b: advance skeletal animation playback times.
+        for sac in self
+            .world
+            .query_mut::<&mut SkeletalAnimationComponent>()
+            .into_iter()
+        {
+            if !sac.playing {
+                continue;
+            }
+            if let Some(clip_idx) = sac.current_clip {
+                if let Some(clip) = sac.clips.get(clip_idx) {
+                    let duration = clip.duration;
+                    sac.playback_time += dt * sac.speed;
+                    if sac.playback_time >= duration {
+                        if sac.looping {
+                            sac.playback_time %= duration;
+                        } else {
+                            sac.playback_time = duration;
+                            sac.playing = false;
+                        }
+                    }
+                }
             }
         }
 
@@ -617,6 +642,10 @@ impl Scene {
                         MeshPrimitive::Cube => Mesh::cube(color),
                         MeshPrimitive::Sphere => Mesh::sphere(32, 16, color),
                         MeshPrimitive::Plane => Mesh::plane(color),
+                        MeshPrimitive::Cylinder => Mesh::cylinder(32, color),
+                        MeshPrimitive::Cone => Mesh::cone(32, color),
+                        MeshPrimitive::Torus => Mesh::torus(32, 16, color),
+                        MeshPrimitive::Capsule => Mesh::capsule(32, 16, color),
                     };
                     (m, None)
                 }
@@ -673,6 +702,42 @@ impl Scene {
                     self.core.va_graveyard.push_back(Vec::new());
                 }
                 self.core.va_graveyard.back_mut().unwrap().push(old_va);
+            }
+        }
+    }
+
+    /// Upload vertex arrays for any [`SkeletalAnimationComponent`] that doesn't
+    /// have one yet. Called once per frame before rendering.
+    pub fn resolve_skinned_meshes(&mut self, renderer: &mut Renderer) {
+        let needs: Vec<hecs::Entity> = self
+            .world
+            .query::<(hecs::Entity, &SkeletalAnimationComponent)>()
+            .iter()
+            .filter_map(|(handle, sac)| {
+                if sac.skinned_vertex_array.is_none() && sac.loaded_skinned_mesh.is_some() {
+                    Some(handle)
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        for handle in needs {
+            let mesh_ref = {
+                let sac = self.world.get::<&SkeletalAnimationComponent>(handle).unwrap();
+                sac.loaded_skinned_mesh.as_ref().unwrap().clone()
+            };
+            match mesh_ref.upload(renderer) {
+                Ok(va) => {
+                    if let Ok(mut sac) =
+                        self.world.get::<&mut SkeletalAnimationComponent>(handle)
+                    {
+                        sac.skinned_vertex_array = Some(va);
+                    }
+                }
+                Err(e) => {
+                    log::error!("Failed to upload skinned mesh: {e}");
+                }
             }
         }
     }
@@ -1147,6 +1212,9 @@ impl Scene {
 
         // Render 3D meshes (after flushing all 2D batches).
         self.render_meshes(renderer);
+
+        // Render skinned 3D meshes (skeletal animation).
+        self.render_skinned_meshes(renderer);
     }
 
     /// Find the primary ECS camera and return its frustum info for shadow
@@ -1279,7 +1347,22 @@ impl Scene {
             })
             .collect();
 
-        if meshes.is_empty() {
+        // Collect skinned meshes for shadow rendering.
+        let skinned_meshes: Vec<(hecs::Entity, glam::Mat4)> = self
+            .world
+            .query::<(hecs::Entity, &SkeletalAnimationComponent)>()
+            .iter()
+            .filter_map(|(h, sac)| {
+                if sac.skinned_vertex_array.is_some() {
+                    let w = self.get_world_transform(super::Entity::new(h));
+                    Some((h, w))
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        if meshes.is_empty() && skinned_meshes.is_empty() {
             return;
         }
 
@@ -1328,6 +1411,36 @@ impl Scene {
             .collect();
 
         let use_alpha_pipeline = has_alpha && renderer.has_shadow_alpha_pipeline();
+
+        // Pre-compute bone poses for skinned meshes (shared across cascades).
+        let has_skinned = !skinned_meshes.is_empty();
+        let mut skinned_draw_data: Vec<(hecs::Entity, glam::Mat4, u32)> = Vec::new();
+        if has_skinned {
+            if let Err(e) = renderer.ensure_bone_palette() {
+                log::error!("Failed to init bone palette for shadow: {e}");
+            } else if let Err(e) = renderer.init_skinned_shadow_pipeline() {
+                log::error!("Failed to create skinned shadow pipeline: {e}");
+            } else {
+                for (handle, world_transform) in &skinned_meshes {
+                    let sac = self
+                        .world
+                        .get::<&SkeletalAnimationComponent>(*handle)
+                        .unwrap();
+                    let pose = if let Some(clip_idx) = sac.current_clip {
+                        if let Some(clip) = sac.clips.get(clip_idx) {
+                            sac.skeleton.compute_pose(clip, sac.playback_time)
+                        } else {
+                            sac.skeleton.bind_pose()
+                        }
+                    } else {
+                        sac.skeleton.bind_pose()
+                    };
+                    if let Some(bone_offset) = renderer.write_bone_matrices(&pose.matrices) {
+                        skinned_draw_data.push((*handle, *world_transform, bone_offset));
+                    }
+                }
+            }
+        }
 
         // Render each cascade with per-cascade frustum culling.
         for (cascade, cascade_vp) in cascade_vps.iter().enumerate() {
@@ -1388,6 +1501,26 @@ impl Scene {
                             world_transform,
                             0.5, // Default alpha cutoff for shadow pass.
                             tex_index,
+                            cmd_buf,
+                        );
+                    }
+                }
+            }
+
+            // Pass 3: skinned meshes (switch to skinned shadow pipeline).
+            if !skinned_draw_data.is_empty() {
+                renderer.bind_skinned_shadow_pipeline(cmd_buf);
+                for (handle, world_transform, bone_offset) in &skinned_draw_data {
+                    let sac = self
+                        .world
+                        .get::<&SkeletalAnimationComponent>(*handle)
+                        .unwrap();
+                    if let Some(ref va) = sac.skinned_vertex_array {
+                        renderer.submit_skinned_shadow_with_pipeline(
+                            va,
+                            cascade_vp,
+                            world_transform,
+                            *bone_offset,
                             cmd_buf,
                         );
                     }
@@ -1594,6 +1727,111 @@ impl Scene {
                     world_transform,
                     Some(&default_handle),
                     handle.id() as i32,
+                );
+            }
+        }
+    }
+
+    /// Render all [`SkeletalAnimationComponent`] entities using the skinned
+    /// mesh pipeline. Computes bone poses, writes bone matrices to the SSBO,
+    /// and issues draw calls.
+    fn render_skinned_meshes(&self, renderer: &mut Renderer) {
+        // Collect skinned entities that have uploaded vertex arrays.
+        let skinned: Vec<(hecs::Entity, glam::Mat4)> = self
+            .world
+            .query::<(hecs::Entity, &SkeletalAnimationComponent)>()
+            .iter()
+            .filter_map(|(handle, sac)| {
+                if sac.skinned_vertex_array.is_some() {
+                    let world = self.get_world_transform(super::Entity::new(handle));
+                    Some((handle, world))
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        if skinned.is_empty() {
+            return;
+        }
+
+        // Ensure bone palette is initialized and reset for this frame.
+        if let Err(e) = renderer.ensure_bone_palette() {
+            log::error!("Failed to init bone palette: {e}");
+            return;
+        }
+
+        // Compute bone poses and write to SSBO.
+        let mut draw_list: Vec<(hecs::Entity, glam::Mat4, u32)> = Vec::new();
+        for (handle, world_transform) in &skinned {
+            let sac = self
+                .world
+                .get::<&SkeletalAnimationComponent>(*handle)
+                .unwrap();
+
+            // Compute the pose for the current clip + time.
+            let pose = if let Some(clip_idx) = sac.current_clip {
+                if let Some(clip) = sac.clips.get(clip_idx) {
+                    sac.skeleton.compute_pose(clip, sac.playback_time)
+                } else {
+                    sac.skeleton.bind_pose()
+                }
+            } else {
+                sac.skeleton.bind_pose()
+            };
+
+            // Write bone matrices to the SSBO.
+            if let Some(bone_offset) = renderer.write_bone_matrices(&pose.matrices) {
+                draw_list.push((*handle, *world_transform, bone_offset));
+            } else {
+                log::warn!("Bone palette full, skipping skinned entity");
+            }
+        }
+
+        if draw_list.is_empty() {
+            return;
+        }
+
+        // Get or create the skinned pipeline.
+        let pipeline = match renderer.skinned_mesh3d_pipeline() {
+            Ok(p) => p,
+            Err(e) => {
+                log::error!("Failed to get skinned mesh3d pipeline: {e}");
+                return;
+            }
+        };
+
+        // Bind pipeline + shared descriptor sets (0-5) once.
+        renderer.bind_skinned_3d_shared_sets(&pipeline);
+
+        let default_handle = renderer.material_library().default_handle();
+
+        for (handle, world_transform, bone_offset) in &draw_list {
+            let sac = self
+                .world
+                .get::<&SkeletalAnimationComponent>(*handle)
+                .unwrap();
+            if let Some(ref va) = sac.skinned_vertex_array {
+                // Use MeshRendererComponent material properties if present.
+                if let Ok(mesh_comp) = self.world.get::<&MeshRendererComponent>(*handle) {
+                    let mat = renderer
+                        .material_library_mut()
+                        .get_mut(&default_handle)
+                        .unwrap();
+                    mat.albedo_color = mesh_comp.color;
+                    mat.metallic = mesh_comp.metallic;
+                    mat.roughness = mesh_comp.roughness;
+                    mat.emissive_color = mesh_comp.emissive_color;
+                    mat.emissive_strength = mesh_comp.emissive_strength;
+                    mat.albedo_texture = mesh_comp.texture.clone();
+                }
+                renderer.submit_skinned_3d(
+                    &pipeline,
+                    va,
+                    world_transform,
+                    Some(&default_handle),
+                    handle.id() as i32,
+                    *bone_offset,
                 );
             }
         }

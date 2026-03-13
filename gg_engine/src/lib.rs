@@ -63,6 +63,7 @@ pub use scene::{
     IdComponent, InstancedSpriteAnimator, MeshPrimitive, MeshRendererComponent, MeshSource,
     NativeScript, NativeScriptComponent, ParticleEmitterComponent, PointLightComponent,
     RelationshipComponent, RigidBody2DComponent, RigidBody2DType, RigidBody3DComponent,
+    SkeletalAnimationComponent,
     RigidBody3DType, RigidBodyType, Scene, SceneSerializer, SphereCollider3DComponent,
     SpriteAnimatorComponent, SpriteRendererComponent, TagComponent, TextComponent,
     TilemapComponent, TransformComponent, TransitionCondition, UIAnchorComponent, TILE_FLIP_H,
@@ -96,7 +97,7 @@ pub mod prelude {
     };
     pub use crate::project::Project;
     pub use crate::renderer::{
-        as_bytes, load_gltf, BlendMode, BufferElement, BufferLayout, CullMode, DepthConfig,
+        as_bytes, load_gltf, load_gltf_skinned, BlendMode, BufferElement, BufferLayout, CullMode, DepthConfig,
         EditorCamera, Font, Framebuffer, FramebufferSpec, FramebufferTextureFormat,
         FramebufferTextureSpec, IndexBuffer, LightEnvironment, LightGpuData, Material,
         MaterialGpuData, MaterialHandle, MaterialLibrary, Mesh, MeshVertex, MsaaSamples,
@@ -115,7 +116,8 @@ pub mod prelude {
         MeshRendererComponent, MeshSource, NativeScript, NativeScriptComponent,
         ParticleEmitterComponent, PointLightComponent, RelationshipComponent, RigidBody2DComponent,
         RigidBody2DType, RigidBody3DComponent, RigidBody3DType, RigidBodyType, Scene,
-        SceneSerializer, SphereCollider3DComponent, SpriteAnimatorComponent,
+        SceneSerializer, SkeletalAnimationComponent, SphereCollider3DComponent,
+        SpriteAnimatorComponent,
         SpriteRendererComponent, TagComponent, TextComponent, TilemapComponent, TransformComponent,
         TransitionCondition, UIAnchorComponent, TILE_FLIP_H, TILE_FLIP_V, TILE_ID_MASK,
     };

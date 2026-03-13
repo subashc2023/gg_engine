@@ -36,9 +36,9 @@ pub use components::{
     MeshPrimitive, MeshRendererComponent, MeshSource, NativeScriptComponent,
     ParticleEmitterComponent, PointLightComponent, RelationshipComponent, RigidBody2DComponent,
     RigidBody2DType, RigidBody3DComponent, RigidBody3DType, RigidBodyType,
-    SphereCollider3DComponent, SpriteRendererComponent, TagComponent, TextComponent,
-    TilemapComponent, TransformComponent, UIAnchorComponent, TILE_FLIP_H, TILE_FLIP_V,
-    TILE_ID_MASK,
+    SkeletalAnimationComponent, SphereCollider3DComponent, SpriteRendererComponent,
+    TagComponent, TextComponent, TilemapComponent, TransformComponent, UIAnchorComponent,
+    TILE_FLIP_H, TILE_FLIP_V, TILE_ID_MASK,
 };
 pub use entity::Entity;
 pub use native_script::NativeScript;

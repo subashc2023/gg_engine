@@ -4,6 +4,7 @@ use std::sync::{Arc, Mutex};
 use ash::vk;
 use glam::{Mat4, Quat, Vec2, Vec3, Vec4};
 
+use super::bone_palette::BonePaletteSystem;
 use super::buffer::{IndexBuffer, VertexBuffer};
 use super::camera_system::CameraSystem;
 use super::draw_context::DrawContext;
@@ -203,6 +204,17 @@ pub struct Renderer {
 
     // Post-processing pipeline (lazily initialized when scene framebuffer is available).
     postprocess: Option<PostProcessPipeline>,
+
+    // Bone palette SSBO for skeletal animation (lazily initialized).
+    bone_palette: Option<BonePaletteSystem>,
+    // Frame-in-flight index for bone writes (set by begin_bone_frame, used by
+    // write_bone_matrices before draw_context is available).
+    bone_frame_index: usize,
+
+    // Skinned mesh pipeline state (lazily created like mesh3d).
+    skinned_pipeline: Option<Arc<Pipeline>>,
+    skinned_offscreen_pipeline: Option<Arc<Pipeline>>,
+    skinned_shadow_pipeline: Option<Arc<Pipeline>>,
 }
 
 impl Renderer {
@@ -223,7 +235,8 @@ impl Renderer {
         let ubo_slot_count = (super::MAX_FRAMES_IN_FLIGHT * super::MAX_VIEWPORTS) as u32;
         let total_ubo_sets = ubo_slot_count * 4; // camera + material + lighting + shadow camera
         let total_sampler_descriptors = 100 + ubo_slot_count * 2; // textures + shadow map (2 samplers per set: PCF + PCSS blocker)
-        let total_sets = total_sampler_descriptors + total_ubo_sets;
+        let bone_palette_sets = super::MAX_FRAMES_IN_FLIGHT as u32; // one SSBO per frame-in-flight
+        let total_sets = total_sampler_descriptors + total_ubo_sets + bone_palette_sets;
         let pool_sizes = [
             vk::DescriptorPoolSize {
                 ty: vk::DescriptorType::COMBINED_IMAGE_SAMPLER,
@@ -232,6 +245,10 @@ impl Renderer {
             vk::DescriptorPoolSize {
                 ty: vk::DescriptorType::UNIFORM_BUFFER,
                 descriptor_count: total_ubo_sets,
+            },
+            vk::DescriptorPoolSize {
+                ty: vk::DescriptorType::STORAGE_BUFFER,
+                descriptor_count: bone_palette_sets,
             },
         ];
         let pool_info = vk::DescriptorPoolCreateInfo::default()
@@ -307,6 +324,11 @@ impl Renderer {
             shadow: ShadowState::new(),
             gpu_profiler: None,
             postprocess: None,
+            bone_palette: None,
+            bone_frame_index: 0,
+            skinned_pipeline: None,
+            skinned_offscreen_pipeline: None,
+            skinned_shadow_pipeline: None,
         })
     }
 
@@ -471,6 +493,7 @@ impl Renderer {
             self.pipeline_cache,
             msaa.to_vk(),
             false,
+            false, // CCW front face (standard)
         )?))
     }
 
@@ -804,6 +827,142 @@ impl Renderer {
     /// Returns `true` if the shadow pipeline is ready for rendering.
     pub fn has_shadow_pipeline(&self) -> bool {
         self.shadow.pipeline.is_some()
+    }
+
+    /// Initialize the skinned shadow pipeline for skeletal mesh shadows.
+    pub fn init_skinned_shadow_pipeline(&mut self) -> EngineResult<()> {
+        if self.skinned_shadow_pipeline.is_some() {
+            return Ok(());
+        }
+        self.ensure_shadow_map()?;
+        self.ensure_bone_palette()?;
+
+        let sm = self
+            .shadow
+            .map
+            .as_ref()
+            .expect("Shadow map just initialized");
+        let bone_ds_layout = self
+            .bone_palette
+            .as_ref()
+            .expect("Bone palette just initialized")
+            .ds_layout();
+
+        let shader = self.create_shader(
+            "skinned_shadow",
+            super::shaders::SKINNED_SHADOW_VERT_SPV,
+            super::shaders::SKINNED_SHADOW_FRAG_SPV,
+        )?;
+        let pipeline = Arc::new(shadow_map::create_skinned_shadow_pipeline(
+            &self.device,
+            &shader,
+            sm.render_pass(),
+            bone_ds_layout,
+            self.pipeline_cache,
+        )?);
+        log::info!(target: "gg_engine", "Skinned shadow pipeline created");
+        self.skinned_shadow_pipeline = Some(pipeline);
+        Ok(())
+    }
+
+    /// Bind the skinned shadow pipeline within a shadow pass.
+    /// Must be called after `begin_shadow_pass`.
+    pub fn bind_skinned_shadow_pipeline(&self, cmd_buf: vk::CommandBuffer) {
+        let pipeline = self
+            .skinned_shadow_pipeline
+            .as_ref()
+            .expect("Skinned shadow pipeline not initialized");
+
+        let ctx_frame = self
+            .draw_context
+            .map(|c| c.current_frame)
+            .unwrap_or(self.bone_frame_index);
+
+        unsafe {
+            self.device.cmd_bind_pipeline(
+                cmd_buf,
+                vk::PipelineBindPoint::GRAPHICS,
+                pipeline.pipeline(),
+            );
+
+            // Bind bone palette SSBO at set 0.
+            if let Some(ref bp) = self.bone_palette {
+                let bone_ds = bp.descriptor_set(ctx_frame);
+                self.device.cmd_bind_descriptor_sets(
+                    cmd_buf,
+                    vk::PipelineBindPoint::GRAPHICS,
+                    pipeline.layout(),
+                    0,
+                    &[bone_ds],
+                    &[],
+                );
+            }
+        }
+
+        // Store the skinned shadow pipeline layout for submit_skinned_shadow.
+        // We reuse shadow.active_layout since there's only one shadow pass at a time.
+    }
+
+    /// Submit a skinned mesh to the shadow pass, using the skinned shadow pipeline.
+    pub fn submit_skinned_shadow_with_pipeline(
+        &self,
+        vertex_array: &VertexArray,
+        light_vp: &Mat4,
+        transform: &Mat4,
+        bone_offset: u32,
+        cmd_buf: vk::CommandBuffer,
+    ) {
+        let pipeline = self
+            .skinned_shadow_pipeline
+            .as_ref()
+            .expect("Skinned shadow pipeline not initialized");
+
+        unsafe {
+            // Push light VP at offset 0 (64 bytes).
+            let vp_bytes = std::slice::from_raw_parts(
+                light_vp as *const Mat4 as *const u8,
+                std::mem::size_of::<Mat4>(),
+            );
+            self.device.cmd_push_constants(
+                cmd_buf,
+                pipeline.layout(),
+                vk::ShaderStageFlags::VERTEX,
+                0,
+                vp_bytes,
+            );
+
+            // Push model at offset 64 (64 bytes).
+            let model_bytes = std::slice::from_raw_parts(
+                transform as *const Mat4 as *const u8,
+                std::mem::size_of::<Mat4>(),
+            );
+            self.device.cmd_push_constants(
+                cmd_buf,
+                pipeline.layout(),
+                vk::ShaderStageFlags::VERTEX,
+                64,
+                model_bytes,
+            );
+
+            // Push bone_offset at offset 128 (4 bytes).
+            self.device.cmd_push_constants(
+                cmd_buf,
+                pipeline.layout(),
+                vk::ShaderStageFlags::VERTEX,
+                128,
+                &bone_offset.to_ne_bytes(),
+            );
+        }
+
+        vertex_array.bind(cmd_buf);
+        let index_count = vertex_array
+            .index_buffer()
+            .expect("VertexArray has no index buffer")
+            .count();
+        unsafe {
+            self.device
+                .cmd_draw_indexed(cmd_buf, index_count, 1, 0, 0, 0);
+        }
     }
 
     /// Begin the shadow depth-only render pass for a specific cascade.
@@ -2552,6 +2711,7 @@ impl Renderer {
                 self.pipeline_cache,
                 self.mesh3d.offscreen_sample_count,
                 wireframe,
+                false, // CCW front face (standard for winding-flipped glTF)
             )?);
             if wireframe {
                 self.mesh3d.wireframe_offscreen_pipeline = Some(Arc::clone(&pipeline));
@@ -2599,6 +2759,7 @@ impl Renderer {
                 self.pipeline_cache,
                 vk::SampleCountFlags::TYPE_1,
                 wireframe,
+                false, // CCW front face (standard for winding-flipped glTF)
             )?);
             if wireframe {
                 self.mesh3d.wireframe_pipeline = Some(Arc::clone(&pipeline));
@@ -2606,6 +2767,383 @@ impl Renderer {
                 self.mesh3d.pipeline = Some(Arc::clone(&pipeline));
             }
             Ok(pipeline)
+        }
+    }
+
+    // -- Skeletal Animation / Skinned Mesh Pipeline -------------------------
+
+    /// Ensure the bone palette SSBO system is initialized. Lazily created on
+    /// first skinned mesh draw.
+    pub fn ensure_bone_palette(&mut self) -> EngineResult<()> {
+        if self.bone_palette.is_some() {
+            return Ok(());
+        }
+        let bp = BonePaletteSystem::new(&self.allocator, &self.device, self.descriptor_pool)?;
+        self.bone_palette = Some(bp);
+        Ok(())
+    }
+
+    /// Reset the bone palette write offset for a new frame.
+    /// `current_frame` is the frame-in-flight index, stored so that
+    /// `write_bone_matrices` and `bind_skinned_shadow_pipeline` use the
+    /// correct SSBO buffer even before `begin_scene` sets `draw_context`.
+    pub fn begin_bone_frame(&mut self, current_frame: usize) {
+        self.bone_frame_index = current_frame;
+        if let Some(ref mut bp) = self.bone_palette {
+            bp.begin_frame();
+        }
+    }
+
+    /// Write bone matrices for one skinned entity. Returns the bone offset.
+    pub fn write_bone_matrices(&mut self, matrices: &[Mat4]) -> Option<u32> {
+        let current_frame = self
+            .draw_context
+            .map(|ctx| ctx.current_frame)
+            .unwrap_or(self.bone_frame_index);
+        self.bone_palette
+            .as_mut()
+            .and_then(|bp| bp.write_bones(matrices, current_frame))
+    }
+
+    /// Get or lazily create the skinned mesh3d pipeline.
+    pub fn skinned_mesh3d_pipeline(&mut self) -> EngineResult<Arc<Pipeline>> {
+        // Ensure dependencies.
+        self.ensure_shadow_map()?;
+        self.ensure_bone_palette()?;
+
+        let bindless_layout = self
+            .renderer_2d
+            .as_ref()
+            .map(|r2d| r2d.bindless_ds_layout())
+            .unwrap_or(self.texture_descriptor_set_layout);
+
+        let shadow_ds_layout = self
+            .shadow
+            .map
+            .as_ref()
+            .expect("Shadow map just initialized")
+            .ds_layout();
+
+        let bone_ds_layout = self
+            .bone_palette
+            .as_ref()
+            .expect("Bone palette just initialized")
+            .ds_layout();
+
+        if self.mesh3d.use_offscreen {
+            if let Some(ref pipeline) = self.skinned_offscreen_pipeline {
+                return Ok(Arc::clone(pipeline));
+            }
+            let offscreen_rp = self.mesh3d.offscreen_render_pass.ok_or_else(|| {
+                crate::error::EngineError::Gpu(
+                    "No offscreen render pass set for skinned pipeline".to_string(),
+                )
+            })?;
+            let shader = self.create_shader(
+                "skinned_mesh3d",
+                super::shaders::SKINNED_MESH3D_VERT_SPV,
+                super::shaders::SKINNED_MESH3D_FRAG_SPV,
+            )?;
+            let vertex_layout = super::mesh::SkinnedMesh::vertex_layout();
+            let pipeline = Arc::new(pipeline::create_3d_pipeline(
+                &self.device,
+                &shader,
+                &vertex_layout,
+                offscreen_rp,
+                self.camera.ds_layout(),
+                &[
+                    bindless_layout,
+                    self.material_library.ds_layout(),
+                    self.lighting.ds_layout(),
+                    shadow_ds_layout,
+                    bone_ds_layout,
+                ],
+                super::CullMode::Back,
+                super::DepthConfig::STANDARD_3D,
+                super::BlendMode::Opaque,
+                self.mesh3d.offscreen_color_attachment_count,
+                self.pipeline_cache,
+                self.mesh3d.offscreen_sample_count,
+                false,
+                true, // CW front face — skinned meshes keep glTF CCW winding (no index flip)
+            )?);
+            self.skinned_offscreen_pipeline = Some(Arc::clone(&pipeline));
+            Ok(pipeline)
+        } else {
+            if let Some(ref pipeline) = self.skinned_pipeline {
+                return Ok(Arc::clone(pipeline));
+            }
+            let shader = self.create_shader(
+                "skinned_mesh3d_swapchain",
+                super::shaders::SKINNED_MESH3D_SWAPCHAIN_VERT_SPV,
+                super::shaders::SKINNED_MESH3D_SWAPCHAIN_FRAG_SPV,
+            )?;
+            let vertex_layout = super::mesh::SkinnedMesh::vertex_layout();
+            let pipeline = Arc::new(pipeline::create_3d_pipeline(
+                &self.device,
+                &shader,
+                &vertex_layout,
+                self.render_pass,
+                self.camera.ds_layout(),
+                &[
+                    bindless_layout,
+                    self.material_library.ds_layout(),
+                    self.lighting.ds_layout(),
+                    shadow_ds_layout,
+                    bone_ds_layout,
+                ],
+                super::CullMode::Back,
+                super::DepthConfig::STANDARD_3D,
+                super::BlendMode::Opaque,
+                1,
+                self.pipeline_cache,
+                vk::SampleCountFlags::TYPE_1,
+                false,
+                true, // CW front face — skinned meshes keep glTF CCW winding (no index flip)
+            )?);
+            self.skinned_pipeline = Some(Arc::clone(&pipeline));
+            Ok(pipeline)
+        }
+    }
+
+    /// Bind the skinned mesh pipeline + shared descriptor sets (0-5).
+    pub fn bind_skinned_3d_shared_sets(&self, pipeline: &Pipeline) {
+        let ctx = self
+            .draw_context
+            .expect("bind_skinned_3d_shared_sets called outside begin/end_scene");
+
+        let cmd = ctx.cmd_buf;
+        let device = &self.device;
+
+        unsafe {
+            device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::GRAPHICS, pipeline.pipeline());
+
+            // Set 0: camera UBO.
+            let camera_ds = self
+                .camera
+                .descriptor_set(ctx.current_frame, ctx.viewport_index);
+            device.cmd_bind_descriptor_sets(
+                cmd,
+                vk::PipelineBindPoint::GRAPHICS,
+                pipeline.layout(),
+                0,
+                &[camera_ds],
+                &[],
+            );
+
+            // Set 1: bindless textures.
+            if let Some(ref r2d) = self.renderer_2d {
+                let bindless_ds = r2d.bindless_descriptor_set(ctx.current_frame);
+                device.cmd_bind_descriptor_sets(
+                    cmd,
+                    vk::PipelineBindPoint::GRAPHICS,
+                    pipeline.layout(),
+                    1,
+                    &[bindless_ds],
+                    &[],
+                );
+            }
+
+            // Set 2: material.
+            let material_ds = self
+                .material_library
+                .descriptor_set(ctx.current_frame, ctx.viewport_index);
+            device.cmd_bind_descriptor_sets(
+                cmd,
+                vk::PipelineBindPoint::GRAPHICS,
+                pipeline.layout(),
+                2,
+                &[material_ds],
+                &[],
+            );
+
+            // Set 3: lighting.
+            let lighting_ds = self
+                .lighting
+                .descriptor_set(ctx.current_frame, ctx.viewport_index);
+            device.cmd_bind_descriptor_sets(
+                cmd,
+                vk::PipelineBindPoint::GRAPHICS,
+                pipeline.layout(),
+                3,
+                &[lighting_ds],
+                &[],
+            );
+
+            // Set 4: shadow map.
+            if let Some(ref sm) = self.shadow.map {
+                let shadow_ds = sm.descriptor_set(ctx.current_frame, ctx.viewport_index);
+                device.cmd_bind_descriptor_sets(
+                    cmd,
+                    vk::PipelineBindPoint::GRAPHICS,
+                    pipeline.layout(),
+                    4,
+                    &[shadow_ds],
+                    &[],
+                );
+            }
+
+            // Set 5: bone palette SSBO.
+            if let Some(ref bp) = self.bone_palette {
+                let bone_ds = bp.descriptor_set(ctx.current_frame);
+                device.cmd_bind_descriptor_sets(
+                    cmd,
+                    vk::PipelineBindPoint::GRAPHICS,
+                    pipeline.layout(),
+                    5,
+                    &[bone_ds],
+                    &[],
+                );
+            }
+        }
+    }
+
+    /// Submit a skinned 3D draw call. Push model transform, normal matrix,
+    /// material, and bone offset, then draw indexed.
+    pub fn submit_skinned_3d(
+        &self,
+        pipeline: &Pipeline,
+        vertex_array: &VertexArray,
+        transform: &Mat4,
+        material_handle: Option<&super::MaterialHandle>,
+        entity_id: i32,
+        bone_offset: u32,
+    ) {
+        let ctx = self
+            .draw_context
+            .expect("submit_skinned_3d called outside begin/end_scene");
+
+        let cmd = ctx.cmd_buf;
+        let device = &self.device;
+
+        unsafe {
+            // Push model + normal_matrix + entity_id = 116 bytes at offset 0
+            // (identical to static submit_3d).
+            let mut push_data = [0u8; 116];
+            let transform_bytes = std::slice::from_raw_parts(
+                transform as *const Mat4 as *const u8,
+                std::mem::size_of::<Mat4>(),
+            );
+            push_data[..64].copy_from_slice(transform_bytes);
+
+            let nm = glam::Mat3::from_mat4(*transform).inverse().transpose();
+            let col0 = Vec4::new(nm.x_axis.x, nm.x_axis.y, nm.x_axis.z, 0.0);
+            let col1 = Vec4::new(nm.y_axis.x, nm.y_axis.y, nm.y_axis.z, 0.0);
+            let col2 = Vec4::new(nm.z_axis.x, nm.z_axis.y, nm.z_axis.z, 0.0);
+            push_data[64..80].copy_from_slice(std::slice::from_raw_parts(
+                &col0 as *const Vec4 as *const u8, 16,
+            ));
+            push_data[80..96].copy_from_slice(std::slice::from_raw_parts(
+                &col1 as *const Vec4 as *const u8, 16,
+            ));
+            push_data[96..112].copy_from_slice(std::slice::from_raw_parts(
+                &col2 as *const Vec4 as *const u8, 16,
+            ));
+
+            push_data[112..116].copy_from_slice(&entity_id.to_ne_bytes());
+            device.cmd_push_constants(
+                cmd,
+                pipeline.layout(),
+                vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT,
+                0,
+                &push_data,
+            );
+
+            // Material at offset 116 (48 bytes) + bone_offset at offset 164 (4 bytes)
+            // = 52 bytes total. Shader layout:
+            //   116: metallic, 120: roughness, 124: emissive_strength,
+            //   128: albedo_color (vec4), 144: emissive_color (vec4),
+            //   160: albedo_tex_index, 164: bone_offset
+            let mat_handle = material_handle
+                .cloned()
+                .unwrap_or_else(|| self.material_library.default_handle());
+            if let Some(mat) = self.material_library.get(&mat_handle) {
+                let albedo_tex_index: i32 = mat
+                    .albedo_texture
+                    .as_ref()
+                    .map(|t| t.bindless_index() as i32)
+                    .unwrap_or(-1);
+                // 3 floats + vec4 + vec4 + int + uint = 4+4+4+16+16+4+4 = 52 bytes.
+                let mut frag_data = [0u32; 13];
+                frag_data[0] = mat.metallic.to_bits();
+                frag_data[1] = mat.roughness.to_bits();
+                frag_data[2] = mat.emissive_strength.to_bits();
+                frag_data[3] = mat.albedo_color.x.to_bits();
+                frag_data[4] = mat.albedo_color.y.to_bits();
+                frag_data[5] = mat.albedo_color.z.to_bits();
+                frag_data[6] = mat.albedo_color.w.to_bits();
+                frag_data[7] = mat.emissive_color.x.to_bits();
+                frag_data[8] = mat.emissive_color.y.to_bits();
+                frag_data[9] = mat.emissive_color.z.to_bits();
+                frag_data[10] = 0; // padding (.w of emissive_color vec4)
+                frag_data[11] = albedo_tex_index as u32;
+                frag_data[12] = bone_offset;
+                let frag_bytes = std::slice::from_raw_parts(frag_data.as_ptr() as *const u8, 52);
+                device.cmd_push_constants(
+                    cmd,
+                    pipeline.layout(),
+                    vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT,
+                    116,
+                    frag_bytes,
+                );
+            }
+        }
+
+        vertex_array.bind(cmd);
+        let index_count = vertex_array
+            .index_buffer()
+            .expect("VertexArray has no index buffer")
+            .count();
+        unsafe {
+            device.cmd_draw_indexed(cmd, index_count, 1, 0, 0, 0);
+        }
+    }
+
+    /// Submit a skinned mesh to the shadow pass. Applies bone skinning in the
+    /// vertex shader for correct shadow silhouettes.
+    pub fn submit_skinned_shadow(
+        &self,
+        vertex_array: &VertexArray,
+        transform: &Mat4,
+        bone_offset: u32,
+        cmd_buf: vk::CommandBuffer,
+    ) {
+        let layout = self
+            .shadow
+            .active_layout
+            .expect("submit_skinned_shadow called outside begin/end_shadow_pass");
+
+        unsafe {
+            // Push model matrix at offset 64 (after light VP at 0) + bone_offset at 128.
+            let transform_bytes = std::slice::from_raw_parts(
+                transform as *const Mat4 as *const u8,
+                std::mem::size_of::<Mat4>(),
+            );
+            self.device.cmd_push_constants(
+                cmd_buf,
+                layout,
+                vk::ShaderStageFlags::VERTEX,
+                64,
+                transform_bytes,
+            );
+            // bone_offset at offset 128.
+            self.device.cmd_push_constants(
+                cmd_buf,
+                layout,
+                vk::ShaderStageFlags::VERTEX,
+                128,
+                &bone_offset.to_ne_bytes(),
+            );
+        }
+
+        vertex_array.bind(cmd_buf);
+        let index_count = vertex_array
+            .index_buffer()
+            .expect("VertexArray has no index buffer")
+            .count();
+        unsafe {
+            self.device
+                .cmd_draw_indexed(cmd_buf, index_count, 1, 0, 0, 0);
         }
     }
 
@@ -2683,6 +3221,14 @@ impl Drop for Renderer {
         drop(self.postprocess.take());
         // Drop GPU profiler (owns query pools).
         drop(self.gpu_profiler.take());
+        // Drop skinned pipelines.
+        drop(self.skinned_pipeline.take());
+        drop(self.skinned_offscreen_pipeline.take());
+        drop(self.skinned_shadow_pipeline.take());
+        // Drop bone palette SSBO system.
+        if let Some(mut bp) = self.bone_palette.take() {
+            bp.destroy(&self.device);
+        }
         // Drop shadow pipelines before shadow map (pipelines reference render pass).
         drop(self.shadow.pipeline.take());
         drop(self.shadow.pipeline_front.take());

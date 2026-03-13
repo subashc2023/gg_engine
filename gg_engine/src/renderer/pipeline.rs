@@ -135,7 +135,7 @@ impl Drop for Pipeline {
 
 /// Standard rasterizer state: fill mode, no culling, CCW front face.
 fn default_rasterizer() -> vk::PipelineRasterizationStateCreateInfo<'static> {
-    rasterizer(CullMode::None, false)
+    rasterizer(CullMode::None, false, false)
 }
 
 /// Rasterizer state with configurable face culling and optional wireframe mode.
@@ -146,7 +146,13 @@ fn default_rasterizer() -> vk::PipelineRasterizationStateCreateInfo<'static> {
 fn rasterizer(
     cull_mode: CullMode,
     wireframe: bool,
+    clockwise_front_face: bool,
 ) -> vk::PipelineRasterizationStateCreateInfo<'static> {
+    let front_face = if clockwise_front_face {
+        vk::FrontFace::CLOCKWISE
+    } else {
+        vk::FrontFace::COUNTER_CLOCKWISE
+    };
     let info = vk::PipelineRasterizationStateCreateInfo::default()
         .polygon_mode(if wireframe {
             vk::PolygonMode::LINE
@@ -158,7 +164,7 @@ fn rasterizer(
         } else {
             cull_mode.to_vk()
         })
-        .front_face(vk::FrontFace::COUNTER_CLOCKWISE)
+        .front_face(front_face)
         .line_width(1.0);
     info
 }
@@ -307,7 +313,7 @@ pub(crate) fn create_pipeline(
         .viewport_count(1)
         .scissor_count(1);
 
-    let rasterizer = rasterizer(CullMode::None, wireframe);
+    let rasterizer = rasterizer(CullMode::None, wireframe, false);
     let multisampling = default_multisampling(samples);
 
     let depth_stencil = vk::PipelineDepthStencilStateCreateInfo::default()
@@ -437,7 +443,7 @@ pub(crate) fn create_batch_pipeline(
         .viewport_count(1)
         .scissor_count(1);
 
-    let rast = rasterizer(CullMode::None, wireframe);
+    let rast = rasterizer(CullMode::None, wireframe, false);
     let multisampling = default_multisampling(samples);
 
     // 2D batch rendering uses painter's algorithm (draw order); no depth test needed.
@@ -536,7 +542,7 @@ pub(crate) fn create_instanced_batch_pipeline(
         .viewport_count(1)
         .scissor_count(1);
 
-    let rast = rasterizer(CullMode::None, wireframe);
+    let rast = rasterizer(CullMode::None, wireframe, false);
     let multisampling = default_multisampling(samples);
 
     let depth_stencil = vk::PipelineDepthStencilStateCreateInfo::default()
@@ -725,6 +731,7 @@ pub(crate) fn create_3d_pipeline(
     pipeline_cache: vk::PipelineCache,
     samples: vk::SampleCountFlags,
     wireframe: bool,
+    clockwise_front_face: bool,
 ) -> EngineResult<Pipeline> {
     let _timer = ProfileTimer::new("Pipeline::create_3d");
     let entry_point = c"main";
@@ -761,7 +768,7 @@ pub(crate) fn create_3d_pipeline(
         .viewport_count(1)
         .scissor_count(1);
 
-    let rast = rasterizer(cull_mode, wireframe);
+    let rast = rasterizer(cull_mode, wireframe, clockwise_front_face);
     let multisampling = default_multisampling(samples);
 
     let depth_stencil = vk::PipelineDepthStencilStateCreateInfo::default()
@@ -795,15 +802,20 @@ pub(crate) fn create_3d_pipeline(
     let all_layouts =
         prepare_descriptor_layouts(camera_ubo_ds_layout, extra_descriptor_set_layouts);
 
-    // Push constants: both stages declare the same 164-byte block in SPIR-V.
-    // Layout: mat4 model (64) + mat3 normal_matrix (48) + entity_id (4) +
-    //         metallic/roughness/emissive_strength (12) + albedo_color (16) +
-    //         emissive_color (16) + albedo_tex_index (4) = 164 bytes.
-    // A single range with VERTEX | FRAGMENT covers the full block per Vulkan spec.
+    // Push constants: both stages declare the same block in SPIR-V.
+    // Static mesh: 164 bytes. Skinned mesh: 168 bytes (+ bone_offset u32).
+    // Size is inferred from the extra descriptor set layouts:
+    //   5 extras (sets 1-5 = bindless + material + lighting + shadow + bone) → 168
+    //   4 extras (sets 1-4 = bindless + material + lighting + shadow)        → 164
+    let push_size: u32 = if extra_descriptor_set_layouts.len() >= 5 {
+        168
+    } else {
+        164
+    };
     let push_range = vk::PushConstantRange {
         stage_flags: vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT,
         offset: 0,
-        size: 164,
+        size: push_size,
     };
     let push_ranges = [push_range];
 

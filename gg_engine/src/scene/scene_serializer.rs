@@ -1566,6 +1566,10 @@ impl SceneSerializer {
                                 MeshPrimitive::Cube => "Cube",
                                 MeshPrimitive::Sphere => "Sphere",
                                 MeshPrimitive::Plane => "Plane",
+                                MeshPrimitive::Cylinder => "Cylinder",
+                                MeshPrimitive::Cone => "Cone",
+                                MeshPrimitive::Torus => "Torus",
+                                MeshPrimitive::Capsule => "Capsule",
                             };
                             (s.to_string(), 0)
                         }
@@ -2050,6 +2054,10 @@ impl SceneSerializer {
                 let primitive = match mrd.primitive.as_str() {
                     "Sphere" => MeshPrimitive::Sphere,
                     "Plane" => MeshPrimitive::Plane,
+                    "Cylinder" => MeshPrimitive::Cylinder,
+                    "Cone" => MeshPrimitive::Cone,
+                    "Torus" => MeshPrimitive::Torus,
+                    "Capsule" => MeshPrimitive::Capsule,
                     _ => MeshPrimitive::Cube,
                 };
                 MeshSource::Primitive(primitive)

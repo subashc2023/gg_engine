@@ -108,44 +108,35 @@ pub(crate) fn draw_mesh_renderer_component(
             match &current_source {
                 MeshSource::Primitive(_) => {
                     // Primitive selector.
-                    let prim_labels = ["Cube", "Sphere", "Plane"];
-                    let current_label = match primitive {
-                        MeshPrimitive::Cube => prim_labels[0],
-                        MeshPrimitive::Sphere => prim_labels[1],
-                        MeshPrimitive::Plane => prim_labels[2],
-                    };
+                    let prim_labels = [
+                        "Cube", "Sphere", "Plane", "Cylinder", "Cone", "Torus", "Capsule",
+                    ];
+                    let prim_variants = [
+                        MeshPrimitive::Cube,
+                        MeshPrimitive::Sphere,
+                        MeshPrimitive::Plane,
+                        MeshPrimitive::Cylinder,
+                        MeshPrimitive::Cone,
+                        MeshPrimitive::Torus,
+                        MeshPrimitive::Capsule,
+                    ];
+                    let current_idx = prim_variants
+                        .iter()
+                        .position(|&v| v == primitive)
+                        .unwrap_or(0);
                     egui::ComboBox::from_label("Primitive")
-                        .selected_text(current_label)
+                        .selected_text(prim_labels[current_idx])
                         .show_ui(ui, |ui| {
-                            if ui
-                                .selectable_value(
-                                    &mut primitive,
-                                    MeshPrimitive::Cube,
-                                    prim_labels[0],
-                                )
-                                .changed()
+                            for (i, (&variant, &label)) in
+                                prim_variants.iter().zip(&prim_labels).enumerate()
                             {
-                                changed = true;
-                            }
-                            if ui
-                                .selectable_value(
-                                    &mut primitive,
-                                    MeshPrimitive::Sphere,
-                                    prim_labels[1],
-                                )
-                                .changed()
-                            {
-                                changed = true;
-                            }
-                            if ui
-                                .selectable_value(
-                                    &mut primitive,
-                                    MeshPrimitive::Plane,
-                                    prim_labels[2],
-                                )
-                                .changed()
-                            {
-                                changed = true;
+                                let _ = i; // suppress unused warning
+                                if ui
+                                    .selectable_value(&mut primitive, variant, label)
+                                    .changed()
+                                {
+                                    changed = true;
+                                }
                             }
                         });
                 }
