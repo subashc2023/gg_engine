@@ -69,6 +69,16 @@ impl GGEditor {
                 self.open_project();
                 ui.close();
             }
+            if ui
+                .add_enabled(
+                    self.project_state.project.is_some(),
+                    egui::Button::new("Build Project...").shortcut_text("Ctrl+Shift+B"),
+                )
+                .clicked()
+            {
+                self.open_build_modal();
+                ui.close();
+            }
         });
         let in_edit_mode = self.playback.scene_state == SceneState::Edit;
         ui.menu_button("Edit", |ui| {
@@ -378,6 +388,9 @@ impl GGEditor {
                         ui.label("Ctrl+R");
                         ui.label("Reload Scripts");
                         ui.end_row();
+                        ui.label("Ctrl+Shift+B");
+                        ui.label("Build Project");
+                        ui.end_row();
                     });
 
                 ui.add_space(8.0);
@@ -429,6 +442,24 @@ impl GGEditor {
                         ui.end_row();
                     });
             });
+    }
+
+    pub(super) fn open_build_modal(&mut self) {
+        let build_name = match &self.project_state.project {
+            Some(p) => p.name().to_string(),
+            None => return,
+        };
+
+        // Save current scene if dirty.
+        if self.scene_ctx.dirty {
+            self.save_scene();
+        }
+
+        self.ui.build_modal = Some(super::build::BuildModal {
+            output_directory: String::new(),
+            build_name,
+            result: None,
+        });
     }
 
     fn create_named_scene(&mut self, name: &str) {

@@ -437,4 +437,61 @@ impl Font {
     pub fn bindless_index(&self) -> u32 {
         self.atlas_texture.bindless_index()
     }
+
+    /// Measure the bounding width and height of a text string at the given
+    /// `font_size`, using the same cursor-advance logic as
+    /// [`Renderer::draw_text_string`].
+    ///
+    /// Returns `(width, height)` in the same coordinate space that
+    /// `draw_text_string` uses (i.e. world units when `font_size` is the
+    /// scale factor passed to the renderer).
+    pub fn measure_text(&self, text: &str, font_size: f32, line_spacing: f32, kerning: f32) -> (f32, f32) {
+        let scale = font_size;
+        let mut cursor_x: f32 = 0.0;
+        let mut max_width: f32 = 0.0;
+        let mut line_count: u32 = 1;
+
+        let mut chars = text.chars().peekable();
+        while let Some(ch) = chars.next() {
+            if ch == '\n' {
+                max_width = max_width.max(cursor_x);
+                cursor_x = 0.0;
+                line_count += 1;
+                continue;
+            }
+            if ch == '\r' {
+                continue;
+            }
+            if ch == '\t' {
+                if let Some(space_glyph) = self.glyph(' ') {
+                    cursor_x += (space_glyph.advance_x + kerning) * scale * 4.0;
+                }
+                continue;
+            }
+
+            let glyph = match self.glyph(ch).or_else(|| self.glyph('?')) {
+                Some(g) => g,
+                None => continue,
+            };
+
+            let mut advance = glyph.advance_x;
+            if let Some(&next_ch) = chars.peek() {
+                advance += self.kerning(ch, next_ch);
+            }
+            cursor_x += (advance + kerning) * scale;
+        }
+        max_width = max_width.max(cursor_x);
+
+        let height = self.line_height * scale * line_spacing * line_count as f32;
+        (max_width, height)
+    }
+
+    /// Return the Y offset from the text origin to the vertical centre of
+    /// the first line. Text is rendered with the baseline at `cursor_y = 0`
+    /// and descends (negative Y) for subsequent lines. The visual centre of
+    /// a single line sits at `ascender / 2` above the baseline (in font
+    /// units scaled by `font_size`).
+    pub fn text_vertical_center(&self, font_size: f32) -> f32 {
+        self.ascender * font_size * 0.5
+    }
 }

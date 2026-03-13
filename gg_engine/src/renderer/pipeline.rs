@@ -803,14 +803,14 @@ pub(crate) fn create_3d_pipeline(
         prepare_descriptor_layouts(camera_ubo_ds_layout, extra_descriptor_set_layouts);
 
     // Push constants: both stages declare the same block in SPIR-V.
-    // Static mesh: 164 bytes. Skinned mesh: 168 bytes (+ bone_offset u32).
+    // Static mesh: 168 bytes. Skinned mesh: 172 bytes (+ bone_offset u32).
     // Size is inferred from the extra descriptor set layouts:
-    //   5 extras (sets 1-5 = bindless + material + lighting + shadow + bone) → 168
-    //   4 extras (sets 1-4 = bindless + material + lighting + shadow)        → 164
+    //   5 extras (sets 1-5 = bindless + material + lighting + shadow + bone) → 172
+    //   4 extras (sets 1-4 = bindless + material + lighting + shadow)        → 168
     let push_size: u32 = if extra_descriptor_set_layouts.len() >= 5 {
-        168
+        172
     } else {
-        164
+        168
     };
     let push_range = vk::PushConstantRange {
         stage_flags: vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT,

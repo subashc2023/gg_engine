@@ -1,3 +1,4 @@
+mod build;
 mod camera_controller;
 mod editor_settings;
 mod file_ops;
@@ -248,6 +249,8 @@ struct UiState {
     pp_output_egui_tex_id: Option<egui::TextureId>,
     /// Draw MSAA test pattern (diagonal lines) to verify anti-aliasing.
     show_msaa_test: bool,
+    /// When `Some`, the build project modal is open.
+    build_modal: Option<build::BuildModal>,
 }
 
 // ---------------------------------------------------------------------------
@@ -450,6 +453,7 @@ impl Application for GGEditor {
                 wireframe_mode: WireframeMode::Off,
                 pp_output_egui_tex_id: None,
                 show_msaa_test: false,
+                build_modal: None,
             },
             viewport: ViewportInfo {
                 scene_fb: None,
@@ -766,6 +770,9 @@ impl Application for GGEditor {
                     }
                     self.save_scene_as();
                 }
+                KeyCode::B if ctrl && shift => {
+                    self.open_build_modal();
+                }
                 KeyCode::S if ctrl && !shift => {
                     if self.playback.scene_state != SceneState::Edit {
                         self.on_scene_stop();
@@ -1033,6 +1040,27 @@ impl Application for GGEditor {
                     self.scene.on_update_animations(step_dt.seconds());
                     // Update spatial audio panning/attenuation.
                     self.scene.update_spatial_audio();
+
+                    // UI interaction: hit test + dispatch Lua callbacks.
+                    if let Some((px, py)) = self.viewport.mouse_pos {
+                        let mouse_world = self.scene.screen_to_world_2d(px, py);
+                        let mouse_down =
+                            input.is_mouse_button_pressed(MouseButton::Left);
+                        let just_pressed =
+                            input.is_mouse_button_just_pressed(MouseButton::Left);
+                        let just_released =
+                            input.is_mouse_button_just_released(MouseButton::Left);
+                        let events = self.scene.update_ui_with_input(
+                            mouse_world,
+                            mouse_down,
+                            just_pressed,
+                            just_released,
+                        );
+                        if !events.is_empty() {
+                            self.scene.dispatch_ui_events(&events);
+                        }
+                    }
+
                     if self.playback.step_frames > 0 {
                         self.playback.step_frames -= 1;
                     }
@@ -1629,6 +1657,9 @@ impl Application for GGEditor {
 
         // "New Scene" naming modal.
         self.new_scene_modal_ui(ctx);
+
+        // "Build Project" modal.
+        self.build_modal_ui(ctx);
 
         // Keyboard shortcuts help dialog.
         self.shortcuts_dialog_ui(ctx);
