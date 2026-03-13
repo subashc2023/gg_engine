@@ -2592,7 +2592,7 @@ impl Renderer {
                 &push_data,
             );
 
-            // Material: push properties at offset 116 (48 bytes).
+            // Material: push properties at offset 116 (52 bytes).
             // Each draw call gets its own material data embedded in the command stream.
             let mat_handle = material_handle
                 .cloned()
@@ -2603,8 +2603,13 @@ impl Renderer {
                     .as_ref()
                     .map(|t| t.bindless_index() as i32)
                     .unwrap_or(-1);
-                // 3 floats + vec4 + vec4 + int = 4+4+4+16+16+4 = 48 bytes.
-                let mut frag_data = [0u32; 12];
+                let normal_tex_index: i32 = mat
+                    .normal_texture
+                    .as_ref()
+                    .map(|t| t.bindless_index() as i32)
+                    .unwrap_or(-1);
+                // 3 floats + vec4 + vec4 + int + int = 4+4+4+16+16+4+4 = 52 bytes.
+                let mut frag_data = [0u32; 13];
                 frag_data[0] = mat.metallic.to_bits();
                 frag_data[1] = mat.roughness.to_bits();
                 frag_data[2] = mat.emissive_strength.to_bits();
@@ -2617,7 +2622,8 @@ impl Renderer {
                 frag_data[9] = mat.emissive_color.z.to_bits();
                 frag_data[10] = 0; // padding (.w of emissive_color vec4)
                 frag_data[11] = albedo_tex_index as u32;
-                let frag_bytes = std::slice::from_raw_parts(frag_data.as_ptr() as *const u8, 48);
+                frag_data[12] = normal_tex_index as u32;
+                let frag_bytes = std::slice::from_raw_parts(frag_data.as_ptr() as *const u8, 52);
                 device.cmd_push_constants(
                     cmd,
                     pipeline.layout(),
@@ -3049,11 +3055,11 @@ impl Renderer {
                 &push_data,
             );
 
-            // Material at offset 116 (48 bytes) + bone_offset at offset 164 (4 bytes)
-            // = 52 bytes total. Shader layout:
+            // Material at offset 116 (52 bytes) + bone_offset at offset 168 (4 bytes)
+            // = 56 bytes total. Shader layout:
             //   116: metallic, 120: roughness, 124: emissive_strength,
             //   128: albedo_color (vec4), 144: emissive_color (vec4),
-            //   160: albedo_tex_index, 164: bone_offset
+            //   160: albedo_tex_index, 164: normal_tex_index, 168: bone_offset
             let mat_handle = material_handle
                 .cloned()
                 .unwrap_or_else(|| self.material_library.default_handle());
@@ -3063,8 +3069,13 @@ impl Renderer {
                     .as_ref()
                     .map(|t| t.bindless_index() as i32)
                     .unwrap_or(-1);
-                // 3 floats + vec4 + vec4 + int + uint = 4+4+4+16+16+4+4 = 52 bytes.
-                let mut frag_data = [0u32; 13];
+                let normal_tex_index: i32 = mat
+                    .normal_texture
+                    .as_ref()
+                    .map(|t| t.bindless_index() as i32)
+                    .unwrap_or(-1);
+                // 3 floats + vec4 + vec4 + int + int + uint = 4+4+4+16+16+4+4+4 = 56 bytes.
+                let mut frag_data = [0u32; 14];
                 frag_data[0] = mat.metallic.to_bits();
                 frag_data[1] = mat.roughness.to_bits();
                 frag_data[2] = mat.emissive_strength.to_bits();
@@ -3077,8 +3088,9 @@ impl Renderer {
                 frag_data[9] = mat.emissive_color.z.to_bits();
                 frag_data[10] = 0; // padding (.w of emissive_color vec4)
                 frag_data[11] = albedo_tex_index as u32;
-                frag_data[12] = bone_offset;
-                let frag_bytes = std::slice::from_raw_parts(frag_data.as_ptr() as *const u8, 52);
+                frag_data[12] = normal_tex_index as u32;
+                frag_data[13] = bone_offset;
+                let frag_bytes = std::slice::from_raw_parts(frag_data.as_ptr() as *const u8, 56);
                 device.cmd_push_constants(
                     cmd,
                     pipeline.layout(),

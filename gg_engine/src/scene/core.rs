@@ -10,7 +10,9 @@ use parking_lot::{Mutex, RwLock};
 
 use super::components::{
     AudioCategory, CameraComponent, IdComponent, MeshRendererComponent, RelationshipComponent,
-    TagComponent, TransformComponent, UIAnchorComponent,
+    TagComponent, TransformComponent, UIAnchorComponent, UIEvent, UIImageComponent,
+    UIInteractableComponent, UIInteractionState, UILayoutAlignment, UILayoutComponent,
+    UILayoutDirection, UIRectComponent,
 };
 use super::entity::Entity;
 use super::spatial::{Aabb2D, Aabb3D, SpatialGrid, SpatialGrid3D};
@@ -123,6 +125,14 @@ pub struct SceneCore {
     /// Base directory for Lua `require()`. Set by the editor/player before runtime start.
     /// Module names are resolved as `<module_search_path>/<name>.lua`.
     pub(super) script_module_search_path: Option<PathBuf>,
+
+    // UI interaction state
+    /// UUID of the currently hovered UI entity.
+    pub(super) ui_hovered_entity: Option<u64>,
+    /// UUID of the currently pressed UI entity.
+    pub(super) ui_pressed_entity: Option<u64>,
+    /// Cached UI draw order (front-to-back UUIDs) for hit testing.
+    pub(super) ui_draw_order_cache: Vec<u64>,
 }
 
 // Compile-time verification that SceneCore is Send + Sync.
@@ -163,6 +173,9 @@ impl SceneCore {
             shadow_quality_state: AtomicI32::new(3),
             gui_scale: Mutex::new(1.0),
             script_module_search_path: None,
+            ui_hovered_entity: None,
+            ui_pressed_entity: None,
+            ui_draw_order_cache: Vec::new(),
         }
     }
 
@@ -433,6 +446,33 @@ impl SceneCore {
         {
             camera.primary = handle == entity.handle();
         }
+    }
+
+    /// Convert screen-space pixel coordinates to 2D world coordinates using
+    /// the primary camera's position, zoom, and rotation.
+    pub fn screen_to_world_2d(&self, screen_x: f32, screen_y: f32) -> glam::Vec2 {
+        let vw = self.viewport_width;
+        let vh = self.viewport_height;
+        if vw == 0 || vh == 0 {
+            return glam::Vec2::ZERO;
+        }
+        self.get_primary_camera_entity()
+            .and_then(|cam_entity| {
+                let cam = self.get_component::<CameraComponent>(cam_entity)?;
+                let tf = self.get_component::<TransformComponent>(cam_entity)?;
+                let aspect = vw as f32 / vh as f32;
+                let ortho_size = cam.camera.orthographic_size();
+                let half_h = ortho_size * 0.5;
+                let half_w = half_h * aspect;
+                let local_x = (screen_x / vw as f32 - 0.5) * half_w * 2.0;
+                let local_y = (0.5 - screen_y / vh as f32) * half_h * 2.0;
+                let euler_z = tf.rotation.to_euler(glam::EulerRot::XYZ).2;
+                let (sin, cos) = euler_z.sin_cos();
+                let wx = cos * local_x - sin * local_y + tf.translation.x;
+                let wy = sin * local_x + cos * local_y + tf.translation.y;
+                Some(glam::Vec2::new(wx, wy))
+            })
+            .unwrap_or(glam::Vec2::ZERO)
     }
 
     // -----------------------------------------------------------------
@@ -718,7 +758,9 @@ impl SceneCore {
     // -----------------------------------------------------------------
 
     /// Reposition all entities with a [`UIAnchorComponent`] so they stick
-    /// to a screen-relative anchor point.
+    /// to a screen-relative anchor point. Also scales entities with
+    /// [`UIRectComponent`] to maintain consistent pixel size, and assigns
+    /// hierarchy-based draw order for UI entities.
     pub fn apply_ui_anchors(&mut self) {
         let mut cam_info: Option<(glam::Vec3, f32, f32)> = None;
         for (handle, cam, _tc) in self
@@ -747,6 +789,14 @@ impl SceneCore {
         };
 
         let gui_scale = *self.gui_scale.lock();
+        let ortho_size = half_h * 2.0;
+        let ppwu = if ortho_size > 0.0 && self.viewport_height > 0 {
+            self.viewport_height as f32 / ortho_size
+        } else {
+            1.0
+        };
+
+        // Collect position updates for anchored entities.
         let mut updates: Vec<(hecs::Entity, f32, f32)> = Vec::new();
         for (handle, anchor, _tc) in self
             .world
@@ -768,6 +818,412 @@ impl SceneCore {
                 tc.translation.y = y;
             }
         }
+
+        // UIRect scaling: set entity scale so UI elements have consistent pixel size.
+        let mut rect_updates: Vec<(hecs::Entity, f32, f32, f32, f32)> = Vec::new();
+        for (handle, rect) in self
+            .world
+            .query::<(hecs::Entity, &UIRectComponent)>()
+            .iter()
+        {
+            let world_w = rect.size.x * gui_scale / ppwu;
+            let world_h = rect.size.y * gui_scale / ppwu;
+            let pivot_offset_x = (0.5 - rect.pivot.x) * world_w;
+            let pivot_offset_y = (rect.pivot.y - 0.5) * world_h;
+            rect_updates.push((handle, world_w, world_h, pivot_offset_x, pivot_offset_y));
+        }
+
+        for (handle, world_w, world_h, pivot_offset_x, pivot_offset_y) in rect_updates {
+            if let Ok(mut tc) = self.world.get::<&mut TransformComponent>(handle) {
+                tc.scale = glam::Vec3::new(world_w, world_h, 1.0);
+                tc.rotation = glam::Quat::IDENTITY;
+                tc.translation.x += pivot_offset_x;
+                tc.translation.y += pivot_offset_y;
+            }
+        }
+
+        // Apply layout to entities with UILayoutComponent.
+        self.apply_ui_layouts(gui_scale, ppwu);
+
+        // Assign hierarchy-based draw order for UI entities.
+        self.assign_ui_draw_order();
+    }
+
+    /// Apply layout positioning for entities with [`UILayoutComponent`].
+    ///
+    /// For each entity that has both a `UILayoutComponent` and a `UIRectComponent`,
+    /// this method positions its children (that also have `UIRectComponent`) in a
+    /// vertical or horizontal stack within the parent's content area.
+    ///
+    /// Must be called after UIRect scaling has been applied (so parent translation
+    /// and child scales are final).
+    fn apply_ui_layouts(&mut self, gui_scale: f32, ppwu: f32) {
+        // world-units per UI-point
+        let wup = if ppwu > 0.0 { gui_scale / ppwu } else { 1.0 };
+
+        // Collect layout parents.
+        struct LayoutParent {
+            handle: hecs::Entity,
+            direction: UILayoutDirection,
+            spacing: f32,
+            alignment: UILayoutAlignment,
+            padding: [f32; 4], // [top, right, bottom, left]
+            rect_size: glam::Vec2,
+            children: Vec<u64>,
+        }
+
+        let mut parents: Vec<LayoutParent> = Vec::new();
+
+        for (handle, layout, rect, rel) in self
+            .world
+            .query::<(
+                hecs::Entity,
+                &UILayoutComponent,
+                &UIRectComponent,
+                &RelationshipComponent,
+            )>()
+            .iter()
+        {
+            if rel.children.is_empty() {
+                continue;
+            }
+            parents.push(LayoutParent {
+                handle,
+                direction: layout.direction,
+                spacing: layout.spacing,
+                alignment: layout.alignment,
+                padding: layout.padding,
+                rect_size: rect.size,
+                children: rel.children.clone(),
+            });
+        }
+
+        // For each layout parent, position children.
+        for parent in &parents {
+            // Read parent's world position (already final after UIRect scaling + anchor).
+            let parent_pos = match self.world.get::<&TransformComponent>(parent.handle) {
+                Ok(tc) => tc.translation,
+                Err(_) => continue,
+            };
+
+            let pad_top = parent.padding[0];
+            let pad_right = parent.padding[1];
+            let pad_bottom = parent.padding[2];
+            let pad_left = parent.padding[3];
+
+            let content_w = parent.rect_size.x - pad_left - pad_right;
+            let content_h = parent.rect_size.y - pad_top - pad_bottom;
+
+            // Collect children that have UIRectComponent, preserving order.
+            struct ChildInfo {
+                handle: hecs::Entity,
+                size: glam::Vec2,
+            }
+            let mut children: Vec<ChildInfo> = Vec::new();
+            for &child_uuid in &parent.children {
+                let Some(&child_handle) = self.uuid_cache.get(&child_uuid) else {
+                    continue;
+                };
+                let Ok(child_rect) = self.world.get::<&UIRectComponent>(child_handle) else {
+                    continue;
+                };
+                children.push(ChildInfo {
+                    handle: child_handle,
+                    size: child_rect.size,
+                });
+            }
+
+            if children.is_empty() {
+                continue;
+            }
+
+            // Padding asymmetry offsets (shift content center relative to parent center).
+            let content_center_offset_x = (pad_left - pad_right) * 0.5;
+            let content_center_offset_y = (pad_bottom - pad_top) * 0.5;
+
+            match parent.direction {
+                UILayoutDirection::Vertical => {
+                    // Cursor starts at top of content area (relative to content center).
+                    let mut cursor_y = content_h * 0.5;
+
+                    for child in &children {
+                        let child_center_y = cursor_y - child.size.y * 0.5;
+
+                        let child_center_x = match parent.alignment {
+                            UILayoutAlignment::Start => -content_w * 0.5 + child.size.x * 0.5,
+                            UILayoutAlignment::Center => 0.0,
+                            UILayoutAlignment::End => content_w * 0.5 - child.size.x * 0.5,
+                        };
+
+                        let world_x =
+                            parent_pos.x + (child_center_x + content_center_offset_x) * wup;
+                        let world_y =
+                            parent_pos.y + (child_center_y + content_center_offset_y) * wup;
+
+                        if let Ok(mut tc) = self.world.get::<&mut TransformComponent>(child.handle)
+                        {
+                            tc.translation.x = world_x;
+                            tc.translation.y = world_y;
+                        }
+
+                        cursor_y -= child.size.y + parent.spacing;
+                    }
+                }
+                UILayoutDirection::Horizontal => {
+                    // Cursor starts at left of content area (relative to content center).
+                    let mut cursor_x = -content_w * 0.5;
+
+                    for child in &children {
+                        let child_center_x = cursor_x + child.size.x * 0.5;
+
+                        let child_center_y = match parent.alignment {
+                            UILayoutAlignment::Start => content_h * 0.5 - child.size.y * 0.5,
+                            UILayoutAlignment::Center => 0.0,
+                            UILayoutAlignment::End => -content_h * 0.5 + child.size.y * 0.5,
+                        };
+
+                        let world_x =
+                            parent_pos.x + (child_center_x + content_center_offset_x) * wup;
+                        let world_y =
+                            parent_pos.y + (child_center_y + content_center_offset_y) * wup;
+
+                        if let Ok(mut tc) = self.world.get::<&mut TransformComponent>(child.handle)
+                        {
+                            tc.translation.x = world_x;
+                            tc.translation.y = world_y;
+                        }
+
+                        cursor_x += child.size.x + parent.spacing;
+                    }
+                }
+            }
+        }
+    }
+
+    /// Constant base sorting layer for UI entities.
+    const UI_BASE_SORTING_LAYER: i32 = 10000;
+
+    /// Assign draw order to UI entities via DFS pre-order traversal.
+    /// UI entities always render on top of world content.
+    fn assign_ui_draw_order(&mut self) {
+        // Find root UI entities (have UIRectComponent, no parent with UIRect).
+        let mut roots: Vec<(hecs::Entity, u64)> = Vec::new();
+        for (handle, _rect, id) in self
+            .world
+            .query::<(hecs::Entity, &UIRectComponent, &IdComponent)>()
+            .iter()
+        {
+            let is_ui_root = if let Ok(rel) = self.world.get::<&RelationshipComponent>(handle) {
+                if let Some(parent_uuid) = rel.parent {
+                    // Parent exists but doesn't have UIRect → this is a UI root.
+                    self.uuid_cache
+                        .get(&parent_uuid)
+                        .map(|&ph| self.world.get::<&UIRectComponent>(ph).is_err())
+                        .unwrap_or(true)
+                } else {
+                    true // No parent → root.
+                }
+            } else {
+                true
+            };
+            if is_ui_root {
+                roots.push((handle, id.id.raw()));
+            }
+        }
+
+        // DFS pre-order traversal.
+        let mut visit_order: Vec<u64> = Vec::new();
+        let mut stack: Vec<hecs::Entity> = Vec::new();
+        for &(root_handle, _) in &roots {
+            stack.push(root_handle);
+        }
+
+        while let Some(handle) = stack.pop() {
+            // Only include entities with UIRect.
+            if self.world.get::<&UIRectComponent>(handle).is_err() {
+                continue;
+            }
+            if let Ok(id) = self.world.get::<&IdComponent>(handle) {
+                visit_order.push(id.id.raw());
+            }
+            // Push children in reverse order so first child is visited first.
+            if let Ok(rel) = self.world.get::<&RelationshipComponent>(handle) {
+                let children = rel.children.clone();
+                for &child_uuid in children.iter().rev() {
+                    if let Some(&child_handle) = self.uuid_cache.get(&child_uuid) {
+                        stack.push(child_handle);
+                    }
+                }
+            }
+        }
+
+        // Apply sorting layer/order and propagate to visual components.
+        // Use order*2 for images/sprites and order*2+1 for text so that text
+        // on the same entity always renders in front of its background image.
+        for (idx, &uuid) in visit_order.iter().enumerate() {
+            let Some(&handle) = self.uuid_cache.get(&uuid) else {
+                continue;
+            };
+            let base_order = idx as i32 * 2;
+            if let Ok(mut img) = self.world.get::<&mut UIImageComponent>(handle) {
+                img.sorting_layer = Self::UI_BASE_SORTING_LAYER;
+                img.order_in_layer = base_order;
+            }
+            if let Ok(mut sprite) =
+                self.world.get::<&mut super::SpriteRendererComponent>(handle)
+            {
+                sprite.sorting_layer = Self::UI_BASE_SORTING_LAYER;
+                sprite.order_in_layer = base_order;
+            }
+            if let Ok(mut text) = self.world.get::<&mut super::TextComponent>(handle) {
+                text.sorting_layer = Self::UI_BASE_SORTING_LAYER;
+                text.order_in_layer = base_order + 1;
+            }
+        }
+
+        // Cache in front-to-back order for hit testing (reverse of draw order).
+        visit_order.reverse();
+        self.ui_draw_order_cache = visit_order;
+    }
+
+    // -----------------------------------------------------------------
+    // UI Interaction (CPU hit testing)
+    // -----------------------------------------------------------------
+
+    /// Perform CPU-based hit testing on UI entities and update interaction state.
+    ///
+    /// Returns a list of [`UIEvent`]s for state transitions (hover enter/exit,
+    /// press, release, click). Call after [`apply_ui_anchors`] each frame.
+    pub fn update_ui_interaction(
+        &mut self,
+        mouse_world: glam::Vec2,
+        _mouse_down: bool,
+        mouse_just_pressed: bool,
+        mouse_just_released: bool,
+    ) -> Vec<UIEvent> {
+        let mut events = Vec::new();
+        let wt_ref = self.transform_cache.read();
+
+        // Find the topmost UI entity under the mouse (front-to-back order).
+        let mut hit_uuid: Option<u64> = None;
+        for &uuid in &self.ui_draw_order_cache {
+            let Some(&handle) = self.uuid_cache.get(&uuid) else {
+                continue;
+            };
+            let Ok(rect) = self.world.get::<&UIRectComponent>(handle) else {
+                continue;
+            };
+            if !rect.raycast_target {
+                continue;
+            }
+            let Some(wt) = wt_ref.get(&handle) else {
+                continue;
+            };
+            let pos = glam::Vec2::new(wt.w_axis.x, wt.w_axis.y);
+            let scale = glam::Vec2::new(
+                wt.x_axis.truncate().length(),
+                wt.y_axis.truncate().length(),
+            );
+            let half = scale * 0.5;
+            let aabb_min = pos - half;
+            let aabb_max = pos + half;
+            if mouse_world.x >= aabb_min.x
+                && mouse_world.x <= aabb_max.x
+                && mouse_world.y >= aabb_min.y
+                && mouse_world.y <= aabb_max.y
+            {
+                hit_uuid = Some(uuid);
+                break;
+            }
+        }
+
+        drop(wt_ref);
+
+        let prev_hover = self.ui_hovered_entity;
+        let prev_pressed = self.ui_pressed_entity;
+
+        // Hover transitions.
+        if hit_uuid != prev_hover {
+            if let Some(old) = prev_hover {
+                events.push(UIEvent::HoverExit(old));
+                if let Some(&handle) = self.uuid_cache.get(&old) {
+                    if let Ok(mut inter) =
+                        self.world.get::<&mut UIInteractableComponent>(handle)
+                    {
+                        if inter.state == UIInteractionState::Hovered {
+                            inter.state = UIInteractionState::Normal;
+                        }
+                    }
+                }
+            }
+            if let Some(new) = hit_uuid {
+                events.push(UIEvent::HoverEnter(new));
+                if let Some(&handle) = self.uuid_cache.get(&new) {
+                    if let Ok(mut inter) =
+                        self.world.get::<&mut UIInteractableComponent>(handle)
+                    {
+                        if inter.interactable && inter.state != UIInteractionState::Pressed {
+                            inter.state = UIInteractionState::Hovered;
+                        }
+                    }
+                }
+            }
+        }
+        self.ui_hovered_entity = hit_uuid;
+
+        // Press.
+        if mouse_just_pressed {
+            if let Some(uuid) = hit_uuid {
+                self.ui_pressed_entity = Some(uuid);
+                events.push(UIEvent::Press(uuid));
+                if let Some(&handle) = self.uuid_cache.get(&uuid) {
+                    if let Ok(mut inter) =
+                        self.world.get::<&mut UIInteractableComponent>(handle)
+                    {
+                        if inter.interactable {
+                            inter.state = UIInteractionState::Pressed;
+                        }
+                    }
+                }
+            }
+        }
+
+        // Release.
+        if mouse_just_released {
+            if let Some(pressed_uuid) = prev_pressed {
+                events.push(UIEvent::Release(pressed_uuid));
+                // Click = released while still over the same entity.
+                if hit_uuid == Some(pressed_uuid) {
+                    events.push(UIEvent::Click(pressed_uuid));
+                }
+                if let Some(&handle) = self.uuid_cache.get(&pressed_uuid) {
+                    if let Ok(mut inter) =
+                        self.world.get::<&mut UIInteractableComponent>(handle)
+                    {
+                        if inter.interactable {
+                            inter.state = if hit_uuid == Some(pressed_uuid) {
+                                UIInteractionState::Hovered
+                            } else {
+                                UIInteractionState::Normal
+                            };
+                        }
+                    }
+                }
+                self.ui_pressed_entity = None;
+            }
+        }
+
+        // Reset disabled entities' state.
+        for inter in self
+            .world
+            .query_mut::<&mut UIInteractableComponent>()
+        {
+            if !inter.interactable {
+                inter.state = UIInteractionState::Disabled;
+            }
+        }
+
+        events
     }
 
     /// Return the primary camera's visible world-space rectangle as

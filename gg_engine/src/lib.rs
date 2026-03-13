@@ -66,8 +66,9 @@ pub use scene::{
     SkeletalAnimationComponent,
     RigidBody3DType, RigidBodyType, Scene, SceneSerializer, SphereCollider3DComponent,
     SpriteAnimatorComponent, SpriteRendererComponent, TagComponent, TextComponent,
-    TilemapComponent, TransformComponent, TransitionCondition, UIAnchorComponent, TILE_FLIP_H,
-    TILE_FLIP_V, TILE_ID_MASK,
+    TilemapComponent, TransformComponent, TransitionCondition, UIAnchorComponent, UIEvent,
+    UIImageComponent, UIInteractableComponent, UIInteractionState, UILayoutAlignment,
+    UILayoutComponent, UILayoutDirection, UIRectComponent, TILE_FLIP_H, TILE_FLIP_V, TILE_ID_MASK,
 };
 #[cfg(feature = "lua-scripting")]
 pub use scene::{LuaScriptComponent, ScriptEngine, ScriptFieldValue};
@@ -119,7 +120,9 @@ pub mod prelude {
         SceneSerializer, SkeletalAnimationComponent, SphereCollider3DComponent,
         SpriteAnimatorComponent,
         SpriteRendererComponent, TagComponent, TextComponent, TilemapComponent, TransformComponent,
-        TransitionCondition, UIAnchorComponent, TILE_FLIP_H, TILE_FLIP_V, TILE_ID_MASK,
+        TransitionCondition, UIAnchorComponent, UIEvent, UIImageComponent,
+        UIInteractableComponent, UIInteractionState, UILayoutAlignment, UILayoutComponent,
+        UILayoutDirection, UIRectComponent, TILE_FLIP_H, TILE_FLIP_V, TILE_ID_MASK,
     };
     #[cfg(feature = "lua-scripting")]
     pub use crate::scene::{LuaScriptComponent, ScriptEngine, ScriptFieldValue};

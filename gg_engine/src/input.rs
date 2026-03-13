@@ -77,6 +77,11 @@ impl Input {
         self.mouse_buttons_pressed.contains(&button) && !self.mouse_buttons_prev.contains(&button)
     }
 
+    /// Returns `true` only on the first frame the mouse button is released.
+    pub fn is_mouse_button_just_released(&self, button: MouseButton) -> bool {
+        !self.mouse_buttons_pressed.contains(&button) && self.mouse_buttons_prev.contains(&button)
+    }
+
     pub fn mouse_position(&self) -> (f64, f64) {
         (self.mouse_x, self.mouse_y)
     }

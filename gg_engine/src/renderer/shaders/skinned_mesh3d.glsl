@@ -21,6 +21,7 @@ layout(push_constant) uniform PushConstants {
     vec4 u_albedo_color;
     vec4 u_emissive_color;
     int u_albedo_tex_index;
+    int u_normal_tex_index;
     uint u_bone_offset;    // Offset into bone SSBO for this draw call
 } push;
 
@@ -28,8 +29,9 @@ layout(location = 0) in vec3 a_position;
 layout(location = 1) in vec3 a_normal;
 layout(location = 2) in vec2 a_uv;
 layout(location = 3) in vec4 a_color;
-layout(location = 4) in ivec4 a_bone_indices;
-layout(location = 5) in vec4 a_bone_weights;
+layout(location = 4) in vec4 a_tangent;
+layout(location = 5) in ivec4 a_bone_indices;
+layout(location = 6) in vec4 a_bone_weights;
 
 layout(location = 0) out vec4 v_color;
 layout(location = 1) out vec3 v_normal;
@@ -38,6 +40,8 @@ layout(location = 3) out vec3 v_world_position;
 #ifdef OFFSCREEN
 layout(location = 4) out flat int v_entity_id;
 #endif
+layout(location = 5) out vec3 v_tangent;
+layout(location = 6) out vec3 v_bitangent;
 
 void main() {
     // Skeletal skinning: blend up to 4 bone influences.
@@ -50,6 +54,7 @@ void main() {
 
     vec4 skinned_pos = skin_matrix * vec4(a_position, 1.0);
     vec3 skinned_normal = mat3(skin_matrix) * a_normal;
+    vec3 skinned_tangent = mat3(skin_matrix) * a_tangent.xyz;
 
     vec4 world_pos = push.u_model * skinned_pos;
     v_world_position = world_pos.xyz;
@@ -57,6 +62,11 @@ void main() {
     v_normal = push.u_normal_matrix * skinned_normal;
     v_uv = a_uv;
     v_color = a_color;
+
+    // Transform tangent to world space and reconstruct bitangent.
+    v_tangent = normalize(push.u_normal_matrix * skinned_tangent);
+    v_bitangent = a_tangent.w * cross(normalize(v_normal), v_tangent);
+
 #ifdef OFFSCREEN
     v_entity_id = push.u_entity_id;
 #endif
@@ -85,6 +95,7 @@ layout(push_constant) uniform PushConstants {
     vec4 u_albedo_color;
     vec4 u_emissive_color;
     int u_albedo_tex_index;
+    int u_normal_tex_index;
     uint u_bone_offset;
 } push;
 
@@ -124,6 +135,8 @@ layout(location = 3) in vec3 v_world_position;
 #ifdef OFFSCREEN
 layout(location = 4) in flat int v_entity_id;
 #endif
+layout(location = 5) in vec3 v_tangent;
+layout(location = 6) in vec3 v_bitangent;
 
 layout(location = 0) out vec4 out_color;
 #ifdef OFFSCREEN
@@ -325,6 +338,19 @@ vec3 blinn_phong(vec3 light_dir, vec3 light_color, float light_intensity,
 
 void main() {
     vec3 n = normalize(v_normal);
+
+    // Normal mapping: if a normal map is assigned, sample it and transform
+    // from tangent space to world space using the TBN matrix.
+    if (push.u_normal_tex_index >= 0) {
+        vec3 T = normalize(v_tangent);
+        vec3 B = normalize(v_bitangent);
+        vec3 N = n;
+        mat3 TBN = mat3(T, B, N);
+        vec3 tangent_normal = texture(u_textures[push.u_normal_tex_index], v_uv).rgb;
+        tangent_normal = tangent_normal * 2.0 - 1.0;
+        n = normalize(TBN * tangent_normal);
+    }
+
     vec3 view_dir = normalize(lighting.camera_position.xyz - v_world_position);
 
     vec4 tex_color = vec4(1.0);

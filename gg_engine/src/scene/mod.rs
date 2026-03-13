@@ -38,7 +38,8 @@ pub use components::{
     RigidBody2DType, RigidBody3DComponent, RigidBody3DType, RigidBodyType,
     SkeletalAnimationComponent, SphereCollider3DComponent, SpriteRendererComponent,
     TagComponent, TextComponent, TilemapComponent, TransformComponent, UIAnchorComponent,
-    TILE_FLIP_H, TILE_FLIP_V, TILE_ID_MASK,
+    UIEvent, UIImageComponent, UIInteractableComponent, UIInteractionState, UILayoutAlignment,
+    UILayoutComponent, UILayoutDirection, UIRectComponent, TILE_FLIP_H, TILE_FLIP_V, TILE_ID_MASK,
 };
 pub use entity::Entity;
 pub use native_script::NativeScript;
@@ -150,6 +151,10 @@ macro_rules! for_each_cloneable_component {
             PointLightComponent,
             AmbientLightComponent,
             UIAnchorComponent,
+            UIRectComponent,
+            UIImageComponent,
+            UIInteractableComponent,
+            UILayoutComponent,
         );
     };
 }
@@ -197,6 +202,10 @@ macro_rules! for_each_addable_component {
             ($crate::scene::PointLightComponent, "Point Light"),
             ($crate::scene::AmbientLightComponent, "Ambient Light"),
             ($crate::scene::UIAnchorComponent, "UI Anchor"),
+            ($crate::scene::UIRectComponent, "UI Rect"),
+            ($crate::scene::UIImageComponent, "UI Image"),
+            ($crate::scene::UIInteractableComponent, "UI Interactable"),
+            ($crate::scene::UILayoutComponent, "UI Layout"),
         );
     };
 }
@@ -766,7 +775,7 @@ mod tests {
             };
         }
         for_each_cloneable_component!(count_types);
-        const EXPECTED_COUNT: usize = 25;
+        const EXPECTED_COUNT: usize = 29;
         assert_eq!(
             MACRO_COUNT, EXPECTED_COUNT,
             "for_each_cloneable_component! has {} types but expected {}. \

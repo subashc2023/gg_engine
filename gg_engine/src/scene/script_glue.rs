@@ -465,6 +465,17 @@ pub fn register_all(lua: &Lua) -> LuaResult<()> {
     engine.set("set_ui_anchor", lua.create_function(lua_set_ui_anchor)?)?;
     engine.set("get_ui_anchor", lua.create_function(lua_get_ui_anchor)?)?;
 
+    // UI Rect / Image / Interactable
+    engine.set("set_ui_rect", lua.create_function(lua_set_ui_rect)?)?;
+    engine.set("get_ui_rect", lua.create_function(lua_get_ui_rect)?)?;
+    engine.set("set_ui_pivot", lua.create_function(lua_set_ui_pivot)?)?;
+    engine.set("set_ui_image", lua.create_function(lua_set_ui_image)?)?;
+    engine.set("set_ui_image_color", lua.create_function(lua_set_ui_image_color)?)?;
+    engine.set("set_ui_border", lua.create_function(lua_set_ui_border)?)?;
+    engine.set("set_ui_interactable", lua.create_function(lua_set_ui_interactable)?)?;
+    engine.set("get_ui_state", lua.create_function(lua_get_ui_state)?)?;
+    engine.set("create_ui_entity", lua.create_function(lua_create_ui_entity)?)?;
+
     // Time
     engine.set("get_time", lua.create_function(lua_get_time)?)?;
     engine.set("delta_time", lua.create_function(lua_delta_time)?)?;
@@ -918,6 +929,10 @@ fn has_component(lua: &Lua, (entity_id, name): (u64, String)) -> LuaResult<bool>
         "PointLight" => scene.has_component::<super::PointLightComponent>(entity),
         "AmbientLight" => scene.has_component::<super::AmbientLightComponent>(entity),
         "UIAnchor" => scene.has_component::<super::UIAnchorComponent>(entity),
+        "UIRect" => scene.has_component::<super::UIRectComponent>(entity),
+        "UIImage" => scene.has_component::<super::UIImageComponent>(entity),
+        "UIInteractable" => scene.has_component::<super::UIInteractableComponent>(entity),
+        "UILayout" => scene.has_component::<super::UILayoutComponent>(entity),
         "LuaScript" => {
             #[cfg(feature = "lua-scripting")]
             {
@@ -2404,6 +2419,10 @@ fn lua_find_entities_with_component(lua: &Lua, name: String) -> LuaResult<LuaTab
         "PointLight" => collect_uuids!(super::PointLightComponent),
         "AmbientLight" => collect_uuids!(super::AmbientLightComponent),
         "UIAnchor" => collect_uuids!(super::UIAnchorComponent),
+        "UIRect" => collect_uuids!(super::UIRectComponent),
+        "UIImage" => collect_uuids!(super::UIImageComponent),
+        "UIInteractable" => collect_uuids!(super::UIInteractableComponent),
+        "UILayout" => collect_uuids!(super::UILayoutComponent),
         #[cfg(feature = "lua-scripting")]
         "LuaScript" => collect_uuids!(super::LuaScriptComponent),
         _ => {
@@ -2790,6 +2809,228 @@ fn lua_get_ui_anchor(
 }
 
 // ---------------------------------------------------------------------------
+// UI Rect / Image / Interactable
+// ---------------------------------------------------------------------------
+
+/// `Engine.set_ui_rect(entity_id, width, height)`.
+fn lua_set_ui_rect(lua: &Lua, (entity_id, w, h): (u64, f32, f32)) -> LuaResult<()> {
+    let mut ctx = match lua.app_data_mut::<SceneScriptContext>() {
+        Some(ctx) => ctx,
+        None => return Ok(()),
+    };
+    let scene = unsafe { ctx.scene_mut() };
+    let entity = match scene.find_entity_by_uuid(entity_id) {
+        Some(e) => e,
+        None => return Ok(()),
+    };
+    if scene.has_component::<super::UIRectComponent>(entity) {
+        if let Some(mut rect) = scene.get_component_mut::<super::UIRectComponent>(entity) {
+            rect.size = glam::Vec2::new(w, h);
+        }
+    } else {
+        scene.add_component(
+            entity,
+            super::UIRectComponent {
+                size: glam::Vec2::new(w, h),
+                ..Default::default()
+            },
+        );
+    }
+    Ok(())
+}
+
+/// `Engine.get_ui_rect(entity_id)` → `(width, height)` or `(nil)`.
+fn lua_get_ui_rect(
+    lua: &Lua,
+    entity_id: u64,
+) -> LuaResult<(Option<f32>, Option<f32>)> {
+    let ctx = match lua.app_data_mut::<SceneScriptContext>() {
+        Some(ctx) => ctx,
+        None => return Ok((None, None)),
+    };
+    let scene = unsafe { ctx.scene() };
+    let entity = match scene.find_entity_by_uuid(entity_id) {
+        Some(e) => e,
+        None => return Ok((None, None)),
+    };
+    let result = match scene.get_component::<super::UIRectComponent>(entity) {
+        Some(r) => (Some(r.size.x), Some(r.size.y)),
+        None => (None, None),
+    };
+    Ok(result)
+}
+
+/// `Engine.set_ui_pivot(entity_id, px, py)`.
+fn lua_set_ui_pivot(lua: &Lua, (entity_id, px, py): (u64, f32, f32)) -> LuaResult<()> {
+    let mut ctx = match lua.app_data_mut::<SceneScriptContext>() {
+        Some(ctx) => ctx,
+        None => return Ok(()),
+    };
+    let scene = unsafe { ctx.scene_mut() };
+    let entity = match scene.find_entity_by_uuid(entity_id) {
+        Some(e) => e,
+        None => return Ok(()),
+    };
+    if let Some(mut rect) = scene.get_component_mut::<super::UIRectComponent>(entity) {
+        rect.pivot = glam::Vec2::new(px, py);
+    }
+    Ok(())
+}
+
+/// `Engine.set_ui_image(entity_id, texture_handle)` — 0 to clear texture.
+fn lua_set_ui_image(lua: &Lua, (entity_id, tex_handle): (u64, u64)) -> LuaResult<()> {
+    let mut ctx = match lua.app_data_mut::<SceneScriptContext>() {
+        Some(ctx) => ctx,
+        None => return Ok(()),
+    };
+    let scene = unsafe { ctx.scene_mut() };
+    let entity = match scene.find_entity_by_uuid(entity_id) {
+        Some(e) => e,
+        None => return Ok(()),
+    };
+    if scene.has_component::<super::UIImageComponent>(entity) {
+        if let Some(mut img) = scene.get_component_mut::<super::UIImageComponent>(entity) {
+            img.texture_handle = crate::uuid::Uuid::from_raw(tex_handle);
+            img.texture = None;
+        }
+    } else {
+        scene.add_component(
+            entity,
+            super::UIImageComponent {
+                texture_handle: crate::uuid::Uuid::from_raw(tex_handle),
+                ..Default::default()
+            },
+        );
+    }
+    scene.core.textures_all_resolved = false;
+    Ok(())
+}
+
+/// `Engine.set_ui_image_color(entity_id, r, g, b, a)`.
+fn lua_set_ui_image_color(
+    lua: &Lua,
+    (entity_id, r, g, b, a): (u64, f32, f32, f32, f32),
+) -> LuaResult<()> {
+    let mut ctx = match lua.app_data_mut::<SceneScriptContext>() {
+        Some(ctx) => ctx,
+        None => return Ok(()),
+    };
+    let scene = unsafe { ctx.scene_mut() };
+    let entity = match scene.find_entity_by_uuid(entity_id) {
+        Some(e) => e,
+        None => return Ok(()),
+    };
+    if let Some(mut img) = scene.get_component_mut::<super::UIImageComponent>(entity) {
+        img.color = glam::Vec4::new(r, g, b, a);
+    }
+    Ok(())
+}
+
+/// `Engine.set_ui_border(entity_id, left, right, top, bottom)`.
+fn lua_set_ui_border(
+    lua: &Lua,
+    (entity_id, left, right, top, bottom): (u64, f32, f32, f32, f32),
+) -> LuaResult<()> {
+    let mut ctx = match lua.app_data_mut::<SceneScriptContext>() {
+        Some(ctx) => ctx,
+        None => return Ok(()),
+    };
+    let scene = unsafe { ctx.scene_mut() };
+    let entity = match scene.find_entity_by_uuid(entity_id) {
+        Some(e) => e,
+        None => return Ok(()),
+    };
+    if let Some(mut img) = scene.get_component_mut::<super::UIImageComponent>(entity) {
+        img.border = [left, right, top, bottom];
+    }
+    Ok(())
+}
+
+/// `Engine.set_ui_interactable(entity_id, enabled)`.
+fn lua_set_ui_interactable(lua: &Lua, (entity_id, enabled): (u64, bool)) -> LuaResult<()> {
+    let mut ctx = match lua.app_data_mut::<SceneScriptContext>() {
+        Some(ctx) => ctx,
+        None => return Ok(()),
+    };
+    let scene = unsafe { ctx.scene_mut() };
+    let entity = match scene.find_entity_by_uuid(entity_id) {
+        Some(e) => e,
+        None => return Ok(()),
+    };
+    if scene.has_component::<super::UIInteractableComponent>(entity) {
+        if let Some(mut inter) = scene.get_component_mut::<super::UIInteractableComponent>(entity) {
+            inter.interactable = enabled;
+        }
+    } else {
+        scene.add_component(
+            entity,
+            super::UIInteractableComponent {
+                interactable: enabled,
+                ..Default::default()
+            },
+        );
+    }
+    Ok(())
+}
+
+/// `Engine.get_ui_state(entity_id)` → `"normal"|"hovered"|"pressed"|"disabled"` or `nil`.
+fn lua_get_ui_state(lua: &Lua, entity_id: u64) -> LuaResult<Option<String>> {
+    let ctx = match lua.app_data_mut::<SceneScriptContext>() {
+        Some(ctx) => ctx,
+        None => return Ok(None),
+    };
+    let scene = unsafe { ctx.scene() };
+    let entity = match scene.find_entity_by_uuid(entity_id) {
+        Some(e) => e,
+        None => return Ok(None),
+    };
+    let result = scene
+        .get_component::<super::UIInteractableComponent>(entity)
+        .map(|inter| {
+            match inter.state {
+                super::UIInteractionState::Normal => "normal",
+                super::UIInteractionState::Hovered => "hovered",
+                super::UIInteractionState::Pressed => "pressed",
+                super::UIInteractionState::Disabled => "disabled",
+            }
+            .to_string()
+        });
+    Ok(result)
+}
+
+/// `Engine.create_ui_entity(name, width, height, anchor_x, anchor_y)` → entity_id.
+fn lua_create_ui_entity(
+    lua: &Lua,
+    (name, width, height, ax, ay): (String, f32, f32, f32, f32),
+) -> LuaResult<u64> {
+    let mut ctx = match lua.app_data_mut::<SceneScriptContext>() {
+        Some(ctx) => ctx,
+        None => return Ok(0),
+    };
+    let scene = unsafe { ctx.scene_mut() };
+    let entity = scene.create_entity_with_tag(&name);
+    let uuid = scene
+        .get_component::<super::IdComponent>(entity)
+        .map(|id| id.id.raw())
+        .unwrap_or(0);
+    scene.add_component(
+        entity,
+        super::UIAnchorComponent {
+            anchor: glam::Vec2::new(ax, ay),
+            offset: glam::Vec2::ZERO,
+        },
+    );
+    scene.add_component(
+        entity,
+        super::UIRectComponent {
+            size: glam::Vec2::new(width, height),
+            ..Default::default()
+        },
+    );
+    Ok(uuid)
+}
+
+// ---------------------------------------------------------------------------
 // Time
 // ---------------------------------------------------------------------------
 
@@ -2936,6 +3177,31 @@ fn lua_add_component(lua: &Lua, args: mlua::Variadic<LuaValue>) -> LuaResult<boo
                 });
             }
         }
+        "UIRect" => {
+            let w = args.get(2).and_then(lua_value_as_f32).unwrap_or(100.0);
+            let h = args.get(3).and_then(lua_value_as_f32).unwrap_or(100.0);
+            if !scene.has_component::<super::UIRectComponent>(entity) {
+                scene.add_component(entity, super::UIRectComponent {
+                    size: glam::Vec2::new(w, h),
+                    ..Default::default()
+                });
+            }
+        }
+        "UIImage" => {
+            if !scene.has_component::<super::UIImageComponent>(entity) {
+                scene.add_component(entity, super::UIImageComponent::default());
+            }
+        }
+        "UIInteractable" => {
+            if !scene.has_component::<super::UIInteractableComponent>(entity) {
+                scene.add_component(entity, super::UIInteractableComponent::default());
+            }
+        }
+        "UILayout" => {
+            if !scene.has_component::<super::UILayoutComponent>(entity) {
+                scene.add_component(entity, super::UILayoutComponent::default());
+            }
+        }
         "Camera" => {
             if !scene.has_component::<super::CameraComponent>(entity) {
                 scene.add_component(entity, super::CameraComponent::default());
@@ -2990,6 +3256,10 @@ fn lua_remove_component(lua: &Lua, (entity_id, name): (u64, String)) -> LuaResul
         "AudioListener" => scene.remove_component::<super::AudioListenerComponent>(entity).is_some(),
         "ParticleEmitter" => scene.remove_component::<super::ParticleEmitterComponent>(entity).is_some(),
         "UIAnchor" => scene.remove_component::<super::UIAnchorComponent>(entity).is_some(),
+        "UIRect" => scene.remove_component::<super::UIRectComponent>(entity).is_some(),
+        "UIImage" => scene.remove_component::<super::UIImageComponent>(entity).is_some(),
+        "UIInteractable" => scene.remove_component::<super::UIInteractableComponent>(entity).is_some(),
+        "UILayout" => scene.remove_component::<super::UILayoutComponent>(entity).is_some(),
         "Camera" => scene.remove_component::<super::CameraComponent>(entity).is_some(),
         "SpriteAnimator" => scene.remove_component::<super::SpriteAnimatorComponent>(entity).is_some(),
         "RigidBody2D" => scene.remove_component::<super::RigidBody2DComponent>(entity).is_some(),

@@ -4,7 +4,8 @@ use super::{
     MeshRendererComponent, MeshSource, ParticleEmitterComponent, PointLightComponent,
     RigidBody3DComponent, RigidBody3DType, Scene, SkeletalAnimationComponent,
     SpriteAnimatorComponent, SpriteRendererComponent, TextComponent, TilemapComponent,
-    TransformComponent, UIAnchorComponent, TILE_FLIP_H, TILE_FLIP_V, TILE_ID_MASK,
+    TransformComponent, UIAnchorComponent, UIImageComponent, UIInteractableComponent,
+    UIInteractionState, UIRectComponent, TILE_FLIP_H, TILE_FLIP_V, TILE_ID_MASK,
 };
 use crate::renderer::shadow_map::{
     compute_cascade_vps, compute_directional_light_vp, ShadowCameraInfo,
@@ -18,7 +19,7 @@ struct RenderSortKey {
     sorting_layer: i32,
     order_in_layer: i32,
     z: f32,
-    /// 0 = Sprite, 1 = Circle, 2 = Text, 3 = Tilemap
+    /// 0 = Sprite, 1 = Circle, 2 = Text, 3 = Tilemap, 4 = UIImage
     kind: u8,
     entity: hecs::Entity,
 }
@@ -300,13 +301,16 @@ impl Scene {
 
         /// Collect entities with an unresolved texture handle and assign textures.
         macro_rules! resolve_textures_sync {
-            ($world:expr, $asset_manager:expr, $renderer:expr, $Component:ty, $texture_field:ident) => {{
+            ($world:expr, $asset_manager:expr, $renderer:expr, $Component:ty, $texture_field:ident) => {
+                resolve_textures_sync!($world, $asset_manager, $renderer, $Component, $texture_field, texture_handle)
+            };
+            ($world:expr, $asset_manager:expr, $renderer:expr, $Component:ty, $texture_field:ident, $handle_field:ident) => {{
                 let needs: Vec<(hecs::Entity, crate::uuid::Uuid)> = $world
                     .query::<(hecs::Entity, &$Component)>()
                     .iter()
                     .filter_map(|(handle, comp)| {
-                        if comp.texture_handle.raw() != 0 && comp.$texture_field.is_none() {
-                            Some((handle, comp.texture_handle))
+                        if comp.$handle_field.raw() != 0 && comp.$texture_field.is_none() {
+                            Some((handle, comp.$handle_field))
                         } else {
                             None
                         }
@@ -338,6 +342,21 @@ impl Scene {
             TilemapComponent,
             texture
         );
+        resolve_textures_sync!(
+            self.world,
+            asset_manager,
+            renderer,
+            UIImageComponent,
+            texture
+        );
+        resolve_textures_sync!(
+            self.world,
+            asset_manager,
+            renderer,
+            MeshRendererComponent,
+            normal_texture,
+            normal_texture_handle
+        );
 
         // Resolve per-clip animator textures.
         self.resolve_animator_clip_textures(asset_manager, Some(renderer));
@@ -365,13 +384,16 @@ impl Scene {
 
         /// Collect entities with an unresolved texture handle and assign or request load.
         macro_rules! resolve_textures_async {
-            ($world:expr, $asset_manager:expr, $found:expr, $Component:ty, $texture_field:ident) => {{
+            ($world:expr, $asset_manager:expr, $found:expr, $Component:ty, $texture_field:ident) => {
+                resolve_textures_async!($world, $asset_manager, $found, $Component, $texture_field, texture_handle)
+            };
+            ($world:expr, $asset_manager:expr, $found:expr, $Component:ty, $texture_field:ident, $handle_field:ident) => {{
                 let needs: Vec<(hecs::Entity, crate::uuid::Uuid)> = $world
                     .query::<(hecs::Entity, &$Component)>()
                     .iter()
                     .filter_map(|(handle, comp)| {
-                        if comp.texture_handle.raw() != 0 && comp.$texture_field.is_none() {
-                            Some((handle, comp.texture_handle))
+                        if comp.$handle_field.raw() != 0 && comp.$texture_field.is_none() {
+                            Some((handle, comp.$handle_field))
                         } else {
                             None
                         }
@@ -410,6 +432,21 @@ impl Scene {
             asset_manager,
             found_unresolved,
             MeshRendererComponent,
+            texture
+        );
+        resolve_textures_async!(
+            self.world,
+            asset_manager,
+            found_unresolved,
+            MeshRendererComponent,
+            normal_texture,
+            normal_texture_handle
+        );
+        resolve_textures_async!(
+            self.world,
+            asset_manager,
+            found_unresolved,
+            UIImageComponent,
             texture
         );
 
@@ -784,6 +821,10 @@ impl Scene {
             crate::profile_scope!("Scene::build_world_transform_cache");
             self.build_world_transform_cache();
         }
+        // Render 3D meshes first so they appear behind 2D sprites/particles.
+        self.render_meshes(renderer);
+        self.render_skinned_meshes(renderer);
+
         let wt_ref = self.transform_cache.read();
         let wt_cache = &*wt_ref;
 
@@ -791,6 +832,21 @@ impl Scene {
         let vp = renderer.view_projection();
         let frustum = super::spatial::Frustum2D::from_view_projection(&vp);
         let gui_scale = self.gui_scale();
+
+        // Pixels-per-world-unit for UIRect/9-slice corner sizing.
+        let ppwu = {
+            let mut val = 1.0f32;
+            for cam in self.world.query::<&super::CameraComponent>().iter() {
+                if cam.primary {
+                    let ortho_size = cam.camera.orthographic_size();
+                    if ortho_size > 0.0 && self.viewport_height > 0 {
+                        val = self.viewport_height as f32 / ortho_size;
+                    }
+                    break;
+                }
+            }
+            val
+        };
 
         // Collect all renderable entities with sort keys.
         // Sprites and circles are frustum-culled via AABB overlap test.
@@ -909,6 +965,22 @@ impl Scene {
                 order_in_layer: tilemap.order_in_layer,
                 z,
                 kind: 3,
+                entity: handle,
+            });
+        }
+
+        // --- UIImage entities ---
+        for (handle, img) in self
+            .world
+            .query::<(hecs::Entity, &UIImageComponent)>()
+            .iter()
+        {
+            let z = wt_cache.get(&handle).map(|m| m.w_axis.z).unwrap_or(0.0);
+            renderables.push(RenderSortKey {
+                sorting_layer: img.sorting_layer,
+                order_in_layer: img.order_in_layer,
+                z,
+                kind: 4,
                 entity: handle,
             });
         }
@@ -1081,7 +1153,66 @@ impl Scene {
                     let Ok(text) = self.world.get::<&TextComponent>(handle) else {
                         continue;
                     };
-                    if gui_scale != 1.0 && self.world.get::<&UIAnchorComponent>(handle).is_ok() {
+                    // Text inside a UIRect: font_size is in UI points (matching
+                    // the rect coordinate system). Convert to world units, then
+                    // render centered inside the rect, ignoring the rect's
+                    // non-uniform scale.
+                    if self.world.get::<&UIRectComponent>(handle).is_ok() {
+                        if let Some(font) = &text.font {
+                            // UI points → world units
+                            let wup = if ppwu > 0.0 { gui_scale / ppwu } else { 1.0 };
+                            let text_font_size = text.font_size * wup;
+
+                            // Measure text bounds for centering.
+                            let (text_w, text_h) = font.measure_text(
+                                &text.text,
+                                text_font_size,
+                                text.line_spacing,
+                                text.kerning,
+                            );
+
+                            // Rect center is the entity's world position (after
+                            // apply_ui_anchors with pivot offset). The rect's
+                            // world dimensions are encoded in the transform scale.
+                            let rect_center = glam::Vec3::new(
+                                world_transform.w_axis.x,
+                                world_transform.w_axis.y,
+                                world_transform.w_axis.z,
+                            );
+                            let _rect_world_w =
+                                world_transform.x_axis.truncate().length();
+                            let _rect_world_h =
+                                world_transform.y_axis.truncate().length();
+
+                            // Vertical centre helper: offset from text origin
+                            // (baseline) to the visual centre of a single line.
+                            let v_center = font.text_vertical_center(text_font_size);
+
+                            // Position text so its bounding box is centred in
+                            // the rect. draw_text_string starts at the transform
+                            // origin and advances rightward / downward.
+                            let text_origin = glam::Vec3::new(
+                                rect_center.x - text_w * 0.5,
+                                rect_center.y + text_h * 0.5 - v_center,
+                                rect_center.z,
+                            );
+
+                            let text_transform = glam::Mat4::from_translation(text_origin);
+
+                            renderer.draw_text_string(
+                                &text.text,
+                                &text_transform,
+                                font,
+                                text_font_size,
+                                text.color,
+                                text.line_spacing,
+                                text.kerning,
+                                handle.id() as i32,
+                            );
+                        }
+                    } else if gui_scale != 1.0
+                        && self.world.get::<&UIAnchorComponent>(handle).is_ok()
+                    {
                         if let Some(font) = &text.font {
                             renderer.draw_text_string(
                                 &text.text,
@@ -1203,18 +1334,71 @@ impl Scene {
                         }
                     }
                 }
+                4 => {
+                    // UIImage — simple stretch or 9-slice.
+                    let Ok(img) = self.world.get::<&UIImageComponent>(handle) else {
+                        continue;
+                    };
+
+                    // Apply interaction color tinting.
+                    let mut color = img.color;
+                    if let Ok(inter) = self.world.get::<&UIInteractableComponent>(handle) {
+                        let tint = match inter.state {
+                            UIInteractionState::Hovered => {
+                                inter.hover_color.unwrap_or(glam::Vec4::ONE)
+                            }
+                            UIInteractionState::Pressed => {
+                                inter.press_color.unwrap_or(glam::Vec4::ONE)
+                            }
+                            UIInteractionState::Disabled => {
+                                inter.disabled_color.unwrap_or(glam::Vec4::splat(0.5))
+                            }
+                            UIInteractionState::Normal => glam::Vec4::ONE,
+                        };
+                        color *= tint;
+                    }
+
+                    let eid = handle.id() as i32;
+                    let has_border = img.border.iter().any(|&b| b > 0.0);
+
+                    if has_border {
+                        // 9-slice rendering.
+                        self.draw_9slice(
+                            renderer,
+                            &world_transform,
+                            &img,
+                            color,
+                            eid,
+                            gui_scale,
+                            ppwu,
+                        );
+                    } else {
+                        // Simple stretch.
+                        if let Some(ref tex) = img.texture {
+                            let tex_idx = tex.bindless_index() as f32;
+                            renderer.draw_textured_quad_transformed_uv(
+                                &world_transform,
+                                tex_idx,
+                                [0.0, 0.0],
+                                [1.0, 1.0],
+                                color,
+                                eid,
+                            );
+                        } else {
+                            renderer.draw_quad_transform(
+                                &world_transform,
+                                color,
+                                eid,
+                            );
+                        }
+                    }
+                }
                 _ => {}
             }
         }
 
         // Emit and render GPU particles from all active ParticleEmitterComponents.
         self.emit_and_render_particles(renderer);
-
-        // Render 3D meshes (after flushing all 2D batches).
-        self.render_meshes(renderer);
-
-        // Render skinned 3D meshes (skeletal animation).
-        self.render_skinned_meshes(renderer);
     }
 
     /// Find the primary ECS camera and return its frustum info for shadow
@@ -1720,6 +1904,7 @@ impl Scene {
                     mat.emissive_color = mesh_comp.emissive_color;
                     mat.emissive_strength = mesh_comp.emissive_strength;
                     mat.albedo_texture = mesh_comp.texture.clone();
+                    mat.normal_texture = mesh_comp.normal_texture.clone();
                 }
                 renderer.submit_3d(
                     &pipeline,
@@ -1824,6 +2009,7 @@ impl Scene {
                     mat.emissive_color = mesh_comp.emissive_color;
                     mat.emissive_strength = mesh_comp.emissive_strength;
                     mat.albedo_texture = mesh_comp.texture.clone();
+                    mat.normal_texture = mesh_comp.normal_texture.clone();
                 }
                 renderer.submit_skinned_3d(
                     &pipeline,
@@ -1889,6 +2075,133 @@ impl Scene {
     /// Use this for **runtime** rendering where the scene's own ECS camera
     /// drives the view. For editor rendering with an external camera, use
     /// [`on_update_editor`](Self::on_update_editor).
+    /// Draw a 9-slice UIImage: 4 corners (fixed size), 4 edges (stretch one axis),
+    /// and optional center patch using the existing batch renderer.
+    #[allow(clippy::too_many_arguments)]
+    fn draw_9slice(
+        &self,
+        renderer: &mut Renderer,
+        world_transform: &glam::Mat4,
+        img: &UIImageComponent,
+        color: glam::Vec4,
+        entity_id: i32,
+        gui_scale: f32,
+        ppwu: f32,
+    ) {
+        let tex = match img.texture.as_ref() {
+            Some(t) => t,
+            None => return,
+        };
+        let tex_idx = tex.bindless_index() as f32;
+        let tw = tex.width() as f32;
+        let th = tex.height() as f32;
+        if tw == 0.0 || th == 0.0 {
+            return;
+        }
+
+        let [b_left, b_right, b_top, b_bottom] = img.border;
+
+        // Corner size in world units (fixed pixel size).
+        let corner_w_left = b_left * gui_scale / ppwu;
+        let corner_w_right = b_right * gui_scale / ppwu;
+        let corner_h_top = b_top * gui_scale / ppwu;
+        let corner_h_bottom = b_bottom * gui_scale / ppwu;
+
+        // Quad world size from transform scale.
+        let world_w = world_transform.x_axis.truncate().length();
+        let world_h = world_transform.y_axis.truncate().length();
+
+        // Center stretch region.
+        let center_w = (world_w - corner_w_left - corner_w_right).max(0.0);
+        let center_h = (world_h - corner_h_top - corner_h_bottom).max(0.0);
+
+        // UV boundaries.
+        let u_left = b_left / tw;
+        let u_right = 1.0 - b_right / tw;
+        let v_top = b_top / th;
+        let v_bottom = 1.0 - b_bottom / th;
+
+        // Base position (bottom-left of the quad in world space).
+        let pos = glam::Vec2::new(world_transform.w_axis.x, world_transform.w_axis.y);
+        let base_x = pos.x - world_w * 0.5;
+        let base_y = pos.y - world_h * 0.5;
+
+        // Helper: build a transform for a sub-rect at (x, y) with size (w, h).
+        let make_transform = |x: f32, y: f32, w: f32, h: f32| -> glam::Mat4 {
+            glam::Mat4::from_scale_rotation_translation(
+                glam::Vec3::new(w, h, 1.0),
+                glam::Quat::IDENTITY,
+                glam::Vec3::new(x + w * 0.5, y + h * 0.5, world_transform.w_axis.z),
+            )
+        };
+
+        // X positions: left edge, center start, right edge start.
+        let x0 = base_x;
+        let x1 = base_x + corner_w_left;
+        let x2 = base_x + corner_w_left + center_w;
+
+        // Y positions: bottom edge, center start, top edge start.
+        let y0 = base_y;
+        let y1 = base_y + corner_h_bottom;
+        let y2 = base_y + corner_h_bottom + center_h;
+
+        // 9 patches: [transform, uv_min, uv_max]
+        let patches: [(glam::Mat4, [f32; 2], [f32; 2]); 9] = [
+            // Bottom-left corner.
+            (make_transform(x0, y0, corner_w_left, corner_h_bottom),
+             [0.0, v_bottom], [u_left, 1.0]),
+            // Bottom center edge.
+            (make_transform(x1, y0, center_w, corner_h_bottom),
+             [u_left, v_bottom], [u_right, 1.0]),
+            // Bottom-right corner.
+            (make_transform(x2, y0, corner_w_right, corner_h_bottom),
+             [u_right, v_bottom], [1.0, 1.0]),
+            // Middle-left edge.
+            (make_transform(x0, y1, corner_w_left, center_h),
+             [0.0, v_top], [u_left, v_bottom]),
+            // Center.
+            (make_transform(x1, y1, center_w, center_h),
+             [u_left, v_top], [u_right, v_bottom]),
+            // Middle-right edge.
+            (make_transform(x2, y1, corner_w_right, center_h),
+             [u_right, v_top], [1.0, v_bottom]),
+            // Top-left corner.
+            (make_transform(x0, y2, corner_w_left, corner_h_top),
+             [0.0, 0.0], [u_left, v_top]),
+            // Top center edge.
+            (make_transform(x1, y2, center_w, corner_h_top),
+             [u_left, 0.0], [u_right, v_top]),
+            // Top-right corner.
+            (make_transform(x2, y2, corner_w_right, corner_h_top),
+             [u_right, 0.0], [1.0, v_top]),
+        ];
+
+        for (i, (transform, uv_min, uv_max)) in patches.iter().enumerate() {
+            // Skip center patch if fill_center is false.
+            if i == 4 && !img.fill_center {
+                continue;
+            }
+            // Skip zero-size patches.
+            let (_, _, t) = transform.to_scale_rotation_translation();
+            let s = glam::Vec2::new(
+                transform.x_axis.truncate().length(),
+                transform.y_axis.truncate().length(),
+            );
+            if s.x <= 0.0 || s.y <= 0.0 {
+                continue;
+            }
+            let _ = t;
+            renderer.draw_textured_quad_transformed_uv(
+                transform,
+                tex_idx,
+                *uv_min,
+                *uv_max,
+                color,
+                entity_id,
+            );
+        }
+    }
+
     pub fn on_update_runtime(&mut self, renderer: &mut Renderer) {
         let _timer = crate::profiling::ProfileTimer::new("Scene::on_update_runtime");
 
@@ -1917,6 +2230,19 @@ impl Scene {
             renderer.set_camera_position(cam_position);
             self.render_scene(renderer);
         }
+    }
+
+    /// Run UI hit testing with mouse state. Call after `apply_ui_anchors()`.
+    /// Returns UI events for Lua dispatch.
+    pub fn update_ui_with_input(
+        &mut self,
+        mouse_world: glam::Vec2,
+        mouse_down: bool,
+        mouse_just_pressed: bool,
+        mouse_just_released: bool,
+    ) -> Vec<super::UIEvent> {
+        self.core
+            .update_ui_interaction(mouse_world, mouse_down, mouse_just_pressed, mouse_just_released)
     }
 
     /// Render all entities using an externally provided view-projection

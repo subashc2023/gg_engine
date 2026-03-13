@@ -346,4 +346,51 @@ impl Scene {
     pub fn script_engine(&self) -> Option<&ScriptEngine> {
         self.script_engine.as_ref()
     }
+
+    /// Dispatch UI events to Lua scripts (on_ui_hover_enter, on_ui_hover_exit, on_ui_click).
+    #[cfg(feature = "lua-scripting")]
+    pub fn dispatch_ui_events(&mut self, events: &[super::UIEvent]) {
+        if events.is_empty() {
+            return;
+        }
+        let engine = match self.script_engine.take() {
+            Some(e) => e,
+            None => return,
+        };
+
+        let scene_ptr: *mut Scene = self;
+        let mut guard = ScriptEngineGuard::new(engine, scene_ptr);
+
+        let ctx = SceneScriptContext {
+            scene: scene_ptr,
+            input: std::ptr::null(),
+        };
+        guard.engine_mut().lua().set_app_data(ctx);
+
+        for event in events {
+            match event {
+                super::UIEvent::HoverEnter(uuid) => {
+                    guard
+                        .engine_mut()
+                        .call_entity_ui_callback(*uuid, "on_ui_hover_enter");
+                }
+                super::UIEvent::HoverExit(uuid) => {
+                    guard
+                        .engine_mut()
+                        .call_entity_ui_callback(*uuid, "on_ui_hover_exit");
+                }
+                super::UIEvent::Click(uuid) => {
+                    guard
+                        .engine_mut()
+                        .call_entity_ui_callback(*uuid, "on_ui_click");
+                }
+                _ => {} // Press/Release have no Lua callbacks.
+            }
+        }
+        // Guard drop restores engine and cleans up SceneScriptContext.
+    }
+
+    /// No-op when Lua scripting is disabled.
+    #[cfg(not(feature = "lua-scripting"))]
+    pub fn dispatch_ui_events(&mut self, _events: &[super::UIEvent]) {}
 }

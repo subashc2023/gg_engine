@@ -10,7 +10,7 @@ use crate::renderer::Renderer;
 // MeshVertex
 // ---------------------------------------------------------------------------
 
-/// Standard 3D vertex: position, normal, texture coordinates, vertex color.
+/// Standard 3D vertex: position, normal, texture coordinates, vertex color, tangent.
 #[repr(C)]
 #[derive(Clone, Copy, Debug)]
 pub struct MeshVertex {
@@ -18,6 +18,10 @@ pub struct MeshVertex {
     pub normal: [f32; 3],
     pub uv: [f32; 2],
     pub color: [f32; 4],
+    /// Tangent vector for normal mapping. xyz = tangent direction,
+    /// w = bitangent sign (+1 or -1) for reconstructing the bitangent
+    /// via `cross(normal, tangent.xyz) * tangent.w`.
+    pub tangent: [f32; 4],
 }
 
 // ---------------------------------------------------------------------------
@@ -39,6 +43,7 @@ impl Mesh {
             BufferElement::new(ShaderDataType::Float3, "a_normal"),
             BufferElement::new(ShaderDataType::Float2, "a_uv"),
             BufferElement::new(ShaderDataType::Float4, "a_color"),
+            BufferElement::new(ShaderDataType::Float4, "a_tangent"),
         ])
     }
 
@@ -91,11 +96,13 @@ impl Mesh {
                     normal: *normal,
                     uv: uvs[i],
                     color,
+                    tangent: [0.0; 4],
                 });
             }
             indices.extend_from_slice(&[base, base + 2, base + 1, base, base + 3, base + 2]);
         }
 
+        compute_tangents(&mut vertices, &indices);
         Self {
             vertices,
             indices,
@@ -130,6 +137,7 @@ impl Mesh {
                     normal: [x, y, z],
                     uv: [u, v],
                     color,
+                    tangent: [0.0; 4],
                 });
             }
         }
@@ -144,6 +152,7 @@ impl Mesh {
             }
         }
 
+        compute_tangents(&mut vertices, &indices);
         Self {
             vertices,
             indices,
@@ -154,34 +163,39 @@ impl Mesh {
     /// Flat plane on the XZ plane (Y = 0), centered at origin (side length 1).
     pub fn plane(color: [f32; 4]) -> Self {
         let normal = [0.0, 1.0, 0.0];
-        let vertices = vec![
+        let mut vertices = vec![
             MeshVertex {
                 position: [-0.5, 0.0, -0.5],
                 normal,
                 uv: [0.0, 0.0],
                 color,
+                tangent: [0.0; 4],
             },
             MeshVertex {
                 position: [0.5, 0.0, -0.5],
                 normal,
                 uv: [1.0, 0.0],
                 color,
+                tangent: [0.0; 4],
             },
             MeshVertex {
                 position: [0.5, 0.0, 0.5],
                 normal,
                 uv: [1.0, 1.0],
                 color,
+                tangent: [0.0; 4],
             },
             MeshVertex {
                 position: [-0.5, 0.0, 0.5],
                 normal,
                 uv: [0.0, 1.0],
                 color,
+                tangent: [0.0; 4],
             },
         ];
         let indices = vec![0, 1, 2, 0, 2, 3];
 
+        compute_tangents(&mut vertices, &indices);
         Self {
             vertices,
             indices,
@@ -194,6 +208,7 @@ impl Mesh {
         let segments = segments.max(3);
         let mut vertices = Vec::new();
         let mut indices = Vec::new();
+        let t0 = [0.0; 4];
 
         let two_pi = 2.0 * std::f32::consts::PI;
 
@@ -211,6 +226,7 @@ impl Mesh {
                 normal: [nx, 0.0, nz],
                 uv: [u, 1.0],
                 color,
+                tangent: t0,
             });
             // Top ring.
             vertices.push(MeshVertex {
@@ -218,6 +234,7 @@ impl Mesh {
                 normal: [nx, 0.0, nz],
                 uv: [u, 0.0],
                 color,
+                tangent: t0,
             });
         }
 
@@ -235,6 +252,7 @@ impl Mesh {
             normal: [0.0, 1.0, 0.0],
             uv: [0.5, 0.5],
             color,
+            tangent: t0,
         });
         for i in 0..=segments {
             let theta = i as f32 / segments as f32 * two_pi;
@@ -244,6 +262,7 @@ impl Mesh {
                 normal: [0.0, 1.0, 0.0],
                 uv: [sin_t * 0.5 + 0.5, cos_t * 0.5 + 0.5],
                 color,
+                tangent: t0,
             });
         }
         for i in 0..segments {
@@ -257,6 +276,7 @@ impl Mesh {
             normal: [0.0, -1.0, 0.0],
             uv: [0.5, 0.5],
             color,
+            tangent: t0,
         });
         for i in 0..=segments {
             let theta = i as f32 / segments as f32 * two_pi;
@@ -266,12 +286,14 @@ impl Mesh {
                 normal: [0.0, -1.0, 0.0],
                 uv: [sin_t * 0.5 + 0.5, cos_t * 0.5 + 0.5],
                 color,
+                tangent: t0,
             });
         }
         for i in 0..segments {
             indices.extend_from_slice(&[bot_center, bot_center + 1 + i, bot_center + 2 + i]);
         }
 
+        compute_tangents(&mut vertices, &indices);
         Self {
             vertices,
             indices,
@@ -284,6 +306,7 @@ impl Mesh {
         let segments = segments.max(3);
         let mut vertices = Vec::new();
         let mut indices = Vec::new();
+        let t0 = [0.0; 4];
 
         let two_pi = 2.0 * std::f32::consts::PI;
         // The slope angle for normals: atan(radius / height) = atan(0.5/1.0).
@@ -307,6 +330,7 @@ impl Mesh {
                 normal: [nx, ny, nz],
                 uv: [u, 0.0],
                 color,
+                tangent: t0,
             });
             // Base vertex.
             vertices.push(MeshVertex {
@@ -314,6 +338,7 @@ impl Mesh {
                 normal: [nx, ny, nz],
                 uv: [u, 1.0],
                 color,
+                tangent: t0,
             });
         }
 
@@ -331,6 +356,7 @@ impl Mesh {
             normal: [0.0, -1.0, 0.0],
             uv: [0.5, 0.5],
             color,
+            tangent: t0,
         });
         for i in 0..=segments {
             let theta = i as f32 / segments as f32 * two_pi;
@@ -340,12 +366,14 @@ impl Mesh {
                 normal: [0.0, -1.0, 0.0],
                 uv: [sin_t * 0.5 + 0.5, cos_t * 0.5 + 0.5],
                 color,
+                tangent: t0,
             });
         }
         for i in 0..segments {
             indices.extend_from_slice(&[bot_center, bot_center + 1 + i, bot_center + 2 + i]);
         }
 
+        compute_tangents(&mut vertices, &indices);
         Self {
             vertices,
             indices,
@@ -364,6 +392,7 @@ impl Mesh {
         let tubular = tubular_segments.max(3);
         let mut vertices = Vec::new();
         let mut indices = Vec::new();
+        let t0 = [0.0; 4];
 
         let major_r = 0.35;
         let minor_r = 0.15;
@@ -398,6 +427,7 @@ impl Mesh {
                     normal: [nx / len, ny / len, nz / len],
                     uv: [u, v],
                     color,
+                    tangent: t0,
                 });
             }
         }
@@ -412,6 +442,7 @@ impl Mesh {
             }
         }
 
+        compute_tangents(&mut vertices, &indices);
         Self {
             vertices,
             indices,
@@ -425,6 +456,7 @@ impl Mesh {
         let rings = rings.max(2);
         let mut vertices = Vec::new();
         let mut indices = Vec::new();
+        let t0 = [0.0; 4];
 
         let radius = 0.25;
         let half_height = 0.25; // Cylinder half-height (total capsule = 1.0).
@@ -451,6 +483,7 @@ impl Mesh {
                     normal: [x, y, z],
                     uv: [u, v * 0.25], // Top quarter of UV.
                     color,
+                    tangent: t0,
                 });
             }
         }
@@ -480,6 +513,7 @@ impl Mesh {
                 normal: [nx, 0.0, nz],
                 uv: [u, 0.25],
                 color,
+                tangent: t0,
             });
             // Bottom ring of cylinder (= equator of bottom hemisphere).
             vertices.push(MeshVertex {
@@ -487,6 +521,7 @@ impl Mesh {
                 normal: [nx, 0.0, nz],
                 uv: [u, 0.75],
                 color,
+                tangent: t0,
             });
         }
 
@@ -517,6 +552,7 @@ impl Mesh {
                     normal: [x, y, z],
                     uv: [u, 0.75 + v * 0.25], // Bottom quarter of UV.
                     color,
+                    tangent: t0,
                 });
             }
         }
@@ -531,6 +567,7 @@ impl Mesh {
             }
         }
 
+        compute_tangents(&mut vertices, &indices);
         Self {
             vertices,
             indices,
@@ -591,6 +628,8 @@ pub struct SkinnedMeshVertex {
     pub normal: [f32; 3],
     pub uv: [f32; 2],
     pub color: [f32; 4],
+    /// Tangent vector for normal mapping (xyz = direction, w = bitangent sign).
+    pub tangent: [f32; 4],
     /// Indices into the bone matrix palette (up to 4 influences).
     pub bone_indices: [i32; 4],
     /// Blend weights (should sum to 1.0).
@@ -617,6 +656,7 @@ impl SkinnedMesh {
             BufferElement::new(ShaderDataType::Float3, "a_normal"),
             BufferElement::new(ShaderDataType::Float2, "a_uv"),
             BufferElement::new(ShaderDataType::Float4, "a_color"),
+            BufferElement::new(ShaderDataType::Float4, "a_tangent"),
             BufferElement::new(ShaderDataType::Int4, "a_bone_indices"),
             BufferElement::new(ShaderDataType::Float4, "a_bone_weights"),
         ])
@@ -661,6 +701,170 @@ pub struct GltfSkinData {
     pub mesh: SkinnedMesh,
     pub skeleton: Skeleton,
     pub clips: Vec<SkeletalAnimationClip>,
+}
+
+// ---------------------------------------------------------------------------
+// Tangent generation (Mikktspace-style)
+// ---------------------------------------------------------------------------
+
+/// Compute tangent vectors for indexed triangle geometry from positions,
+/// normals, and UVs. Uses the standard Mikktspace algorithm: accumulate
+/// per-triangle tangent/bitangent from UV deltas, then Gram-Schmidt
+/// orthogonalize against the vertex normal and store the bitangent sign
+/// in the `.w` component.
+///
+/// Operates in-place on a `MeshVertex` slice using the given index buffer.
+pub fn compute_tangents(vertices: &mut [MeshVertex], indices: &[u32]) {
+    let n = vertices.len();
+    let mut tan1 = vec![[0.0_f32; 3]; n]; // accumulated tangent
+    let mut tan2 = vec![[0.0_f32; 3]; n]; // accumulated bitangent
+
+    for tri in indices.chunks(3) {
+        if tri.len() < 3 {
+            continue;
+        }
+        let (i0, i1, i2) = (tri[0] as usize, tri[1] as usize, tri[2] as usize);
+        if i0 >= n || i1 >= n || i2 >= n {
+            continue;
+        }
+
+        let p0 = vertices[i0].position;
+        let p1 = vertices[i1].position;
+        let p2 = vertices[i2].position;
+        let uv0 = vertices[i0].uv;
+        let uv1 = vertices[i1].uv;
+        let uv2 = vertices[i2].uv;
+
+        let e1 = [p1[0] - p0[0], p1[1] - p0[1], p1[2] - p0[2]];
+        let e2 = [p2[0] - p0[0], p2[1] - p0[1], p2[2] - p0[2]];
+        let duv1 = [uv1[0] - uv0[0], uv1[1] - uv0[1]];
+        let duv2 = [uv2[0] - uv0[0], uv2[1] - uv0[1]];
+
+        let denom = duv1[0] * duv2[1] - duv2[0] * duv1[1];
+        if denom.abs() < 1e-8 {
+            continue; // Degenerate UV triangle — skip.
+        }
+        let r = 1.0 / denom;
+
+        // Tangent = (e1 * duv2.y - e2 * duv1.y) * r
+        let t = [
+            (e1[0] * duv2[1] - e2[0] * duv1[1]) * r,
+            (e1[1] * duv2[1] - e2[1] * duv1[1]) * r,
+            (e1[2] * duv2[1] - e2[2] * duv1[1]) * r,
+        ];
+        // Bitangent = (e2 * duv1.x - e1 * duv2.x) * r
+        let b = [
+            (e2[0] * duv1[0] - e1[0] * duv2[0]) * r,
+            (e2[1] * duv1[0] - e1[1] * duv2[0]) * r,
+            (e2[2] * duv1[0] - e1[2] * duv2[0]) * r,
+        ];
+
+        for &idx in &[i0, i1, i2] {
+            tan1[idx][0] += t[0];
+            tan1[idx][1] += t[1];
+            tan1[idx][2] += t[2];
+            tan2[idx][0] += b[0];
+            tan2[idx][1] += b[1];
+            tan2[idx][2] += b[2];
+        }
+    }
+
+    // Gram-Schmidt orthogonalize and compute bitangent sign.
+    for i in 0..n {
+        let n_vec = glam::Vec3::from(vertices[i].normal);
+        let t_vec = glam::Vec3::from(tan1[i]);
+
+        // Orthogonalize: T' = normalize(T - N * dot(N, T))
+        let tangent = (t_vec - n_vec * n_vec.dot(t_vec)).normalize_or_zero();
+
+        // Bitangent sign: determines handedness of the TBN basis.
+        let b_vec = glam::Vec3::from(tan2[i]);
+        let w = if n_vec.cross(t_vec).dot(b_vec) < 0.0 {
+            -1.0
+        } else {
+            1.0
+        };
+
+        if tangent.length_squared() > 0.0 {
+            vertices[i].tangent = [tangent.x, tangent.y, tangent.z, w];
+        } else {
+            // Fallback for degenerate vertices.
+            vertices[i].tangent = [1.0, 0.0, 0.0, 1.0];
+        }
+    }
+}
+
+/// Compute tangent vectors for a skinned mesh vertex slice (same algorithm
+/// as [`compute_tangents`] but operating on [`SkinnedMeshVertex`]).
+pub fn compute_tangents_skinned(vertices: &mut [SkinnedMeshVertex], indices: &[u32]) {
+    let n = vertices.len();
+    let mut tan1 = vec![[0.0_f32; 3]; n];
+    let mut tan2 = vec![[0.0_f32; 3]; n];
+
+    for tri in indices.chunks(3) {
+        if tri.len() < 3 {
+            continue;
+        }
+        let (i0, i1, i2) = (tri[0] as usize, tri[1] as usize, tri[2] as usize);
+        if i0 >= n || i1 >= n || i2 >= n {
+            continue;
+        }
+
+        let p0 = vertices[i0].position;
+        let p1 = vertices[i1].position;
+        let p2 = vertices[i2].position;
+        let uv0 = vertices[i0].uv;
+        let uv1 = vertices[i1].uv;
+        let uv2 = vertices[i2].uv;
+
+        let e1 = [p1[0] - p0[0], p1[1] - p0[1], p1[2] - p0[2]];
+        let e2 = [p2[0] - p0[0], p2[1] - p0[1], p2[2] - p0[2]];
+        let duv1 = [uv1[0] - uv0[0], uv1[1] - uv0[1]];
+        let duv2 = [uv2[0] - uv0[0], uv2[1] - uv0[1]];
+
+        let denom = duv1[0] * duv2[1] - duv2[0] * duv1[1];
+        if denom.abs() < 1e-8 {
+            continue;
+        }
+        let r = 1.0 / denom;
+
+        let t = [
+            (e1[0] * duv2[1] - e2[0] * duv1[1]) * r,
+            (e1[1] * duv2[1] - e2[1] * duv1[1]) * r,
+            (e1[2] * duv2[1] - e2[2] * duv1[1]) * r,
+        ];
+        let b = [
+            (e2[0] * duv1[0] - e1[0] * duv2[0]) * r,
+            (e2[1] * duv1[0] - e1[1] * duv2[0]) * r,
+            (e2[2] * duv1[0] - e1[2] * duv2[0]) * r,
+        ];
+
+        for &idx in &[i0, i1, i2] {
+            tan1[idx][0] += t[0];
+            tan1[idx][1] += t[1];
+            tan1[idx][2] += t[2];
+            tan2[idx][0] += b[0];
+            tan2[idx][1] += b[1];
+            tan2[idx][2] += b[2];
+        }
+    }
+
+    for i in 0..n {
+        let n_vec = glam::Vec3::from(vertices[i].normal);
+        let t_vec = glam::Vec3::from(tan1[i]);
+        let tangent = (t_vec - n_vec * n_vec.dot(t_vec)).normalize_or_zero();
+        let b_vec = glam::Vec3::from(tan2[i]);
+        let w = if n_vec.cross(t_vec).dot(b_vec) < 0.0 {
+            -1.0
+        } else {
+            1.0
+        };
+        if tangent.length_squared() > 0.0 {
+            vertices[i].tangent = [tangent.x, tangent.y, tangent.z, w];
+        } else {
+            vertices[i].tangent = [1.0, 0.0, 0.0, 1.0];
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -780,12 +984,21 @@ pub fn load_gltf(path: &Path) -> EngineResult<Vec<Mesh>> {
                 .map(|c| c.into_rgba_f32().collect())
                 .unwrap_or_else(|| vec![[1.0, 1.0, 1.0, 1.0]; vert_count]);
 
-            let vertices: Vec<MeshVertex> = (0..vert_count)
+            // Read tangents from glTF if present (vec4: xyz = direction, w = sign).
+            let gltf_tangents: Option<Vec<[f32; 4]>> = reader
+                .read_tangents()
+                .map(|t| t.collect());
+
+            let mut vertices: Vec<MeshVertex> = (0..vert_count)
                 .map(|i| MeshVertex {
                     position: positions[i],
                     normal: normals[i],
                     uv: uvs[i],
                     color: colors[i],
+                    tangent: gltf_tangents
+                        .as_ref()
+                        .map(|t| t[i])
+                        .unwrap_or([0.0; 4]),
                 })
                 .collect();
 
@@ -802,6 +1015,17 @@ pub fn load_gltf(path: &Path) -> EngineResult<Vec<Mesh>> {
                 }
                 flipped
             };
+
+            // Compute tangents from geometry if the glTF file didn't provide them.
+            if gltf_tangents.is_none() {
+                compute_tangents(&mut vertices, &indices);
+            } else {
+                // glTF tangents were authored for CCW winding. After the CW
+                // flip above, the bitangent sign is inverted, so negate .w.
+                for v in &mut vertices {
+                    v.tangent[3] = -v.tangent[3];
+                }
+            }
 
             let name = mesh
                 .name()
@@ -1053,6 +1277,11 @@ pub fn load_gltf_skinned(path: &Path) -> EngineResult<GltfSkinData> {
             .map(|w| w.into_f32().collect())
             .unwrap_or_else(|| vec![[1.0, 0.0, 0.0, 0.0]; vert_count]);
 
+        // Tangents from glTF (vec4: xyz = direction, w = bitangent sign).
+        let gltf_tangents: Option<Vec<[f32; 4]>> = prim_reader
+            .read_tangents()
+            .map(|t| t.collect());
+
         let base = all_vertices.len() as u32;
         for i in 0..vert_count {
             all_vertices.push(SkinnedMeshVertex {
@@ -1060,6 +1289,10 @@ pub fn load_gltf_skinned(path: &Path) -> EngineResult<GltfSkinData> {
                 normal: normals[i],
                 uv: uvs[i],
                 color: colors[i],
+                tangent: gltf_tangents
+                    .as_ref()
+                    .map(|t| t[i])
+                    .unwrap_or([0.0; 4]),
                 bone_indices: joints[i],
                 bone_weights: weights[i],
             });
@@ -1073,6 +1306,11 @@ pub fn load_gltf_skinned(path: &Path) -> EngineResult<GltfSkinData> {
         let indices: Vec<u32> = prim_raw_indices.iter().map(|&i| i + base).collect();
 
         all_indices.extend(indices);
+
+        // Compute tangents if glTF didn't provide them.
+        if gltf_tangents.is_none() {
+            compute_tangents_skinned(&mut all_vertices[base as usize..], &prim_raw_indices);
+        }
     }
 
     let mesh_name = gltf_mesh

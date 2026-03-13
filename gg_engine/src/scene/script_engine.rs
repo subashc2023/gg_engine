@@ -433,6 +433,12 @@ impl ScriptEngine {
         self.call_entity_function(uuid, callback_name, other_uuid)
     }
 
+    /// Call a UI interaction callback (e.g. `on_ui_hover_enter`, `on_ui_click`)
+    /// in an entity's environment. No arguments.
+    pub fn call_entity_ui_callback(&mut self, uuid: u64, callback_name: &str) -> bool {
+        self.call_entity_function(uuid, callback_name, ())
+    }
+
     /// Call a named callback with a string argument (e.g. `on_animation_finished(clip_name)`).
     pub fn call_entity_callback_str(
         &mut self,

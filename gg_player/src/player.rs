@@ -374,6 +374,21 @@ impl Application for GGPlayer {
         self.scene.on_update_animations(dt.seconds());
         self.scene.update_spatial_audio();
 
+        // --- UI interaction (hit testing + Lua callbacks) ---
+        {
+            let (mx, my) = input.mouse_position();
+            let mouse_world = self.scene.screen_to_world_2d(mx as f32, my as f32);
+            let mouse_down = input.is_mouse_button_pressed(MouseButton::Left);
+            let just_pressed = input.is_mouse_button_just_pressed(MouseButton::Left);
+            let just_released = input.is_mouse_button_just_released(MouseButton::Left);
+            let events = self
+                .scene
+                .update_ui_with_input(mouse_world, mouse_down, just_pressed, just_released);
+            if !events.is_empty() {
+                self.scene.dispatch_ui_events(&events);
+            }
+        }
+
         // --- Poll runtime setting requests from Lua scripts ---
 
         // Quit.

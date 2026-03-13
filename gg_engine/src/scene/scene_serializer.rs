@@ -21,6 +21,8 @@ use crate::scene::{
     RigidBody2DType, RigidBody3DComponent, RigidBody3DType, Scene, SphereCollider3DComponent,
     SpriteAnimatorComponent, SpriteRendererComponent, TagComponent, TextComponent,
     TilemapComponent, TransformComponent, TransitionCondition, UIAnchorComponent,
+    UIImageComponent, UIInteractableComponent, UILayoutAlignment, UILayoutComponent,
+    UILayoutDirection, UIRectComponent,
 };
 
 /// Default value for collision layer/mask fields — all bits set (collides with everything).
@@ -242,6 +244,30 @@ struct EntityData {
         default
     )]
     ui_anchor: Option<UIAnchorData>,
+    #[serde(
+        rename = "UIRectComponent",
+        skip_serializing_if = "Option::is_none",
+        default
+    )]
+    ui_rect: Option<UIRectData>,
+    #[serde(
+        rename = "UIImageComponent",
+        skip_serializing_if = "Option::is_none",
+        default
+    )]
+    ui_image: Option<UIImageData>,
+    #[serde(
+        rename = "UIInteractableComponent",
+        skip_serializing_if = "Option::is_none",
+        default
+    )]
+    ui_interactable: Option<UIInteractableData>,
+    #[serde(
+        rename = "UILayoutComponent",
+        skip_serializing_if = "Option::is_none",
+        default
+    )]
+    ui_layout: Option<UILayoutData>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -882,6 +908,8 @@ struct MeshRendererData {
     /// Mesh asset handle (glTF/GLB). 0 = no asset, use primitive instead.
     #[serde(rename = "MeshAsset", default)]
     mesh_asset: u64,
+    #[serde(rename = "NormalTexture", default)]
+    normal_texture: u64,
     /// Use alpha-tested shadow pipeline for this mesh.
     #[serde(rename = "CastAlphaShadow", default)]
     cast_alpha_shadow: bool,
@@ -952,6 +980,60 @@ struct UIAnchorData {
     anchor: [f32; 2],
     #[serde(rename = "Offset", default)]
     offset: [f32; 2],
+}
+
+#[derive(Serialize, Deserialize)]
+struct UIRectData {
+    #[serde(rename = "Size")]
+    size: [f32; 2],
+    #[serde(rename = "Pivot", default = "default_half_vec2")]
+    pivot: [f32; 2],
+    #[serde(rename = "RaycastTarget", default = "default_true")]
+    raycast_target: bool,
+}
+
+fn default_half_vec2() -> [f32; 2] {
+    [0.5, 0.5]
+}
+
+#[derive(Serialize, Deserialize)]
+struct UIImageData {
+    #[serde(rename = "Color")]
+    color: [f32; 4],
+    #[serde(rename = "TextureHandle", default, skip_serializing_if = "is_zero_u64")]
+    texture_handle: u64,
+    #[serde(rename = "Border", default)]
+    border: [f32; 4],
+    #[serde(rename = "FillCenter", default = "default_true")]
+    fill_center: bool,
+    #[serde(rename = "SortingLayer", default)]
+    sorting_layer: i32,
+    #[serde(rename = "OrderInLayer", default)]
+    order_in_layer: i32,
+}
+
+#[derive(Serialize, Deserialize)]
+struct UIInteractableData {
+    #[serde(rename = "Interactable", default = "default_true")]
+    interactable: bool,
+    #[serde(rename = "HoverColor", skip_serializing_if = "Option::is_none", default)]
+    hover_color: Option<[f32; 4]>,
+    #[serde(rename = "PressColor", skip_serializing_if = "Option::is_none", default)]
+    press_color: Option<[f32; 4]>,
+    #[serde(rename = "DisabledColor", skip_serializing_if = "Option::is_none", default)]
+    disabled_color: Option<[f32; 4]>,
+}
+
+#[derive(Serialize, Deserialize)]
+struct UILayoutData {
+    #[serde(rename = "Direction", default)]
+    direction: String,
+    #[serde(rename = "Spacing", default)]
+    spacing: f32,
+    #[serde(rename = "Alignment", default)]
+    alignment: String,
+    #[serde(rename = "Padding", default)]
+    padding: [f32; 4],
 }
 
 fn has_no_relationships(r: &Option<RelationshipData>) -> bool {
@@ -1584,6 +1666,7 @@ impl SceneSerializer {
                         emissive_strength: mc.emissive_strength,
                         albedo_texture: mc.texture_handle.raw(),
                         mesh_asset,
+                        normal_texture: mc.normal_texture_handle.raw(),
                         cast_alpha_shadow: mc.cast_alpha_shadow,
                     }
                 }),
@@ -1615,6 +1698,46 @@ impl SceneSerializer {
                 .map(|ua| UIAnchorData {
                     anchor: ua.anchor.into(),
                     offset: ua.offset.into(),
+                }),
+            ui_rect: scene
+                .get_component::<UIRectComponent>(entity)
+                .map(|r| UIRectData {
+                    size: r.size.into(),
+                    pivot: r.pivot.into(),
+                    raycast_target: r.raycast_target,
+                }),
+            ui_image: scene
+                .get_component::<UIImageComponent>(entity)
+                .map(|img| UIImageData {
+                    color: img.color.into(),
+                    texture_handle: img.texture_handle.raw(),
+                    border: img.border,
+                    fill_center: img.fill_center,
+                    sorting_layer: img.sorting_layer,
+                    order_in_layer: img.order_in_layer,
+                }),
+            ui_interactable: scene
+                .get_component::<UIInteractableComponent>(entity)
+                .map(|inter| UIInteractableData {
+                    interactable: inter.interactable,
+                    hover_color: inter.hover_color.map(|c| c.into()),
+                    press_color: inter.press_color.map(|c| c.into()),
+                    disabled_color: inter.disabled_color.map(|c| c.into()),
+                }),
+            ui_layout: scene
+                .get_component::<UILayoutComponent>(entity)
+                .map(|layout| UILayoutData {
+                    direction: match layout.direction {
+                        UILayoutDirection::Vertical => "Vertical".to_string(),
+                        UILayoutDirection::Horizontal => "Horizontal".to_string(),
+                    },
+                    spacing: layout.spacing,
+                    alignment: match layout.alignment {
+                        UILayoutAlignment::Start => "Start".to_string(),
+                        UILayoutAlignment::Center => "Center".to_string(),
+                        UILayoutAlignment::End => "End".to_string(),
+                    },
+                    padding: layout.padding,
                 }),
         }
     }
@@ -2073,6 +2196,8 @@ impl SceneSerializer {
                     emissive_strength: mrd.emissive_strength,
                     texture: None,
                     texture_handle: Uuid::from_raw(mrd.albedo_texture),
+                    normal_texture: None,
+                    normal_texture_handle: Uuid::from_raw(mrd.normal_texture),
                     loaded_mesh: None,
                     local_bounds: None,
                     cast_alpha_shadow: mrd.cast_alpha_shadow,
@@ -2125,6 +2250,68 @@ impl SceneSerializer {
                 UIAnchorComponent {
                     anchor: Vec2::from(ua.anchor),
                     offset: Vec2::from(ua.offset),
+                },
+            );
+        }
+
+        // UIRectComponent
+        if let Some(ref r) = entity_data.ui_rect {
+            scene.add_component(
+                entity,
+                UIRectComponent {
+                    size: Vec2::from(r.size),
+                    pivot: Vec2::from(r.pivot),
+                    raycast_target: r.raycast_target,
+                },
+            );
+        }
+
+        // UIImageComponent
+        if let Some(ref img) = entity_data.ui_image {
+            scene.add_component(
+                entity,
+                UIImageComponent {
+                    color: Vec4::from(img.color),
+                    texture: None,
+                    texture_handle: Uuid::from_raw(img.texture_handle),
+                    border: img.border,
+                    fill_center: img.fill_center,
+                    sorting_layer: img.sorting_layer,
+                    order_in_layer: img.order_in_layer,
+                },
+            );
+        }
+
+        // UIInteractableComponent
+        if let Some(ref inter) = entity_data.ui_interactable {
+            scene.add_component(
+                entity,
+                UIInteractableComponent {
+                    interactable: inter.interactable,
+                    hover_color: inter.hover_color.map(Vec4::from),
+                    press_color: inter.press_color.map(Vec4::from),
+                    disabled_color: inter.disabled_color.map(Vec4::from),
+                    state: Default::default(),
+                },
+            );
+        }
+
+        // UILayoutComponent
+        if let Some(ref layout) = entity_data.ui_layout {
+            scene.add_component(
+                entity,
+                UILayoutComponent {
+                    direction: match layout.direction.as_str() {
+                        "Horizontal" => UILayoutDirection::Horizontal,
+                        _ => UILayoutDirection::Vertical,
+                    },
+                    spacing: layout.spacing,
+                    alignment: match layout.alignment.as_str() {
+                        "Start" => UILayoutAlignment::Start,
+                        "End" => UILayoutAlignment::End,
+                        _ => UILayoutAlignment::Center,
+                    },
+                    padding: layout.padding,
                 },
             );
         }
@@ -2619,6 +2806,53 @@ Entities:
             .get_component::<crate::scene::TilemapComponent>(*ent)
             .unwrap();
         assert_eq!(tm.tiles, vec![1, 2, 3, 4]);
+    }
+
+    #[test]
+    fn ui_test_scene_deserializes() {
+        let yaml = include_str!("../../../assets/scenes/ui_test.ggscene");
+        let mut scene = Scene::new();
+        SceneSerializer::deserialize_from_string(&mut scene, yaml)
+            .expect("Failed to deserialize ui_test scene");
+        // Camera, GameManager, Title, AccentBar, Panel,
+        // PlayBtnBg, ResetBtnBg, QuitBtnBg, ClickCounter, StatusText = 10
+        assert_eq!(scene.entity_count(), 10);
+
+        let entities = scene.each_entity_with_tag();
+        let names: Vec<&str> = entities.iter().map(|(_, name)| name.as_str()).collect();
+        assert!(names.contains(&"Camera"));
+        assert!(names.contains(&"PlayBtnBg"));
+        assert!(names.contains(&"Panel"));
+        assert!(names.contains(&"ClickCounter"));
+
+        // Verify button has UIRect + UIImage + UIInteractable + Text (single entity).
+        let (btn, _) = entities.iter().find(|(_, n)| n == "PlayBtnBg").unwrap();
+        let rect = scene
+            .get_component::<crate::scene::UIRectComponent>(*btn)
+            .unwrap();
+        assert!((rect.size.x - 320.0).abs() < 0.01);
+        assert!((rect.size.y - 60.0).abs() < 0.01);
+        assert!(rect.raycast_target);
+        assert!(scene.has_component::<crate::scene::UIImageComponent>(*btn));
+        assert!(scene.has_component::<crate::scene::UIInteractableComponent>(*btn));
+        assert!(scene.has_component::<crate::scene::TextComponent>(*btn));
+
+        // Panel has UIRect + UIImage + UILayout but no UIInteractable.
+        let (panel, _) = entities.iter().find(|(_, n)| n == "Panel").unwrap();
+        assert!(scene.has_component::<crate::scene::UIRectComponent>(*panel));
+        assert!(scene.has_component::<crate::scene::UIImageComponent>(*panel));
+        assert!(scene.has_component::<crate::scene::UILayoutComponent>(*panel));
+        assert!(!scene.has_component::<crate::scene::UIInteractableComponent>(*panel));
+
+        // Button is a child of Panel.
+        let rel = scene
+            .get_component::<crate::scene::RelationshipComponent>(*btn)
+            .unwrap();
+        assert!(rel.parent.is_some());
+
+        // GameManager has the Lua script.
+        let (gm, _) = entities.iter().find(|(_, n)| n == "GameManager").unwrap();
+        assert!(scene.has_component::<LuaScriptComponent>(*gm));
     }
 
     #[test]

@@ -1192,6 +1192,11 @@ pub struct MeshRendererComponent {
     /// Asset handle referencing an albedo texture in the asset registry.
     /// 0 = no texture assigned.
     pub texture_handle: Uuid,
+    /// Runtime-only loaded normal map texture. Not serialized.
+    pub normal_texture: Option<Ref<Texture2D>>,
+    /// Asset handle referencing a normal map texture in the asset registry.
+    /// 0 = no normal map assigned.
+    pub normal_texture_handle: Uuid,
     /// Runtime-only CPU mesh data loaded from a glTF asset. Not serialized.
     pub loaded_mesh: Option<Ref<crate::renderer::Mesh>>,
     /// Local-space AABB computed from loaded mesh vertices. Not serialized.
@@ -1214,6 +1219,8 @@ impl Clone for MeshRendererComponent {
             emissive_strength: self.emissive_strength,
             texture: self.texture.clone(),
             texture_handle: self.texture_handle,
+            normal_texture: self.normal_texture.clone(),
+            normal_texture_handle: self.normal_texture_handle,
             loaded_mesh: self.loaded_mesh.clone(), // Arc clone (refcount bump).
             local_bounds: self.local_bounds,
             cast_alpha_shadow: self.cast_alpha_shadow,
@@ -1233,6 +1240,8 @@ impl MeshRendererComponent {
             emissive_strength: 1.0,
             texture: None,
             texture_handle: Uuid::from_raw(0),
+            normal_texture: None,
+            normal_texture_handle: Uuid::from_raw(0),
             loaded_mesh: None,
             local_bounds: None,
             cast_alpha_shadow: false,
@@ -1268,6 +1277,8 @@ impl Default for MeshRendererComponent {
             emissive_strength: 1.0,
             texture: None,
             texture_handle: Uuid::from_raw(0),
+            normal_texture: None,
+            normal_texture_handle: Uuid::from_raw(0),
             loaded_mesh: None,
             local_bounds: None,
             cast_alpha_shadow: false,
@@ -1406,6 +1417,209 @@ impl Default for UIAnchorComponent {
         Self {
             anchor: Vec2::new(0.5, 0.5),
             offset: Vec2::ZERO,
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// UI Rect Component (screen-space sized UI element)
+// ---------------------------------------------------------------------------
+
+/// Defines an entity as a UI element with a fixed screen-pixel size.
+///
+/// When combined with a [`UIAnchorComponent`], the entity's scale is
+/// automatically adjusted each frame so that it maintains a consistent
+/// pixel size on screen regardless of camera zoom / orthographic size.
+///
+/// `size` is in **UI points** (screen pixels at `gui_scale = 1.0`).
+/// `pivot` controls the alignment origin within the rect.
+#[derive(Clone, Debug)]
+pub struct UIRectComponent {
+    /// Size in UI points (screen pixels at gui_scale=1).
+    pub size: Vec2,
+    /// Pivot (0,0)=top-left, (0.5,0.5)=center, (1,1)=bottom-right.
+    pub pivot: Vec2,
+    /// If true, blocks mouse events from passing through.
+    pub raycast_target: bool,
+}
+
+impl Default for UIRectComponent {
+    fn default() -> Self {
+        Self {
+            size: Vec2::new(100.0, 100.0),
+            pivot: Vec2::new(0.5, 0.5),
+            raycast_target: true,
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// UI Image Component (visual for UI entities, supports 9-slice)
+// ---------------------------------------------------------------------------
+
+/// Renders a colored/textured quad on a UI entity, optionally using
+/// 9-slice borders for scalable panel backgrounds.
+///
+/// When `border` is all zeros the image is a simple stretched quad.
+/// Non-zero border values define fixed-size corners and stretching
+/// edges (like Unity's Image in Sliced mode).
+#[derive(Clone)]
+pub struct UIImageComponent {
+    /// Tint color (multiplied with texture).
+    pub color: Vec4,
+    /// Runtime-loaded texture (not serialized).
+    pub texture: Option<Ref<Texture2D>>,
+    /// Asset handle for the texture (serialized).
+    pub texture_handle: Uuid,
+    /// 9-slice border insets in texels [left, right, top, bottom].
+    /// All zero = simple stretch.
+    pub border: [f32; 4],
+    /// Whether to fill the center patch of the 9-slice.
+    pub fill_center: bool,
+    /// Sorting layer for draw ordering.
+    pub sorting_layer: i32,
+    /// Order within the sorting layer.
+    pub order_in_layer: i32,
+}
+
+impl Default for UIImageComponent {
+    fn default() -> Self {
+        Self {
+            color: Vec4::ONE,
+            texture: None,
+            texture_handle: Uuid::default(),
+            border: [0.0; 4],
+            fill_center: true,
+            sorting_layer: 0,
+            order_in_layer: 0,
+        }
+    }
+}
+
+impl std::fmt::Debug for UIImageComponent {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("UIImageComponent")
+            .field("color", &self.color)
+            .field("texture_handle", &self.texture_handle)
+            .field("border", &self.border)
+            .field("fill_center", &self.fill_center)
+            .field("sorting_layer", &self.sorting_layer)
+            .field("order_in_layer", &self.order_in_layer)
+            .finish()
+    }
+}
+
+// ---------------------------------------------------------------------------
+// UI Interactable Component (hover/press/click detection)
+// ---------------------------------------------------------------------------
+
+/// Adds mouse interaction (hover, press, click) to a UI entity.
+///
+/// Requires a [`UIRectComponent`] with `raycast_target = true` for hit testing.
+/// Color overrides are multiplied with the entity's visual color (sprite or
+/// UIImage) based on the current interaction state.
+#[derive(Clone, Debug)]
+pub struct UIInteractableComponent {
+    /// Whether this interactable is enabled (accepts input).
+    pub interactable: bool,
+    /// Color multiplier when hovered.
+    pub hover_color: Option<Vec4>,
+    /// Color multiplier when pressed.
+    pub press_color: Option<Vec4>,
+    /// Color multiplier when disabled.
+    pub disabled_color: Option<Vec4>,
+    /// Current runtime interaction state (not serialized).
+    pub state: UIInteractionState,
+}
+
+impl Default for UIInteractableComponent {
+    fn default() -> Self {
+        Self {
+            interactable: true,
+            hover_color: None,
+            press_color: None,
+            disabled_color: None,
+            state: UIInteractionState::Normal,
+        }
+    }
+}
+
+/// Runtime interaction state for a [`UIInteractableComponent`].
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum UIInteractionState {
+    #[default]
+    Normal,
+    Hovered,
+    Pressed,
+    Disabled,
+}
+
+// ---------------------------------------------------------------------------
+// UI Event (returned by hit-testing system)
+// ---------------------------------------------------------------------------
+
+/// A UI interaction event generated by [`SceneCore::update_ui_interaction`].
+#[derive(Clone, Debug)]
+pub enum UIEvent {
+    HoverEnter(u64),
+    HoverExit(u64),
+    Press(u64),
+    Release(u64),
+    Click(u64),
+}
+
+// ---------------------------------------------------------------------------
+// UI Layout Component (auto-arranges children in stacks)
+// ---------------------------------------------------------------------------
+
+/// Layout direction for a [`UILayoutComponent`].
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum UILayoutDirection {
+    /// Children stacked top-to-bottom.
+    #[default]
+    Vertical,
+    /// Children arranged left-to-right.
+    Horizontal,
+}
+
+/// Cross-axis alignment for a [`UILayoutComponent`].
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum UILayoutAlignment {
+    /// Align to the start (left for vertical, top for horizontal).
+    Start,
+    /// Center along the cross axis.
+    #[default]
+    Center,
+    /// Align to the end (right for vertical, bottom for horizontal).
+    End,
+}
+
+/// Automatically arranges child entities in a vertical or horizontal stack.
+///
+/// Requires a [`UIRectComponent`] (defines the container size) and a
+/// [`RelationshipComponent`] (supplies the list of children).
+/// Only children that also have a [`UIRectComponent`] participate in layout.
+///
+/// `padding` is `[top, right, bottom, left]` in UI points.
+#[derive(Clone, Debug)]
+pub struct UILayoutComponent {
+    /// Stack direction.
+    pub direction: UILayoutDirection,
+    /// Gap between children in UI points.
+    pub spacing: f32,
+    /// Cross-axis alignment.
+    pub alignment: UILayoutAlignment,
+    /// Content padding `[top, right, bottom, left]` in UI points.
+    pub padding: [f32; 4],
+}
+
+impl Default for UILayoutComponent {
+    fn default() -> Self {
+        Self {
+            direction: UILayoutDirection::Vertical,
+            spacing: 0.0,
+            alignment: UILayoutAlignment::Center,
+            padding: [0.0; 4],
         }
     }
 }

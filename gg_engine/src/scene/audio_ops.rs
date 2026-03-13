@@ -135,6 +135,16 @@ impl Scene {
             }
         }
 
+        for (tag, img) in self
+            .world
+            .query::<(&TagComponent, &super::UIImageComponent)>()
+            .iter()
+        {
+            if img.texture_handle == asset_handle {
+                refs.push((tag.tag.clone(), "UIImage"));
+            }
+        }
+
         refs
     }
 
