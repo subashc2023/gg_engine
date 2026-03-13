@@ -30,6 +30,7 @@ pub(crate) fn draw_mesh_renderer_component(
                 mut emissive_arr,
                 mut emissive_strength,
                 texture_handle_raw,
+                normal_texture_handle_raw,
             ) = {
                 let mc = scene
                     .get_component::<MeshRendererComponent>(entity)
@@ -42,6 +43,7 @@ pub(crate) fn draw_mesh_renderer_component(
                     <[f32; 3]>::from(mc.emissive_color),
                     mc.emissive_strength,
                     mc.texture_handle.raw(),
+                    mc.normal_texture_handle.raw(),
                 )
             };
 
@@ -225,6 +227,42 @@ pub(crate) fn draw_mesh_renderer_component(
                             mc.texture_handle = Uuid::from_raw(0);
                             mc.texture = None;
                         }
+                        *scene_dirty = true;
+                    }
+                    super::AssetPickerAction::None => {}
+                }
+            });
+
+            // Normal map texture picker.
+            ui.horizontal(|ui| {
+                ui.label("Normal Map");
+                match super::asset_handle_picker(
+                    ui,
+                    normal_texture_handle_raw,
+                    asset_manager,
+                    assets_root,
+                    "textures",
+                    "Image files",
+                    &["png", "jpg", "jpeg"],
+                ) {
+                    super::AssetPickerAction::Selected(handle) => {
+                        if let Some(mut mc) =
+                            scene.get_component_mut::<MeshRendererComponent>(entity)
+                        {
+                            mc.normal_texture_handle = handle;
+                            mc.normal_texture = None;
+                        }
+                        scene.invalidate_texture_cache();
+                        *scene_dirty = true;
+                    }
+                    super::AssetPickerAction::Cleared => {
+                        if let Some(mut mc) =
+                            scene.get_component_mut::<MeshRendererComponent>(entity)
+                        {
+                            mc.normal_texture_handle = Uuid::from_raw(0);
+                            mc.normal_texture = None;
+                        }
+                        scene.invalidate_texture_cache();
                         *scene_dirty = true;
                     }
                     super::AssetPickerAction::None => {}

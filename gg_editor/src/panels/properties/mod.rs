@@ -9,6 +9,10 @@ mod sprite;
 mod text;
 mod tilemap;
 mod ui_anchor;
+mod ui_image;
+mod ui_interactable;
+mod ui_layout;
+mod ui_rect;
 
 #[cfg(feature = "lua-scripting")]
 pub(crate) use scripting::clear_field_cache;
@@ -869,6 +873,60 @@ fn draw_components(
     ) {
         undo_system.record(scene, "Remove UI Anchor");
         scene.remove_component::<UIAnchorComponent>(entity);
+        *scene_dirty = true;
+    }
+
+    if ui_rect::draw_ui_rect_component(
+        ui,
+        scene,
+        entity,
+        &bold_family,
+        scene_dirty,
+        undo_system,
+    ) {
+        undo_system.record(scene, "Remove UI Rect");
+        scene.remove_component::<UIRectComponent>(entity);
+        *scene_dirty = true;
+    }
+
+    if ui_image::draw_ui_image_component(
+        ui,
+        scene,
+        entity,
+        &bold_family,
+        asset_manager,
+        assets_root,
+        scene_dirty,
+        undo_system,
+    ) {
+        undo_system.record(scene, "Remove UI Image");
+        scene.remove_component::<UIImageComponent>(entity);
+        *scene_dirty = true;
+    }
+
+    if ui_interactable::draw_ui_interactable_component(
+        ui,
+        scene,
+        entity,
+        &bold_family,
+        scene_dirty,
+        undo_system,
+    ) {
+        undo_system.record(scene, "Remove UI Interactable");
+        scene.remove_component::<UIInteractableComponent>(entity);
+        *scene_dirty = true;
+    }
+
+    if ui_layout::draw_ui_layout_component(
+        ui,
+        scene,
+        entity,
+        &bold_family,
+        scene_dirty,
+        undo_system,
+    ) {
+        undo_system.record(scene, "Remove UI Layout");
+        scene.remove_component::<UILayoutComponent>(entity);
         *scene_dirty = true;
     }
 

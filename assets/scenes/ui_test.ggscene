@@ -1,0 +1,244 @@
+Version: 2
+Scene: UI Test
+Entities:
+# ── Camera ────────────────────────────────────────────────────
+- Entity: 100
+  TagComponent:
+    Tag: Camera
+  TransformComponent:
+    Translation: [0.0, 0.0, 0.0]
+    Rotation: [0.0, 0.0, 0.0]
+    Scale: [1.0, 1.0, 1.0]
+  CameraComponent:
+    Camera:
+      ProjectionType: 1
+      PerspectiveFOV: 0.7853982
+      PerspectiveNear: 0.01
+      PerspectiveFar: 1000.0
+      OrthographicSize: 10.0
+      OrthographicNear: -1.0
+      OrthographicFar: 1.0
+    Primary: true
+    FixedAspectRatio: false
+
+# ── Game Manager (Lua script) ─────────────────────────────────
+- Entity: 150
+  TagComponent:
+    Tag: GameManager
+  TransformComponent:
+    Translation: [0.0, 0.0, 0.0]
+    Rotation: [0.0, 0.0, 0.0]
+    Scale: [1.0, 1.0, 1.0]
+  LuaScriptComponent:
+    ScriptPath: assets/scripts/ui_test.lua
+
+# ── Title ─────────────────────────────────────────────────────
+- Entity: 200
+  TagComponent:
+    Tag: Title
+  TransformComponent:
+    Translation: [0.0, 0.0, 0.0]
+    Rotation: [0.0, 0.0, 0.0]
+    Scale: [1.0, 1.0, 1.0]
+  TextComponent:
+    Text: "Runtime UI Test"
+    FontPath: assets/fonts/JetBrainsMono-Regular.ttf
+    FontSize: 0.7
+    Color: [1.0, 1.0, 1.0, 1.0]
+    LineSpacing: 1.0
+    Kerning: 0.0
+    SortingLayer: 10001
+    OrderInLayer: 0
+  UIAnchorComponent:
+    Anchor: [0.5, 0.08]
+    Offset: [-3.5, 0.0]
+
+# ── Accent bar ────────────────────────────────────────────────
+- Entity: 210
+  TagComponent:
+    Tag: AccentBar
+  TransformComponent:
+    Translation: [0.0, 0.0, 0.1]
+    Rotation: [0.0, 0.0, 0.0]
+    Scale: [20.0, 0.03, 1.0]
+  SpriteRendererComponent:
+    Color: [0.3, 0.55, 1.0, 1.0]
+    TilingFactor: 1.0
+  UIAnchorComponent:
+    Anchor: [0.5, 0.16]
+    Offset: [0.0, 0.0]
+
+# ══════════════════════════════════════════════════════════════
+# Panel — vertical layout container with 3 button children
+# ══════════════════════════════════════════════════════════════
+- Entity: 300
+  TagComponent:
+    Tag: Panel
+  TransformComponent:
+    Translation: [0.0, 0.0, 0.5]
+    Rotation: [0.0, 0.0, 0.0]
+    Scale: [1.0, 1.0, 1.0]
+  RelationshipComponent:
+    Children: [400, 500, 600]
+  UIAnchorComponent:
+    Anchor: [0.5, 0.5]
+    Offset: [0.0, 0.0]
+  UIRectComponent:
+    Size: [400.0, 300.0]
+    Pivot: [0.5, 0.5]
+    RaycastTarget: false
+  UIImageComponent:
+    Color: [0.12, 0.12, 0.18, 0.85]
+    Border: [0.0, 0.0, 0.0, 0.0]
+    FillCenter: true
+    SortingLayer: 0
+    OrderInLayer: 0
+  UILayoutComponent:
+    Direction: Vertical
+    Spacing: 12.0
+    Alignment: Center
+    Padding: [30.0, 30.0, 30.0, 30.0]
+
+# ── Click Me button ──────────────────────────────────────────
+- Entity: 400
+  TagComponent:
+    Tag: PlayBtnBg
+  TransformComponent:
+    Translation: [0.0, 0.0, 0.0]
+    Rotation: [0.0, 0.0, 0.0]
+    Scale: [1.0, 1.0, 1.0]
+  RelationshipComponent:
+    Parent: 300
+  UIRectComponent:
+    Size: [320.0, 60.0]
+    Pivot: [0.5, 0.5]
+    RaycastTarget: true
+  UIImageComponent:
+    Color: [0.22, 0.22, 0.30, 1.0]
+    Border: [0.0, 0.0, 0.0, 0.0]
+    FillCenter: true
+    SortingLayer: 1
+    OrderInLayer: 0
+  UIInteractableComponent:
+    Interactable: true
+    HoverColor: [0.3, 0.5, 0.9, 1.0]
+    PressColor: [0.15, 0.25, 0.5, 1.0]
+  TextComponent:
+    Text: "Click Me!"
+    FontPath: assets/fonts/JetBrainsMono-Regular.ttf
+    FontSize: 28.0
+    Color: [0.9, 0.9, 0.9, 1.0]
+    LineSpacing: 1.0
+    Kerning: 0.0
+    SortingLayer: 10001
+    OrderInLayer: 1
+
+# ── Reset button ──────────────────────────────────────────────
+- Entity: 500
+  TagComponent:
+    Tag: ResetBtnBg
+  TransformComponent:
+    Translation: [0.0, 0.0, 0.0]
+    Rotation: [0.0, 0.0, 0.0]
+    Scale: [1.0, 1.0, 1.0]
+  RelationshipComponent:
+    Parent: 300
+  UIRectComponent:
+    Size: [320.0, 60.0]
+    Pivot: [0.5, 0.5]
+    RaycastTarget: true
+  UIImageComponent:
+    Color: [0.22, 0.22, 0.30, 1.0]
+    Border: [0.0, 0.0, 0.0, 0.0]
+    FillCenter: true
+    SortingLayer: 1
+    OrderInLayer: 0
+  UIInteractableComponent:
+    Interactable: true
+    HoverColor: [0.3, 0.5, 0.9, 1.0]
+    PressColor: [0.15, 0.25, 0.5, 1.0]
+  TextComponent:
+    Text: "Reset"
+    FontPath: assets/fonts/JetBrainsMono-Regular.ttf
+    FontSize: 28.0
+    Color: [0.9, 0.9, 0.9, 1.0]
+    LineSpacing: 1.0
+    Kerning: 0.0
+    SortingLayer: 10001
+    OrderInLayer: 1
+
+# ── Quit button ───────────────────────────────────────────────
+- Entity: 600
+  TagComponent:
+    Tag: QuitBtnBg
+  TransformComponent:
+    Translation: [0.0, 0.0, 0.0]
+    Rotation: [0.0, 0.0, 0.0]
+    Scale: [1.0, 1.0, 1.0]
+  RelationshipComponent:
+    Parent: 300
+  UIRectComponent:
+    Size: [320.0, 60.0]
+    Pivot: [0.5, 0.5]
+    RaycastTarget: true
+  UIImageComponent:
+    Color: [0.35, 0.15, 0.15, 1.0]
+    Border: [0.0, 0.0, 0.0, 0.0]
+    FillCenter: true
+    SortingLayer: 1
+    OrderInLayer: 0
+  UIInteractableComponent:
+    Interactable: true
+    HoverColor: [0.7, 0.2, 0.2, 1.0]
+    PressColor: [0.4, 0.1, 0.1, 1.0]
+  TextComponent:
+    Text: "Quit"
+    FontPath: assets/fonts/JetBrainsMono-Regular.ttf
+    FontSize: 28.0
+    Color: [0.9, 0.9, 0.9, 1.0]
+    LineSpacing: 1.0
+    Kerning: 0.0
+    SortingLayer: 10001
+    OrderInLayer: 1
+
+# ── Click counter ─────────────────────────────────────────────
+- Entity: 700
+  TagComponent:
+    Tag: ClickCounter
+  TransformComponent:
+    Translation: [0.0, 0.0, 0.0]
+    Rotation: [0.0, 0.0, 0.0]
+    Scale: [1.0, 1.0, 1.0]
+  TextComponent:
+    Text: "Clicks: 0"
+    FontPath: assets/fonts/JetBrainsMono-Regular.ttf
+    FontSize: 0.4
+    Color: [0.9, 0.85, 0.2, 1.0]
+    LineSpacing: 1.0
+    Kerning: 0.0
+    SortingLayer: 10001
+    OrderInLayer: 0
+  UIAnchorComponent:
+    Anchor: [0.5, 0.82]
+    Offset: [-1.5, 0.0]
+
+# ── Status text (bottom) ──────────────────────────────────────
+- Entity: 800
+  TagComponent:
+    Tag: StatusText
+  TransformComponent:
+    Translation: [0.0, 0.0, 0.0]
+    Rotation: [0.0, 0.0, 0.0]
+    Scale: [1.0, 1.0, 1.0]
+  TextComponent:
+    Text: "Hover over buttons to test interaction"
+    FontPath: assets/fonts/JetBrainsMono-Regular.ttf
+    FontSize: 0.22
+    Color: [0.4, 0.4, 0.5, 1.0]
+    LineSpacing: 1.0
+    Kerning: 0.0
+    SortingLayer: 10001
+    OrderInLayer: 0
+  UIAnchorComponent:
+    Anchor: [0.0, 1.0]
+    Offset: [0.5, 0.6]

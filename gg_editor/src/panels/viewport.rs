@@ -191,10 +191,10 @@ pub(crate) fn viewport_ui(
         None
     };
 
-    // -- Mouse picking: schedule pixel readback (edit mode only) --
-    // Also store viewport-relative mouse position for tilemap cursor highlight.
+    // -- Mouse position + pixel readback --
+    // Track viewport-relative mouse position for tilemap painting and UI interaction.
     *viewport_mouse_pos = None;
-    if *viewport_hovered && !is_playing {
+    if *viewport_hovered {
         if let Some(viewport_rect) = viewport_rect {
             if let Some(pos) = ui.ctx().input(|i| i.pointer.latest_pos()) {
                 let ppp = ui.ctx().pixels_per_point();
@@ -203,8 +203,11 @@ pub(crate) fn viewport_ui(
 
                 if mx >= 0 && my >= 0 && mx < viewport_size.0 as i32 && my < viewport_size.1 as i32
                 {
-                    if let Some(fb) = scene_fb.as_mut() {
-                        fb.schedule_pixel_readback(1, mx, my);
+                    // Pixel readback for entity picking (edit mode only).
+                    if !is_playing {
+                        if let Some(fb) = scene_fb.as_mut() {
+                            fb.schedule_pixel_readback(1, mx, my);
+                        }
                     }
                     *viewport_mouse_pos = Some((mx as f32, my as f32));
                 }
