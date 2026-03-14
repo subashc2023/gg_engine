@@ -1749,6 +1749,12 @@ pub struct SkeletalAnimationComponent {
     /// Total blend duration (seconds). 0.0 = no blend active.
     pub blend_duration: f32,
 
+    /// Per-clip animation events, keyed by clip name. These are user-defined
+    /// (not from glTF) and are serialized on the component. When playback
+    /// crosses an event's time, the engine fires `on_animation_event(event_name, clip_name)`.
+    pub clip_events:
+        std::collections::HashMap<String, Vec<crate::renderer::skeleton::SkeletalAnimationEvent>>,
+
     /// Runtime-only: the uploaded skinned mesh vertex array.
     pub(crate) skinned_vertex_array: Option<crate::renderer::VertexArray>,
     /// Runtime-only: the loaded skinned mesh data (shared via Arc).
@@ -1770,6 +1776,7 @@ impl Clone for SkeletalAnimationComponent {
             blend_from_time: self.blend_from_time,
             blend_elapsed: self.blend_elapsed,
             blend_duration: self.blend_duration,
+            clip_events: self.clip_events.clone(),
             skinned_vertex_array: None, // Runtime-only, not copied.
             loaded_skinned_mesh: self.loaded_skinned_mesh.clone(), // Arc clone.
         }
@@ -1792,6 +1799,7 @@ impl SkeletalAnimationComponent {
             blend_from_time: 0.0,
             blend_elapsed: 0.0,
             blend_duration: 0.0,
+            clip_events: std::collections::HashMap::new(),
             skinned_vertex_array: None,
             loaded_skinned_mesh: Some(crate::Ref::new(data.mesh.clone())),
         }
@@ -1820,6 +1828,7 @@ impl SkeletalAnimationComponent {
             blend_from_time: 0.0,
             blend_elapsed: 0.0,
             blend_duration: 0.0,
+            clip_events: std::collections::HashMap::new(),
             skinned_vertex_array: None,
             loaded_skinned_mesh: None,
         }

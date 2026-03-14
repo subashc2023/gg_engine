@@ -60,9 +60,9 @@ pub use renderer::{
 };
 pub use scene::{Aabb2D, Aabb3D, CullingStats, Frustum3D, SpatialGrid, SpatialGrid3D};
 pub use scene::{
-    AmbientLightComponent, AnimationClip, AnimationControllerComponent, AnimationTransition,
-    AudioCategory, AudioListenerComponent, AudioSourceComponent, BoxCollider2DComponent,
-    CameraComponent, CircleCollider2DComponent, CircleRendererComponent,
+    AmbientLightComponent, AnimationClip, AnimationControllerComponent, AnimationEvent,
+    AnimationTransition, AudioCategory, AudioListenerComponent, AudioSourceComponent,
+    BoxCollider2DComponent, CameraComponent, CircleCollider2DComponent, CircleRendererComponent,
     DirectionalLightComponent, Entity, FloatOrdering, FullscreenMode, IdComponent,
     InstancedSpriteAnimator, MeshPrimitive, MeshRendererComponent, MeshSource, NativeScript,
     NativeScriptComponent, ParticleEmitterComponent, PointLightComponent, RelationshipComponent,
@@ -117,17 +117,18 @@ pub mod prelude {
     };
     pub use crate::scene::{Aabb2D, Aabb3D, Frustum3D, SpatialGrid, SpatialGrid3D};
     pub use crate::scene::{
-        AmbientLightComponent, AnimationClip, AnimationControllerComponent, AnimationTransition,
-        AudioCategory, AudioListenerComponent, AudioSourceComponent, BoxCollider2DComponent,
-        CameraComponent, CircleCollider2DComponent, CircleRendererComponent,
-        DirectionalLightComponent, Entity, EnvironmentComponent, FloatOrdering, FullscreenMode,
-        IdComponent, InstancedSpriteAnimator, MeshPrimitive, MeshRendererComponent, MeshSource,
-        NativeScript, NativeScriptComponent, ParticleEmitterComponent, PointLightComponent,
-        RelationshipComponent, RigidBody2DComponent, RigidBody2DType, RigidBodyType, Scene,
-        SceneSerializer, SkeletalAnimationComponent, SpriteAnimatorComponent,
-        SpriteRendererComponent, TagComponent, TextComponent, TilemapComponent,
-        TransformComponent, TransitionCondition, UIAnchorComponent, UIEvent, UIImageComponent,
-        UIInteractableComponent, UIInteractionState, UILayoutAlignment, UILayoutComponent,
+        AmbientLightComponent, AnimationClip, AnimationControllerComponent, AnimationEvent,
+        AnimationTransition, AudioCategory, AudioListenerComponent, AudioSourceComponent,
+        BoxCollider2DComponent, CameraComponent, CircleCollider2DComponent,
+        CircleRendererComponent, DirectionalLightComponent, Entity, EnvironmentComponent,
+        FloatOrdering, FullscreenMode, IdComponent, InstancedSpriteAnimator, MeshPrimitive,
+        MeshRendererComponent, MeshSource, NativeScript, NativeScriptComponent,
+        ParticleEmitterComponent, PointLightComponent, RelationshipComponent,
+        RigidBody2DComponent, RigidBody2DType, RigidBodyType, Scene, SceneSerializer,
+        SkeletalAnimationComponent, SpriteAnimatorComponent, SpriteRendererComponent,
+        TagComponent, TextComponent, TilemapComponent, TransformComponent, TransitionCondition,
+        UIAnchorComponent, UIEvent, UIImageComponent, UIInteractableComponent,
+        UIInteractionState, UILayoutAlignment, UILayoutComponent,
         UILayoutDirection, UIRectComponent, TILE_FLIP_H, TILE_FLIP_V, TILE_ID_MASK,
     };
     #[cfg(feature = "physics-3d")]

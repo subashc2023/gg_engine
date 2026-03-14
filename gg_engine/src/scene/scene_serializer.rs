@@ -590,6 +590,14 @@ struct RelationshipData {
 }
 
 #[derive(Serialize, Deserialize)]
+struct AnimationEventData {
+    #[serde(rename = "Frame")]
+    frame: u32,
+    #[serde(rename = "Name")]
+    name: String,
+}
+
+#[derive(Serialize, Deserialize)]
 struct AnimationClipData {
     #[serde(rename = "Name")]
     name: String,
@@ -603,6 +611,8 @@ struct AnimationClipData {
     looping: bool,
     #[serde(rename = "TextureHandle", default, skip_serializing_if = "is_zero_u64")]
     texture_handle: u64,
+    #[serde(rename = "Events", default, skip_serializing_if = "Vec::is_empty")]
+    events: Vec<AnimationEventData>,
 }
 
 fn convert_clips(clips: &[AnimationClip]) -> Vec<AnimationClipData> {
@@ -615,6 +625,14 @@ fn convert_clips(clips: &[AnimationClip]) -> Vec<AnimationClipData> {
             fps: c.fps,
             looping: c.looping,
             texture_handle: c.texture_handle.raw(),
+            events: c
+                .events
+                .iter()
+                .map(|e| AnimationEventData {
+                    frame: e.frame,
+                    name: e.name.clone(),
+                })
+                .collect(),
         })
         .collect()
 }
@@ -940,6 +958,28 @@ fn default_blend_mode() -> String {
     "Opaque".to_string()
 }
 
+/// Serialization struct for a single skeletal animation event.
+#[derive(Serialize, Deserialize)]
+struct SkeletalAnimEventData {
+    /// Time in seconds within the clip.
+    #[serde(rename = "Time")]
+    time: f32,
+    /// Event name.
+    #[serde(rename = "Name")]
+    name: String,
+}
+
+/// Serialization struct for events attached to a named skeletal clip.
+#[derive(Serialize, Deserialize)]
+struct SkeletalClipEventsData {
+    /// Clip name these events belong to.
+    #[serde(rename = "Clip")]
+    clip: String,
+    /// Events on this clip.
+    #[serde(rename = "Events")]
+    events: Vec<SkeletalAnimEventData>,
+}
+
 #[derive(Serialize, Deserialize)]
 struct SkeletalAnimationData {
     /// glTF/GLB mesh asset handle (UUID).
@@ -964,6 +1004,9 @@ struct SkeletalAnimationData {
         skip_serializing_if = "is_zero_f32"
     )]
     blend_duration: f32,
+    /// Per-clip animation events for skeletal clips.
+    #[serde(rename = "ClipEvents", default, skip_serializing_if = "Vec::is_empty")]
+    clip_events: Vec<SkeletalClipEventsData>,
 }
 
 fn default_anim_speed() -> f32 {
@@ -1885,6 +1928,20 @@ impl SceneSerializer {
                     playing: sac.playing,
                     default_clip: sac.current_clip_name().unwrap_or("").to_string(),
                     blend_duration: sac.blend_duration,
+                    clip_events: sac
+                        .clip_events
+                        .iter()
+                        .map(|(clip_name, events)| SkeletalClipEventsData {
+                            clip: clip_name.clone(),
+                            events: events
+                                .iter()
+                                .map(|e| SkeletalAnimEventData {
+                                    time: e.time,
+                                    name: e.name.clone(),
+                                })
+                                .collect(),
+                        })
+                        .collect(),
                 }),
             directional_light: scene
                 .get_component::<DirectionalLightComponent>(entity)
@@ -2236,6 +2293,14 @@ impl SceneSerializer {
                     looping: c.looping,
                     texture_handle: Uuid::from_raw(c.texture_handle),
                     texture: None,
+                    events: c
+                        .events
+                        .iter()
+                        .map(|e| super::animation::AnimationEvent {
+                            frame: e.frame,
+                            name: e.name.clone(),
+                        })
+                        .collect(),
                 })
                 .collect();
             scene.add_component(
@@ -2264,6 +2329,14 @@ impl SceneSerializer {
                     looping: c.looping,
                     texture_handle: Uuid::from_raw(c.texture_handle),
                     texture: None,
+                    events: c
+                        .events
+                        .iter()
+                        .map(|e| super::animation::AnimationEvent {
+                            frame: e.frame,
+                            name: e.name.clone(),
+                        })
+                        .collect(),
                 })
                 .collect();
             scene.add_component(
@@ -2450,6 +2523,20 @@ impl SceneSerializer {
                 sac.looping = sad.looping;
                 sac.playing = sad.playing;
                 sac.blend_duration = sad.blend_duration;
+                // Deserialize per-clip animation events.
+                for ce in &sad.clip_events {
+                    let events = ce
+                        .events
+                        .iter()
+                        .map(|e| {
+                            crate::renderer::skeleton::SkeletalAnimationEvent {
+                                time: e.time,
+                                name: e.name.clone(),
+                            }
+                        })
+                        .collect();
+                    sac.clip_events.insert(ce.clip.clone(), events);
+                }
                 // default_clip is resolved after asset loads (clip names not available yet).
                 scene.add_component(entity, sac);
             }

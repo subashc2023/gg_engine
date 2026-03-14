@@ -144,6 +144,18 @@ pub struct JointChannel {
     pub scales: Vec<Keyframe<Vec3>>,
 }
 
+/// A named event marker at a specific time in a skeletal animation clip.
+///
+/// When playback crosses this time, the engine fires an
+/// `on_animation_event(event_name, clip_name)` Lua callback on the entity.
+#[derive(Clone, Debug)]
+pub struct SkeletalAnimationEvent {
+    /// Time in seconds within the clip that triggers this event.
+    pub time: f32,
+    /// The event name passed to the Lua callback (e.g. "footstep", "attack_hit").
+    pub name: String,
+}
+
 /// A complete skeletal animation clip (e.g. "Walk", "Run", "Idle").
 #[derive(Clone)]
 pub struct SkeletalAnimationClip {

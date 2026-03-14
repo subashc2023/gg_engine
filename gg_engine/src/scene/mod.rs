@@ -27,8 +27,8 @@ pub(crate) mod spatial;
 
 pub use self::core::SceneCore;
 pub use animation::{
-    AnimationClip, AnimationControllerComponent, AnimationTransition, FloatOrdering,
-    InstancedSpriteAnimator, SpriteAnimatorComponent, TransitionCondition,
+    AnimationClip, AnimationControllerComponent, AnimationEvent, AnimationTransition,
+    FloatOrdering, InstancedSpriteAnimator, SpriteAnimatorComponent, TransitionCondition,
 };
 #[cfg(feature = "lua-scripting")]
 pub use components::LuaScriptComponent;

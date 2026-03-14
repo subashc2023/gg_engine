@@ -449,6 +449,18 @@ impl ScriptEngine {
         self.call_entity_function(uuid, callback_name, arg)
     }
 
+    /// Call a named callback with two string arguments
+    /// (e.g. `on_animation_event(event_name, clip_name)`).
+    pub fn call_entity_callback_str2(
+        &mut self,
+        uuid: u64,
+        callback_name: &str,
+        arg1: String,
+        arg2: String,
+    ) -> bool {
+        self.call_entity_function(uuid, callback_name, (arg1, arg2))
+    }
+
     /// Returns all tracked entity UUIDs.
     pub fn entity_uuids(&self) -> Vec<u64> {
         self.entity_envs.keys().copied().collect()

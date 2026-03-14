@@ -315,6 +315,24 @@ pub fn register_all(lua: &Lua) -> LuaResult<()> {
         lua.create_function(lua_list_skeletal_animations)?,
     )?;
 
+    // Animation events
+    engine.set(
+        "add_animation_event",
+        lua.create_function(lua_add_animation_event)?,
+    )?;
+    engine.set(
+        "remove_animation_event",
+        lua.create_function(lua_remove_animation_event)?,
+    )?;
+    engine.set(
+        "add_skeletal_anim_event",
+        lua.create_function(lua_add_skeletal_anim_event)?,
+    )?;
+    engine.set(
+        "remove_skeletal_anim_event",
+        lua.create_function(lua_remove_skeletal_anim_event)?,
+    )?;
+
     // Audio
     engine.set("play_sound", lua.create_function(lua_play_sound)?)?;
     engine.set("stop_sound", lua.create_function(lua_stop_sound)?)?;
@@ -1534,6 +1552,114 @@ fn lua_list_skeletal_animations(lua: &Lua, entity_id: u64) -> LuaResult<LuaValue
         table.set(i as i64 + 1, name.as_str())?;
     }
     Ok(LuaValue::Table(table))
+}
+
+// ---------------------------------------------------------------------------
+// Animation event bindings
+// ---------------------------------------------------------------------------
+
+/// `Engine.add_animation_event(entity_id, clip_name, frame, event_name)` —
+/// add a frame-based event to a sprite/instanced animation clip.
+fn lua_add_animation_event(
+    lua: &Lua,
+    (entity_id, clip_name, frame, event_name): (u64, String, u32, String),
+) -> LuaResult<bool> {
+    with_entity_mut(lua, entity_id, false, |scene, entity| {
+        // Try SpriteAnimatorComponent first.
+        if let Some(mut anim) = scene.get_component_mut::<super::SpriteAnimatorComponent>(entity) {
+            if let Some(clip) = anim.clips.iter_mut().find(|c| c.name == clip_name) {
+                clip.events.push(super::animation::AnimationEvent {
+                    frame,
+                    name: event_name.clone(),
+                });
+                return true;
+            }
+        }
+        // Fall back to InstancedSpriteAnimator.
+        if let Some(mut anim) = scene.get_component_mut::<super::InstancedSpriteAnimator>(entity) {
+            if let Some(clip) = anim.clips.iter_mut().find(|c| c.name == clip_name) {
+                clip.events.push(super::animation::AnimationEvent {
+                    frame,
+                    name: event_name,
+                });
+                return true;
+            }
+        }
+        false
+    })
+}
+
+/// `Engine.remove_animation_event(entity_id, clip_name, event_name)` —
+/// remove all events with the given name from a sprite/instanced animation clip.
+fn lua_remove_animation_event(
+    lua: &Lua,
+    (entity_id, clip_name, event_name): (u64, String, String),
+) -> LuaResult<bool> {
+    with_entity_mut(lua, entity_id, false, |scene, entity| {
+        if let Some(mut anim) = scene.get_component_mut::<super::SpriteAnimatorComponent>(entity) {
+            if let Some(clip) = anim.clips.iter_mut().find(|c| c.name == clip_name) {
+                let before = clip.events.len();
+                clip.events.retain(|e| e.name != event_name);
+                if clip.events.len() != before {
+                    return true;
+                }
+            }
+        }
+        if let Some(mut anim) = scene.get_component_mut::<super::InstancedSpriteAnimator>(entity) {
+            if let Some(clip) = anim.clips.iter_mut().find(|c| c.name == clip_name) {
+                let before = clip.events.len();
+                clip.events.retain(|e| e.name != event_name);
+                if clip.events.len() != before {
+                    return true;
+                }
+            }
+        }
+        false
+    })
+}
+
+/// `Engine.add_skeletal_anim_event(entity_id, clip_name, time, event_name)` —
+/// add a time-based event to a skeletal animation clip.
+fn lua_add_skeletal_anim_event(
+    lua: &Lua,
+    (entity_id, clip_name, time, event_name): (u64, String, f32, String),
+) -> LuaResult<bool> {
+    with_entity_mut(lua, entity_id, false, |scene, entity| {
+        if let Some(mut sac) =
+            scene.get_component_mut::<super::SkeletalAnimationComponent>(entity)
+        {
+            sac.clip_events
+                .entry(clip_name)
+                .or_default()
+                .push(crate::renderer::skeleton::SkeletalAnimationEvent {
+                    time,
+                    name: event_name,
+                });
+            true
+        } else {
+            false
+        }
+    })
+}
+
+/// `Engine.remove_skeletal_anim_event(entity_id, clip_name, event_name)` —
+/// remove all events with the given name from a skeletal animation clip.
+fn lua_remove_skeletal_anim_event(
+    lua: &Lua,
+    (entity_id, clip_name, event_name): (u64, String, String),
+) -> LuaResult<bool> {
+    with_entity_mut(lua, entity_id, false, |scene, entity| {
+        if let Some(mut sac) =
+            scene.get_component_mut::<super::SkeletalAnimationComponent>(entity)
+        {
+            if let Some(events) = sac.clip_events.get_mut(&clip_name) {
+                let before = events.len();
+                events.retain(|e| e.name != event_name);
+                return events.len() != before;
+            }
+        }
+        false
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -4145,6 +4271,19 @@ mod tests {
         assert!(engine
             .get::<LuaFunction>("list_skeletal_animations")
             .is_ok());
+        // Animation events
+        assert!(engine
+            .get::<LuaFunction>("add_animation_event")
+            .is_ok());
+        assert!(engine
+            .get::<LuaFunction>("remove_animation_event")
+            .is_ok());
+        assert!(engine
+            .get::<LuaFunction>("add_skeletal_anim_event")
+            .is_ok());
+        assert!(engine
+            .get::<LuaFunction>("remove_skeletal_anim_event")
+            .is_ok());
         // Sprite
         assert!(engine.get::<LuaFunction>("set_sprite_texture").is_ok());
         // Tilemap
@@ -5241,5 +5380,49 @@ mod tests {
         assert_eq!(color[3], 1.0);
 
         lua.remove_app_data::<SceneScriptContext>();
+    }
+
+    // -----------------------------------------------------------------------
+    // Animation event no-context tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn add_animation_event_no_context_returns_false() {
+        let lua = setup();
+        lua.load("result = Engine.add_animation_event(12345, 'walk', 2, 'footstep')")
+            .exec()
+            .unwrap();
+        let result: bool = lua.globals().get("result").unwrap();
+        assert!(!result);
+    }
+
+    #[test]
+    fn remove_animation_event_no_context_returns_false() {
+        let lua = setup();
+        lua.load("result = Engine.remove_animation_event(12345, 'walk', 'footstep')")
+            .exec()
+            .unwrap();
+        let result: bool = lua.globals().get("result").unwrap();
+        assert!(!result);
+    }
+
+    #[test]
+    fn add_skeletal_anim_event_no_context_returns_false() {
+        let lua = setup();
+        lua.load("result = Engine.add_skeletal_anim_event(12345, 'walk', 0.3, 'footstep')")
+            .exec()
+            .unwrap();
+        let result: bool = lua.globals().get("result").unwrap();
+        assert!(!result);
+    }
+
+    #[test]
+    fn remove_skeletal_anim_event_no_context_returns_false() {
+        let lua = setup();
+        lua.load("result = Engine.remove_skeletal_anim_event(12345, 'walk', 'footstep')")
+            .exec()
+            .unwrap();
+        let result: bool = lua.globals().get("result").unwrap();
+        assert!(!result);
     }
 }

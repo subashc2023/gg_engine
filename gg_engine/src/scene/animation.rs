@@ -26,6 +26,18 @@ use crate::Ref;
 // animation parameters. Zero CPU animation cost for playing entities.
 // ==========================================================================
 
+/// A named event marker on a specific frame of a sprite animation clip.
+///
+/// When playback crosses this frame, the engine fires an
+/// `on_animation_event(event_name, clip_name)` Lua callback on the entity.
+#[derive(Clone, Debug)]
+pub struct AnimationEvent {
+    /// The frame index that triggers this event (0-based, within the clip range).
+    pub frame: u32,
+    /// The event name passed to the Lua callback (e.g. "footstep", "attack_hit").
+    pub name: String,
+}
+
 /// A named animation clip within a sprite sheet.
 ///
 /// Clips reference a contiguous range of frames in a grid-based sprite sheet.
@@ -52,6 +64,8 @@ pub struct AnimationClip {
     pub texture_handle: Uuid,
     /// Runtime-only loaded texture for this clip. Not serialized.
     pub texture: Option<Ref<Texture2D>>,
+    /// Event markers that fire Lua callbacks at specific frames.
+    pub events: Vec<AnimationEvent>,
 }
 
 impl Default for AnimationClip {
@@ -64,6 +78,7 @@ impl Default for AnimationClip {
             looping: true,
             texture_handle: Uuid::from_raw(0),
             texture: None,
+            events: Vec::new(),
         }
     }
 }
@@ -937,5 +952,55 @@ mod tests {
         };
         // Current clip is "run", not "idle" — transition should not fire.
         assert_eq!(ctrl.evaluate(Some("run"), false), None);
+    }
+
+    // -----------------------------------------------------------------------
+    // AnimationEvent tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn animation_event_on_clip() {
+        let clip = AnimationClip {
+            name: "walk".into(),
+            start_frame: 0,
+            end_frame: 3,
+            fps: 10.0,
+            looping: true,
+            events: vec![
+                AnimationEvent {
+                    frame: 1,
+                    name: "step_left".into(),
+                },
+                AnimationEvent {
+                    frame: 3,
+                    name: "step_right".into(),
+                },
+            ],
+            ..Default::default()
+        };
+        assert_eq!(clip.events.len(), 2);
+        assert_eq!(clip.events[0].frame, 1);
+        assert_eq!(clip.events[0].name, "step_left");
+        assert_eq!(clip.events[1].frame, 3);
+    }
+
+    #[test]
+    fn animation_event_default_empty() {
+        let clip = AnimationClip::default();
+        assert!(clip.events.is_empty());
+    }
+
+    #[test]
+    fn animation_event_clone() {
+        let clip = AnimationClip {
+            events: vec![AnimationEvent {
+                frame: 2,
+                name: "hit".into(),
+            }],
+            ..Default::default()
+        };
+        let cloned = clip.clone();
+        assert_eq!(cloned.events.len(), 1);
+        assert_eq!(cloned.events[0].name, "hit");
     }
 }

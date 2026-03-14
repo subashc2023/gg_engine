@@ -59,6 +59,8 @@ pub(super) struct RenderBufferPool {
     anim_finished: Vec<(u64, String, String)>,
     /// Animation controller transitions to apply.
     anim_transitions: Vec<(u64, String)>,
+    /// Animation event callbacks (uuid, event_name, clip_name).
+    anim_events: Vec<(u64, String, String)>,
 }
 
 impl Default for RenderBufferPool {
@@ -77,6 +79,7 @@ impl Default for RenderBufferPool {
             anim_work: Vec::new(),
             anim_finished: Vec::new(),
             anim_transitions: Vec::new(),
+            anim_events: Vec::new(),
         }
     }
 }
@@ -87,6 +90,8 @@ struct AnimWork {
     uuid: u64,
     frame_timer: f32,
     current_frame: u32,
+    /// Frame value before tick — used to detect frame transitions for events.
+    old_frame: u32,
     playing: bool,
     speed_scale: f32,
     clip_start_frame: u32,
@@ -96,6 +101,77 @@ struct AnimWork {
     clip_name: String,
     default_clip: String,
     finished: bool,
+}
+
+// ---------------------------------------------------------------------------
+// Animation event helpers (free functions for borrowing ergonomics)
+// ---------------------------------------------------------------------------
+
+use super::animation::AnimationEvent;
+use crate::renderer::skeleton::SkeletalAnimationEvent;
+
+/// Collect sprite animation events for frames crossed between `old_frame` and
+/// `new_frame`. Handles both forward progression and looping wrap-around.
+///
+/// Fires for each event whose `frame` was crossed during this tick
+/// (exclusive of `old_frame`, inclusive of `new_frame`).
+#[allow(clippy::too_many_arguments)]
+fn collect_sprite_events(
+    events: &[AnimationEvent],
+    old_frame: u32,
+    new_frame: u32,
+    looping: bool,
+    clip_start: u32,
+    clip_end: u32,
+    uuid: u64,
+    clip_name: &str,
+    out: &mut Vec<(u64, String, String)>,
+) {
+    for ev in events {
+        let f = ev.frame;
+        let hit = if new_frame > old_frame {
+            // Normal forward progression.
+            f > old_frame && f <= new_frame
+        } else if new_frame < old_frame && looping {
+            // Wrapped around (e.g., old=7 new=1 in range 0..7).
+            f > old_frame && f <= clip_end || f >= clip_start && f <= new_frame
+        } else {
+            false
+        };
+        if hit {
+            out.push((uuid, ev.name.clone(), clip_name.to_owned()));
+        }
+    }
+}
+
+/// Collect skeletal animation events for the time window `(old_time, new_time]`.
+/// Handles looping wrap-around.
+#[allow(clippy::too_many_arguments)]
+fn collect_skeletal_events(
+    events: &[SkeletalAnimationEvent],
+    old_time: f32,
+    new_time: f32,
+    looping: bool,
+    duration: f32,
+    uuid: u64,
+    clip_name: &str,
+    out: &mut Vec<(u64, String, String)>,
+) {
+    for ev in events {
+        let t = ev.time;
+        let hit = if new_time > old_time {
+            // Normal forward progression.
+            t > old_time && t <= new_time
+        } else if new_time < old_time && looping {
+            // Wrapped around (old near end, new near start).
+            t > old_time && t <= duration || t >= 0.0 && t <= new_time
+        } else {
+            false
+        };
+        if hit {
+            out.push((uuid, ev.name.clone(), clip_name.to_owned()));
+        }
+    }
 }
 
 impl Scene {
@@ -124,10 +200,12 @@ impl Scene {
         let mut pool = self.core.render_buffers.lock();
         let mut work = std::mem::take(&mut pool.anim_work);
         let mut finished_events = std::mem::take(&mut pool.anim_finished);
+        let mut anim_events = std::mem::take(&mut pool.anim_events);
         drop(pool);
 
         work.clear();
         finished_events.clear();
+        anim_events.clear();
 
         // Phase 1: extract + parallel tick SpriteAnimatorComponent timers.
         work.extend(
@@ -142,6 +220,7 @@ impl Scene {
                         uuid: id.id.raw(),
                         frame_timer: anim.frame_timer,
                         current_frame: anim.current_frame,
+                        old_frame: anim.current_frame,
                         playing: true,
                         speed_scale: anim.speed_scale,
                         clip_start_frame: clip.map(|c| c.start_frame).unwrap_or(0),
@@ -178,7 +257,7 @@ impl Scene {
             }
         });
 
-        // Writeback + collect finished events.
+        // Writeback + collect finished events + animation events.
         for item in &work {
             if let Ok(mut anim) = self.world.get::<&mut SpriteAnimatorComponent>(item.entity) {
                 anim.frame_timer = item.frame_timer;
@@ -194,15 +273,65 @@ impl Scene {
                         item.default_clip.clone(),
                     ));
                 }
+                // Collect animation events for frames crossed this tick.
+                if item.old_frame != item.current_frame {
+                    if let Some(clip) = anim
+                        .current_clip_index()
+                        .and_then(|i| anim.clips.get(i))
+                    {
+                        if !clip.events.is_empty() {
+                            collect_sprite_events(
+                                &clip.events,
+                                item.old_frame,
+                                item.current_frame,
+                                item.clip_looping,
+                                item.clip_start_frame,
+                                item.clip_end_frame,
+                                item.uuid,
+                                &item.clip_name,
+                                &mut anim_events,
+                            );
+                        }
+                    }
+                }
             }
         }
 
-        // Phase 2: check InstancedSpriteAnimator non-looping clips for completion.
+        // Phase 2: check InstancedSpriteAnimator non-looping clips for completion
+        // + collect animation events for frame transitions.
         let gt = self.global_time;
+        let prev_gt = gt - dt as f64;
         for (id_comp, anim) in self
             .world
             .query_mut::<(&IdComponent, &mut InstancedSpriteAnimator)>()
         {
+            if !anim.playing {
+                continue;
+            }
+            // Collect animation events by comparing previous frame to current frame.
+            if let Some(clip_idx) = anim.current_clip_index {
+                if let Some(clip) = anim.clips.get(clip_idx) {
+                    if !clip.events.is_empty() {
+                        let prev_frame = anim.current_frame(prev_gt);
+                        let curr_frame = anim.current_frame(gt);
+                        if let (Some(pf), Some(cf)) = (prev_frame, curr_frame) {
+                            if pf != cf {
+                                collect_sprite_events(
+                                    &clip.events,
+                                    pf,
+                                    cf,
+                                    anim.looping,
+                                    anim.start_frame,
+                                    anim.start_frame + anim.frame_count.saturating_sub(1),
+                                    id_comp.id.raw(),
+                                    &clip.name,
+                                    &mut anim_events,
+                                );
+                            }
+                        }
+                    }
+                }
+            }
             if anim.is_finished(gt) {
                 let clip_name = anim.current_clip_name().unwrap_or("").to_owned();
                 let default = anim.default_clip.clone();
@@ -211,26 +340,44 @@ impl Scene {
             }
         }
 
-        // Phase 2b: advance skeletal animation playback times + blend state.
-        for sac in self
+        // Phase 2b: advance skeletal animation playback times + blend state + events.
+        for (id_comp, sac) in self
             .world
-            .query_mut::<&mut SkeletalAnimationComponent>()
-            .into_iter()
+            .query_mut::<(&IdComponent, &mut SkeletalAnimationComponent)>()
         {
             if !sac.playing {
                 continue;
             }
-            // Advance the current clip.
+            // Advance the current clip, tracking old time for event detection.
             if let Some(clip_idx) = sac.current_clip {
                 if let Some(clip) = sac.clips.get(clip_idx) {
+                    let old_time = sac.playback_time;
                     let duration = clip.duration;
                     sac.playback_time += dt * sac.speed;
+                    let looping = sac.looping;
                     if sac.playback_time >= duration {
-                        if sac.looping {
+                        if looping {
                             sac.playback_time %= duration;
                         } else {
                             sac.playback_time = duration;
                             sac.playing = false;
+                        }
+                    }
+                    // Collect skeletal animation events for the time window.
+                    if let Some(events) = sac.clip_events.get(&clip.name) {
+                        if !events.is_empty() {
+                            let uuid = id_comp.id.raw();
+                            let clip_name = &clip.name;
+                            collect_skeletal_events(
+                                events,
+                                old_time,
+                                sac.playback_time,
+                                looping,
+                                duration,
+                                uuid,
+                                clip_name,
+                                &mut anim_events,
+                            );
                         }
                     }
                 }
@@ -286,6 +433,12 @@ impl Scene {
             }
         }
 
+        // Phase 4b: dispatch animation event callbacks.
+        if !anim_events.is_empty() {
+            #[cfg(feature = "lua-scripting")]
+            self.dispatch_animation_events(&anim_events);
+        }
+
         // Phase 5: evaluate animation controllers.
         self.evaluate_animation_controllers();
 
@@ -293,6 +446,7 @@ impl Scene {
         let mut pool = self.core.render_buffers.lock();
         pool.anim_work = work;
         pool.anim_finished = finished_events;
+        pool.anim_events = anim_events;
     }
 
     /// Evaluate all [`AnimationControllerComponent`]s and apply transitions.
@@ -398,6 +552,38 @@ impl Scene {
             guard.engine_mut().call_entity_callback_str(
                 *uuid,
                 "on_animation_finished",
+                clip_name.clone(),
+            );
+        }
+
+        // Guard drop restores engine and cleans up SceneScriptContext.
+    }
+
+    /// Dispatch `on_animation_event(event_name, clip_name)` Lua callbacks.
+    #[cfg(feature = "lua-scripting")]
+    fn dispatch_animation_events(&mut self, events: &[(u64, String, String)]) {
+        use super::lua_ops::ScriptEngineGuard;
+        use super::script_glue::SceneScriptContext;
+
+        let engine = match self.script_engine.take() {
+            Some(e) => e,
+            None => return,
+        };
+
+        let scene_ptr: *mut Scene = self;
+        let mut guard = ScriptEngineGuard::new(engine, scene_ptr);
+
+        let ctx = SceneScriptContext {
+            scene: scene_ptr,
+            input: std::ptr::null(),
+        };
+        guard.engine_mut().lua().set_app_data(ctx);
+
+        for (uuid, event_name, clip_name) in events {
+            guard.engine_mut().call_entity_callback_str2(
+                *uuid,
+                "on_animation_event",
+                event_name.clone(),
                 clip_name.clone(),
             );
         }
@@ -2783,5 +2969,108 @@ impl Scene {
     pub fn on_update_simulation(&self, editor_camera_vp: &glam::Mat4, renderer: &mut Renderer) {
         renderer.set_view_projection(*editor_camera_vp);
         self.render_scene(renderer);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn collect_sprite_events_forward() {
+        let events = vec![
+            AnimationEvent { frame: 1, name: "a".into() },
+            AnimationEvent { frame: 3, name: "b".into() },
+            AnimationEvent { frame: 5, name: "c".into() },
+        ];
+        let mut out = Vec::new();
+        // Crossed from frame 0 → frame 3: should fire "a" (frame 1) and "b" (frame 3).
+        collect_sprite_events(&events, 0, 3, true, 0, 7, 42, "walk", &mut out);
+        let names: Vec<&str> = out.iter().map(|(_, n, _)| n.as_str()).collect();
+        assert_eq!(names, &["a", "b"]);
+    }
+
+    #[test]
+    fn collect_sprite_events_no_change() {
+        let events = vec![AnimationEvent { frame: 2, name: "x".into() }];
+        let mut out = Vec::new();
+        // Same frame — no events fired.
+        collect_sprite_events(&events, 2, 2, true, 0, 7, 42, "walk", &mut out);
+        assert!(out.is_empty());
+    }
+
+    #[test]
+    fn collect_sprite_events_wrap_around() {
+        let events = vec![
+            AnimationEvent { frame: 0, name: "start".into() },
+            AnimationEvent { frame: 7, name: "end".into() },
+        ];
+        let mut out = Vec::new();
+        // Looping wrap: old=6, new=1, range 0..7.
+        // Should fire "end" (frame 7, > old) and "start" (frame 0, <= new).
+        collect_sprite_events(&events, 6, 1, true, 0, 7, 42, "walk", &mut out);
+        let names: Vec<&str> = out.iter().map(|(_, n, _)| n.as_str()).collect();
+        assert_eq!(names, &["start", "end"]);
+    }
+
+    #[test]
+    fn collect_sprite_events_non_looping_no_wrap() {
+        let events = vec![AnimationEvent { frame: 0, name: "x".into() }];
+        let mut out = Vec::new();
+        // Non-looping, new < old — should fire nothing.
+        collect_sprite_events(&events, 5, 3, false, 0, 7, 42, "walk", &mut out);
+        assert!(out.is_empty());
+    }
+
+    #[test]
+    fn collect_skeletal_events_forward() {
+        let events = vec![
+            SkeletalAnimationEvent { time: 0.2, name: "foot_l".into() },
+            SkeletalAnimationEvent { time: 0.5, name: "foot_r".into() },
+            SkeletalAnimationEvent { time: 0.8, name: "extra".into() },
+        ];
+        let mut out = Vec::new();
+        // Time range (0.1, 0.5]: should fire foot_l (0.2) and foot_r (0.5).
+        collect_skeletal_events(&events, 0.1, 0.5, true, 1.0, 42, "walk", &mut out);
+        let names: Vec<&str> = out.iter().map(|(_, n, _)| n.as_str()).collect();
+        assert_eq!(names, &["foot_l", "foot_r"]);
+    }
+
+    #[test]
+    fn collect_skeletal_events_wrap_around() {
+        let events = vec![
+            SkeletalAnimationEvent { time: 0.05, name: "start".into() },
+            SkeletalAnimationEvent { time: 0.95, name: "end".into() },
+        ];
+        let mut out = Vec::new();
+        // Looping wrap: old=0.9, new=0.1, duration=1.0.
+        // "end" (0.95 > 0.9) and "start" (0.05 <= 0.1).
+        collect_skeletal_events(&events, 0.9, 0.1, true, 1.0, 42, "run", &mut out);
+        let names: Vec<&str> = out.iter().map(|(_, n, _)| n.as_str()).collect();
+        assert_eq!(names, &["start", "end"]);
+    }
+
+    #[test]
+    fn collect_skeletal_events_non_looping_no_wrap() {
+        let events = vec![SkeletalAnimationEvent { time: 0.1, name: "x".into() }];
+        let mut out = Vec::new();
+        // Non-looping, new < old.
+        collect_skeletal_events(&events, 0.5, 0.3, false, 1.0, 42, "run", &mut out);
+        assert!(out.is_empty());
+    }
+
+    #[test]
+    fn collect_events_preserves_uuid_and_clip() {
+        let events = vec![AnimationEvent { frame: 2, name: "hit".into() }];
+        let mut out = Vec::new();
+        collect_sprite_events(&events, 1, 3, false, 0, 7, 999, "attack", &mut out);
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].0, 999); // uuid
+        assert_eq!(out[0].1, "hit"); // event_name
+        assert_eq!(out[0].2, "attack"); // clip_name
     }
 }

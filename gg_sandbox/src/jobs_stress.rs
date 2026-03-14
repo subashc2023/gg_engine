@@ -279,6 +279,7 @@ fn add_animator(scene: &mut Scene, entity: Entity, index: usize) {
         looping,
         texture_handle: gg_engine::uuid::Uuid::from_raw(0),
         texture: None,
+        events: Vec::new(),
     }];
     anim.default_clip = if looping {
         "anim".to_string()
