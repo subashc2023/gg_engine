@@ -21,10 +21,15 @@ pub(crate) fn draw_environment_component(
         bold_family,
         entity,
         |ui| {
-            let (handle_raw, loaded, mut exposure, mut ibl_intensity, mut rotation, mut show_skybox) = {
-                let ec = scene
-                    .get_component::<EnvironmentComponent>(entity)
-                    .unwrap();
+            let (
+                handle_raw,
+                loaded,
+                mut exposure,
+                mut ibl_intensity,
+                mut rotation,
+                mut show_skybox,
+            ) = {
+                let ec = scene.get_component::<EnvironmentComponent>(entity).unwrap();
                 (
                     ec.environment_handle,
                     ec.loaded,
@@ -73,17 +78,9 @@ pub(crate) fn draw_environment_component(
 
             // Status indicator.
             if handle_raw == 0 {
-                ui.label(
-                    egui::RichText::new("No HDR map selected")
-                        .weak()
-                        .small(),
-                );
+                ui.label(egui::RichText::new("No HDR map selected").weak().small());
             } else if !loaded {
-                ui.label(
-                    egui::RichText::new("Loading...")
-                        .weak()
-                        .small(),
-                );
+                ui.label(egui::RichText::new("Loading...").weak().small());
             }
 
             ui.separator();
@@ -130,9 +127,7 @@ pub(crate) fn draw_environment_component(
             }
 
             if changed {
-                if let Some(mut ec) =
-                    scene.get_component_mut::<EnvironmentComponent>(entity)
-                {
+                if let Some(mut ec) = scene.get_component_mut::<EnvironmentComponent>(entity) {
                     ec.skybox_exposure = exposure;
                     ec.ibl_intensity = ibl_intensity;
                     ec.skybox_rotation = rotation;

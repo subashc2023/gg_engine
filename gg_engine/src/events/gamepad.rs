@@ -1,10 +1,12 @@
 use std::fmt;
 
+use serde::{Deserialize, Serialize};
+
 /// Identifies a connected gamepad by index.
 pub type GamepadId = usize;
 
 /// Standard gamepad button mapping (follows Xbox/PlayStation conventions).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum GamepadButton {
     /// A / Cross
     South,
@@ -39,7 +41,7 @@ pub enum GamepadButton {
 }
 
 /// Standard gamepad axis (analog input).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum GamepadAxis {
     /// Left stick horizontal (-1.0 = left, 1.0 = right)
     LeftStickX,

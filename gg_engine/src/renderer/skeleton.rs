@@ -92,7 +92,9 @@ impl Skeleton {
         // Multiply by inverse bind matrix and apply bind-space correction
         // per the glTF spec: jointMatrix = inverse(meshGlobal) × jointGlobal × IBM.
         let matrices: Vec<Mat4> = (0..num_joints)
-            .map(|j| self.bind_space_correction * world_transforms[j] * self.inverse_bind_matrices[j])
+            .map(|j| {
+                self.bind_space_correction * world_transforms[j] * self.inverse_bind_matrices[j]
+            })
             .collect();
 
         BonePose { matrices }
@@ -114,7 +116,9 @@ impl Skeleton {
             }
         }
         let matrices = (0..num_joints)
-            .map(|j| self.bind_space_correction * world_transforms[j] * self.inverse_bind_matrices[j])
+            .map(|j| {
+                self.bind_space_correction * world_transforms[j] * self.inverse_bind_matrices[j]
+            })
             .collect();
         BonePose { matrices }
     }

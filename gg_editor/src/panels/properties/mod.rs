@@ -920,14 +920,7 @@ fn draw_components(
         *scene_dirty = true;
     }
 
-    if ui_rect::draw_ui_rect_component(
-        ui,
-        scene,
-        entity,
-        &bold_family,
-        scene_dirty,
-        undo_system,
-    ) {
+    if ui_rect::draw_ui_rect_component(ui, scene, entity, &bold_family, scene_dirty, undo_system) {
         undo_system.record(scene, "Remove UI Rect");
         scene.remove_component::<UIRectComponent>(entity);
         *scene_dirty = true;

@@ -1069,8 +1069,9 @@ impl SceneCore {
                 img.sorting_layer = Self::UI_BASE_SORTING_LAYER;
                 img.order_in_layer = base_order;
             }
-            if let Ok(mut sprite) =
-                self.world.get::<&mut super::SpriteRendererComponent>(handle)
+            if let Ok(mut sprite) = self
+                .world
+                .get::<&mut super::SpriteRendererComponent>(handle)
             {
                 sprite.sorting_layer = Self::UI_BASE_SORTING_LAYER;
                 sprite.order_in_layer = base_order;
@@ -1120,10 +1121,8 @@ impl SceneCore {
                 continue;
             };
             let pos = glam::Vec2::new(wt.w_axis.x, wt.w_axis.y);
-            let scale = glam::Vec2::new(
-                wt.x_axis.truncate().length(),
-                wt.y_axis.truncate().length(),
-            );
+            let scale =
+                glam::Vec2::new(wt.x_axis.truncate().length(), wt.y_axis.truncate().length());
             let half = scale * 0.5;
             let aabb_min = pos - half;
             let aabb_max = pos + half;
@@ -1147,9 +1146,7 @@ impl SceneCore {
             if let Some(old) = prev_hover {
                 events.push(UIEvent::HoverExit(old));
                 if let Some(&handle) = self.uuid_cache.get(&old) {
-                    if let Ok(mut inter) =
-                        self.world.get::<&mut UIInteractableComponent>(handle)
-                    {
+                    if let Ok(mut inter) = self.world.get::<&mut UIInteractableComponent>(handle) {
                         if inter.state == UIInteractionState::Hovered {
                             inter.state = UIInteractionState::Normal;
                         }
@@ -1159,9 +1156,7 @@ impl SceneCore {
             if let Some(new) = hit_uuid {
                 events.push(UIEvent::HoverEnter(new));
                 if let Some(&handle) = self.uuid_cache.get(&new) {
-                    if let Ok(mut inter) =
-                        self.world.get::<&mut UIInteractableComponent>(handle)
-                    {
+                    if let Ok(mut inter) = self.world.get::<&mut UIInteractableComponent>(handle) {
                         if inter.interactable && inter.state != UIInteractionState::Pressed {
                             inter.state = UIInteractionState::Hovered;
                         }
@@ -1177,9 +1172,7 @@ impl SceneCore {
                 self.ui_pressed_entity = Some(uuid);
                 events.push(UIEvent::Press(uuid));
                 if let Some(&handle) = self.uuid_cache.get(&uuid) {
-                    if let Ok(mut inter) =
-                        self.world.get::<&mut UIInteractableComponent>(handle)
-                    {
+                    if let Ok(mut inter) = self.world.get::<&mut UIInteractableComponent>(handle) {
                         if inter.interactable {
                             inter.state = UIInteractionState::Pressed;
                         }
@@ -1197,9 +1190,7 @@ impl SceneCore {
                     events.push(UIEvent::Click(pressed_uuid));
                 }
                 if let Some(&handle) = self.uuid_cache.get(&pressed_uuid) {
-                    if let Ok(mut inter) =
-                        self.world.get::<&mut UIInteractableComponent>(handle)
-                    {
+                    if let Ok(mut inter) = self.world.get::<&mut UIInteractableComponent>(handle) {
                         if inter.interactable {
                             inter.state = if hit_uuid == Some(pressed_uuid) {
                                 UIInteractionState::Hovered
@@ -1214,10 +1205,7 @@ impl SceneCore {
         }
 
         // Reset disabled entities' state.
-        for inter in self
-            .world
-            .query_mut::<&mut UIInteractableComponent>()
-        {
+        for inter in self.world.query_mut::<&mut UIInteractableComponent>() {
             if !inter.interactable {
                 inter.state = UIInteractionState::Disabled;
             }

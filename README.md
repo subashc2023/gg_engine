@@ -2,7 +2,7 @@
 
 A 2D/3D game engine written in Rust with a Vulkan rendering backend. Build scenes in a visual editor, script gameplay in Lua, and ship standalone builds.
 
-![GGEngine Editor](gg_docs/public/editor.png)
+![GGEngine Demo](gg_docs/public/demo3d.png)
 
 ---
 

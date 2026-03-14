@@ -154,6 +154,8 @@ pub(crate) struct ProjectContext<'a> {
     pub(crate) project_name: Option<&'a str>,
     pub(crate) editor_scene_path: Option<&'a str>,
     pub(crate) egui_texture_map: &'a std::collections::HashMap<u64, egui::TextureId>,
+    pub(crate) input_actions: &'a mut gg_engine::InputActionMap,
+    pub(crate) project: &'a mut Option<gg_engine::Project>,
 }
 
 // ---------------------------------------------------------------------------
@@ -307,6 +309,8 @@ impl egui_dock::TabViewer for EditorTabViewer<'_> {
                     self.project.assets_root,
                     self.project.editor_scene_path,
                     self.pending_open_path,
+                    self.project.input_actions,
+                    self.project.project,
                 );
             }
 

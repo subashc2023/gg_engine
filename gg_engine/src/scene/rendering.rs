@@ -1,9 +1,8 @@
 use super::{
     AmbientLightComponent, AnimationControllerComponent, CircleRendererComponent,
-    DirectionalLightComponent, Entity, EnvironmentComponent, IdComponent,
-    InstancedSpriteAnimator, MeshPrimitive,
-    MeshRendererComponent, MeshSource, ParticleEmitterComponent, PointLightComponent,
-    RigidBody3DComponent, RigidBody3DType, Scene, SkeletalAnimationComponent,
+    DirectionalLightComponent, Entity, EnvironmentComponent, IdComponent, InstancedSpriteAnimator,
+    MeshPrimitive, MeshRendererComponent, MeshSource, ParticleEmitterComponent,
+    PointLightComponent, RigidBody3DComponent, RigidBody3DType, Scene, SkeletalAnimationComponent,
     SpriteAnimatorComponent, SpriteRendererComponent, TextComponent, TilemapComponent,
     TransformComponent, UIAnchorComponent, UIImageComponent, UIInteractableComponent,
     UIInteractionState, UIRectComponent, TILE_FLIP_H, TILE_FLIP_V, TILE_ID_MASK,
@@ -303,7 +302,14 @@ impl Scene {
         /// Collect entities with an unresolved texture handle and assign textures.
         macro_rules! resolve_textures_sync {
             ($world:expr, $asset_manager:expr, $renderer:expr, $Component:ty, $texture_field:ident) => {
-                resolve_textures_sync!($world, $asset_manager, $renderer, $Component, $texture_field, texture_handle)
+                resolve_textures_sync!(
+                    $world,
+                    $asset_manager,
+                    $renderer,
+                    $Component,
+                    $texture_field,
+                    texture_handle
+                )
             };
             ($world:expr, $asset_manager:expr, $renderer:expr, $Component:ty, $texture_field:ident, $handle_field:ident) => {{
                 let needs: Vec<(hecs::Entity, crate::uuid::Uuid)> = $world
@@ -386,7 +392,14 @@ impl Scene {
         /// Collect entities with an unresolved texture handle and assign or request load.
         macro_rules! resolve_textures_async {
             ($world:expr, $asset_manager:expr, $found:expr, $Component:ty, $texture_field:ident) => {
-                resolve_textures_async!($world, $asset_manager, $found, $Component, $texture_field, texture_handle)
+                resolve_textures_async!(
+                    $world,
+                    $asset_manager,
+                    $found,
+                    $Component,
+                    $texture_field,
+                    texture_handle
+                )
             };
             ($world:expr, $asset_manager:expr, $found:expr, $Component:ty, $texture_field:ident, $handle_field:ident) => {{
                 let needs: Vec<(hecs::Entity, crate::uuid::Uuid)> = $world
@@ -769,8 +782,7 @@ impl Scene {
                 if let Ok(mut sac) = self.world.get::<&mut SkeletalAnimationComponent>(handle) {
                     sac.skeleton = crate::Ref::new(skin_data.skeleton.clone());
                     sac.clips = skin_data.clips.clone();
-                    sac.loaded_skinned_mesh =
-                        Some(crate::Ref::new(skin_data.mesh.clone()));
+                    sac.loaded_skinned_mesh = Some(crate::Ref::new(skin_data.mesh.clone()));
                     if !sac.clips.is_empty() && sac.current_clip.is_none() {
                         sac.current_clip = Some(0);
                         sac.playing = true;
@@ -800,14 +812,15 @@ impl Scene {
 
         for handle in needs {
             let mesh_ref = {
-                let sac = self.world.get::<&SkeletalAnimationComponent>(handle).unwrap();
+                let sac = self
+                    .world
+                    .get::<&SkeletalAnimationComponent>(handle)
+                    .unwrap();
                 sac.loaded_skinned_mesh.as_ref().unwrap().clone()
             };
             match mesh_ref.upload(renderer) {
                 Ok(va) => {
-                    if let Ok(mut sac) =
-                        self.world.get::<&mut SkeletalAnimationComponent>(handle)
-                    {
+                    if let Ok(mut sac) = self.world.get::<&mut SkeletalAnimationComponent>(handle) {
                         sac.skinned_vertex_array = Some(va);
                     }
                 }
@@ -861,24 +874,20 @@ impl Scene {
 
         if let Some((entity, asset_handle)) = needs_load {
             let uuid = crate::uuid::Uuid::from_raw(asset_handle);
-            let path = asset_manager.get_metadata(&uuid).map(|m| {
-                asset_manager.asset_directory().join(&m.file_path)
-            });
+            let path = asset_manager
+                .get_metadata(&uuid)
+                .map(|m| asset_manager.asset_directory().join(&m.file_path));
             if let Some(path) = path {
                 match renderer.load_environment_hdr_from_file(&path) {
                     Ok(()) => {
-                        if let Ok(mut ec) =
-                            self.world.get::<&mut EnvironmentComponent>(entity)
-                        {
+                        if let Ok(mut ec) = self.world.get::<&mut EnvironmentComponent>(entity) {
                             ec.loaded = true;
                         }
                     }
                     Err(e) => {
                         log::error!("Failed to load environment map: {e}");
                         // Mark loaded to prevent retry spam.
-                        if let Ok(mut ec) =
-                            self.world.get::<&mut EnvironmentComponent>(entity)
-                        {
+                        if let Ok(mut ec) = self.world.get::<&mut EnvironmentComponent>(entity) {
                             ec.loaded = true;
                         }
                     }
@@ -975,7 +984,13 @@ impl Scene {
                     let view = renderer.camera_view();
                     let proj = renderer.camera_projection();
                     let offscreen = renderer.is_offscreen();
-                    if let Err(e) = renderer.render_skybox(view, proj, ec.skybox_exposure, ec.skybox_rotation, offscreen) {
+                    if let Err(e) = renderer.render_skybox(
+                        view,
+                        proj,
+                        ec.skybox_exposure,
+                        ec.skybox_rotation,
+                        offscreen,
+                    ) {
                         log::error!("Skybox render failed: {e}");
                     }
                 }
@@ -1336,10 +1351,8 @@ impl Scene {
                                 world_transform.w_axis.y,
                                 world_transform.w_axis.z,
                             );
-                            let _rect_world_w =
-                                world_transform.x_axis.truncate().length();
-                            let _rect_world_h =
-                                world_transform.y_axis.truncate().length();
+                            let _rect_world_w = world_transform.x_axis.truncate().length();
+                            let _rect_world_h = world_transform.y_axis.truncate().length();
 
                             // Vertical centre helper: offset from text origin
                             // (baseline) to the visual centre of a single line.
@@ -1542,11 +1555,7 @@ impl Scene {
                                 eid,
                             );
                         } else {
-                            renderer.draw_quad_transform(
-                                &world_transform,
-                                color,
-                                eid,
-                            );
+                            renderer.draw_quad_transform(&world_transform, color, eid);
                         }
                     }
                 }
@@ -1635,12 +1644,7 @@ impl Scene {
         }
 
         // Environment map (IBL) — use the first EnvironmentComponent found.
-        if let Some(ec) = self
-            .world
-            .query::<&EnvironmentComponent>()
-            .iter()
-            .next()
-        {
+        if let Some(ec) = self.world.query::<&EnvironmentComponent>().iter().next() {
             if ec.loaded && ec.environment_handle != 0 {
                 env.has_ibl = true;
                 env.ibl_intensity = ec.ibl_intensity;
@@ -2318,32 +2322,59 @@ impl Scene {
         // 9 patches: [transform, uv_min, uv_max]
         let patches: [(glam::Mat4, [f32; 2], [f32; 2]); 9] = [
             // Bottom-left corner.
-            (make_transform(x0, y0, corner_w_left, corner_h_bottom),
-             [0.0, v_bottom], [u_left, 1.0]),
+            (
+                make_transform(x0, y0, corner_w_left, corner_h_bottom),
+                [0.0, v_bottom],
+                [u_left, 1.0],
+            ),
             // Bottom center edge.
-            (make_transform(x1, y0, center_w, corner_h_bottom),
-             [u_left, v_bottom], [u_right, 1.0]),
+            (
+                make_transform(x1, y0, center_w, corner_h_bottom),
+                [u_left, v_bottom],
+                [u_right, 1.0],
+            ),
             // Bottom-right corner.
-            (make_transform(x2, y0, corner_w_right, corner_h_bottom),
-             [u_right, v_bottom], [1.0, 1.0]),
+            (
+                make_transform(x2, y0, corner_w_right, corner_h_bottom),
+                [u_right, v_bottom],
+                [1.0, 1.0],
+            ),
             // Middle-left edge.
-            (make_transform(x0, y1, corner_w_left, center_h),
-             [0.0, v_top], [u_left, v_bottom]),
+            (
+                make_transform(x0, y1, corner_w_left, center_h),
+                [0.0, v_top],
+                [u_left, v_bottom],
+            ),
             // Center.
-            (make_transform(x1, y1, center_w, center_h),
-             [u_left, v_top], [u_right, v_bottom]),
+            (
+                make_transform(x1, y1, center_w, center_h),
+                [u_left, v_top],
+                [u_right, v_bottom],
+            ),
             // Middle-right edge.
-            (make_transform(x2, y1, corner_w_right, center_h),
-             [u_right, v_top], [1.0, v_bottom]),
+            (
+                make_transform(x2, y1, corner_w_right, center_h),
+                [u_right, v_top],
+                [1.0, v_bottom],
+            ),
             // Top-left corner.
-            (make_transform(x0, y2, corner_w_left, corner_h_top),
-             [0.0, 0.0], [u_left, v_top]),
+            (
+                make_transform(x0, y2, corner_w_left, corner_h_top),
+                [0.0, 0.0],
+                [u_left, v_top],
+            ),
             // Top center edge.
-            (make_transform(x1, y2, center_w, corner_h_top),
-             [u_left, 0.0], [u_right, v_top]),
+            (
+                make_transform(x1, y2, center_w, corner_h_top),
+                [u_left, 0.0],
+                [u_right, v_top],
+            ),
             // Top-right corner.
-            (make_transform(x2, y2, corner_w_right, corner_h_top),
-             [u_right, 0.0], [1.0, v_top]),
+            (
+                make_transform(x2, y2, corner_w_right, corner_h_top),
+                [u_right, 0.0],
+                [1.0, v_top],
+            ),
         ];
 
         for (i, (transform, uv_min, uv_max)) in patches.iter().enumerate() {
@@ -2362,12 +2393,7 @@ impl Scene {
             }
             let _ = t;
             renderer.draw_textured_quad_transformed_uv(
-                transform,
-                tex_idx,
-                *uv_min,
-                *uv_max,
-                color,
-                entity_id,
+                transform, tex_idx, *uv_min, *uv_max, color, entity_id,
             );
         }
     }
@@ -2414,8 +2440,12 @@ impl Scene {
         mouse_just_pressed: bool,
         mouse_just_released: bool,
     ) -> Vec<super::UIEvent> {
-        self.core
-            .update_ui_interaction(mouse_world, mouse_down, mouse_just_pressed, mouse_just_released)
+        self.core.update_ui_interaction(
+            mouse_world,
+            mouse_down,
+            mouse_just_pressed,
+            mouse_just_released,
+        )
     }
 
     /// Render all entities using an externally provided view-projection

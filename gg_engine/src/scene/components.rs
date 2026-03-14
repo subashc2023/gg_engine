@@ -1727,7 +1727,7 @@ impl Clone for SkeletalAnimationComponent {
             speed: self.speed,
             looping: self.looping,
             playing: self.playing,
-            skinned_vertex_array: None,     // Runtime-only, not copied.
+            skinned_vertex_array: None, // Runtime-only, not copied.
             loaded_skinned_mesh: self.loaded_skinned_mesh.clone(), // Arc clone.
         }
     }

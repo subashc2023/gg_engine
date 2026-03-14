@@ -292,6 +292,8 @@ struct GGEditor {
     /// an automatic [`Scene::reload_lua_scripts`] call.
     #[cfg(feature = "lua-scripting")]
     script_reload_pending: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    /// Input action map loaded from the project config.
+    input_actions: InputActionMap,
 }
 
 impl Application for GGEditor {
@@ -406,6 +408,11 @@ impl Application for GGEditor {
             None
         };
 
+        let input_actions = project
+            .as_ref()
+            .map(|p| p.input_actions().clone())
+            .unwrap_or_default();
+
         let initial_gizmo_op = editor_settings.gizmo_operation;
         let initial_cam_state = editor_settings.camera_state.clone();
 
@@ -505,6 +512,7 @@ impl Application for GGEditor {
             _script_watcher,
             #[cfg(feature = "lua-scripting")]
             script_reload_pending,
+            input_actions,
         }
     }
 
@@ -515,11 +523,7 @@ impl Application for GGEditor {
             width: ws.width,
             height: ws.height,
             decorations: cfg!(target_os = "macos"),
-            position: if ws.x >= 0 && ws.y >= 0 {
-                Some((ws.x, ws.y))
-            } else {
-                None
-            },
+            position: ws.position,
             maximized: ws.maximized,
         }
     }
@@ -707,6 +711,14 @@ impl Application for GGEditor {
                 self.render_game_viewport(renderer);
             }
             _ => {}
+        }
+    }
+
+    fn input_action_map(&self) -> Option<InputActionMap> {
+        if self.input_actions.actions.is_empty() {
+            None
+        } else {
+            Some(self.input_actions.clone())
         }
     }
 
@@ -1044,12 +1056,9 @@ impl Application for GGEditor {
                     // UI interaction: hit test + dispatch Lua callbacks.
                     if let Some((px, py)) = self.viewport.mouse_pos {
                         let mouse_world = self.scene.screen_to_world_2d(px, py);
-                        let mouse_down =
-                            input.is_mouse_button_pressed(MouseButton::Left);
-                        let just_pressed =
-                            input.is_mouse_button_just_pressed(MouseButton::Left);
-                        let just_released =
-                            input.is_mouse_button_just_released(MouseButton::Left);
+                        let mouse_down = input.is_mouse_button_pressed(MouseButton::Left);
+                        let just_pressed = input.is_mouse_button_just_pressed(MouseButton::Left);
+                        let just_released = input.is_mouse_button_just_released(MouseButton::Left);
                         let events = self.scene.update_ui_with_input(
                             mouse_world,
                             mouse_down,
@@ -1338,8 +1347,7 @@ impl Application for GGEditor {
             self.editor_settings.window_state.maximized = window.is_maximized();
             if !window.is_maximized() {
                 if let Ok(pos) = window.outer_position() {
-                    self.editor_settings.window_state.x = pos.x;
-                    self.editor_settings.window_state.y = pos.y;
+                    self.editor_settings.window_state.position = Some((pos.x, pos.y));
                 }
                 let size = window.inner_size();
                 if size.width > 0 && size.height > 0 {
@@ -1564,6 +1572,11 @@ impl Application for GGEditor {
             let current_snap_to_grid = self.editor_settings.snap_to_grid;
             let current_grid_size = self.editor_settings.grid_size;
             let mut hierarchy_action = None;
+            let project_name_owned = self
+                .project_state
+                .project
+                .as_ref()
+                .map(|p| p.name().to_string());
             let mut viewer = EditorTabViewer {
                 scene: &mut self.scene,
                 selection: &mut self.selection,
@@ -1608,9 +1621,11 @@ impl Application for GGEditor {
                     assets_root: &self.project_state.assets_root,
                     current_directory: &mut self.project_state.current_directory,
                     asset_manager: &mut self.project_state.asset_manager,
-                    project_name: self.project_state.project.as_ref().map(|p| p.name()),
+                    project_name: project_name_owned.as_deref(),
                     editor_scene_path: self.scene_ctx.editor_scene_path.as_deref(),
                     egui_texture_map: &self.ui.egui_texture_map,
+                    input_actions: &mut self.input_actions,
+                    project: &mut self.project_state.project,
                 },
                 hierarchy_action: &mut hierarchy_action,
                 postprocess_settings: &mut self.postprocess_settings,
@@ -2013,7 +2028,8 @@ impl GGEditor {
 
         // Viewport bounds rectangle — shows the primary camera's visible area
         // so the user can see where UI-anchored elements will appear at runtime.
-        if self.editor_settings.show_camera_bounds && self.playback.scene_state != SceneState::Play {
+        if self.editor_settings.show_camera_bounds && self.playback.scene_state != SceneState::Play
+        {
             if let Some((center, half_w, half_h)) = self.scene.primary_camera_bounds() {
                 let prev_line_width = renderer.line_width();
                 renderer.set_line_width(1.0);

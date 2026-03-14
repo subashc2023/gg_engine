@@ -2,6 +2,7 @@ use std::collections::{HashMap, HashSet};
 
 use crate::events::gamepad::{GamepadAxis, GamepadButton, GamepadId};
 use crate::events::{KeyCode, MouseButton};
+use crate::input_action::{InputActionMap, InputActionState};
 
 /// Tracks the current state of keyboard and mouse input.
 ///
@@ -28,6 +29,9 @@ pub struct Input {
     gamepad_buttons_prev: HashMap<GamepadId, HashSet<GamepadButton>>,
     gamepad_axes: HashMap<GamepadId, HashMap<GamepadAxis, f32>>,
     connected_gamepads: HashSet<GamepadId>,
+    // Input action mapping
+    action_map: Option<InputActionMap>,
+    action_state: InputActionState,
 }
 
 impl Input {
@@ -47,6 +51,8 @@ impl Input {
             gamepad_buttons_prev: HashMap::new(),
             gamepad_axes: HashMap::new(),
             connected_gamepads: HashSet::new(),
+            action_map: None,
+            action_state: InputActionState::default(),
         }
     }
 
@@ -169,6 +175,29 @@ impl Input {
         self.connected_gamepads.iter().copied()
     }
 
+    // -- Input action query API -----------------------------------------------
+
+    /// Returns `true` while the named action is active (any binding pressed).
+    pub fn is_action_pressed(&self, name: &str) -> bool {
+        self.action_state.is_action_pressed(name)
+    }
+
+    /// Returns `true` only on the first frame the action becomes active.
+    pub fn is_action_just_pressed(&self, name: &str) -> bool {
+        self.action_state.is_action_just_pressed(name)
+    }
+
+    /// Returns `true` only on the first frame the action becomes inactive.
+    pub fn is_action_just_released(&self, name: &str) -> bool {
+        self.action_state.is_action_just_released(name)
+    }
+
+    /// Returns the continuous value of an axis action (-1.0..1.0).
+    /// Returns 0.0 for button actions that are not pressed, 1.0 when pressed.
+    pub fn action_value(&self, name: &str) -> f32 {
+        self.action_state.action_value(name)
+    }
+
     // -- Mutation (engine-internal) -------------------------------------------
 
     pub(crate) fn press_key(&mut self, key: KeyCode) {
@@ -238,6 +267,34 @@ impl Input {
             .insert(axis, value);
     }
 
+    /// Set the input action map. Called once after project load.
+    pub(crate) fn set_action_map(&mut self, map: InputActionMap) {
+        self.action_map = Some(map);
+    }
+
+    /// Returns `true` if an action map has been set.
+    pub(crate) fn has_action_map(&self) -> bool {
+        self.action_map.is_some()
+    }
+
+    /// Returns the number of actions in the current action map, or 0 if none.
+    pub(crate) fn action_count(&self) -> usize {
+        self.action_map.as_ref().map_or(0, |m| m.actions.len())
+    }
+
+    /// Evaluate all action bindings against current raw input.
+    /// Called each frame before `on_update`.
+    pub(crate) fn update_actions(&mut self) {
+        if let Some(ref map) = self.action_map {
+            // Temporarily move action_state out to avoid split borrow:
+            // update() needs &Input for raw queries while mutating state.
+            let map = map.clone();
+            let mut action_state = std::mem::take(&mut self.action_state);
+            action_state.update(&map, self);
+            self.action_state = action_state;
+        }
+    }
+
     /// Clear all pressed state (call on window focus loss to avoid stuck keys).
     /// Clears both current and previous frame sets to prevent spurious
     /// "just released" events on the next frame.
@@ -246,6 +303,7 @@ impl Input {
         self.keys_prev.clear();
         self.mouse_buttons_pressed.clear();
         self.mouse_buttons_prev.clear();
+        self.action_state.clear();
     }
 
     /// Snapshot current state so next frame can detect transitions.

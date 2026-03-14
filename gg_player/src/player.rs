@@ -132,6 +132,8 @@ pub struct GGPlayer {
     pending_drop_scenes: Vec<Scene>,
     /// Splash screen texture, created on attach, destroyed when runtime starts.
     splash_texture: Option<Texture2D>,
+    /// Input action map loaded from the project config.
+    input_actions: InputActionMap,
 }
 
 impl GGPlayer {
@@ -275,9 +277,16 @@ impl Application for GGPlayer {
         scene.set_cursor_mode(gg_engine::cursor::CursorMode::Confined);
         scene.set_script_module_search_path(project.script_module_path());
 
+        let input_actions = project.input_actions().clone();
+
         info!(
-            "GGPlayer: loaded project '{}', scene '{}', {}x{}, vsync={}",
-            project_name, path_str, config.width, config.height, config.vsync
+            "GGPlayer: loaded project '{}', scene '{}', {}x{}, vsync={}, {} input actions",
+            project_name,
+            path_str,
+            config.width,
+            config.height,
+            config.vsync,
+            input_actions.actions.len()
         );
 
         GGPlayer {
@@ -293,6 +302,7 @@ impl Application for GGPlayer {
             pending_shadow_quality: None,
             pending_drop_scenes: Vec::new(),
             splash_texture: None,
+            input_actions,
         }
     }
 
@@ -308,6 +318,10 @@ impl Application for GGPlayer {
             decorations: true,
             ..Default::default()
         }
+    }
+
+    fn input_action_map(&self) -> Option<InputActionMap> {
+        Some(self.input_actions.clone())
     }
 
     fn present_mode(&self) -> PresentMode {
@@ -381,9 +395,12 @@ impl Application for GGPlayer {
             let mouse_down = input.is_mouse_button_pressed(MouseButton::Left);
             let just_pressed = input.is_mouse_button_just_pressed(MouseButton::Left);
             let just_released = input.is_mouse_button_just_released(MouseButton::Left);
-            let events = self
-                .scene
-                .update_ui_with_input(mouse_world, mouse_down, just_pressed, just_released);
+            let events = self.scene.update_ui_with_input(
+                mouse_world,
+                mouse_down,
+                just_pressed,
+                just_released,
+            );
             if !events.is_empty() {
                 self.scene.dispatch_ui_events(&events);
             }

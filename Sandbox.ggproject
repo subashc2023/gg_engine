@@ -1,5 +1,39 @@
 Project:
+  SchemaVersion: 2
   Name: Sandbox
   AssetDirectory: assets
   ScriptModulePath: assets/scripts
   StartScene: scenes/main_menu.ggscene
+  InputActions:
+  - Name: move_horizontal
+    Type: Axis
+    Bindings:
+    - !KeyComposite
+      Negative: A
+      Positive: D
+    - !GamepadAxis
+      Axis: LeftStickX
+      DeadZone: 0.15
+      Scale: 1.0
+  - Name: move_vertical
+    Type: Axis
+    Bindings:
+    - !KeyComposite
+      Negative: S
+      Positive: W
+    - !GamepadAxis
+      Axis: LeftStickY
+      DeadZone: 0.15
+      Scale: 1.0
+  - Name: jump
+    Type: Button
+    Bindings:
+    - !Key Space
+    - !GamepadButton
+      Button: South
+  - Name: sprint
+    Type: Button
+    Bindings:
+    - !Key LeftShift
+    - !GamepadButton
+      Button: West

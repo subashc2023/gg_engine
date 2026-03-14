@@ -1,7 +1,7 @@
 use std::path::Path;
 
 use super::buffer::as_bytes;
-use super::skeleton::{JointChannel, Keyframe, Skeleton, SkeletalAnimationClip};
+use super::skeleton::{JointChannel, Keyframe, SkeletalAnimationClip, Skeleton};
 use super::{BufferElement, BufferLayout, ShaderDataType, VertexArray};
 use crate::error::{EngineError, EngineResult};
 use crate::renderer::Renderer;
@@ -383,11 +383,7 @@ impl Mesh {
 
     /// Torus centered at origin, lying in the XZ plane.
     /// Major radius 0.35, minor (tube) radius 0.15 — fits in a unit bounding box.
-    pub fn torus(
-        radial_segments: u32,
-        tubular_segments: u32,
-        color: [f32; 4],
-    ) -> Self {
+    pub fn torus(radial_segments: u32, tubular_segments: u32, color: [f32; 4]) -> Self {
         let radial = radial_segments.max(3);
         let tubular = tubular_segments.max(3);
         let mut vertices = Vec::new();
@@ -961,18 +957,19 @@ pub fn load_gltf(path: &Path) -> EngineResult<Vec<Mesh>> {
                 .map(|idx| idx.into_u32().collect())
                 .unwrap_or_else(|| (0..vert_count as u32).collect());
 
-            let normals: Vec<[f32; 3]> = reader
-                .read_normals()
-                .map(|n| n.collect())
-                .unwrap_or_else(|| {
-                    // No authored normals — compute smooth normals from the
-                    // original (CCW) winding so they point outward correctly.
-                    log::warn!(
-                        "Mesh '{}' has no normals — generating from geometry",
-                        mesh.name().unwrap_or("unnamed")
-                    );
-                    compute_normals_from_geometry(&positions, &raw_indices)
-                });
+            let normals: Vec<[f32; 3]> =
+                reader
+                    .read_normals()
+                    .map(|n| n.collect())
+                    .unwrap_or_else(|| {
+                        // No authored normals — compute smooth normals from the
+                        // original (CCW) winding so they point outward correctly.
+                        log::warn!(
+                            "Mesh '{}' has no normals — generating from geometry",
+                            mesh.name().unwrap_or("unnamed")
+                        );
+                        compute_normals_from_geometry(&positions, &raw_indices)
+                    });
 
             let uvs: Vec<[f32; 2]> = reader
                 .read_tex_coords(0)
@@ -985,9 +982,7 @@ pub fn load_gltf(path: &Path) -> EngineResult<Vec<Mesh>> {
                 .unwrap_or_else(|| vec![[1.0, 1.0, 1.0, 1.0]; vert_count]);
 
             // Read tangents from glTF if present (vec4: xyz = direction, w = sign).
-            let gltf_tangents: Option<Vec<[f32; 4]>> = reader
-                .read_tangents()
-                .map(|t| t.collect());
+            let gltf_tangents: Option<Vec<[f32; 4]>> = reader.read_tangents().map(|t| t.collect());
 
             let mut vertices: Vec<MeshVertex> = (0..vert_count)
                 .map(|i| MeshVertex {
@@ -995,10 +990,7 @@ pub fn load_gltf(path: &Path) -> EngineResult<Vec<Mesh>> {
                     normal: normals[i],
                     uv: uvs[i],
                     color: colors[i],
-                    tangent: gltf_tangents
-                        .as_ref()
-                        .map(|t| t[i])
-                        .unwrap_or([0.0; 4]),
+                    tangent: gltf_tangents.as_ref().map(|t| t[i]).unwrap_or([0.0; 4]),
                 })
                 .collect();
 
@@ -1063,9 +1055,10 @@ pub fn load_gltf_skinned(path: &Path) -> EngineResult<GltfSkinData> {
     })?;
 
     // --- Find the first skin -------------------------------------------------
-    let skin = document.skins().next().ok_or_else(|| {
-        EngineError::Gpu(format!("No skin found in '{}'", path.display()))
-    })?;
+    let skin = document
+        .skins()
+        .next()
+        .ok_or_else(|| EngineError::Gpu(format!("No skin found in '{}'", path.display())))?;
 
     // Build joint node-index → skeleton joint-index mapping.
     let joint_nodes: Vec<gltf::Node> = skin.joints().collect();
@@ -1164,9 +1157,7 @@ pub fn load_gltf_skinned(path: &Path) -> EngineResult<GltfSkinData> {
     let skin_index = skin.index();
     let mesh_node = document
         .nodes()
-        .find(|n| {
-            n.skin().map(|s| s.index()) == Some(skin_index) && n.mesh().is_some()
-        })
+        .find(|n| n.skin().map(|s| s.index()) == Some(skin_index) && n.mesh().is_some())
         .ok_or_else(|| {
             EngineError::Gpu(format!(
                 "No mesh node with skin found in '{}'",
@@ -1278,9 +1269,7 @@ pub fn load_gltf_skinned(path: &Path) -> EngineResult<GltfSkinData> {
             .unwrap_or_else(|| vec![[1.0, 0.0, 0.0, 0.0]; vert_count]);
 
         // Tangents from glTF (vec4: xyz = direction, w = bitangent sign).
-        let gltf_tangents: Option<Vec<[f32; 4]>> = prim_reader
-            .read_tangents()
-            .map(|t| t.collect());
+        let gltf_tangents: Option<Vec<[f32; 4]>> = prim_reader.read_tangents().map(|t| t.collect());
 
         let base = all_vertices.len() as u32;
         for i in 0..vert_count {
@@ -1289,10 +1278,7 @@ pub fn load_gltf_skinned(path: &Path) -> EngineResult<GltfSkinData> {
                 normal: normals[i],
                 uv: uvs[i],
                 color: colors[i],
-                tangent: gltf_tangents
-                    .as_ref()
-                    .map(|t| t[i])
-                    .unwrap_or([0.0; 4]),
+                tangent: gltf_tangents.as_ref().map(|t| t[i]).unwrap_or([0.0; 4]),
                 bone_indices: joints[i],
                 bone_weights: weights[i],
             });
@@ -1514,7 +1500,10 @@ mod tests {
             return;
         }
         let data = load_gltf_skinned(path).expect("Failed to load Fox.glb skinned");
-        assert!(data.mesh.vertices.len() > 100, "Fox mesh should have vertices");
+        assert!(
+            data.mesh.vertices.len() > 100,
+            "Fox mesh should have vertices"
+        );
         assert!(data.skeleton.joint_count() > 10, "Fox should have joints");
         assert!(!data.clips.is_empty(), "Fox should have animation clips");
 
@@ -1590,8 +1579,7 @@ mod tests {
         println!("\n=== bind pose bone matrices (first 5) ===");
         for (j, m) in bind_pose.matrices.iter().enumerate().take(5) {
             let d = m.determinant();
-            let near_identity = (*m - glam::Mat4::IDENTITY)
-                .abs_diff_eq(glam::Mat4::ZERO, 0.01);
+            let near_identity = (*m - glam::Mat4::IDENTITY).abs_diff_eq(glam::Mat4::ZERO, 0.01);
             println!(
                 "  joint {} '{}': det={:.6} near_identity={}",
                 j, data.skeleton.joint_names[j], d, near_identity

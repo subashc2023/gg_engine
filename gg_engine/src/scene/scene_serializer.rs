@@ -16,13 +16,11 @@ use crate::scene::{
     AudioCategory, AudioListenerComponent, AudioSourceComponent, BoxCollider2DComponent,
     BoxCollider3DComponent, CameraComponent, CapsuleCollider3DComponent, CircleCollider2DComponent,
     CircleRendererComponent, DirectionalLightComponent, EnvironmentComponent, FloatOrdering,
-    IdComponent,
-    InstancedSpriteAnimator, MeshPrimitive, MeshRendererComponent, MeshSource,
+    IdComponent, InstancedSpriteAnimator, MeshPrimitive, MeshRendererComponent, MeshSource,
     ParticleEmitterComponent, PointLightComponent, RelationshipComponent, RigidBody2DComponent,
     RigidBody2DType, RigidBody3DComponent, RigidBody3DType, Scene, SkeletalAnimationComponent,
-    SphereCollider3DComponent,
-    SpriteAnimatorComponent, SpriteRendererComponent, TagComponent, TextComponent,
-    TilemapComponent, TransformComponent, TransitionCondition, UIAnchorComponent,
+    SphereCollider3DComponent, SpriteAnimatorComponent, SpriteRendererComponent, TagComponent,
+    TextComponent, TilemapComponent, TransformComponent, TransitionCondition, UIAnchorComponent,
     UIImageComponent, UIInteractableComponent, UILayoutAlignment, UILayoutComponent,
     UILayoutDirection, UIRectComponent,
 };
@@ -1067,11 +1065,23 @@ struct UIImageData {
 struct UIInteractableData {
     #[serde(rename = "Interactable", default = "default_true")]
     interactable: bool,
-    #[serde(rename = "HoverColor", skip_serializing_if = "Option::is_none", default)]
+    #[serde(
+        rename = "HoverColor",
+        skip_serializing_if = "Option::is_none",
+        default
+    )]
     hover_color: Option<[f32; 4]>,
-    #[serde(rename = "PressColor", skip_serializing_if = "Option::is_none", default)]
+    #[serde(
+        rename = "PressColor",
+        skip_serializing_if = "Option::is_none",
+        default
+    )]
     press_color: Option<[f32; 4]>,
-    #[serde(rename = "DisabledColor", skip_serializing_if = "Option::is_none", default)]
+    #[serde(
+        rename = "DisabledColor",
+        skip_serializing_if = "Option::is_none",
+        default
+    )]
     disabled_color: Option<[f32; 4]>,
 }
 
@@ -1728,10 +1738,7 @@ impl SceneSerializer {
                     speed: sac.speed,
                     looping: sac.looping,
                     playing: sac.playing,
-                    default_clip: sac
-                        .current_clip_name()
-                        .unwrap_or("")
-                        .to_string(),
+                    default_clip: sac.current_clip_name().unwrap_or("").to_string(),
                 }),
             directional_light: scene
                 .get_component::<DirectionalLightComponent>(entity)

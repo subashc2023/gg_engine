@@ -4,6 +4,7 @@ pub mod cursor;
 pub mod error;
 pub mod events;
 mod input;
+pub mod input_action;
 pub mod jobs;
 mod layer;
 mod logging;
@@ -35,6 +36,7 @@ pub use events::gamepad::{GamepadAxis, GamepadButton, GamepadEvent, GamepadId};
 pub use glam;
 pub use hecs;
 pub use input::Input;
+pub use input_action::{ActionType, InputAction, InputActionMap, InputBinding};
 pub use layer::{Layer, LayerStack};
 pub use log;
 pub use logging::{clear_log_buffer, init as log_init, with_log_buffer, LogEntry};
@@ -63,11 +65,10 @@ pub use scene::{
     IdComponent, InstancedSpriteAnimator, MeshPrimitive, MeshRendererComponent, MeshSource,
     NativeScript, NativeScriptComponent, ParticleEmitterComponent, PointLightComponent,
     RelationshipComponent, RigidBody2DComponent, RigidBody2DType, RigidBody3DComponent,
-    SkeletalAnimationComponent,
-    RigidBody3DType, RigidBodyType, Scene, SceneSerializer, SphereCollider3DComponent,
-    SpriteAnimatorComponent, SpriteRendererComponent, TagComponent, TextComponent,
-    TilemapComponent, TransformComponent, TransitionCondition, UIAnchorComponent, UIEvent,
-    UIImageComponent, UIInteractableComponent, UIInteractionState, UILayoutAlignment,
+    RigidBody3DType, RigidBodyType, Scene, SceneSerializer, SkeletalAnimationComponent,
+    SphereCollider3DComponent, SpriteAnimatorComponent, SpriteRendererComponent, TagComponent,
+    TextComponent, TilemapComponent, TransformComponent, TransitionCondition, UIAnchorComponent,
+    UIEvent, UIImageComponent, UIInteractableComponent, UIInteractionState, UILayoutAlignment,
     UILayoutComponent, UILayoutDirection, UIRectComponent, TILE_FLIP_H, TILE_FLIP_V, TILE_ID_MASK,
 };
 #[cfg(feature = "lua-scripting")]
@@ -88,6 +89,7 @@ pub mod prelude {
     pub use crate::events::gamepad::{GamepadAxis, GamepadButton, GamepadEvent, GamepadId};
     pub use crate::events::{Event, KeyCode, KeyEvent, MouseButton, MouseEvent, WindowEvent};
     pub use crate::input::Input;
+    pub use crate::input_action::{ActionType, InputAction, InputActionMap, InputBinding};
     pub use crate::layer::{Layer, LayerStack};
     pub use crate::orthographic_camera_controller::OrthographicCameraController;
     pub use crate::particle_system::{ParticleProps, ParticleSystem};
@@ -98,8 +100,8 @@ pub mod prelude {
     };
     pub use crate::project::Project;
     pub use crate::renderer::{
-        as_bytes, load_gltf, load_gltf_skinned, BlendMode, BufferElement, BufferLayout, CullMode, DepthConfig,
-        EditorCamera, Font, Framebuffer, FramebufferSpec, FramebufferTextureFormat,
+        as_bytes, load_gltf, load_gltf_skinned, BlendMode, BufferElement, BufferLayout, CullMode,
+        DepthConfig, EditorCamera, Font, Framebuffer, FramebufferSpec, FramebufferTextureFormat,
         FramebufferTextureSpec, IndexBuffer, LightEnvironment, LightGpuData, Material,
         MaterialGpuData, MaterialHandle, MaterialLibrary, Mesh, MeshVertex, MsaaSamples,
         OrthographicCamera, Pipeline, PresentMode, ProjectionType, Renderer, Renderer2DStats,
@@ -112,17 +114,17 @@ pub mod prelude {
         AmbientLightComponent, AnimationClip, AnimationControllerComponent, AnimationTransition,
         AudioCategory, AudioListenerComponent, AudioSourceComponent, BoxCollider2DComponent,
         BoxCollider3DComponent, CameraComponent, CapsuleCollider3DComponent,
-        CircleCollider2DComponent, CircleRendererComponent, DirectionalLightComponent, Entity, EnvironmentComponent,
-        FloatOrdering, FullscreenMode, IdComponent, InstancedSpriteAnimator, MeshPrimitive,
-        MeshRendererComponent, MeshSource, NativeScript, NativeScriptComponent,
+        CircleCollider2DComponent, CircleRendererComponent, DirectionalLightComponent, Entity,
+        EnvironmentComponent, FloatOrdering, FullscreenMode, IdComponent, InstancedSpriteAnimator,
+        MeshPrimitive, MeshRendererComponent, MeshSource, NativeScript, NativeScriptComponent,
         ParticleEmitterComponent, PointLightComponent, RelationshipComponent, RigidBody2DComponent,
         RigidBody2DType, RigidBody3DComponent, RigidBody3DType, RigidBodyType, Scene,
         SceneSerializer, SkeletalAnimationComponent, SphereCollider3DComponent,
-        SpriteAnimatorComponent,
-        SpriteRendererComponent, TagComponent, TextComponent, TilemapComponent, TransformComponent,
-        TransitionCondition, UIAnchorComponent, UIEvent, UIImageComponent,
-        UIInteractableComponent, UIInteractionState, UILayoutAlignment, UILayoutComponent,
-        UILayoutDirection, UIRectComponent, TILE_FLIP_H, TILE_FLIP_V, TILE_ID_MASK,
+        SpriteAnimatorComponent, SpriteRendererComponent, TagComponent, TextComponent,
+        TilemapComponent, TransformComponent, TransitionCondition, UIAnchorComponent, UIEvent,
+        UIImageComponent, UIInteractableComponent, UIInteractionState, UILayoutAlignment,
+        UILayoutComponent, UILayoutDirection, UIRectComponent, TILE_FLIP_H, TILE_FLIP_V,
+        TILE_ID_MASK,
     };
     #[cfg(feature = "lua-scripting")]
     pub use crate::scene::{LuaScriptComponent, ScriptEngine, ScriptFieldValue};

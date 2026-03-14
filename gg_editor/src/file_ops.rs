@@ -930,6 +930,7 @@ impl GGEditor {
         // Update recent projects and editor state.
         self.editor_settings
             .add_recent_project(project.name(), &abs_path.to_string_lossy());
+        self.input_actions = project.input_actions().clone();
         self.project_state.project = Some(project);
         self.selection.clear();
         // Don't overwrite dirty=true set by autosave recovery above.

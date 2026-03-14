@@ -1091,8 +1091,8 @@ pub(crate) fn create_skinned_shadow_pipeline(
     let layout_info = vk::PipelineLayoutCreateInfo::default()
         .set_layouts(&ds_layouts)
         .push_constant_ranges(std::slice::from_ref(&push_constant_range));
-    let pipeline_layout = unsafe { device.create_pipeline_layout(&layout_info, None) }
-        .map_err(|e| {
+    let pipeline_layout =
+        unsafe { device.create_pipeline_layout(&layout_info, None) }.map_err(|e| {
             EngineError::Gpu(format!(
                 "Failed to create skinned shadow pipeline layout: {e}"
             ))
@@ -1121,7 +1121,11 @@ pub(crate) fn create_skinned_shadow_pipeline(
                 EngineError::Gpu(format!("Failed to create skinned shadow pipeline: {e}"))
             })?[0];
 
-    Ok(Pipeline::from_raw(pipeline, pipeline_layout, device.clone()))
+    Ok(Pipeline::from_raw(
+        pipeline,
+        pipeline_layout,
+        device.clone(),
+    ))
 }
 
 /// Create an alpha-tested depth pipeline for the shadow pass.

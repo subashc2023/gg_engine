@@ -2,6 +2,18 @@ Assets:
 - Handle: 1001
   FilePath: audio/test_tone.wav
   Type: Audio
+- Handle: 5001
+  FilePath: hdri/environment.hdr
+  Type: Texture2D
+- Handle: 6001
+  FilePath: meshes/Fox.glb
+  Type: Mesh
+- Handle: 3002
+  FilePath: sprites/2dguy/2dguy_atlas.png
+  Type: Texture2D
+- Handle: 3001
+  FilePath: sprites/2dguy/Walking.png
+  Type: Texture2D
 - Handle: 2001
   FilePath: textures/checkerboard.png
   Type: Texture2D
@@ -11,15 +23,3 @@ Assets:
 - Handle: 2841034490373146
   FilePath: textures/tileset_legacy.png
   Type: Texture2D
-- Handle: 3001
-  FilePath: sprites/2dguy/Walking.png
-  Type: Texture2D
-- Handle: 3002
-  FilePath: sprites/2dguy/2dguy_atlas.png
-  Type: Texture2D
-- Handle: 5001
-  FilePath: hdri/environment.hdr
-  Type: Texture2D
-- Handle: 6001
-  FilePath: meshes/Fox.glb
-  Type: Mesh

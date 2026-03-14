@@ -8,9 +8,9 @@ use super::cubemap::Cubemap;
 use super::gpu_allocation::{GpuAllocator, MemoryLocation};
 use super::lighting::LightingSystem;
 use super::pipeline::Pipeline;
-use super::texture::{Texture2D, TextureSpecification, ImageFormat};
+use super::texture::{ImageFormat, Texture2D, TextureSpecification};
 use super::vertex_array::VertexArray;
-use super::{BufferLayout, ShaderDataType, BufferElement, RendererResources};
+use super::{BufferElement, BufferLayout, RendererResources, ShaderDataType};
 use crate::error::{EngineError, EngineResult};
 use crate::shaders;
 
@@ -236,9 +236,7 @@ impl EnvironmentMapSystem {
             )
         }
         .map_err(|e| {
-            EngineError::Gpu(format!(
-                "Failed to create equirect compute DS layout: {e}"
-            ))
+            EngineError::Gpu(format!("Failed to create equirect compute DS layout: {e}"))
         })?;
 
         // Layout for irradiance/prefilter: binding 0 = samplerCube, binding 1 = image2D
@@ -261,9 +259,7 @@ impl EnvironmentMapSystem {
             )
         }
         .map_err(|e| {
-            EngineError::Gpu(format!(
-                "Failed to create cubemap compute DS layout: {e}"
-            ))
+            EngineError::Gpu(format!("Failed to create cubemap compute DS layout: {e}"))
         })?;
 
         // Layout for BRDF LUT: binding 0 = image2D (write-only)
@@ -278,13 +274,14 @@ impl EnvironmentMapSystem {
                 None,
             )
         }
-        .map_err(|e| {
-            EngineError::Gpu(format!("Failed to create BRDF compute DS layout: {e}"))
-        })?;
+        .map_err(|e| EngineError::Gpu(format!("Failed to create BRDF compute DS layout: {e}")))?;
 
         // --- Compute pipelines ---
-        let equirect_shader =
-            ComputeShader::new(device, "equirect_to_cube", shaders::EQUIRECT_TO_CUBE_COMP_SPV)?;
+        let equirect_shader = ComputeShader::new(
+            device,
+            "equirect_to_cube",
+            shaders::EQUIRECT_TO_CUBE_COMP_SPV,
+        )?;
         let equirect_to_cube_pipeline = create_compute_pipeline(
             device,
             &equirect_shader,
@@ -293,8 +290,11 @@ impl EnvironmentMapSystem {
             pipeline_cache,
         )?;
 
-        let irradiance_shader =
-            ComputeShader::new(device, "irradiance_convolve", shaders::IRRADIANCE_CONVOLVE_COMP_SPV)?;
+        let irradiance_shader = ComputeShader::new(
+            device,
+            "irradiance_convolve",
+            shaders::IRRADIANCE_CONVOLVE_COMP_SPV,
+        )?;
         let irradiance_pipeline = create_compute_pipeline(
             device,
             &irradiance_shader,
@@ -303,8 +303,11 @@ impl EnvironmentMapSystem {
             pipeline_cache,
         )?;
 
-        let prefilter_shader =
-            ComputeShader::new(device, "prefilter_specular", shaders::PREFILTER_SPECULAR_COMP_SPV)?;
+        let prefilter_shader = ComputeShader::new(
+            device,
+            "prefilter_specular",
+            shaders::PREFILTER_SPECULAR_COMP_SPV,
+        )?;
         let prefilter_pipeline = create_compute_pipeline(
             device,
             &prefilter_shader,
@@ -445,16 +448,24 @@ impl EnvironmentMapSystem {
         log::info!(target: "gg_engine", "Loading HDR environment map ({width}x{height})...");
 
         // 1. Upload equirectangular HDR as a temporary 2D texture (R16G16B16A16_SFLOAT).
-        let (staging_buf, staging_alloc) = create_staging_buffer(allocator, device, pixels_rgba_f16)?;
+        let (staging_buf, staging_alloc) =
+            create_staging_buffer(allocator, device, pixels_rgba_f16)?;
         let equirect_image = Self::create_hdr_image(allocator, device, width, height)?;
 
         super::texture::execute_one_shot_pub(device, command_pool, queue, |cmd_buf| {
             // Transition equirect image for upload.
             Self::transition_image(
-                device, cmd_buf, equirect_image.0, vk::ImageLayout::UNDEFINED,
-                vk::ImageLayout::TRANSFER_DST_OPTIMAL, 1, 1,
-                vk::AccessFlags::empty(), vk::AccessFlags::TRANSFER_WRITE,
-                vk::PipelineStageFlags::TOP_OF_PIPE, vk::PipelineStageFlags::TRANSFER,
+                device,
+                cmd_buf,
+                equirect_image.0,
+                vk::ImageLayout::UNDEFINED,
+                vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+                1,
+                1,
+                vk::AccessFlags::empty(),
+                vk::AccessFlags::TRANSFER_WRITE,
+                vk::PipelineStageFlags::TOP_OF_PIPE,
+                vk::PipelineStageFlags::TRANSFER,
             );
 
             let region = vk::BufferImageCopy {
@@ -468,20 +479,34 @@ impl EnvironmentMapSystem {
                     layer_count: 1,
                 },
                 image_offset: vk::Offset3D::default(),
-                image_extent: vk::Extent3D { width, height, depth: 1 },
+                image_extent: vk::Extent3D {
+                    width,
+                    height,
+                    depth: 1,
+                },
             };
             unsafe {
                 device.cmd_copy_buffer_to_image(
-                    cmd_buf, staging_buf, equirect_image.0,
-                    vk::ImageLayout::TRANSFER_DST_OPTIMAL, &[region],
+                    cmd_buf,
+                    staging_buf,
+                    equirect_image.0,
+                    vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+                    &[region],
                 );
             }
 
             Self::transition_image(
-                device, cmd_buf, equirect_image.0, vk::ImageLayout::TRANSFER_DST_OPTIMAL,
-                vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL, 1, 1,
-                vk::AccessFlags::TRANSFER_WRITE, vk::AccessFlags::SHADER_READ,
-                vk::PipelineStageFlags::TRANSFER, vk::PipelineStageFlags::COMPUTE_SHADER,
+                device,
+                cmd_buf,
+                equirect_image.0,
+                vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+                vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
+                1,
+                1,
+                vk::AccessFlags::TRANSFER_WRITE,
+                vk::AccessFlags::SHADER_READ,
+                vk::PipelineStageFlags::TRANSFER,
+                vk::PipelineStageFlags::COMPUTE_SHADER,
             );
         })?;
 
@@ -494,12 +519,15 @@ impl EnvironmentMapSystem {
                     .format(vk::Format::R16G16B16A16_SFLOAT)
                     .subresource_range(vk::ImageSubresourceRange {
                         aspect_mask: vk::ImageAspectFlags::COLOR,
-                        base_mip_level: 0, level_count: 1,
-                        base_array_layer: 0, layer_count: 1,
+                        base_mip_level: 0,
+                        level_count: 1,
+                        base_array_layer: 0,
+                        layer_count: 1,
                     }),
                 None,
             )
-        }.map_err(|e| EngineError::Gpu(format!("Failed to create equirect view: {e}")))?;
+        }
+        .map_err(|e| EngineError::Gpu(format!("Failed to create equirect view: {e}")))?;
 
         let equirect_sampler = unsafe {
             device.create_sampler(
@@ -511,51 +539,87 @@ impl EnvironmentMapSystem {
                     .address_mode_w(vk::SamplerAddressMode::CLAMP_TO_EDGE),
                 None,
             )
-        }.map_err(|e| EngineError::Gpu(format!("Failed to create equirect sampler: {e}")))?;
+        }
+        .map_err(|e| EngineError::Gpu(format!("Failed to create equirect sampler: {e}")))?;
 
         // 2. Run compute preprocessing chain in one command buffer.
         super::texture::execute_one_shot_pub(device, command_pool, queue, |cmd_buf| {
             log::info!(target: "gg_engine", "Running IBL compute preprocessing chain...");
             // -- Equirect → Cubemap --
             Cubemap::transition_all_layers(
-                device, cmd_buf, self.env_cubemap.image(),
-                vk::ImageLayout::UNDEFINED, vk::ImageLayout::GENERAL,
+                device,
+                cmd_buf,
+                self.env_cubemap.image(),
+                vk::ImageLayout::UNDEFINED,
+                vk::ImageLayout::GENERAL,
                 self.env_cubemap.mip_levels(),
-                vk::AccessFlags::empty(), vk::AccessFlags::SHADER_WRITE,
-                vk::PipelineStageFlags::TOP_OF_PIPE, vk::PipelineStageFlags::COMPUTE_SHADER,
+                vk::AccessFlags::empty(),
+                vk::AccessFlags::SHADER_WRITE,
+                vk::PipelineStageFlags::TOP_OF_PIPE,
+                vk::PipelineStageFlags::COMPUTE_SHADER,
             );
 
             for face in 0..6u32 {
                 let ds = Self::alloc_and_write_sampler2d_storage_ds(
-                    device, self.compute_ds_pool, self.compute_sampler2d_ds_layout,
-                    equirect_view, equirect_sampler,
+                    device,
+                    self.compute_ds_pool,
+                    self.compute_sampler2d_ds_layout,
+                    equirect_view,
+                    equirect_sampler,
                     self.env_cubemap.face_mip_view(face, 0),
                 );
                 unsafe {
-                    device.cmd_bind_pipeline(cmd_buf, vk::PipelineBindPoint::COMPUTE,
-                        self.equirect_to_cube_pipeline.pipeline());
-                    device.cmd_bind_descriptor_sets(cmd_buf, vk::PipelineBindPoint::COMPUTE,
-                        self.equirect_to_cube_pipeline.layout(), 0, &[ds], &[]);
+                    device.cmd_bind_pipeline(
+                        cmd_buf,
+                        vk::PipelineBindPoint::COMPUTE,
+                        self.equirect_to_cube_pipeline.pipeline(),
+                    );
+                    device.cmd_bind_descriptor_sets(
+                        cmd_buf,
+                        vk::PipelineBindPoint::COMPUTE,
+                        self.equirect_to_cube_pipeline.layout(),
+                        0,
+                        &[ds],
+                        &[],
+                    );
                 }
-                let push = EquirectToCubePush { face: face as i32, face_size: ENV_CUBEMAP_SIZE as i32 };
+                let push = EquirectToCubePush {
+                    face: face as i32,
+                    face_size: ENV_CUBEMAP_SIZE as i32,
+                };
                 let push_bytes = unsafe {
-                    std::slice::from_raw_parts(&push as *const _ as *const u8, std::mem::size_of_val(&push))
+                    std::slice::from_raw_parts(
+                        &push as *const _ as *const u8,
+                        std::mem::size_of_val(&push),
+                    )
                 };
                 unsafe {
-                    device.cmd_push_constants(cmd_buf, self.equirect_to_cube_pipeline.layout(),
-                        vk::ShaderStageFlags::COMPUTE, 0, push_bytes);
+                    device.cmd_push_constants(
+                        cmd_buf,
+                        self.equirect_to_cube_pipeline.layout(),
+                        vk::ShaderStageFlags::COMPUTE,
+                        0,
+                        push_bytes,
+                    );
                 }
                 let groups = (ENV_CUBEMAP_SIZE + 15) / 16;
-                unsafe { device.cmd_dispatch(cmd_buf, groups, groups, 1); }
+                unsafe {
+                    device.cmd_dispatch(cmd_buf, groups, groups, 1);
+                }
             }
 
             // Barrier: env_cubemap GENERAL → SHADER_READ_ONLY for sampling.
             Cubemap::transition_all_layers(
-                device, cmd_buf, self.env_cubemap.image(),
-                vk::ImageLayout::GENERAL, vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+                device,
+                cmd_buf,
+                self.env_cubemap.image(),
+                vk::ImageLayout::GENERAL,
+                vk::ImageLayout::TRANSFER_DST_OPTIMAL,
                 self.env_cubemap.mip_levels(),
-                vk::AccessFlags::SHADER_WRITE, vk::AccessFlags::TRANSFER_WRITE,
-                vk::PipelineStageFlags::COMPUTE_SHADER, vk::PipelineStageFlags::TRANSFER,
+                vk::AccessFlags::SHADER_WRITE,
+                vk::AccessFlags::TRANSFER_WRITE,
+                vk::PipelineStageFlags::COMPUTE_SHADER,
+                vk::PipelineStageFlags::TRANSFER,
             );
 
             // Generate mipmaps for the environment cubemap (blit chain per face).
@@ -565,51 +629,94 @@ impl EnvironmentMapSystem {
 
             // -- Irradiance Convolution --
             Cubemap::transition_all_layers(
-                device, cmd_buf, self.irradiance_map.image(),
-                vk::ImageLayout::UNDEFINED, vk::ImageLayout::GENERAL,
+                device,
+                cmd_buf,
+                self.irradiance_map.image(),
+                vk::ImageLayout::UNDEFINED,
+                vk::ImageLayout::GENERAL,
                 1,
-                vk::AccessFlags::empty(), vk::AccessFlags::SHADER_WRITE,
-                vk::PipelineStageFlags::TOP_OF_PIPE, vk::PipelineStageFlags::COMPUTE_SHADER,
+                vk::AccessFlags::empty(),
+                vk::AccessFlags::SHADER_WRITE,
+                vk::PipelineStageFlags::TOP_OF_PIPE,
+                vk::PipelineStageFlags::COMPUTE_SHADER,
             );
 
             for face in 0..6u32 {
                 let ds = Self::alloc_and_write_sampler2d_storage_ds(
-                    device, self.compute_ds_pool, self.compute_sampler_cube_ds_layout,
-                    self.env_cubemap.image_view(), self.env_cubemap.sampler(),
+                    device,
+                    self.compute_ds_pool,
+                    self.compute_sampler_cube_ds_layout,
+                    self.env_cubemap.image_view(),
+                    self.env_cubemap.sampler(),
                     self.irradiance_map.face_mip_view(face, 0),
                 );
                 unsafe {
-                    device.cmd_bind_pipeline(cmd_buf, vk::PipelineBindPoint::COMPUTE,
-                        self.irradiance_pipeline.pipeline());
-                    device.cmd_bind_descriptor_sets(cmd_buf, vk::PipelineBindPoint::COMPUTE,
-                        self.irradiance_pipeline.layout(), 0, &[ds], &[]);
+                    device.cmd_bind_pipeline(
+                        cmd_buf,
+                        vk::PipelineBindPoint::COMPUTE,
+                        self.irradiance_pipeline.pipeline(),
+                    );
+                    device.cmd_bind_descriptor_sets(
+                        cmd_buf,
+                        vk::PipelineBindPoint::COMPUTE,
+                        self.irradiance_pipeline.layout(),
+                        0,
+                        &[ds],
+                        &[],
+                    );
                 }
-                let push = IrradiancePush { face: face as i32, face_size: IRRADIANCE_SIZE as i32 };
+                let push = IrradiancePush {
+                    face: face as i32,
+                    face_size: IRRADIANCE_SIZE as i32,
+                };
                 let push_bytes = unsafe {
-                    std::slice::from_raw_parts(&push as *const _ as *const u8, std::mem::size_of_val(&push))
+                    std::slice::from_raw_parts(
+                        &push as *const _ as *const u8,
+                        std::mem::size_of_val(&push),
+                    )
                 };
                 unsafe {
-                    device.cmd_push_constants(cmd_buf, self.irradiance_pipeline.layout(),
-                        vk::ShaderStageFlags::COMPUTE, 0, push_bytes);
-                    device.cmd_dispatch(cmd_buf, (IRRADIANCE_SIZE + 7) / 8, (IRRADIANCE_SIZE + 7) / 8, 1);
+                    device.cmd_push_constants(
+                        cmd_buf,
+                        self.irradiance_pipeline.layout(),
+                        vk::ShaderStageFlags::COMPUTE,
+                        0,
+                        push_bytes,
+                    );
+                    device.cmd_dispatch(
+                        cmd_buf,
+                        (IRRADIANCE_SIZE + 7) / 8,
+                        (IRRADIANCE_SIZE + 7) / 8,
+                        1,
+                    );
                 }
             }
 
             Cubemap::transition_all_layers(
-                device, cmd_buf, self.irradiance_map.image(),
-                vk::ImageLayout::GENERAL, vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
+                device,
+                cmd_buf,
+                self.irradiance_map.image(),
+                vk::ImageLayout::GENERAL,
+                vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
                 1,
-                vk::AccessFlags::SHADER_WRITE, vk::AccessFlags::SHADER_READ,
-                vk::PipelineStageFlags::COMPUTE_SHADER, vk::PipelineStageFlags::FRAGMENT_SHADER,
+                vk::AccessFlags::SHADER_WRITE,
+                vk::AccessFlags::SHADER_READ,
+                vk::PipelineStageFlags::COMPUTE_SHADER,
+                vk::PipelineStageFlags::FRAGMENT_SHADER,
             );
 
             // -- Pre-filtered Specular --
             Cubemap::transition_all_layers(
-                device, cmd_buf, self.prefiltered_map.image(),
-                vk::ImageLayout::UNDEFINED, vk::ImageLayout::GENERAL,
+                device,
+                cmd_buf,
+                self.prefiltered_map.image(),
+                vk::ImageLayout::UNDEFINED,
+                vk::ImageLayout::GENERAL,
                 PREFILTER_MIP_LEVELS,
-                vk::AccessFlags::empty(), vk::AccessFlags::SHADER_WRITE,
-                vk::PipelineStageFlags::TOP_OF_PIPE, vk::PipelineStageFlags::COMPUTE_SHADER,
+                vk::AccessFlags::empty(),
+                vk::AccessFlags::SHADER_WRITE,
+                vk::PipelineStageFlags::TOP_OF_PIPE,
+                vk::PipelineStageFlags::COMPUTE_SHADER,
             );
 
             for mip in 0..PREFILTER_MIP_LEVELS {
@@ -619,15 +726,27 @@ impl EnvironmentMapSystem {
 
                 for face in 0..6u32 {
                     let ds = Self::alloc_and_write_sampler2d_storage_ds(
-                        device, self.compute_ds_pool, self.compute_sampler_cube_ds_layout,
-                        self.env_cubemap.image_view(), self.env_cubemap.sampler(),
+                        device,
+                        self.compute_ds_pool,
+                        self.compute_sampler_cube_ds_layout,
+                        self.env_cubemap.image_view(),
+                        self.env_cubemap.sampler(),
                         self.prefiltered_map.face_mip_view(face, mip),
                     );
                     unsafe {
-                        device.cmd_bind_pipeline(cmd_buf, vk::PipelineBindPoint::COMPUTE,
-                            self.prefilter_pipeline.pipeline());
-                        device.cmd_bind_descriptor_sets(cmd_buf, vk::PipelineBindPoint::COMPUTE,
-                            self.prefilter_pipeline.layout(), 0, &[ds], &[]);
+                        device.cmd_bind_pipeline(
+                            cmd_buf,
+                            vk::PipelineBindPoint::COMPUTE,
+                            self.prefilter_pipeline.pipeline(),
+                        );
+                        device.cmd_bind_descriptor_sets(
+                            cmd_buf,
+                            vk::PipelineBindPoint::COMPUTE,
+                            self.prefilter_pipeline.layout(),
+                            0,
+                            &[ds],
+                            &[],
+                        );
                     }
                     let push = PrefilterPush {
                         face: face as i32,
@@ -636,11 +755,19 @@ impl EnvironmentMapSystem {
                         sample_count,
                     };
                     let push_bytes = unsafe {
-                        std::slice::from_raw_parts(&push as *const _ as *const u8, std::mem::size_of_val(&push))
+                        std::slice::from_raw_parts(
+                            &push as *const _ as *const u8,
+                            std::mem::size_of_val(&push),
+                        )
                     };
                     unsafe {
-                        device.cmd_push_constants(cmd_buf, self.prefilter_pipeline.layout(),
-                            vk::ShaderStageFlags::COMPUTE, 0, push_bytes);
+                        device.cmd_push_constants(
+                            cmd_buf,
+                            self.prefilter_pipeline.layout(),
+                            vk::ShaderStageFlags::COMPUTE,
+                            0,
+                            push_bytes,
+                        );
                         let groups = (mip_size + 15) / 16;
                         device.cmd_dispatch(cmd_buf, groups, groups, 1);
                     }
@@ -648,11 +775,16 @@ impl EnvironmentMapSystem {
             }
 
             Cubemap::transition_all_layers(
-                device, cmd_buf, self.prefiltered_map.image(),
-                vk::ImageLayout::GENERAL, vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
+                device,
+                cmd_buf,
+                self.prefiltered_map.image(),
+                vk::ImageLayout::GENERAL,
+                vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
                 PREFILTER_MIP_LEVELS,
-                vk::AccessFlags::SHADER_WRITE, vk::AccessFlags::SHADER_READ,
-                vk::PipelineStageFlags::COMPUTE_SHADER, vk::PipelineStageFlags::FRAGMENT_SHADER,
+                vk::AccessFlags::SHADER_WRITE,
+                vk::AccessFlags::SHADER_READ,
+                vk::PipelineStageFlags::COMPUTE_SHADER,
+                vk::PipelineStageFlags::FRAGMENT_SHADER,
             );
 
             // BRDF LUT is precomputed on CPU and uploaded as a regular texture.
@@ -760,10 +892,7 @@ impl EnvironmentMapSystem {
              1.0,  1.0,  1.0,  -1.0,  1.0, -1.0,   1.0,  1.0, -1.0,
         ];
 
-        let layout = BufferLayout::new(&[BufferElement::new(
-            ShaderDataType::Float3,
-            "a_position",
-        )]);
+        let layout = BufferLayout::new(&[BufferElement::new(ShaderDataType::Float3, "a_position")]);
 
         let bytes: &[u8] = unsafe {
             std::slice::from_raw_parts(vertices.as_ptr() as *const u8, vertices.len() * 4)
@@ -786,7 +915,11 @@ impl EnvironmentMapSystem {
     ) -> EngineResult<(vk::Image, super::gpu_allocation::GpuAllocation)> {
         let image_info = vk::ImageCreateInfo::default()
             .image_type(vk::ImageType::TYPE_2D)
-            .extent(vk::Extent3D { width, height, depth: 1 })
+            .extent(vk::Extent3D {
+                width,
+                height,
+                depth: 1,
+            })
             .mip_levels(1)
             .array_layers(1)
             .format(vk::Format::R16G16B16A16_SFLOAT)
@@ -800,7 +933,11 @@ impl EnvironmentMapSystem {
             .map_err(|e| EngineError::Gpu(format!("Failed to create HDR equirect image: {e}")))?;
 
         let allocation = super::gpu_allocation::GpuAllocator::allocate_for_image(
-            allocator, device, image, "HDR_Equirect", MemoryLocation::GpuOnly,
+            allocator,
+            device,
+            image,
+            "HDR_Equirect",
+            MemoryLocation::GpuOnly,
         )?;
 
         Ok((image, allocation))
@@ -857,8 +994,7 @@ impl EnvironmentMapSystem {
 
                     // Importance sample GGX (N = (0,0,1), so tangent frame is identity).
                     let phi = 2.0 * PI * xi_x;
-                    let cos_theta =
-                        ((1.0 - xi_y) / (1.0 + (alpha * alpha - 1.0) * xi_y)).sqrt();
+                    let cos_theta = ((1.0 - xi_y) / (1.0 + (alpha * alpha - 1.0) * xi_y)).sqrt();
                     let sin_theta = (1.0 - cos_theta * cos_theta).sqrt();
                     let h = [phi.cos() * sin_theta, phi.sin() * sin_theta, cos_theta];
 
@@ -932,8 +1068,13 @@ impl EnvironmentMapSystem {
 
         unsafe {
             device.cmd_pipeline_barrier(
-                cmd_buf, src_stage, dst_stage, vk::DependencyFlags::empty(),
-                &[], &[], &[barrier],
+                cmd_buf,
+                src_stage,
+                dst_stage,
+                vk::DependencyFlags::empty(),
+                &[],
+                &[],
+                &[barrier],
             );
         }
     }
@@ -974,7 +1115,9 @@ impl EnvironmentMapSystem {
                 .descriptor_type(vk::DescriptorType::STORAGE_IMAGE)
                 .image_info(std::slice::from_ref(&storage_info)),
         ];
-        unsafe { device.update_descriptor_sets(&writes, &[]); }
+        unsafe {
+            device.update_descriptor_sets(&writes, &[]);
+        }
         ds
     }
 
@@ -988,12 +1131,16 @@ impl EnvironmentMapSystem {
         if mip_levels <= 1 {
             // No mipmaps to generate, just transition to SHADER_READ_ONLY.
             Cubemap::transition_all_layers(
-                device, cmd_buf, cubemap.image(),
+                device,
+                cmd_buf,
+                cubemap.image(),
                 vk::ImageLayout::TRANSFER_DST_OPTIMAL,
                 vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
                 1,
-                vk::AccessFlags::TRANSFER_WRITE, vk::AccessFlags::SHADER_READ,
-                vk::PipelineStageFlags::TRANSFER, vk::PipelineStageFlags::FRAGMENT_SHADER,
+                vk::AccessFlags::TRANSFER_WRITE,
+                vk::AccessFlags::SHADER_READ,
+                vk::PipelineStageFlags::TRANSFER,
+                vk::PipelineStageFlags::FRAGMENT_SHADER,
             );
             return;
         }
@@ -1020,8 +1167,13 @@ impl EnvironmentMapSystem {
 
             unsafe {
                 device.cmd_pipeline_barrier(
-                    cmd_buf, vk::PipelineStageFlags::TRANSFER, vk::PipelineStageFlags::TRANSFER,
-                    vk::DependencyFlags::empty(), &[], &[], &[barrier_to_src],
+                    cmd_buf,
+                    vk::PipelineStageFlags::TRANSFER,
+                    vk::PipelineStageFlags::TRANSFER,
+                    vk::DependencyFlags::empty(),
+                    &[],
+                    &[],
+                    &[barrier_to_src],
                 );
             }
 
@@ -1037,7 +1189,11 @@ impl EnvironmentMapSystem {
                     },
                     src_offsets: [
                         vk::Offset3D { x: 0, y: 0, z: 0 },
-                        vk::Offset3D { x: mip_width, y: mip_width, z: 1 },
+                        vk::Offset3D {
+                            x: mip_width,
+                            y: mip_width,
+                            z: 1,
+                        },
                     ],
                     dst_subresource: vk::ImageSubresourceLayers {
                         aspect_mask: vk::ImageAspectFlags::COLOR,
@@ -1047,14 +1203,22 @@ impl EnvironmentMapSystem {
                     },
                     dst_offsets: [
                         vk::Offset3D { x: 0, y: 0, z: 0 },
-                        vk::Offset3D { x: next_width, y: next_width, z: 1 },
+                        vk::Offset3D {
+                            x: next_width,
+                            y: next_width,
+                            z: 1,
+                        },
                     ],
                 };
                 unsafe {
                     device.cmd_blit_image(
-                        cmd_buf, cubemap.image(), vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
-                        cubemap.image(), vk::ImageLayout::TRANSFER_DST_OPTIMAL,
-                        &[blit], vk::Filter::LINEAR,
+                        cmd_buf,
+                        cubemap.image(),
+                        vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
+                        cubemap.image(),
+                        vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+                        &[blit],
+                        vk::Filter::LINEAR,
                     );
                 }
             }
@@ -1080,9 +1244,14 @@ impl EnvironmentMapSystem {
 
             unsafe {
                 device.cmd_pipeline_barrier(
-                    cmd_buf, vk::PipelineStageFlags::TRANSFER,
-                    vk::PipelineStageFlags::FRAGMENT_SHADER | vk::PipelineStageFlags::COMPUTE_SHADER,
-                    vk::DependencyFlags::empty(), &[], &[], &[barrier_to_read],
+                    cmd_buf,
+                    vk::PipelineStageFlags::TRANSFER,
+                    vk::PipelineStageFlags::FRAGMENT_SHADER
+                        | vk::PipelineStageFlags::COMPUTE_SHADER,
+                    vk::DependencyFlags::empty(),
+                    &[],
+                    &[],
+                    &[barrier_to_read],
                 );
             }
 
@@ -1108,9 +1277,13 @@ impl EnvironmentMapSystem {
 
         unsafe {
             device.cmd_pipeline_barrier(
-                cmd_buf, vk::PipelineStageFlags::TRANSFER,
+                cmd_buf,
+                vk::PipelineStageFlags::TRANSFER,
                 vk::PipelineStageFlags::FRAGMENT_SHADER | vk::PipelineStageFlags::COMPUTE_SHADER,
-                vk::DependencyFlags::empty(), &[], &[], &[barrier_last],
+                vk::DependencyFlags::empty(),
+                &[],
+                &[],
+                &[barrier_last],
             );
         }
     }

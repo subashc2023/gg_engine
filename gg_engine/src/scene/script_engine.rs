@@ -201,7 +201,10 @@ impl ScriptEngine {
 
         let require_fn = self.lua.create_function(move |lua, module_name: String| {
             // Validate module name: no ".." segments, no absolute paths.
-            if module_name.contains("..") || module_name.starts_with('/') || module_name.starts_with('\\') {
+            if module_name.contains("..")
+                || module_name.starts_with('/')
+                || module_name.starts_with('\\')
+            {
                 return Err(mlua::Error::RuntimeError(format!(
                     "require: invalid module name '{module_name}' (path traversal not allowed)"
                 )));
@@ -257,10 +260,7 @@ impl ScriptEngine {
                 .map(|n| n.to_string_lossy().to_string())
                 .unwrap_or_else(|| module_name.clone());
 
-            let result: LuaValue = lua
-                .load(&source)
-                .set_name(&chunk_name)
-                .eval()?;
+            let result: LuaValue = lua.load(&source).set_name(&chunk_name).eval()?;
 
             // If the module returned nil/nothing, store `true` as a sentinel so
             // subsequent requires don't re-execute the file.

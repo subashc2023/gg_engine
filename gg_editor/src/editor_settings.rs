@@ -49,8 +49,8 @@ impl Default for CameraState {
 pub(crate) struct WindowState {
     pub width: u32,
     pub height: u32,
-    pub x: i32,
-    pub y: i32,
+    #[serde(default)]
+    pub position: Option<(i32, i32)>,
     pub maximized: bool,
 }
 
@@ -59,8 +59,7 @@ impl Default for WindowState {
         Self {
             width: 1600,
             height: 900,
-            x: -1,
-            y: -1,
+            position: None,
             maximized: false,
         }
     }

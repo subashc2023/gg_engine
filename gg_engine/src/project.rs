@@ -4,10 +4,11 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 
 use crate::error::EngineResult;
+use crate::input_action::InputActionMap;
 
 /// Current project schema version. Bump this when changing the project file
 /// format so that older projects can be migrated automatically.
-pub const CURRENT_SCHEMA_VERSION: u32 = 1;
+pub const CURRENT_SCHEMA_VERSION: u32 = 2;
 
 // ---------------------------------------------------------------------------
 // Serialization data types (intermediate representation)
@@ -35,6 +36,8 @@ struct ProjectConfigData {
     script_module_path: String,
     #[serde(rename = "StartScene")]
     start_scene: String,
+    #[serde(rename = "InputActions", default)]
+    input_actions: InputActionMap,
 }
 
 // ---------------------------------------------------------------------------
@@ -47,6 +50,7 @@ pub struct ProjectConfig {
     pub asset_directory: String,
     pub script_module_path: String,
     pub start_scene: String,
+    pub input_actions: InputActionMap,
 }
 
 // ---------------------------------------------------------------------------
@@ -80,13 +84,14 @@ impl Project {
             );
         }
 
-        // Future migrations go here, e.g.:
-        // if schema_version < 2 { migrate_v1_to_v2(&mut data.config); }
+        // v1 → v2: no migration needed; InputActions defaults to empty via serde.
 
+        let action_count = data.config.input_actions.actions.len();
         log::info!(
-            "Loaded project '{}' (schema v{}) from '{}'",
+            "Loaded project '{}' (schema v{}, {} input actions) from '{}'",
             data.config.name,
             schema_version,
+            action_count,
             file_path
         );
 
@@ -97,6 +102,7 @@ impl Project {
                 asset_directory: data.config.asset_directory,
                 script_module_path: data.config.script_module_path,
                 start_scene: data.config.start_scene,
+                input_actions: data.config.input_actions,
             },
             project_directory,
             project_file_path: file_path.to_string(),
@@ -117,6 +123,7 @@ impl Project {
                 asset_directory: "assets".to_string(),
                 script_module_path: "assets/scripts".to_string(),
                 start_scene: "scenes/new.ggscene".to_string(),
+                input_actions: InputActionMap::default(),
             },
             project_directory,
             project_file_path: file_path.to_string(),
@@ -135,6 +142,7 @@ impl Project {
                 asset_directory: self.config.asset_directory.clone(),
                 script_module_path: self.config.script_module_path.clone(),
                 start_scene: self.config.start_scene.clone(),
+                input_actions: self.config.input_actions.clone(),
             },
         };
 
@@ -158,8 +166,17 @@ impl Project {
         &self.config
     }
 
+    pub fn config_mut(&mut self) -> &mut ProjectConfig {
+        &mut self.config
+    }
+
     pub fn project_file_path(&self) -> &str {
         &self.project_file_path
+    }
+
+    /// Convenience accessor for the project's input action map.
+    pub fn input_actions(&self) -> &InputActionMap {
+        &self.config.input_actions
     }
 
     // -- Path helpers ---------------------------------------------------------
@@ -200,6 +217,7 @@ mod tests {
         assert_eq!(project.name(), "TestProject");
         assert_eq!(project.config().asset_directory, "assets");
         assert_eq!(project.config().start_scene, "scenes/new.ggscene");
+        assert!(project.input_actions().actions.is_empty());
 
         // Load it back.
         let loaded = Project::load(&file_str).expect("Failed to load project");
@@ -208,6 +226,7 @@ mod tests {
         assert_eq!(loaded.config().script_module_path, "assets/scripts");
         assert_eq!(loaded.config().start_scene, "scenes/new.ggscene");
         assert_eq!(loaded.project_directory(), dir.as_path());
+        assert!(loaded.input_actions().actions.is_empty());
 
         // Path helpers.
         assert_eq!(loaded.asset_directory_path(), dir.join("assets"));
@@ -222,6 +241,47 @@ mod tests {
         );
 
         // Clean up.
+        let _ = std::fs::remove_file(&file_path);
+    }
+
+    #[test]
+    fn round_trip_with_input_actions() {
+        use crate::events::{KeyCode, MouseButton};
+        use crate::input_action::{ActionType, InputAction, InputBinding};
+
+        let dir = std::env::temp_dir();
+        let file_path = dir.join("test_project_actions.ggproject");
+        let file_str = file_path.to_string_lossy().to_string();
+
+        let mut project = Project::new(&file_str, "ActionTest").expect("Failed to create project");
+        project.config_mut().input_actions = InputActionMap {
+            actions: vec![
+                InputAction {
+                    name: "jump".to_string(),
+                    action_type: ActionType::Button,
+                    bindings: vec![
+                        InputBinding::Key(KeyCode::Space),
+                        InputBinding::Mouse(MouseButton::Left),
+                    ],
+                },
+                InputAction {
+                    name: "move_h".to_string(),
+                    action_type: ActionType::Axis,
+                    bindings: vec![InputBinding::KeyComposite {
+                        negative: KeyCode::A,
+                        positive: KeyCode::D,
+                    }],
+                },
+            ],
+        };
+        project.save().expect("Failed to save");
+
+        let loaded = Project::load(&file_str).expect("Failed to load");
+        assert_eq!(loaded.input_actions().actions.len(), 2);
+        assert_eq!(loaded.input_actions().actions[0].name, "jump");
+        assert_eq!(loaded.input_actions().actions[0].bindings.len(), 2);
+        assert_eq!(loaded.input_actions().actions[1].name, "move_h");
+
         let _ = std::fs::remove_file(&file_path);
     }
 }

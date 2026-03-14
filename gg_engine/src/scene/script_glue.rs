@@ -190,10 +190,31 @@ pub fn register_all(lua: &Lua) -> LuaResult<()> {
         "is_gamepad_button_released",
         lua.create_function(lua_is_gamepad_button_just_released)?,
     )?;
-    engine.set("get_gamepad_axis", lua.create_function(lua_get_gamepad_axis)?)?;
+    engine.set(
+        "get_gamepad_axis",
+        lua.create_function(lua_get_gamepad_axis)?,
+    )?;
     engine.set(
         "is_gamepad_connected",
         lua.create_function(lua_is_gamepad_connected)?,
+    )?;
+
+    // Input action mapping
+    engine.set(
+        "is_action_pressed",
+        lua.create_function(lua_is_action_pressed)?,
+    )?;
+    engine.set(
+        "is_action_just_pressed",
+        lua.create_function(lua_is_action_just_pressed)?,
+    )?;
+    engine.set(
+        "is_action_just_released",
+        lua.create_function(lua_is_action_just_released)?,
+    )?;
+    engine.set(
+        "get_action_value",
+        lua.create_function(lua_get_action_value)?,
     )?;
 
     // Component queries
@@ -470,11 +491,20 @@ pub fn register_all(lua: &Lua) -> LuaResult<()> {
     engine.set("get_ui_rect", lua.create_function(lua_get_ui_rect)?)?;
     engine.set("set_ui_pivot", lua.create_function(lua_set_ui_pivot)?)?;
     engine.set("set_ui_image", lua.create_function(lua_set_ui_image)?)?;
-    engine.set("set_ui_image_color", lua.create_function(lua_set_ui_image_color)?)?;
+    engine.set(
+        "set_ui_image_color",
+        lua.create_function(lua_set_ui_image_color)?,
+    )?;
     engine.set("set_ui_border", lua.create_function(lua_set_ui_border)?)?;
-    engine.set("set_ui_interactable", lua.create_function(lua_set_ui_interactable)?)?;
+    engine.set(
+        "set_ui_interactable",
+        lua.create_function(lua_set_ui_interactable)?,
+    )?;
     engine.set("get_ui_state", lua.create_function(lua_get_ui_state)?)?;
-    engine.set("create_ui_entity", lua.create_function(lua_create_ui_entity)?)?;
+    engine.set(
+        "create_ui_entity",
+        lua.create_function(lua_create_ui_entity)?,
+    )?;
 
     // Time
     engine.set("get_time", lua.create_function(lua_get_time)?)?;
@@ -509,10 +539,7 @@ pub fn register_all(lua: &Lua) -> LuaResult<()> {
     engine.set("set_gui_scale", lua.create_function(lua_set_gui_scale)?)?;
 
     // Component manipulation
-    engine.set(
-        "add_component",
-        lua.create_function(lua_add_component)?,
-    )?;
+    engine.set("add_component", lua.create_function(lua_add_component)?)?;
     engine.set(
         "remove_component",
         lua.create_function(lua_remove_component)?,
@@ -723,6 +750,30 @@ fn get_scroll_delta(lua: &Lua, _: ()) -> LuaResult<(f64, f64)> {
 }
 
 // ---------------------------------------------------------------------------
+// Input action mapping
+// ---------------------------------------------------------------------------
+
+/// `Engine.is_action_pressed("jump")` — true while the action is active.
+fn lua_is_action_pressed(lua: &Lua, name: String) -> LuaResult<bool> {
+    with_input(lua, false, |input| input.is_action_pressed(&name))
+}
+
+/// `Engine.is_action_just_pressed("jump")` — true on the first frame the action becomes active.
+fn lua_is_action_just_pressed(lua: &Lua, name: String) -> LuaResult<bool> {
+    with_input(lua, false, |input| input.is_action_just_pressed(&name))
+}
+
+/// `Engine.is_action_just_released("jump")` — true on the first frame the action becomes inactive.
+fn lua_is_action_just_released(lua: &Lua, name: String) -> LuaResult<bool> {
+    with_input(lua, false, |input| input.is_action_just_released(&name))
+}
+
+/// `Engine.get_action_value("move_horizontal")` — returns the continuous axis value (-1.0..1.0).
+fn lua_get_action_value(lua: &Lua, name: String) -> LuaResult<f32> {
+    with_input(lua, 0.0, |input| input.action_value(&name))
+}
+
+// ---------------------------------------------------------------------------
 // Gamepad button/axis name → enum mapping
 // ---------------------------------------------------------------------------
 
@@ -912,20 +963,14 @@ fn has_component(lua: &Lua, (entity_id, name): (u64, String)) -> LuaResult<bool>
         "ParticleEmitter" => scene.has_component::<super::ParticleEmitterComponent>(entity),
         "Text" => scene.has_component::<super::TextComponent>(entity),
         "SpriteAnimator" => scene.has_component::<super::SpriteAnimatorComponent>(entity),
-        "InstancedSpriteAnimator" => {
-            scene.has_component::<super::InstancedSpriteAnimator>(entity)
-        }
-        "AnimationController" => {
-            scene.has_component::<super::AnimationControllerComponent>(entity)
-        }
+        "InstancedSpriteAnimator" => scene.has_component::<super::InstancedSpriteAnimator>(entity),
+        "AnimationController" => scene.has_component::<super::AnimationControllerComponent>(entity),
         "RigidBody3D" => scene.has_component::<super::RigidBody3DComponent>(entity),
         "BoxCollider3D" => scene.has_component::<super::BoxCollider3DComponent>(entity),
         "SphereCollider3D" => scene.has_component::<super::SphereCollider3DComponent>(entity),
         "CapsuleCollider3D" => scene.has_component::<super::CapsuleCollider3DComponent>(entity),
         "MeshRenderer" => scene.has_component::<super::MeshRendererComponent>(entity),
-        "DirectionalLight" => {
-            scene.has_component::<super::DirectionalLightComponent>(entity)
-        }
+        "DirectionalLight" => scene.has_component::<super::DirectionalLightComponent>(entity),
         "PointLight" => scene.has_component::<super::PointLightComponent>(entity),
         "AmbientLight" => scene.has_component::<super::AmbientLightComponent>(entity),
         "UIAnchor" => scene.has_component::<super::UIAnchorComponent>(entity),
@@ -2840,10 +2885,7 @@ fn lua_set_ui_rect(lua: &Lua, (entity_id, w, h): (u64, f32, f32)) -> LuaResult<(
 }
 
 /// `Engine.get_ui_rect(entity_id)` → `(width, height)` or `(nil)`.
-fn lua_get_ui_rect(
-    lua: &Lua,
-    entity_id: u64,
-) -> LuaResult<(Option<f32>, Option<f32>)> {
+fn lua_get_ui_rect(lua: &Lua, entity_id: u64) -> LuaResult<(Option<f32>, Option<f32>)> {
     let ctx = match lua.app_data_mut::<SceneScriptContext>() {
         Some(ctx) => ctx,
         None => return Ok((None, None)),
@@ -3103,11 +3145,19 @@ fn lua_add_component(lua: &Lua, args: mlua::Variadic<LuaValue>) -> LuaResult<boo
     let entity_id = match &args[0] {
         LuaValue::Integer(n) => *n as u64,
         LuaValue::Number(n) => *n as u64,
-        _ => return Err(mlua::Error::RuntimeError("entity_id must be a number".into())),
+        _ => {
+            return Err(mlua::Error::RuntimeError(
+                "entity_id must be a number".into(),
+            ))
+        }
     };
     let name = match &args[1] {
         LuaValue::String(s) => s.to_str().map(|s| s.to_string()).unwrap_or_default(),
-        _ => return Err(mlua::Error::RuntimeError("component_name must be a string".into())),
+        _ => {
+            return Err(mlua::Error::RuntimeError(
+                "component_name must be a string".into(),
+            ))
+        }
     };
 
     let mut ctx = match lua.app_data_mut::<SceneScriptContext>() {
@@ -3133,16 +3183,20 @@ fn lua_add_component(lua: &Lua, args: mlua::Variadic<LuaValue>) -> LuaResult<boo
         }
         "Text" => {
             if !scene.has_component::<super::TextComponent>(entity) {
-                let text = args.get(2)
+                let text = args
+                    .get(2)
                     .and_then(|v| match v {
                         LuaValue::String(s) => s.to_str().ok().map(|s| s.to_string()),
                         _ => None,
                     })
                     .unwrap_or_default();
-                scene.add_component(entity, super::TextComponent {
-                    text,
-                    ..Default::default()
-                });
+                scene.add_component(
+                    entity,
+                    super::TextComponent {
+                        text,
+                        ..Default::default()
+                    },
+                );
             }
         }
         "AudioSource" => {
@@ -3171,20 +3225,26 @@ fn lua_add_component(lua: &Lua, args: mlua::Variadic<LuaValue>) -> LuaResult<boo
                     ua.offset = glam::Vec2::new(ox, oy);
                 }
             } else {
-                scene.add_component(entity, super::UIAnchorComponent {
-                    anchor: glam::Vec2::new(ax, ay),
-                    offset: glam::Vec2::new(ox, oy),
-                });
+                scene.add_component(
+                    entity,
+                    super::UIAnchorComponent {
+                        anchor: glam::Vec2::new(ax, ay),
+                        offset: glam::Vec2::new(ox, oy),
+                    },
+                );
             }
         }
         "UIRect" => {
             let w = args.get(2).and_then(lua_value_as_f32).unwrap_or(100.0);
             let h = args.get(3).and_then(lua_value_as_f32).unwrap_or(100.0);
             if !scene.has_component::<super::UIRectComponent>(entity) {
-                scene.add_component(entity, super::UIRectComponent {
-                    size: glam::Vec2::new(w, h),
-                    ..Default::default()
-                });
+                scene.add_component(
+                    entity,
+                    super::UIRectComponent {
+                        size: glam::Vec2::new(w, h),
+                        ..Default::default()
+                    },
+                );
             }
         }
         "UIImage" => {
@@ -3228,7 +3288,10 @@ fn lua_add_component(lua: &Lua, args: mlua::Variadic<LuaValue>) -> LuaResult<boo
             }
         }
         _ => {
-            log::warn!("ScriptGlue: add_component: unsupported component '{}'", name);
+            log::warn!(
+                "ScriptGlue: add_component: unsupported component '{}'",
+                name
+            );
             return Ok(false);
         }
     }
@@ -3249,24 +3312,59 @@ fn lua_remove_component(lua: &Lua, (entity_id, name): (u64, String)) -> LuaResul
     };
 
     let removed = match name.as_str() {
-        "SpriteRenderer" => scene.remove_component::<super::SpriteRendererComponent>(entity).is_some(),
-        "CircleRenderer" => scene.remove_component::<super::CircleRendererComponent>(entity).is_some(),
-        "Text" => scene.remove_component::<super::TextComponent>(entity).is_some(),
-        "AudioSource" => scene.remove_component::<super::AudioSourceComponent>(entity).is_some(),
-        "AudioListener" => scene.remove_component::<super::AudioListenerComponent>(entity).is_some(),
-        "ParticleEmitter" => scene.remove_component::<super::ParticleEmitterComponent>(entity).is_some(),
-        "UIAnchor" => scene.remove_component::<super::UIAnchorComponent>(entity).is_some(),
-        "UIRect" => scene.remove_component::<super::UIRectComponent>(entity).is_some(),
-        "UIImage" => scene.remove_component::<super::UIImageComponent>(entity).is_some(),
-        "UIInteractable" => scene.remove_component::<super::UIInteractableComponent>(entity).is_some(),
-        "UILayout" => scene.remove_component::<super::UILayoutComponent>(entity).is_some(),
-        "Camera" => scene.remove_component::<super::CameraComponent>(entity).is_some(),
-        "SpriteAnimator" => scene.remove_component::<super::SpriteAnimatorComponent>(entity).is_some(),
-        "RigidBody2D" => scene.remove_component::<super::RigidBody2DComponent>(entity).is_some(),
-        "BoxCollider2D" => scene.remove_component::<super::BoxCollider2DComponent>(entity).is_some(),
-        "CircleCollider2D" => scene.remove_component::<super::CircleCollider2DComponent>(entity).is_some(),
+        "SpriteRenderer" => scene
+            .remove_component::<super::SpriteRendererComponent>(entity)
+            .is_some(),
+        "CircleRenderer" => scene
+            .remove_component::<super::CircleRendererComponent>(entity)
+            .is_some(),
+        "Text" => scene
+            .remove_component::<super::TextComponent>(entity)
+            .is_some(),
+        "AudioSource" => scene
+            .remove_component::<super::AudioSourceComponent>(entity)
+            .is_some(),
+        "AudioListener" => scene
+            .remove_component::<super::AudioListenerComponent>(entity)
+            .is_some(),
+        "ParticleEmitter" => scene
+            .remove_component::<super::ParticleEmitterComponent>(entity)
+            .is_some(),
+        "UIAnchor" => scene
+            .remove_component::<super::UIAnchorComponent>(entity)
+            .is_some(),
+        "UIRect" => scene
+            .remove_component::<super::UIRectComponent>(entity)
+            .is_some(),
+        "UIImage" => scene
+            .remove_component::<super::UIImageComponent>(entity)
+            .is_some(),
+        "UIInteractable" => scene
+            .remove_component::<super::UIInteractableComponent>(entity)
+            .is_some(),
+        "UILayout" => scene
+            .remove_component::<super::UILayoutComponent>(entity)
+            .is_some(),
+        "Camera" => scene
+            .remove_component::<super::CameraComponent>(entity)
+            .is_some(),
+        "SpriteAnimator" => scene
+            .remove_component::<super::SpriteAnimatorComponent>(entity)
+            .is_some(),
+        "RigidBody2D" => scene
+            .remove_component::<super::RigidBody2DComponent>(entity)
+            .is_some(),
+        "BoxCollider2D" => scene
+            .remove_component::<super::BoxCollider2DComponent>(entity)
+            .is_some(),
+        "CircleCollider2D" => scene
+            .remove_component::<super::CircleCollider2DComponent>(entity)
+            .is_some(),
         _ => {
-            log::warn!("ScriptGlue: remove_component: unsupported component '{}'", name);
+            log::warn!(
+                "ScriptGlue: remove_component: unsupported component '{}'",
+                name
+            );
             false
         }
     };
@@ -3533,12 +3631,16 @@ mod tests {
         let lua = setup();
 
         // distance
-        lua.load("d = Engine.distance(0, 0, 0, 3, 4, 0)").exec().unwrap();
+        lua.load("d = Engine.distance(0, 0, 0, 3, 4, 0)")
+            .exec()
+            .unwrap();
         let d: f32 = lua.globals().get("d").unwrap();
         assert!((d - 5.0).abs() < 0.001);
 
         // distance_2d
-        lua.load("d2 = Engine.distance_2d(0, 0, 3, 4)").exec().unwrap();
+        lua.load("d2 = Engine.distance_2d(0, 0, 3, 4)")
+            .exec()
+            .unwrap();
         let d2: f32 = lua.globals().get("d2").unwrap();
         assert!((d2 - 5.0).abs() < 0.001);
 
@@ -3558,30 +3660,52 @@ mod tests {
         assert!((m - 3.0).abs() < 0.001);
 
         // move_toward (arrives at target)
-        lua.load("m2 = Engine.move_toward(8, 10, 5)").exec().unwrap();
+        lua.load("m2 = Engine.move_toward(8, 10, 5)")
+            .exec()
+            .unwrap();
         let m2: f32 = lua.globals().get("m2").unwrap();
         assert!((m2 - 10.0).abs() < 0.001);
 
         // vector_length
-        lua.load("vl = Engine.vector_length(3, 4, 0)").exec().unwrap();
+        lua.load("vl = Engine.vector_length(3, 4, 0)")
+            .exec()
+            .unwrap();
         let vl: f32 = lua.globals().get("vl").unwrap();
         assert!((vl - 5.0).abs() < 0.001);
     }
 
     #[test]
     fn gamepad_button_name_mapping() {
-        assert_eq!(gamepad_button_name_to_enum("South"), Some(GamepadButton::South));
+        assert_eq!(
+            gamepad_button_name_to_enum("South"),
+            Some(GamepadButton::South)
+        );
         assert_eq!(gamepad_button_name_to_enum("A"), Some(GamepadButton::South));
-        assert_eq!(gamepad_button_name_to_enum("North"), Some(GamepadButton::North));
-        assert_eq!(gamepad_button_name_to_enum("DPadUp"), Some(GamepadButton::DPadUp));
-        assert_eq!(gamepad_button_name_to_enum("L1"), Some(GamepadButton::LeftBumper));
+        assert_eq!(
+            gamepad_button_name_to_enum("North"),
+            Some(GamepadButton::North)
+        );
+        assert_eq!(
+            gamepad_button_name_to_enum("DPadUp"),
+            Some(GamepadButton::DPadUp)
+        );
+        assert_eq!(
+            gamepad_button_name_to_enum("L1"),
+            Some(GamepadButton::LeftBumper)
+        );
         assert_eq!(gamepad_button_name_to_enum("bogus"), None);
     }
 
     #[test]
     fn gamepad_axis_name_mapping() {
-        assert_eq!(gamepad_axis_name_to_enum("LeftStickX"), Some(GamepadAxis::LeftStickX));
-        assert_eq!(gamepad_axis_name_to_enum("RightTrigger"), Some(GamepadAxis::RightTrigger));
+        assert_eq!(
+            gamepad_axis_name_to_enum("LeftStickX"),
+            Some(GamepadAxis::LeftStickX)
+        );
+        assert_eq!(
+            gamepad_axis_name_to_enum("RightTrigger"),
+            Some(GamepadAxis::RightTrigger)
+        );
         assert_eq!(gamepad_axis_name_to_enum("bogus"), None);
     }
 
@@ -4002,5 +4126,31 @@ mod tests {
     fn remove_joint_no_context_no_error() {
         let lua = setup();
         lua.load("Engine.remove_joint(12345)").exec().unwrap();
+    }
+
+    #[test]
+    fn action_functions_registered() {
+        let lua = setup();
+        let engine: LuaTable = lua.globals().get("Engine").unwrap();
+        assert!(engine.get::<LuaFunction>("is_action_pressed").is_ok());
+        assert!(engine.get::<LuaFunction>("is_action_just_pressed").is_ok());
+        assert!(engine.get::<LuaFunction>("is_action_just_released").is_ok());
+        assert!(engine.get::<LuaFunction>("get_action_value").is_ok());
+    }
+
+    #[test]
+    fn action_no_context_returns_defaults() {
+        let lua = setup();
+        lua.load(r#"result = Engine.is_action_pressed("jump")"#)
+            .exec()
+            .unwrap();
+        let result: bool = lua.globals().get("result").unwrap();
+        assert!(!result);
+
+        lua.load(r#"val = Engine.get_action_value("move")"#)
+            .exec()
+            .unwrap();
+        let val: f32 = lua.globals().get("val").unwrap();
+        assert!(val.abs() < 0.001);
     }
 }

@@ -143,6 +143,12 @@ pub trait Application {
         true
     }
 
+    /// Returns the input action map for this application, if any.
+    /// Called once after `on_attach` to configure action-based input queries.
+    fn input_action_map(&self) -> Option<crate::input_action::InputActionMap> {
+        None
+    }
+
     /// Cursor grab and visibility mode. Polled each frame; changes are applied
     /// immediately to the window.
     ///
@@ -367,7 +373,27 @@ impl<T: Application> ApplicationHandler for EngineRunner<T> {
             .with_inner_size(size)
             .with_decorations(self.window_config.decorations)
             .with_maximized(self.window_config.maximized);
-        if let Some((x, y)) = self.window_config.position {
+
+        // Validate saved position against available monitors — if the window
+        // wouldn't be at least partially visible, fall back to OS placement.
+        let validated_position = self.window_config.position.filter(|&(x, y)| {
+            let min_visible = 100i32;
+            let w = self.window_config.width as i32;
+            let h = self.window_config.height as i32;
+            event_loop.available_monitors().any(|monitor| {
+                let pos = monitor.position();
+                let mon_size = monitor.size();
+                let mx = pos.x;
+                let my = pos.y;
+                let mw = mon_size.width as i32;
+                let mh = mon_size.height as i32;
+                // Check that at least min_visible pixels overlap on both axes
+                let overlap_x = (x + w).min(mx + mw) - x.max(mx);
+                let overlap_y = (y + h).min(my + mh) - y.max(my);
+                overlap_x >= min_visible && overlap_y >= min_visible
+            })
+        });
+        if let Some((x, y)) = validated_position {
             attrs = attrs.with_position(winit::dpi::PhysicalPosition::new(x, y));
         }
 
@@ -489,6 +515,11 @@ impl<T: Application> ApplicationHandler for EngineRunner<T> {
                                             self.app.on_attach(renderer);
                                         }
 
+                                        // Set up input action map from the application (if any).
+                                        if let Some(action_map) = self.app.input_action_map() {
+                                            self.input.set_action_map(action_map);
+                                        }
+
                                         // If any viewport has a multi-attachment framebuffer, create
                                         // an offscreen batch pipeline compatible with its render pass.
                                         // All viewports share the same attachment formats, so we only
@@ -583,20 +614,11 @@ impl<T: Application> ApplicationHandler for EngineRunner<T> {
         _window_id: winit::window::WindowId,
         event: winit::event::WindowEvent,
     ) {
-        // Forward raw winit event to egui-winit first.
-        if let (Some(state), Some(window)) = (&mut self.egui_winit_state, &self.window) {
-            let response = state.on_window_event(window, &event);
-            // Only let egui block events from reaching the engine when the
-            // application says so. Editors override `block_events()` to let
-            // viewport-targeted events (e.g. scroll zoom) pass through.
-            if response.consumed && self.app.block_events() {
-                return;
-            }
-        }
-
-        // Update input polling state from raw winit event.
-        // This happens before engine event mapping so that key presses
-        // producing Typed events are still tracked by the polling system.
+        // Update input polling state from raw winit event BEFORE egui
+        // consumes it. This ensures the Input struct always tracks the true
+        // physical state of keys/mouse/scroll, regardless of whether egui
+        // panels have focus. Game systems (input actions, Lua scripts) need
+        // accurate polling state even when egui is active.
         match &event {
             winit::event::WindowEvent::KeyboardInput {
                 event: key_event, ..
@@ -664,6 +686,16 @@ impl<T: Application> ApplicationHandler for EngineRunner<T> {
                 }
             }
             _ => {}
+        }
+
+        // Forward raw winit event to egui-winit. If egui consumed the event
+        // and the application wants blocking, stop here (don't dispatch engine
+        // events). Input polling above has already recorded the raw state.
+        if let (Some(state), Some(window)) = (&mut self.egui_winit_state, &self.window) {
+            let response = state.on_window_event(window, &event);
+            if response.consumed && self.app.block_events() {
+                return;
+            }
         }
 
         // Handle resize: debounce to avoid repeated swapchain recreations when
@@ -765,6 +797,20 @@ impl<T: Application> ApplicationHandler for EngineRunner<T> {
                 let (lx, ly) = self.software_cursor_pos;
                 self.input.set_mouse_position(lx * scale, ly * scale);
             }
+
+            // Sync input action map from the application. This supports
+            // hot-reload when the editor loads a project after startup.
+            // Only clone when the action count changes to avoid per-frame allocation.
+            if let Some(action_map) = self.app.input_action_map() {
+                if !self.input.has_action_map()
+                    || self.input.action_count() != action_map.actions.len()
+                {
+                    self.input.set_action_map(action_map);
+                }
+            }
+
+            // Evaluate input action bindings before update callbacks.
+            self.input.update_actions();
 
             {
                 let _timer = ProfileTimer::new("LayerStack::on_update");

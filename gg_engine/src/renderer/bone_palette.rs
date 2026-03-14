@@ -103,7 +103,9 @@ impl BonePaletteSystem {
                 .descriptor_pool(pool)
                 .set_layouts(&layouts);
             let sets = unsafe { device.allocate_descriptor_sets(&alloc_info) }.map_err(|e| {
-                EngineError::Gpu(format!("Failed to allocate bone palette descriptor set: {e}"))
+                EngineError::Gpu(format!(
+                    "Failed to allocate bone palette descriptor set: {e}"
+                ))
             })?;
             let ds = sets[0];
 

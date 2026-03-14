@@ -96,8 +96,7 @@ pub(crate) fn draw_ui_interactable_component(
             }
 
             if changed {
-                if let Some(mut inter) =
-                    scene.get_component_mut::<UIInteractableComponent>(entity)
+                if let Some(mut inter) = scene.get_component_mut::<UIInteractableComponent>(entity)
                 {
                     inter.interactable = interactable;
                     inter.hover_color = hover_color.map(Vec4::from);

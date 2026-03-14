@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use gg_engine::prelude::*;
-use gg_engine::renderer::skeleton::{Skeleton, SkeletalAnimationClip};
+use gg_engine::renderer::skeleton::{SkeletalAnimationClip, Skeleton};
 
 /// 3D test scene: cube, sphere, and ground plane with directional + point lighting,
 /// backface culling, depth testing, material support, and directional shadow mapping.
@@ -128,19 +128,15 @@ impl Sandbox3D {
             for col in 0..steps {
                 let metallic = row as f32 / (steps - 1) as f32;
                 let roughness = col as f32 / (steps - 1) as f32;
-                let mat_handle = renderer.material_library_mut().create(
-                    format!("M{:.2}_R{:.2}", metallic, roughness),
-                );
+                let mat_handle = renderer
+                    .material_library_mut()
+                    .create(format!("M{:.2}_R{:.2}", metallic, roughness));
                 if let Some(mat) = renderer.material_library_mut().get_mut(&mat_handle) {
                     mat.metallic = metallic;
                     mat.roughness = roughness;
                     // Gold tint for metallic, white for dielectric — to see reflection differences.
-                    mat.albedo_color = Vec4::new(
-                        1.0,
-                        1.0 - metallic * 0.2,
-                        1.0 - metallic * 0.4,
-                        1.0,
-                    );
+                    mat.albedo_color =
+                        Vec4::new(1.0, 1.0 - metallic * 0.2, 1.0 - metallic * 0.4, 1.0);
                 }
                 self.material_grid.push(mat_handle);
             }
@@ -191,7 +187,11 @@ impl Sandbox3D {
             self.target_dist = (self.target_dist - *y_offset as f32 * 0.5).clamp(1.0, 20.0);
         }
         // Debug mode cycling: press D to advance, Shift+D to go back.
-        if let Event::Key(KeyEvent::Pressed { key_code, repeat: false }) = event {
+        if let Event::Key(KeyEvent::Pressed {
+            key_code,
+            repeat: false,
+        }) = event
+        {
             if *key_code == KeyCode::D
                 && !input.is_key_pressed(KeyCode::LeftCtrl)
                 && !input.is_key_pressed(KeyCode::LeftAlt)
@@ -199,10 +199,17 @@ impl Sandbox3D {
                 if input.is_key_pressed(KeyCode::LeftShift)
                     || input.is_key_pressed(KeyCode::RightShift)
                 {
-                    self.debug_mode = if self.debug_mode == 0 { 12 } else { self.debug_mode - 1 };
+                    self.debug_mode = if self.debug_mode == 0 {
+                        12
+                    } else {
+                        self.debug_mode - 1
+                    };
                 } else {
-                    self.debug_mode =
-                        if self.debug_mode >= 12 { 0 } else { self.debug_mode + 1 };
+                    self.debug_mode = if self.debug_mode >= 12 {
+                        0
+                    } else {
+                        self.debug_mode + 1
+                    };
                 }
                 info!(
                     "Debug mode: {} ({})",
@@ -346,20 +353,19 @@ impl Sandbox3D {
         ];
 
         // Pre-compute Fox bone pose + upload for shadow pass.
-        let fox_bone_offset = if let (Some(ref skeleton), Some(ref _va)) =
-            (&self.fox_skeleton, &self.fox_va)
-        {
-            if let Err(e) = renderer.ensure_bone_palette() {
-                gg_engine::log::error!("Failed to init bone palette for Fox shadow: {e}");
-                None
+        let fox_bone_offset =
+            if let (Some(ref skeleton), Some(ref _va)) = (&self.fox_skeleton, &self.fox_va) {
+                if let Err(e) = renderer.ensure_bone_palette() {
+                    gg_engine::log::error!("Failed to init bone palette for Fox shadow: {e}");
+                    None
+                } else {
+                    let clip = &self.fox_clips[self.fox_current_clip];
+                    let pose = skeleton.compute_pose(clip, self.fox_playback_time);
+                    renderer.write_bone_matrices(&pose.matrices)
+                }
             } else {
-                let clip = &self.fox_clips[self.fox_current_clip];
-                let pose = skeleton.compute_pose(clip, self.fox_playback_time);
-                renderer.write_bone_matrices(&pose.matrices)
-            }
-        } else {
-            None
-        };
+                None
+            };
 
         // Initialize skinned shadow pipeline if Fox is present.
         if fox_bone_offset.is_some() {
@@ -378,22 +384,14 @@ impl Sandbox3D {
         let grid_sphere_models: Vec<Mat4> = {
             let steps = 5;
             let spacing = 1.3;
-            let grid_offset = Vec3::new(
-                -(steps as f32 - 1.0) * spacing * 0.5,
-                0.0,
-                0.0,
-            );
+            let grid_offset = Vec3::new(-(steps as f32 - 1.0) * spacing * 0.5, 0.0, 0.0);
             (0..steps * steps)
                 .map(|idx| {
                     let row = idx / steps;
                     let col = idx % steps;
-                    let pos = grid_offset
-                        + Vec3::new(col as f32 * spacing, row as f32 * spacing, 0.0);
-                    Mat4::from_scale_rotation_translation(
-                        Vec3::splat(0.5),
-                        Quat::IDENTITY,
-                        pos,
-                    )
+                    let pos =
+                        grid_offset + Vec3::new(col as f32 * spacing, row as f32 * spacing, 0.0);
+                    Mat4::from_scale_rotation_translation(Vec3::splat(0.5), Quat::IDENTITY, pos)
                 })
                 .collect()
         };
@@ -526,16 +524,12 @@ impl Sandbox3D {
         if let Some(va) = &self.sphere_va {
             let steps = 5;
             let spacing = 1.3;
-            let grid_offset = Vec3::new(
-                -(steps as f32 - 1.0) * spacing * 0.5,
-                0.0,
-                0.0,
-            );
+            let grid_offset = Vec3::new(-(steps as f32 - 1.0) * spacing * 0.5, 0.0, 0.0);
             for row in 0..steps {
                 for col in 0..steps {
                     let idx = row * steps + col;
-                    let pos = grid_offset
-                        + Vec3::new(col as f32 * spacing, row as f32 * spacing, 0.0);
+                    let pos =
+                        grid_offset + Vec3::new(col as f32 * spacing, row as f32 * spacing, 0.0);
                     let model = Mat4::from_scale_rotation_translation(
                         Vec3::splat(0.5),
                         Quat::IDENTITY,
@@ -696,9 +690,7 @@ impl Sandbox3D {
                             }
                         }
                     });
-                ui.add(
-                    gg_engine::egui::Slider::new(&mut self.fox_speed, 0.0..=3.0).text("Speed"),
-                );
+                ui.add(gg_engine::egui::Slider::new(&mut self.fox_speed, 0.0..=3.0).text("Speed"));
                 let clip = &self.fox_clips[self.fox_current_clip];
                 ui.label(format!(
                     "Time: {:.2} / {:.2}s",
@@ -706,7 +698,10 @@ impl Sandbox3D {
                 ));
                 ui.label(format!(
                     "Bones: {}",
-                    self.fox_skeleton.as_ref().map(|s| s.joint_count()).unwrap_or(0)
+                    self.fox_skeleton
+                        .as_ref()
+                        .map(|s| s.joint_count())
+                        .unwrap_or(0)
                 ));
             } else if self.fox_va.is_none() {
                 ui.separator();
@@ -717,7 +712,10 @@ impl Sandbox3D {
 
     /// Try to load an HDR environment map.
     /// Looks in `assets/hdri/` first, then falls back to `test_assets/`.
-    fn try_load_environment(&self, renderer: &mut Renderer) -> Result<(), Box<dyn std::error::Error>> {
+    fn try_load_environment(
+        &self,
+        renderer: &mut Renderer,
+    ) -> Result<(), Box<dyn std::error::Error>> {
         let path = std::path::Path::new("assets/hdri/environment.hdr");
         let path = if path.exists() {
             path

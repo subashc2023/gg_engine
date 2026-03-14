@@ -2568,10 +2568,7 @@ impl Renderer {
     ///
     /// Convenience wrapper around [`load_environment_hdr`] that reads the file,
     /// converts to RGBA f16, and runs the IBL preprocessing chain.
-    pub fn load_environment_hdr_from_file(
-        &mut self,
-        path: &std::path::Path,
-    ) -> EngineResult<()> {
+    pub fn load_environment_hdr_from_file(&mut self, path: &std::path::Path) -> EngineResult<()> {
         let img = image::open(path)
             .map_err(|e| crate::error::EngineError::Gpu(format!("Failed to open HDR: {e}")))?;
         let rgb32f = img.to_rgb32f();
@@ -2649,7 +2646,11 @@ impl Renderer {
 
         // Bind skybox pipeline.
         unsafe {
-            device.cmd_bind_pipeline(cmd_buf, vk::PipelineBindPoint::GRAPHICS, pipeline.pipeline());
+            device.cmd_bind_pipeline(
+                cmd_buf,
+                vk::PipelineBindPoint::GRAPHICS,
+                pipeline.pipeline(),
+            );
         }
 
         // Bind set 0 (camera) — we still need it for the pipeline layout compatibility.
@@ -2727,10 +2728,7 @@ impl Renderer {
         let shader = Shader::new(&self.device, "skybox", vert_spv, frag_spv)?;
 
         // Skybox pipeline layout: set 0 = camera, set 1 = lighting (for env cubemap).
-        let ds_layouts = [
-            self.camera.ds_layout(),
-            self.lighting.ds_layout(),
-        ];
+        let ds_layouts = [self.camera.ds_layout(), self.lighting.ds_layout()];
         let push_range = vk::PushConstantRange {
             stage_flags: vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT,
             offset: 0,
@@ -2739,10 +2737,11 @@ impl Renderer {
         let pipeline_layout_info = vk::PipelineLayoutCreateInfo::default()
             .set_layouts(&ds_layouts)
             .push_constant_ranges(std::slice::from_ref(&push_range));
-        let pipeline_layout =
-            unsafe { self.device.create_pipeline_layout(&pipeline_layout_info, None) }.map_err(
-                |e| EngineError::Gpu(format!("Failed to create skybox pipeline layout: {e}")),
-            )?;
+        let pipeline_layout = unsafe {
+            self.device
+                .create_pipeline_layout(&pipeline_layout_info, None)
+        }
+        .map_err(|e| EngineError::Gpu(format!("Failed to create skybox pipeline layout: {e}")))?;
 
         // Vertex input: position only (Float3).
         let binding_desc = vk::VertexInputBindingDescription {
@@ -2851,7 +2850,11 @@ impl Renderer {
         }
         .map_err(|(_, e)| EngineError::Gpu(format!("Failed to create skybox pipeline: {e}")))?[0];
 
-        Ok(Pipeline::from_raw(vk_pipeline, pipeline_layout, self.device.clone()))
+        Ok(Pipeline::from_raw(
+            vk_pipeline,
+            pipeline_layout,
+            self.device.clone(),
+        ))
     }
 
     /// Bind the pipeline and shared descriptor sets (0, 1, 3, 4) for 3D mesh
@@ -3440,13 +3443,16 @@ impl Renderer {
             let col1 = Vec4::new(nm.y_axis.x, nm.y_axis.y, nm.y_axis.z, 0.0);
             let col2 = Vec4::new(nm.z_axis.x, nm.z_axis.y, nm.z_axis.z, 0.0);
             push_data[64..80].copy_from_slice(std::slice::from_raw_parts(
-                &col0 as *const Vec4 as *const u8, 16,
+                &col0 as *const Vec4 as *const u8,
+                16,
             ));
             push_data[80..96].copy_from_slice(std::slice::from_raw_parts(
-                &col1 as *const Vec4 as *const u8, 16,
+                &col1 as *const Vec4 as *const u8,
+                16,
             ));
             push_data[96..112].copy_from_slice(std::slice::from_raw_parts(
-                &col2 as *const Vec4 as *const u8, 16,
+                &col2 as *const Vec4 as *const u8,
+                16,
             ));
 
             push_data[112..116].copy_from_slice(&entity_id.to_ne_bytes());

@@ -68,28 +68,44 @@ pub(crate) fn draw_ui_image_component(
         ui.horizontal(|ui| {
             ui.label("L:");
             if ui
-                .add(egui::DragValue::new(&mut border[0]).speed(0.5).range(0.0..=f32::MAX))
+                .add(
+                    egui::DragValue::new(&mut border[0])
+                        .speed(0.5)
+                        .range(0.0..=f32::MAX),
+                )
                 .changed()
             {
                 changed = true;
             }
             ui.label("R:");
             if ui
-                .add(egui::DragValue::new(&mut border[1]).speed(0.5).range(0.0..=f32::MAX))
+                .add(
+                    egui::DragValue::new(&mut border[1])
+                        .speed(0.5)
+                        .range(0.0..=f32::MAX),
+                )
                 .changed()
             {
                 changed = true;
             }
             ui.label("T:");
             if ui
-                .add(egui::DragValue::new(&mut border[2]).speed(0.5).range(0.0..=f32::MAX))
+                .add(
+                    egui::DragValue::new(&mut border[2])
+                        .speed(0.5)
+                        .range(0.0..=f32::MAX),
+                )
                 .changed()
             {
                 changed = true;
             }
             ui.label("B:");
             if ui
-                .add(egui::DragValue::new(&mut border[3]).speed(0.5).range(0.0..=f32::MAX))
+                .add(
+                    egui::DragValue::new(&mut border[3])
+                        .speed(0.5)
+                        .range(0.0..=f32::MAX),
+                )
                 .changed()
             {
                 changed = true;

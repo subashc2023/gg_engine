@@ -136,8 +136,7 @@ impl LightingSystem {
                 .descriptor_count(1)
                 .stage_flags(vk::ShaderStageFlags::FRAGMENT),
         ];
-        let ubo_layout_info =
-            vk::DescriptorSetLayoutCreateInfo::default().bindings(&bindings);
+        let ubo_layout_info = vk::DescriptorSetLayoutCreateInfo::default().bindings(&bindings);
         let ds_layout = unsafe { device.create_descriptor_set_layout(&ubo_layout_info, None) }
             .map_err(|e| {
                 EngineError::Gpu(format!(

@@ -101,10 +101,7 @@ fn copy_dir_recursive(src: &Path, dst: &Path) -> std::io::Result<u64> {
 // Build execution
 // ---------------------------------------------------------------------------
 
-pub(crate) fn execute_build(
-    config: &BuildConfig,
-    project: &Project,
-) -> BuildResult {
+pub(crate) fn execute_build(config: &BuildConfig, project: &Project) -> BuildResult {
     let output_dir = PathBuf::from(&config.output_directory);
 
     // Create the output directory.
@@ -127,10 +124,7 @@ pub(crate) fn execute_build(
     let exe_extension = if cfg!(windows) { ".exe" } else { "" };
     let dest_exe = output_dir.join(format!("{}{}", config.build_name, exe_extension));
     if let Err(e) = std::fs::copy(&player_binary, &dest_exe) {
-        return BuildResult::Error(format!(
-            "Failed to copy player binary: {}",
-            e
-        ));
+        return BuildResult::Error(format!("Failed to copy player binary: {}", e));
     }
 
     let mut total_bytes = dest_exe.metadata().map(|m| m.len()).unwrap_or(0);
@@ -270,8 +264,8 @@ impl GGEditor {
 
                     ui.add_space(12.0);
 
-                    let can_build = !modal.output_directory.is_empty()
-                        && !modal.build_name.trim().is_empty();
+                    let can_build =
+                        !modal.output_directory.is_empty() && !modal.build_name.trim().is_empty();
 
                     ui.horizontal(|ui| {
                         if ui
@@ -313,22 +307,16 @@ impl GGEditor {
 fn open_folder(path: &Path) {
     #[cfg(target_os = "windows")]
     {
-        let _ = std::process::Command::new("explorer")
-            .arg(path)
-            .spawn();
+        let _ = std::process::Command::new("explorer").arg(path).spawn();
     }
 
     #[cfg(target_os = "macos")]
     {
-        let _ = std::process::Command::new("open")
-            .arg(path)
-            .spawn();
+        let _ = std::process::Command::new("open").arg(path).spawn();
     }
 
     #[cfg(target_os = "linux")]
     {
-        let _ = std::process::Command::new("xdg-open")
-            .arg(path)
-            .spawn();
+        let _ = std::process::Command::new("xdg-open").arg(path).spawn();
     }
 }

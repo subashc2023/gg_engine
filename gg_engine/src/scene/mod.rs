@@ -33,13 +33,12 @@ pub use components::{
     AmbientLightComponent, AudioCategory, AudioListenerComponent, AudioSourceComponent,
     BoxCollider2DComponent, BoxCollider3DComponent, CameraComponent, CapsuleCollider3DComponent,
     CircleCollider2DComponent, CircleRendererComponent, DirectionalLightComponent,
-    EnvironmentComponent, IdComponent,
-    MeshPrimitive, MeshRendererComponent, MeshSource, NativeScriptComponent,
-    ParticleEmitterComponent, PointLightComponent, RelationshipComponent, RigidBody2DComponent,
-    RigidBody2DType, RigidBody3DComponent, RigidBody3DType, RigidBodyType,
-    SkeletalAnimationComponent, SphereCollider3DComponent, SpriteRendererComponent,
-    TagComponent, TextComponent, TilemapComponent, TransformComponent, UIAnchorComponent,
-    UIEvent, UIImageComponent, UIInteractableComponent, UIInteractionState, UILayoutAlignment,
+    EnvironmentComponent, IdComponent, MeshPrimitive, MeshRendererComponent, MeshSource,
+    NativeScriptComponent, ParticleEmitterComponent, PointLightComponent, RelationshipComponent,
+    RigidBody2DComponent, RigidBody2DType, RigidBody3DComponent, RigidBody3DType, RigidBodyType,
+    SkeletalAnimationComponent, SphereCollider3DComponent, SpriteRendererComponent, TagComponent,
+    TextComponent, TilemapComponent, TransformComponent, UIAnchorComponent, UIEvent,
+    UIImageComponent, UIInteractableComponent, UIInteractionState, UILayoutAlignment,
     UILayoutComponent, UILayoutDirection, UIRectComponent, TILE_FLIP_H, TILE_FLIP_V, TILE_ID_MASK,
 };
 pub use entity::Entity;
@@ -387,8 +386,7 @@ impl Scene {
         *new_scene.core.gui_scale.lock() = source.core.gui_scale();
 
         // Copy script module search path.
-        new_scene.core.script_module_search_path =
-            source.core.script_module_search_path.clone();
+        new_scene.core.script_module_search_path = source.core.script_module_search_path.clone();
 
         new_scene
     }

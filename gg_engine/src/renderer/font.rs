@@ -445,7 +445,13 @@ impl Font {
     /// Returns `(width, height)` in the same coordinate space that
     /// `draw_text_string` uses (i.e. world units when `font_size` is the
     /// scale factor passed to the renderer).
-    pub fn measure_text(&self, text: &str, font_size: f32, line_spacing: f32, kerning: f32) -> (f32, f32) {
+    pub fn measure_text(
+        &self,
+        text: &str,
+        font_size: f32,
+        line_spacing: f32,
+        kerning: f32,
+    ) -> (f32, f32) {
         let scale = font_size;
         let mut cursor_x: f32 = 0.0;
         let mut max_width: f32 = 0.0;

@@ -5,3 +5,4 @@ AUDIT_DETAILED.md
 .claude/
 *.spv
 gg_profile_*.json
+*.autosave.ggscene

@@ -107,11 +107,7 @@ pub(crate) fn draw_skeletal_animation_component(
                     .selected_text(current_label)
                     .show_ui(ui, |ui| {
                         for (i, name) in clip_names.iter().enumerate() {
-                            if ui
-                                .selectable_value(&mut new_idx, Some(i), name)
-                                .changed()
-                            {
-                            }
+                            if ui.selectable_value(&mut new_idx, Some(i), name).changed() {}
                         }
                     });
                 if new_idx != current_clip_idx {
@@ -142,8 +138,7 @@ pub(crate) fn draw_skeletal_animation_component(
             }
 
             if changed {
-                if let Some(mut sac) =
-                    scene.get_component_mut::<SkeletalAnimationComponent>(entity)
+                if let Some(mut sac) = scene.get_component_mut::<SkeletalAnimationComponent>(entity)
                 {
                     sac.speed = speed;
                     sac.looping = looping;

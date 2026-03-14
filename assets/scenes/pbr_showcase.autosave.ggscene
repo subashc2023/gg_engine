@@ -38,14 +38,14 @@ Entities:
     - 10.0
     - 0.0
     Rotation:
-    - -0.52277327
-    - 0.1980011
-    - 0.29368648
-    - 0.77540433
+    - -0.024000729
+    - 0.8985126
+    - 0.28941453
+    - -0.32914788
     Scale:
-    - 1.0
-    - 1.0
-    - 1.0
+    - 1.0000012
+    - 0.99999934
+    - 0.9999984
   DirectionalLightComponent:
     Direction: null
     Color:
@@ -1043,8 +1043,8 @@ Entities:
     - 0.2
     - 0.2
     - 1.0
-    Metallic: 0.0
-    Roughness: 0.3
+    Metallic: 1.0
+    Roughness: 0.1
     EmissiveColor:
     - 0.0
     - 0.0
@@ -1219,7 +1219,7 @@ Entities:
     - 0.95
     - 1.0
     Metallic: 1.0
-    Roughness: 0.0
+    Roughness: 0.02
     EmissiveColor:
     - 0.0
     - 0.0
@@ -1393,13 +1393,13 @@ Entities:
     - 0.8
     - 0.5
     - 1.0
-    Metallic: 1.0
-    Roughness: 0.0
+    Metallic: 0.0
+    Roughness: 0.6
     EmissiveColor:
     - 0.0
     - 0.0
     - 0.0
-    EmissiveStrength: 0.0
+    EmissiveStrength: 1.0
     AlbedoTexture: 0
     MeshAsset: 6001
     NormalTexture: 0
