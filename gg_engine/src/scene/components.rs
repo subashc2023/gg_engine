@@ -856,6 +856,66 @@ impl Default for CapsuleCollider3DComponent {
     }
 }
 
+#[cfg(feature = "physics-3d")]
+/// 3D mesh collider that uses the entity's loaded mesh geometry for collision.
+///
+/// Requires a [`RigidBody3DComponent`] and a [`MeshRendererComponent`] with a
+/// loaded mesh on the same entity. When `convex` is true, a convex hull is
+/// computed from the mesh vertices (works with all body types). When false, a
+/// triangle mesh is used (only works with Fixed or Kinematic bodies — rapier
+/// does not support dynamic concave trimesh colliders).
+pub struct MeshCollider3DComponent {
+    pub offset: Vec3,
+    /// If true, compute a convex hull from the mesh vertices (works with dynamic
+    /// bodies). If false, use the raw triangle mesh (fixed/kinematic only).
+    pub convex: bool,
+    pub density: f32,
+    pub friction: f32,
+    pub restitution: f32,
+    /// Collision group membership bitmask.
+    pub collision_layer: u32,
+    /// Collision group filter bitmask.
+    pub collision_mask: u32,
+    /// If true, this collider acts as a trigger/sensor.
+    pub is_sensor: bool,
+    /// Runtime-only handle into the physics world. Not serialized.
+    pub(crate) runtime_fixture: Option<rapier3d::geometry::ColliderHandle>,
+}
+
+#[cfg(feature = "physics-3d")]
+impl Clone for MeshCollider3DComponent {
+    fn clone(&self) -> Self {
+        Self {
+            offset: self.offset,
+            convex: self.convex,
+            density: self.density,
+            friction: self.friction,
+            restitution: self.restitution,
+            collision_layer: self.collision_layer,
+            collision_mask: self.collision_mask,
+            is_sensor: self.is_sensor,
+            runtime_fixture: None,
+        }
+    }
+}
+
+#[cfg(feature = "physics-3d")]
+impl Default for MeshCollider3DComponent {
+    fn default() -> Self {
+        Self {
+            offset: Vec3::ZERO,
+            convex: true,
+            density: 1.0,
+            friction: 0.5,
+            restitution: 0.0,
+            collision_layer: u32::MAX,
+            collision_mask: u32::MAX,
+            is_sensor: false,
+            runtime_fixture: None,
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Audio Source Component
 // ---------------------------------------------------------------------------

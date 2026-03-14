@@ -25,8 +25,8 @@ use crate::scene::{
 };
 #[cfg(feature = "physics-3d")]
 use crate::scene::{
-    BoxCollider3DComponent, CapsuleCollider3DComponent, RigidBody3DComponent, RigidBody3DType,
-    SphereCollider3DComponent,
+    BoxCollider3DComponent, CapsuleCollider3DComponent, MeshCollider3DComponent,
+    RigidBody3DComponent, RigidBody3DType, SphereCollider3DComponent,
 };
 
 /// Default value for collision layer/mask fields — all bits set (collides with everything).
@@ -164,6 +164,12 @@ struct EntityData {
         default
     )]
     capsule_collider_3d: Option<CapsuleCollider3DData>,
+    #[serde(
+        rename = "MeshCollider3DComponent",
+        skip_serializing_if = "Option::is_none",
+        default
+    )]
+    mesh_collider_3d: Option<MeshCollider3DData>,
     #[serde(
         rename = "LuaScriptComponent",
         skip_serializing_if = "Option::is_none",
@@ -555,6 +561,26 @@ struct CapsuleCollider3DData {
     half_height: f32,
     #[serde(rename = "Radius")]
     radius: f32,
+    #[serde(rename = "Density")]
+    density: f32,
+    #[serde(rename = "Friction")]
+    friction: f32,
+    #[serde(rename = "Restitution")]
+    restitution: f32,
+    #[serde(rename = "CollisionLayer", default = "default_collision_bits")]
+    collision_layer: u32,
+    #[serde(rename = "CollisionMask", default = "default_collision_bits")]
+    collision_mask: u32,
+    #[serde(rename = "IsSensor", default)]
+    is_sensor: bool,
+}
+
+#[derive(Serialize, Deserialize)]
+struct MeshCollider3DData {
+    #[serde(rename = "Offset")]
+    offset: [f32; 3],
+    #[serde(rename = "Convex", default = "default_true")]
+    convex: bool,
     #[serde(rename = "Density")]
     density: f32,
     #[serde(rename = "Friction")]
@@ -1355,6 +1381,7 @@ impl SceneSerializer {
             scene.remove_component::<BoxCollider3DComponent>(entity);
             scene.remove_component::<SphereCollider3DComponent>(entity);
             scene.remove_component::<CapsuleCollider3DComponent>(entity);
+            scene.remove_component::<MeshCollider3DComponent>(entity);
         }
         #[cfg(feature = "lua-scripting")]
         scene.remove_component::<LuaScriptComponent>(entity);
@@ -1703,6 +1730,22 @@ impl SceneSerializer {
         #[cfg(not(feature = "physics-3d"))]
         let capsule_collider_3d_data: Option<CapsuleCollider3DData> = None;
 
+        #[cfg(feature = "physics-3d")]
+        let mesh_collider_3d_data = scene
+            .get_component::<MeshCollider3DComponent>(entity)
+            .map(|mc| MeshCollider3DData {
+                offset: mc.offset.into(),
+                convex: mc.convex,
+                density: mc.density,
+                friction: mc.friction,
+                restitution: mc.restitution,
+                collision_layer: mc.collision_layer,
+                collision_mask: mc.collision_mask,
+                is_sensor: mc.is_sensor,
+            });
+        #[cfg(not(feature = "physics-3d"))]
+        let mesh_collider_3d_data: Option<MeshCollider3DData> = None;
+
         #[cfg(feature = "lua-scripting")]
         let lua_script_data = scene
             .get_component::<LuaScriptComponent>(entity)
@@ -1859,6 +1902,7 @@ impl SceneSerializer {
             box_collider_3d: box_collider_3d_data,
             sphere_collider_3d: sphere_collider_3d_data,
             capsule_collider_3d: capsule_collider_3d_data,
+            mesh_collider_3d: mesh_collider_3d_data,
             lua_script: lua_script_data,
             sprite_animator: sprite_animator_data,
             instanced_animator: instanced_animator_data,
@@ -2265,6 +2309,25 @@ impl SceneSerializer {
                     collision_layer: ccd.collision_layer,
                     collision_mask: ccd.collision_mask,
                     is_sensor: ccd.is_sensor,
+                    runtime_fixture: None,
+                },
+            );
+        }
+
+        // MeshCollider3DComponent
+        #[cfg(feature = "physics-3d")]
+        if let Some(ref mcd) = entity_data.mesh_collider_3d {
+            scene.add_component(
+                entity,
+                MeshCollider3DComponent {
+                    offset: Vec3::from(mcd.offset),
+                    convex: mcd.convex,
+                    density: mcd.density,
+                    friction: mcd.friction,
+                    restitution: mcd.restitution,
+                    collision_layer: mcd.collision_layer,
+                    collision_mask: mcd.collision_mask,
+                    is_sensor: mcd.is_sensor,
                     runtime_fixture: None,
                 },
             );

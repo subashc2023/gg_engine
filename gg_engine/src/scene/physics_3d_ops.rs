@@ -1,7 +1,8 @@
 use super::physics_3d::{PhysicsWorld3D, RaycastHit3D};
 use super::{
-    BoxCollider3DComponent, CapsuleCollider3DComponent, Entity, IdComponent, RelationshipComponent,
-    RigidBody3DComponent, Scene, SphereCollider3DComponent, TransformComponent,
+    BoxCollider3DComponent, CapsuleCollider3DComponent, Entity, IdComponent,
+    MeshCollider3DComponent, MeshRendererComponent, RelationshipComponent, RigidBody3DComponent,
+    Scene, SphereCollider3DComponent, TransformComponent,
 };
 use rapier3d::na;
 
@@ -275,6 +276,83 @@ impl Scene {
                     physics.register_collider(collider_handle, bs.uuid);
                 }
             }
+
+            // Mesh collider.
+            if let Ok(mut mc) = self.world.get::<&mut MeshCollider3DComponent>(bs.handle) {
+                let mesh_data = self
+                    .world
+                    .get::<&MeshRendererComponent>(bs.handle)
+                    .ok()
+                    .and_then(|mr| mr.loaded_mesh.clone());
+
+                match mesh_data {
+                    Some(mesh) if !mesh.vertices.is_empty() && !mesh.indices.is_empty() => {
+                        let vertices: Vec<na::Point3<f32>> = mesh
+                            .vertices
+                            .iter()
+                            .map(|v| {
+                                na::Point3::new(
+                                    v.position[0] * bs.scale.x,
+                                    v.position[1] * bs.scale.y,
+                                    v.position[2] * bs.scale.z,
+                                )
+                            })
+                            .collect();
+
+                        let builder = if mc.convex {
+                            match rapier3d::geometry::ColliderBuilder::convex_hull(&vertices) {
+                                Some(b) => Some(b),
+                                None => {
+                                    log::warn!(
+                                        "Entity {} mesh collider: convex hull computation failed, skipping",
+                                        bs.uuid
+                                    );
+                                    None
+                                }
+                            }
+                        } else {
+                            let indices: Vec<[u32; 3]> = mesh
+                                .indices
+                                .chunks_exact(3)
+                                .map(|tri| [tri[0], tri[1], tri[2]])
+                                .collect();
+                            Some(rapier3d::geometry::ColliderBuilder::trimesh(
+                                vertices, indices,
+                            ))
+                        };
+
+                        if let Some(builder) = builder {
+                            let collider = configure_collider_3d(
+                                builder,
+                                mc.density,
+                                mc.friction,
+                                mc.restitution,
+                                mc.offset,
+                                // Scale already applied to vertices above, pass Vec3::ONE
+                                // to avoid double-scaling the offset.
+                                bs.scale,
+                                mc.collision_layer,
+                                mc.collision_mask,
+                                mc.is_sensor,
+                                bs.uuid,
+                            );
+                            let collider_handle = physics.colliders.insert_with_parent(
+                                collider,
+                                body_handle,
+                                &mut physics.bodies,
+                            );
+                            mc.runtime_fixture = Some(collider_handle);
+                            physics.register_collider(collider_handle, bs.uuid);
+                        }
+                    }
+                    _ => {
+                        log::warn!(
+                            "Entity {} has MeshCollider3D but no loaded mesh (missing or empty MeshRendererComponent), skipping",
+                            bs.uuid
+                        );
+                    }
+                }
+            }
         }
 
         self.physics_world_3d = Some(physics);
@@ -295,6 +373,9 @@ impl Scene {
         }
         for cc in self.world.query_mut::<&mut CapsuleCollider3DComponent>() {
             cc.runtime_fixture = None;
+        }
+        for mc in self.world.query_mut::<&mut MeshCollider3DComponent>() {
+            mc.runtime_fixture = None;
         }
     }
 

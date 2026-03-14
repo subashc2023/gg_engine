@@ -853,3 +853,92 @@ pub(crate) fn draw_capsule_collider3d_component(
         },
     )
 }
+
+#[cfg(feature = "physics-3d")]
+pub(crate) fn draw_mesh_collider3d_component(
+    ui: &mut egui::Ui,
+    scene: &mut Scene,
+    entity: Entity,
+    bold_family: &egui::FontFamily,
+    scene_dirty: &mut bool,
+    _undo_system: &mut crate::undo::UndoSystem,
+) -> bool {
+    if !scene.has_component::<MeshCollider3DComponent>(entity) {
+        return false;
+    }
+    super::component_header(
+        ui,
+        "Mesh Collider 3D",
+        "mesh_collider_3d",
+        bold_family,
+        entity,
+        |ui| {
+            let (
+                mut offset,
+                mut convex,
+                mut density,
+                mut friction,
+                mut restitution,
+                mut collision_layer,
+                mut collision_mask,
+                mut is_sensor,
+            ) = {
+                let mc = scene
+                    .get_component::<MeshCollider3DComponent>(entity)
+                    .unwrap();
+                (
+                    mc.offset,
+                    mc.convex,
+                    mc.density,
+                    mc.friction,
+                    mc.restitution,
+                    mc.collision_layer,
+                    mc.collision_mask,
+                    mc.is_sensor,
+                )
+            };
+
+            let mut changed = false;
+
+            changed |= draw_offset_3d(ui, &mut offset);
+
+            ui.horizontal(|ui| {
+                ui.label("Convex");
+                changed |= ui.checkbox(&mut convex, "").changed();
+            });
+            if !convex {
+                ui.label(
+                    egui::RichText::new("Trimesh: Fixed/Kinematic bodies only")
+                        .small()
+                        .color(egui::Color32::from_rgb(200, 170, 50)),
+                );
+            }
+
+            changed |= draw_collider_material_ui(
+                ui,
+                &mut density,
+                &mut friction,
+                &mut restitution,
+                &mut collision_layer,
+                &mut collision_mask,
+                &mut is_sensor,
+            );
+
+            if changed {
+                if let Some(mut mc) =
+                    scene.get_component_mut::<MeshCollider3DComponent>(entity)
+                {
+                    mc.offset = offset;
+                    mc.convex = convex;
+                    mc.density = density;
+                    mc.friction = friction;
+                    mc.restitution = restitution;
+                    mc.collision_layer = collision_layer;
+                    mc.collision_mask = collision_mask;
+                    mc.is_sensor = is_sensor;
+                }
+                *scene_dirty = true;
+            }
+        },
+    )
+}

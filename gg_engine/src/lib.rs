@@ -133,8 +133,8 @@ pub mod prelude {
     };
     #[cfg(feature = "physics-3d")]
     pub use crate::scene::{
-        BoxCollider3DComponent, CapsuleCollider3DComponent, RigidBody3DComponent, RigidBody3DType,
-        SphereCollider3DComponent,
+        BoxCollider3DComponent, CapsuleCollider3DComponent, MeshCollider3DComponent,
+        RigidBody3DComponent, RigidBody3DType, SphereCollider3DComponent,
     };
     #[cfg(feature = "lua-scripting")]
     pub use crate::scene::{LuaScriptComponent, ScriptEngine, ScriptFieldValue};

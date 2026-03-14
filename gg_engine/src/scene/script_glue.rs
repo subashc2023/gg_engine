@@ -1115,6 +1115,8 @@ fn has_component(lua: &Lua, (entity_id, name): (u64, String)) -> LuaResult<bool>
         "SphereCollider3D" => scene.has_component::<super::SphereCollider3DComponent>(entity),
         #[cfg(feature = "physics-3d")]
         "CapsuleCollider3D" => scene.has_component::<super::CapsuleCollider3DComponent>(entity),
+        #[cfg(feature = "physics-3d")]
+        "MeshCollider3D" => scene.has_component::<super::MeshCollider3DComponent>(entity),
         "MeshRenderer" => scene.has_component::<super::MeshRendererComponent>(entity),
         "DirectionalLight" => scene.has_component::<super::DirectionalLightComponent>(entity),
         "PointLight" => scene.has_component::<super::PointLightComponent>(entity),
@@ -3077,6 +3079,8 @@ fn lua_find_entities_with_component(lua: &Lua, name: String) -> LuaResult<LuaTab
         "SphereCollider3D" => collect_uuids!(super::SphereCollider3DComponent),
         #[cfg(feature = "physics-3d")]
         "CapsuleCollider3D" => collect_uuids!(super::CapsuleCollider3DComponent),
+        #[cfg(feature = "physics-3d")]
+        "MeshCollider3D" => collect_uuids!(super::MeshCollider3DComponent),
         "MeshRenderer" => collect_uuids!(super::MeshRendererComponent),
         "DirectionalLight" => collect_uuids!(super::DirectionalLightComponent),
         "PointLight" => collect_uuids!(super::PointLightComponent),

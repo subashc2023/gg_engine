@@ -507,6 +507,15 @@ fn draw_components(
                         scene.add_component(entity, CapsuleCollider3DComponent::default());
                         *scene_dirty = true;
                     }
+
+                    // Mesh Collider 3D
+                    if !scene.has_component::<MeshCollider3DComponent>(entity)
+                        && ui.button("Mesh Collider 3D").clicked()
+                    {
+                        undo_system.record(scene, "Add Mesh Collider 3D");
+                        scene.add_component(entity, MeshCollider3DComponent::default());
+                        *scene_dirty = true;
+                    }
                 }
 
                 // Skeletal Animation — requires asset, not Default-constructible.
@@ -754,6 +763,19 @@ fn draw_components(
         ) {
             undo_system.record(scene, "Remove Capsule Collider 3D");
             scene.remove_component::<CapsuleCollider3DComponent>(entity);
+            *scene_dirty = true;
+        }
+
+        if physics::draw_mesh_collider3d_component(
+            ui,
+            scene,
+            entity,
+            &bold_family,
+            scene_dirty,
+            undo_system,
+        ) {
+            undo_system.record(scene, "Remove Mesh Collider 3D");
+            scene.remove_component::<MeshCollider3DComponent>(entity);
             *scene_dirty = true;
         }
     }

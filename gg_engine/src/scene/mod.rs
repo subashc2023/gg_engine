@@ -45,8 +45,8 @@ pub use components::{
 };
 #[cfg(feature = "physics-3d")]
 pub use components::{
-    BoxCollider3DComponent, CapsuleCollider3DComponent, RigidBody3DComponent, RigidBody3DType,
-    SphereCollider3DComponent,
+    BoxCollider3DComponent, CapsuleCollider3DComponent, MeshCollider3DComponent,
+    RigidBody3DComponent, RigidBody3DType, SphereCollider3DComponent,
 };
 pub use entity::Entity;
 pub use native_script::NativeScript;
@@ -170,6 +170,7 @@ macro_rules! for_each_cloneable_component {
             BoxCollider3DComponent,
             SphereCollider3DComponent,
             CapsuleCollider3DComponent,
+            MeshCollider3DComponent,
         );
     };
 }
@@ -809,7 +810,7 @@ mod tests {
         }
         for_each_cloneable_component!(count_types);
         #[cfg(feature = "physics-3d")]
-        let expected: usize = 31;
+        let expected: usize = 32;
         #[cfg(not(feature = "physics-3d"))]
         let expected: usize = 27;
         assert_eq!(
