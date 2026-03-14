@@ -1,5 +1,6 @@
 use glam::{Mat4, Quat, Vec2, Vec3, Vec4};
 
+use crate::renderer::BlendMode;
 use crate::renderer::Font;
 use crate::renderer::SceneCamera;
 use crate::renderer::Texture2D;
@@ -1244,6 +1245,10 @@ pub struct MeshRendererComponent {
     /// When true, this mesh uses the alpha-tested shadow pipeline so
     /// partially transparent textures (foliage, fences) cast shaped shadows.
     pub cast_alpha_shadow: bool,
+    /// Blend mode for this mesh. `Opaque` = standard depth-tested,
+    /// `AlphaBlend` = sorted back-to-front with depth-write off,
+    /// `Additive` = additive blending (glow, fire).
+    pub blend_mode: BlendMode,
     /// Runtime-only uploaded vertex array. Not serialized.
     pub(crate) vertex_array: Option<crate::renderer::VertexArray>,
 }
@@ -1264,6 +1269,7 @@ impl Clone for MeshRendererComponent {
             loaded_mesh: self.loaded_mesh.clone(), // Arc clone (refcount bump).
             local_bounds: self.local_bounds,
             cast_alpha_shadow: self.cast_alpha_shadow,
+            blend_mode: self.blend_mode,
             vertex_array: None, // Runtime-only, not copied.
         }
     }
@@ -1285,6 +1291,7 @@ impl MeshRendererComponent {
             loaded_mesh: None,
             local_bounds: None,
             cast_alpha_shadow: false,
+            blend_mode: BlendMode::Opaque,
             vertex_array: None,
         }
     }
@@ -1322,6 +1329,7 @@ impl Default for MeshRendererComponent {
             loaded_mesh: None,
             local_bounds: None,
             cast_alpha_shadow: false,
+            blend_mode: BlendMode::Opaque,
             vertex_array: None,
         }
     }

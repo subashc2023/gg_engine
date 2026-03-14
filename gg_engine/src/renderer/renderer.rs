@@ -88,6 +88,12 @@ pub(crate) struct Mesh3DState {
     pub offscreen_render_pass: Option<vk::RenderPass>,
     pub offscreen_color_attachment_count: u32,
     pub offscreen_sample_count: vk::SampleCountFlags,
+    /// Transparent variant (AlphaBlend, depth-test but no depth-write).
+    pub transparent_pipeline: Option<Arc<Pipeline>>,
+    pub transparent_offscreen_pipeline: Option<Arc<Pipeline>>,
+    /// Additive variant (Additive blend, depth-test but no depth-write).
+    pub additive_pipeline: Option<Arc<Pipeline>>,
+    pub additive_offscreen_pipeline: Option<Arc<Pipeline>>,
 }
 
 impl Mesh3DState {
@@ -103,6 +109,10 @@ impl Mesh3DState {
             offscreen_render_pass: None,
             offscreen_color_attachment_count: 0,
             offscreen_sample_count: vk::SampleCountFlags::TYPE_1,
+            transparent_pipeline: None,
+            transparent_offscreen_pipeline: None,
+            additive_pipeline: None,
+            additive_offscreen_pipeline: None,
         }
     }
 }
@@ -704,6 +714,8 @@ impl Renderer {
         // Invalidate cached offscreen pipelines (render pass / samples may have changed).
         self.mesh3d.offscreen_pipeline = None;
         self.mesh3d.wireframe_offscreen_pipeline = None;
+        self.mesh3d.transparent_offscreen_pipeline = None;
+        self.mesh3d.additive_offscreen_pipeline = None;
         self.skybox_offscreen_pipeline = None;
 
         if let Some(data) = &mut self.renderer_2d {
@@ -1518,66 +1530,6 @@ impl Renderer {
 
         if !data.push_quad(vertices) {
             // Batch full — flush and retry.
-            self.flush_quad_batch();
-            data.push_quad(vertices);
-        }
-    }
-
-    /// Push a particle quad directly — bypasses Mat4 construction.
-    /// Uses one sin/cos + direct vertex math instead of a full matrix transform.
-    pub fn draw_particle(&self, position: &Vec3, size: f32, rotation: f32, color: Vec4) {
-        let data = self
-            .renderer_2d
-            .as_ref()
-            .expect("Renderer2D not initialized — call init_2d first");
-
-        let half = size * 0.5;
-        let (sin_r, cos_r) = rotation.sin_cos();
-        let cx = cos_r * half;
-        let cy = sin_r * half;
-
-        // Four corners of a rotated quad centered at `position`.
-        //   TL = (-cos - (-sin), -sin - cos)  = (-cx + cy, -cy - cx)
-        //   TR = ( cos - (-sin),  sin - cos)   = ( cx + cy,  cy - cx)
-        //   BR = ( cos - sin,     sin - (-cos)) = ( cx - cy,  cy + cx)
-        //   BL = (-cos - sin,    -sin - (-cos)) = (-cx - cy, -cy + cx)
-        let px = position.x;
-        let py = position.y;
-        let pz = position.z;
-        let col = [color.x, color.y, color.z, color.w];
-
-        let vertices = [
-            BatchQuadVertex {
-                position: [px - cx + cy, py - cy - cx, pz],
-                color: col,
-                tex_coord: [0.0, 0.0],
-                tex_index: 0.0,
-                entity_id: -1,
-            },
-            BatchQuadVertex {
-                position: [px + cx + cy, py + cy - cx, pz],
-                color: col,
-                tex_coord: [1.0, 0.0],
-                tex_index: 0.0,
-                entity_id: -1,
-            },
-            BatchQuadVertex {
-                position: [px + cx - cy, py + cy + cx, pz],
-                color: col,
-                tex_coord: [1.0, 1.0],
-                tex_index: 0.0,
-                entity_id: -1,
-            },
-            BatchQuadVertex {
-                position: [px - cx - cy, py - cy + cx, pz],
-                color: col,
-                tex_coord: [0.0, 1.0],
-                tex_index: 0.0,
-                entity_id: -1,
-            },
-        ];
-
-        if !data.push_quad(vertices) {
             self.flush_quad_batch();
             data.push_quad(vertices);
         }
@@ -3182,6 +3134,128 @@ impl Renderer {
         }
     }
 
+    /// Get or lazily create a 3D mesh pipeline for the given blend mode.
+    /// Uses the same shaders/layout as the opaque pipeline but with different
+    /// blend and depth-write settings.
+    pub fn mesh3d_blend_pipeline(
+        &mut self,
+        blend_mode: super::BlendMode,
+    ) -> EngineResult<Arc<Pipeline>> {
+        // Opaque goes through the normal path.
+        if blend_mode == super::BlendMode::Opaque {
+            return self.mesh3d_pipeline();
+        }
+
+        // Check cache first.
+        let cached = match blend_mode {
+            super::BlendMode::AlphaBlend => {
+                if self.mesh3d.use_offscreen {
+                    &self.mesh3d.transparent_offscreen_pipeline
+                } else {
+                    &self.mesh3d.transparent_pipeline
+                }
+            }
+            super::BlendMode::Additive => {
+                if self.mesh3d.use_offscreen {
+                    &self.mesh3d.additive_offscreen_pipeline
+                } else {
+                    &self.mesh3d.additive_pipeline
+                }
+            }
+            super::BlendMode::Opaque => unreachable!(),
+        };
+        if let Some(ref pipeline) = cached {
+            return Ok(Arc::clone(pipeline));
+        }
+
+        // Create the pipeline — same as opaque but with blend + depth read-only.
+        let bindless_layout = self
+            .renderer_2d
+            .as_ref()
+            .map(|r2d| r2d.bindless_ds_layout())
+            .unwrap_or(self.texture_descriptor_set_layout);
+
+        self.ensure_shadow_map()?;
+        let shadow_ds_layout = self
+            .shadow
+            .map
+            .as_ref()
+            .expect("Shadow map system just initialized")
+            .ds_layout();
+
+        let (render_pass, color_count, samples, shader_name, vert_spv, frag_spv) =
+            if self.mesh3d.use_offscreen {
+                let rp = self.mesh3d.offscreen_render_pass.ok_or_else(|| {
+                    EngineError::Gpu(
+                        "No offscreen render pass for transparent mesh pipeline".to_string(),
+                    )
+                })?;
+                (
+                    rp,
+                    self.mesh3d.offscreen_color_attachment_count,
+                    self.mesh3d.offscreen_sample_count,
+                    "mesh3d_blend",
+                    super::shaders::MESH3D_VERT_SPV,
+                    super::shaders::MESH3D_FRAG_SPV,
+                )
+            } else {
+                (
+                    self.render_pass,
+                    1,
+                    vk::SampleCountFlags::TYPE_1,
+                    "mesh3d_blend_swap",
+                    super::shaders::MESH3D_SWAPCHAIN_VERT_SPV,
+                    super::shaders::MESH3D_SWAPCHAIN_FRAG_SPV,
+                )
+            };
+
+        let shader = self.create_shader(shader_name, vert_spv, frag_spv)?;
+        let vertex_layout = super::mesh::Mesh::vertex_layout();
+
+        let pipeline = Arc::new(pipeline::create_3d_pipeline(
+            &self.device,
+            &shader,
+            &vertex_layout,
+            render_pass,
+            self.camera.ds_layout(),
+            &[
+                bindless_layout,
+                self.material_library.ds_layout(),
+                self.lighting.ds_layout(),
+                shadow_ds_layout,
+            ],
+            super::CullMode::Back,
+            super::DepthConfig::READ_ONLY,
+            blend_mode,
+            color_count,
+            self.pipeline_cache,
+            samples,
+            false, // no wireframe for transparent
+            false, // CCW front face
+        )?);
+
+        // Cache it.
+        match blend_mode {
+            super::BlendMode::AlphaBlend => {
+                if self.mesh3d.use_offscreen {
+                    self.mesh3d.transparent_offscreen_pipeline = Some(Arc::clone(&pipeline));
+                } else {
+                    self.mesh3d.transparent_pipeline = Some(Arc::clone(&pipeline));
+                }
+            }
+            super::BlendMode::Additive => {
+                if self.mesh3d.use_offscreen {
+                    self.mesh3d.additive_offscreen_pipeline = Some(Arc::clone(&pipeline));
+                } else {
+                    self.mesh3d.additive_pipeline = Some(Arc::clone(&pipeline));
+                }
+            }
+            super::BlendMode::Opaque => unreachable!(),
+        }
+
+        Ok(pipeline)
+    }
+
     // -- Skeletal Animation / Skinned Mesh Pipeline -------------------------
 
     /// Ensure the bone palette SSBO system is initialized. Lazily created on
@@ -3590,7 +3664,7 @@ impl Renderer {
 
     /// Queue a particle emission for the GPU particle system.
     /// Emissions are processed during the next compute dispatch (1-frame latency).
-    pub fn emit_particles(&mut self, props: &crate::particle_system::ParticleProps) {
+    pub fn emit_particles(&mut self, props: &crate::renderer::ParticleProps) {
         if let Some(ps) = &mut self.gpu_particles {
             ps.emit(props);
         }

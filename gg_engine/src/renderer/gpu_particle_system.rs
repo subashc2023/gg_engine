@@ -8,8 +8,46 @@ use super::gpu_allocation::{GpuAllocation, GpuAllocator, MemoryLocation};
 use super::renderer_2d::Renderer2DData;
 use super::MAX_FRAMES_IN_FLIGHT;
 use crate::error::{EngineError, EngineResult};
-use crate::particle_system::ParticleProps;
 use crate::profiling::ProfileTimer;
+
+use glam::{Vec2, Vec4};
+
+// ---------------------------------------------------------------------------
+// ParticleProps — user-facing emission configuration.
+// ---------------------------------------------------------------------------
+
+/// Configuration for emitting particles (GPU particle system).
+///
+/// `velocity_variation` and `size_variation` add random spread — the actual
+/// value becomes `base + random_in_minus1_to_1 * variation`.
+#[derive(Clone)]
+pub struct ParticleProps {
+    pub position: Vec2,
+    pub velocity: Vec2,
+    pub velocity_variation: Vec2,
+    pub color_begin: Vec4,
+    pub color_end: Vec4,
+    pub size_begin: f32,
+    pub size_end: f32,
+    pub size_variation: f32,
+    pub lifetime: f32,
+}
+
+impl Default for ParticleProps {
+    fn default() -> Self {
+        Self {
+            position: Vec2::ZERO,
+            velocity: Vec2::new(0.0, 0.0),
+            velocity_variation: Vec2::new(3.0, 3.0),
+            color_begin: Vec4::new(0.98, 0.33, 0.16, 1.0),
+            color_end: Vec4::new(0.98, 0.84, 0.16, 0.0),
+            size_begin: 0.1,
+            size_end: 0.0,
+            size_variation: 0.05,
+            lifetime: 5.0,
+        }
+    }
+}
 use crate::shaders;
 
 const FRAMES: usize = MAX_FRAMES_IN_FLIGHT;
@@ -82,7 +120,7 @@ struct ParticleSimPush {
 }
 
 // ---------------------------------------------------------------------------
-// Simple xorshift32 PRNG (same as particle_system.rs)
+// Simple xorshift32 PRNG
 // ---------------------------------------------------------------------------
 
 struct Rng {

@@ -2163,6 +2163,8 @@ impl Scene {
     }
 
     fn render_meshes(&self, renderer: &mut Renderer) {
+        use crate::renderer::BlendMode;
+
         // Take reusable buffer from pool.
         let mut pool = self.render_buffers.lock();
         let mut meshes = std::mem::take(&mut pool.mesh_handles);
@@ -2252,15 +2254,31 @@ impl Scene {
             }
         };
 
-        // Bind pipeline + shared descriptor sets (0, 1, 3, 4) once for all meshes.
+        // Bind opaque pipeline + shared descriptor sets once for all opaque meshes.
         renderer.bind_3d_shared_sets(&pipeline);
 
         let default_handle = renderer.material_library().default_handle();
 
+        // Partition: opaque first, collect transparent for sorted pass.
+        let cam_pos = renderer.camera_position();
+        let mut transparent: Vec<(hecs::Entity, glam::Mat4, BlendMode, f32)> = Vec::new();
+
         for (handle, world_transform) in &meshes {
             let mesh_comp = self.world.get::<&MeshRendererComponent>(*handle).unwrap();
+            if mesh_comp.vertex_array.is_none() {
+                continue;
+            }
+
+            if mesh_comp.blend_mode != BlendMode::Opaque {
+                // Defer transparent/additive meshes — sort and draw after opaques.
+                let (_, _, pos) = world_transform.to_scale_rotation_translation();
+                let dist_sq = (pos - cam_pos).length_squared();
+                transparent.push((*handle, *world_transform, mesh_comp.blend_mode, dist_sq));
+                continue;
+            }
+
+            // Draw opaque immediately.
             if let Some(ref va) = mesh_comp.vertex_array {
-                // Update the default material with per-entity properties.
                 {
                     let mat = renderer
                         .material_library_mut()
@@ -2281,6 +2299,54 @@ impl Scene {
                     Some(&default_handle),
                     handle.id() as i32,
                 );
+            }
+        }
+
+        // Draw transparent meshes sorted back-to-front (farthest first).
+        if !transparent.is_empty() {
+            // Sort by distance descending (reverse-Z: greater distance = farther).
+            transparent.sort_by(|a, b| b.3.partial_cmp(&a.3).unwrap_or(std::cmp::Ordering::Equal));
+
+            let mut current_blend = BlendMode::Opaque; // sentinel
+            let mut current_pipeline = pipeline; // fallback (won't be used)
+
+            for (handle, world_transform, blend_mode, _dist) in &transparent {
+                // Switch pipeline when blend mode changes.
+                if *blend_mode != current_blend {
+                    current_pipeline = match renderer.mesh3d_blend_pipeline(*blend_mode) {
+                        Ok(p) => p,
+                        Err(e) => {
+                            log::error!("Failed to get transparent mesh pipeline: {e}");
+                            continue;
+                        }
+                    };
+                    renderer.bind_3d_shared_sets(&current_pipeline);
+                    current_blend = *blend_mode;
+                }
+
+                let mesh_comp = self.world.get::<&MeshRendererComponent>(*handle).unwrap();
+                if let Some(ref va) = mesh_comp.vertex_array {
+                    {
+                        let mat = renderer
+                            .material_library_mut()
+                            .get_mut(&default_handle)
+                            .unwrap();
+                        mat.albedo_color = mesh_comp.color;
+                        mat.metallic = mesh_comp.metallic;
+                        mat.roughness = mesh_comp.roughness;
+                        mat.emissive_color = mesh_comp.emissive_color;
+                        mat.emissive_strength = mesh_comp.emissive_strength;
+                        mat.albedo_texture = mesh_comp.texture.clone();
+                        mat.normal_texture = mesh_comp.normal_texture.clone();
+                    }
+                    renderer.submit_3d(
+                        &current_pipeline,
+                        va,
+                        world_transform,
+                        Some(&default_handle),
+                        handle.id() as i32,
+                    );
+                }
             }
         }
 
@@ -2439,7 +2505,7 @@ impl Scene {
                 }
                 any_emitter = true;
             }
-            let props = crate::particle_system::ParticleProps {
+            let props = crate::renderer::ParticleProps {
                 position: tf.translation.truncate(),
                 velocity: pe.velocity,
                 velocity_variation: pe.velocity_variation,

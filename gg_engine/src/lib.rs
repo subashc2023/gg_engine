@@ -9,7 +9,6 @@ pub mod jobs;
 mod layer;
 mod logging;
 mod orthographic_camera_controller;
-pub mod particle_system;
 pub mod platform_utils;
 pub mod profiling;
 pub mod project;
@@ -46,7 +45,7 @@ pub use logging::{clear_log_buffer, init as log_init, with_log_buffer, LogEntry}
 #[cfg(feature = "lua-scripting")]
 pub use mlua;
 pub use orthographic_camera_controller::OrthographicCameraController;
-pub use particle_system::{ParticleProps, ParticleSystem};
+pub use renderer::ParticleProps;
 pub use platform_utils::{error_dialog, FileDialogs};
 pub use project::Project;
 pub use renderer::shaders;
@@ -99,7 +98,7 @@ pub mod prelude {
     pub use crate::input_action::{ActionType, InputAction, InputActionMap, InputBinding};
     pub use crate::layer::{Layer, LayerStack};
     pub use crate::orthographic_camera_controller::OrthographicCameraController;
-    pub use crate::particle_system::{ParticleProps, ParticleSystem};
+    pub use crate::renderer::ParticleProps;
     pub use crate::platform_utils::{error_dialog, FileDialogs};
     pub use crate::profiling::{
         begin_session, drain_profile_results, end_session, is_session_active, ProfileResult,

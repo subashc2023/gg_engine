@@ -413,7 +413,6 @@ All methods are on `Renderer` — no pipeline/vertex array management needed.
 | `draw_sub_textured_quad(pos, size, sub_texture, tint)` | Sprite sheet region |
 | `draw_rotated_sub_textured_quad(...)` | Rotated sprite sheet region |
 | `draw_sub_textured_quad_transformed(transform, sub_texture, tint, entity_id)` | Sub-texture quad from raw Mat4 transform |
-| `draw_particle(pos, size, rotation, color)` | Optimized for particles |
 
 Position sets the **center**, size scales the unit quad (-0.5..0.5). Z-ordering is respected via depth testing.
 

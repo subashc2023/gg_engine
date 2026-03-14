@@ -10,6 +10,7 @@ mod font;
 mod framebuffer;
 pub(crate) mod gpu_allocation;
 mod gpu_particle_system;
+pub use gpu_particle_system::ParticleProps;
 mod gpu_profiling;
 mod lighting;
 mod material;

@@ -301,6 +301,34 @@ pub(crate) fn draw_mesh_renderer_component(
                 changed = true;
             }
 
+            // Blend mode selector.
+            {
+                let current_blend = scene
+                    .get_component::<MeshRendererComponent>(entity)
+                    .unwrap()
+                    .blend_mode;
+                let blend_labels = ["Opaque", "Alpha Blend", "Additive"];
+                let blend_variants = [BlendMode::Opaque, BlendMode::AlphaBlend, BlendMode::Additive];
+                let current_idx = blend_variants
+                    .iter()
+                    .position(|&v| v == current_blend)
+                    .unwrap_or(0);
+                let mut selected = current_idx;
+                egui::ComboBox::from_label("Blend Mode")
+                    .selected_text(blend_labels[current_idx])
+                    .show_ui(ui, |ui| {
+                        for (i, &label) in blend_labels.iter().enumerate() {
+                            ui.selectable_value(&mut selected, i, label);
+                        }
+                    });
+                if selected != current_idx {
+                    if let Some(mut mc) = scene.get_component_mut::<MeshRendererComponent>(entity) {
+                        mc.blend_mode = blend_variants[selected];
+                    }
+                    *scene_dirty = true;
+                }
+            }
+
             // Alpha shadow toggle.
             {
                 let mut alpha_shadow = scene

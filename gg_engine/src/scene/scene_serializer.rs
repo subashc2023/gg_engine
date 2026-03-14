@@ -931,6 +931,13 @@ struct MeshRendererData {
     /// Use alpha-tested shadow pipeline for this mesh.
     #[serde(rename = "CastAlphaShadow", default)]
     cast_alpha_shadow: bool,
+    /// Blend mode: "Opaque", "AlphaBlend", or "Additive".
+    #[serde(rename = "BlendMode", default = "default_blend_mode")]
+    blend_mode: String,
+}
+
+fn default_blend_mode() -> String {
+    "Opaque".to_string()
 }
 
 #[derive(Serialize, Deserialize)]
@@ -1854,6 +1861,12 @@ impl SceneSerializer {
                         mesh_asset,
                         normal_texture: mc.normal_texture_handle.raw(),
                         cast_alpha_shadow: mc.cast_alpha_shadow,
+                        blend_mode: match mc.blend_mode {
+                            crate::renderer::BlendMode::Opaque => "Opaque",
+                            crate::renderer::BlendMode::AlphaBlend => "AlphaBlend",
+                            crate::renderer::BlendMode::Additive => "Additive",
+                        }
+                        .to_string(),
                     }
                 }),
             skeletal_animation: scene
@@ -2410,6 +2423,11 @@ impl SceneSerializer {
                     loaded_mesh: None,
                     local_bounds: None,
                     cast_alpha_shadow: mrd.cast_alpha_shadow,
+                    blend_mode: match mrd.blend_mode.as_str() {
+                        "AlphaBlend" => crate::renderer::BlendMode::AlphaBlend,
+                        "Additive" => crate::renderer::BlendMode::Additive,
+                        _ => crate::renderer::BlendMode::Opaque,
+                    },
                     vertex_array: None,
                 },
             );
