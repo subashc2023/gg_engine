@@ -1449,15 +1449,22 @@ impl Renderer2DData {
     /// Compiles each `.glsl` file with `glslc`, creates new shader modules,
     /// and rebuilds all pipelines. On failure, returns an error and keeps
     /// the old pipelines intact.
+    ///
+    /// The `source_hashes` map is used to skip recompiling shaders whose
+    /// source has not changed since the last reload. Hashes are stored
+    /// keyed by source file stem.
     #[allow(clippy::type_complexity)]
     pub(super) fn reload_shaders(
         &mut self,
         shader_dir: &Path,
+        source_hashes: &mut std::collections::HashMap<String, u64>,
     ) -> EngineResult<(
         u32,
         Vec<(String, shader_compiler::CompiledShader)>,
         Vec<(String, shader_compiler::CompiledComputeShader)>,
     )> {
+        use std::hash::{Hash, Hasher};
+
         let entries: Vec<_> = std::fs::read_dir(shader_dir)
             .map_err(|e| {
                 EngineError::Gpu(format!(
@@ -1480,20 +1487,48 @@ impl Renderer2DData {
         // Phase 1: Compile all shaders. If any fail, abort before touching state.
         // Compute shaders (#type compute) use a separate path; skip them from
         // the vertex/fragment compilation so they don't fail with "missing #type vertex".
+        // Shaders whose source hash matches the cached value are skipped.
         let mut compiled: Vec<(String, shader_compiler::CompiledShader)> = Vec::new();
         let mut compiled_compute: Vec<(String, shader_compiler::CompiledComputeShader)> =
             Vec::new();
+        let mut skipped = 0u32;
         for path in &entries {
             let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
             let source = std::fs::read_to_string(path)
                 .map_err(|e| EngineError::Gpu(format!("Cannot read '{}': {e}", path.display())))?;
+
+            // Hash the source and compare against the cached value.
+            let mut hasher = std::hash::DefaultHasher::new();
+            source.hash(&mut hasher);
+            let new_hash = hasher.finish();
+
+            if source_hashes.get(stem) == Some(&new_hash) {
+                skipped += 1;
+                continue;
+            }
+
             if source.contains("#type compute") {
                 let result = shader_compiler::compile_compute_glsl(path)?;
                 compiled_compute.push((stem.to_string(), result));
+            } else if shader_compiler::has_offscreen_ifdef(&source) {
+                // Shaders with #ifdef OFFSCREEN need two variants:
+                // the offscreen variant (name = stem) and the swapchain variant
+                // (name = "{stem}_swapchain"), matching build.rs conventions.
+                let offscreen_result = shader_compiler::compile_glsl_offscreen(path)?;
+                compiled.push((stem.to_string(), offscreen_result));
+                let swapchain_result = shader_compiler::compile_glsl(path)?;
+                compiled.push((format!("{stem}_swapchain"), swapchain_result));
             } else {
                 let result = shader_compiler::compile_glsl(path)?;
                 compiled.push((stem.to_string(), result));
             }
+
+            // Update the hash cache after successful compilation.
+            source_hashes.insert(stem.to_string(), new_hash);
+        }
+
+        if skipped > 0 {
+            log::info!(target: "gg_engine", "Skipped {skipped} unchanged shader(s)");
         }
 
         // Phase 2: Create new Shader objects from the compiled SPIR-V.

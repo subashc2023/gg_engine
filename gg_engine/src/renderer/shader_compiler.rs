@@ -24,6 +24,21 @@ pub(crate) struct CompiledComputeShader {
 /// The source must contain `#type vertex` and `#type fragment` markers
 /// (same format as the build-time shader pipeline).
 pub(crate) fn compile_glsl(path: &Path) -> EngineResult<CompiledShader> {
+    compile_glsl_with_defines(path, &[])
+}
+
+/// Compile a `.glsl` source file into vertex and fragment SPIR-V bytecode
+/// with the `OFFSCREEN` preprocessor define enabled.
+pub(crate) fn compile_glsl_offscreen(path: &Path) -> EngineResult<CompiledShader> {
+    compile_glsl_with_defines(path, &["OFFSCREEN"])
+}
+
+/// Compile a `.glsl` source file into vertex and fragment SPIR-V bytecode
+/// with the given preprocessor defines (passed as `-DNAME` to glslc).
+pub(crate) fn compile_glsl_with_defines(
+    path: &Path,
+    defines: &[&str],
+) -> EngineResult<CompiledShader> {
     let source = std::fs::read_to_string(path)
         .map_err(|e| EngineError::Gpu(format!("Cannot read '{}': {e}", path.display())))?;
 
@@ -48,8 +63,8 @@ pub(crate) fn compile_glsl(path: &Path) -> EngineResult<CompiledShader> {
     let vert_spv_path = temp_dir.join(format!("{stem}_vert.spv"));
     let frag_spv_path = temp_dir.join(format!("{stem}_frag.spv"));
 
-    run_glslc(&vert_tmp, &vert_spv_path)?;
-    run_glslc(&frag_tmp, &frag_spv_path)?;
+    run_glslc_with_defines(&vert_tmp, &vert_spv_path, defines)?;
+    run_glslc_with_defines(&frag_tmp, &frag_spv_path, defines)?;
 
     let vert_spv = std::fs::read(&vert_spv_path)
         .map_err(|e| EngineError::Gpu(format!("Cannot read compiled vert SPIR-V: {e}")))?;
@@ -57,6 +72,12 @@ pub(crate) fn compile_glsl(path: &Path) -> EngineResult<CompiledShader> {
         .map_err(|e| EngineError::Gpu(format!("Cannot read compiled frag SPIR-V: {e}")))?;
 
     Ok(CompiledShader { vert_spv, frag_spv })
+}
+
+/// Returns `true` if the shader source contains an `#ifdef OFFSCREEN` guard,
+/// indicating it needs both an offscreen and swapchain compilation variant.
+pub(crate) fn has_offscreen_ifdef(source: &str) -> bool {
+    source.contains("#ifdef OFFSCREEN")
 }
 
 /// Compile a `.glsl` compute shader source file into SPIR-V bytecode.
@@ -150,12 +171,18 @@ fn extract_compute_source(source: &str, path: &Path) -> EngineResult<String> {
 }
 
 fn run_glslc(input: &Path, output: &Path) -> EngineResult<()> {
-    let result = Command::new("glslc")
-        .arg("--target-env=vulkan1.2")
-        .arg(input)
-        .arg("-o")
-        .arg(output)
-        .output();
+    run_glslc_with_defines(input, output, &[])
+}
+
+fn run_glslc_with_defines(input: &Path, output: &Path, defines: &[&str]) -> EngineResult<()> {
+    let mut cmd = Command::new("glslc");
+    cmd.arg("--target-env=vulkan1.2");
+
+    for def in defines {
+        cmd.arg(format!("-D{def}"));
+    }
+
+    let result = cmd.arg(input).arg("-o").arg(output).output();
 
     match result {
         Ok(output_result) => {

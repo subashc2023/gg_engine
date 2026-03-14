@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 
@@ -235,6 +236,11 @@ pub struct Renderer {
     // Skybox pipeline (lazily created from the environment map system).
     skybox_pipeline: Option<Arc<Pipeline>>,
     skybox_offscreen_pipeline: Option<Arc<Pipeline>>,
+
+    // Shader hot-reload: source hash cache to skip recompiling unchanged shaders.
+    shader_source_hashes: HashMap<String, u64>,
+    // Shader hot-reload: runtime-compiled shader overrides (preferred over build-time constants).
+    shader_overrides: HashMap<String, Arc<Shader>>,
 }
 
 impl Renderer {
@@ -355,6 +361,8 @@ impl Renderer {
             environment: None,
             skybox_pipeline: None,
             skybox_offscreen_pipeline: None,
+            shader_source_hashes: HashMap::new(),
+            shader_overrides: HashMap::new(),
         })
     }
 
@@ -823,11 +831,15 @@ impl Renderer {
             .as_ref()
             .expect("Shadow map system just initialized");
 
-        let shader = self.create_shader(
-            "shadow",
-            super::shaders::SHADOW_VERT_SPV,
-            super::shaders::SHADOW_FRAG_SPV,
-        )?;
+        let shader = if let Some(s) = self.shader_overrides.get("shadow") {
+            Arc::clone(s)
+        } else {
+            self.create_shader(
+                "shadow",
+                super::shaders::SHADOW_VERT_SPV,
+                super::shaders::SHADOW_FRAG_SPV,
+            )?
+        };
         let pipeline = Arc::new(shadow_map::create_shadow_pipeline(
             &self.device,
             &shader,
@@ -876,11 +888,15 @@ impl Renderer {
             .expect("Bone palette just initialized")
             .ds_layout();
 
-        let shader = self.create_shader(
-            "skinned_shadow",
-            super::shaders::SKINNED_SHADOW_VERT_SPV,
-            super::shaders::SKINNED_SHADOW_FRAG_SPV,
-        )?;
+        let shader = if let Some(s) = self.shader_overrides.get("skinned_shadow") {
+            Arc::clone(s)
+        } else {
+            self.create_shader(
+                "skinned_shadow",
+                super::shaders::SKINNED_SHADOW_VERT_SPV,
+                super::shaders::SKINNED_SHADOW_FRAG_SPV,
+            )?
+        };
         let pipeline = Arc::new(shadow_map::create_skinned_shadow_pipeline(
             &self.device,
             &shader,
@@ -1160,11 +1176,15 @@ impl Renderer {
             .as_ref()
             .expect("Shadow map system just initialized");
 
-        let shader = self.create_shader(
-            "shadow_alpha",
-            super::shaders::SHADOW_ALPHA_VERT_SPV,
-            super::shaders::SHADOW_ALPHA_FRAG_SPV,
-        )?;
+        let shader = if let Some(s) = self.shader_overrides.get("shadow_alpha") {
+            Arc::clone(s)
+        } else {
+            self.create_shader(
+                "shadow_alpha",
+                super::shaders::SHADOW_ALPHA_VERT_SPV,
+                super::shaders::SHADOW_ALPHA_FRAG_SPV,
+            )?
+        };
 
         let bindless_layout = self
             .renderer_2d
@@ -1417,36 +1437,137 @@ impl Renderer {
     /// Compiles `.glsl` files with `glslc` at runtime, creates new shader
     /// modules, and rebuilds all pipelines. Waits for GPU idle before
     /// swapping. On failure, returns an error string and keeps old pipelines.
+    /// Unchanged shaders (by source hash) are skipped.
     pub fn reload_shaders(&mut self, shader_dir: &std::path::Path) -> EngineResult<u32> {
-        if let Some(data) = &mut self.renderer_2d {
-            unsafe {
-                self.device
-                    .device_wait_idle()
-                    .map_err(|e| EngineError::Gpu(format!("device_wait_idle failed: {e}")))?;
-            }
-            let (mut count, compiled, compiled_compute) = data.reload_shaders(shader_dir)?;
+        if self.renderer_2d.is_none() {
+            return Err(EngineError::Gpu("2D renderer not initialized".to_string()));
+        }
 
-            // Also hot-reload post-processing pipelines (contact shadows, bloom, etc.).
-            if let Some(pp) = &mut self.postprocess {
-                count += pp.reload_shaders(&compiled)?;
-            }
+        unsafe {
+            self.device
+                .device_wait_idle()
+                .map_err(|e| EngineError::Gpu(format!("device_wait_idle failed: {e}")))?;
+        }
 
-            // Hot-reload compute pipelines (IBL shaders are run once at load
-            // time, so only particle_sim is reloaded here).
-            for (name, cs) in &compiled_compute {
-                if name.as_str() == "particle_sim" {
-                    if let Some(ps) = &mut self.gpu_particles {
-                        ps.reload_compute_pipeline(&cs.comp_spv, self.pipeline_cache)?;
-                        count += 1;
-                        log::info!(target: "gg_engine", "Hot-reloaded compute pipeline: {name}");
-                    }
+        // Split borrows: take shader_source_hashes out so we can pass it into
+        // data.reload_shaders() without conflicting with the &mut self borrow.
+        let mut hashes = std::mem::take(&mut self.shader_source_hashes);
+        let data = self.renderer_2d.as_mut().unwrap();
+        let (mut count, compiled, compiled_compute) =
+            data.reload_shaders(shader_dir, &mut hashes)?;
+        self.shader_source_hashes = hashes;
+
+        // Also hot-reload post-processing pipelines (contact shadows, bloom, etc.).
+        if let Some(pp) = &mut self.postprocess {
+            count += pp.reload_shaders(&compiled)?;
+        }
+
+        // Hot-reload compute pipelines (IBL shaders are run once at load
+        // time, so only particle_sim is reloaded here).
+        for (name, cs) in &compiled_compute {
+            if name.as_str() == "particle_sim" {
+                if let Some(ps) = &mut self.gpu_particles {
+                    ps.reload_compute_pipeline(&cs.comp_spv, self.pipeline_cache)?;
+                    count += 1;
+                    log::info!(target: "gg_engine", "Hot-reloaded compute pipeline: {name}");
                 }
             }
-
-            Ok(count)
-        } else {
-            Err(EngineError::Gpu("2D renderer not initialized".to_string()))
         }
+
+        // Hot-reload 3D pipelines: create shader overrides and invalidate
+        // cached pipelines so they are recreated with the new shaders.
+        let mut invalidate_mesh3d = false;
+        let mut invalidate_shadow = false;
+        let mut invalidate_skinned = false;
+        let mut invalidate_skybox = false;
+
+        for (name, cs) in &compiled {
+            match name.as_str() {
+                "mesh3d" | "mesh3d_swapchain" => {
+                    let shader =
+                        Arc::new(Shader::new(&self.device, name, &cs.vert_spv, &cs.frag_spv)?);
+                    self.shader_overrides.insert(name.clone(), shader);
+                    invalidate_mesh3d = true;
+                }
+                "shadow" => {
+                    let shader = Arc::new(Shader::new(
+                        &self.device,
+                        "shadow",
+                        &cs.vert_spv,
+                        &cs.frag_spv,
+                    )?);
+                    self.shader_overrides.insert("shadow".to_string(), shader);
+                    invalidate_shadow = true;
+                }
+                "shadow_alpha" => {
+                    let shader = Arc::new(Shader::new(
+                        &self.device,
+                        "shadow_alpha",
+                        &cs.vert_spv,
+                        &cs.frag_spv,
+                    )?);
+                    self.shader_overrides
+                        .insert("shadow_alpha".to_string(), shader);
+                    invalidate_shadow = true;
+                }
+                "skinned_mesh3d" | "skinned_mesh3d_swapchain" => {
+                    let shader =
+                        Arc::new(Shader::new(&self.device, name, &cs.vert_spv, &cs.frag_spv)?);
+                    self.shader_overrides.insert(name.clone(), shader);
+                    invalidate_skinned = true;
+                }
+                "skinned_shadow" => {
+                    let shader = Arc::new(Shader::new(
+                        &self.device,
+                        "skinned_shadow",
+                        &cs.vert_spv,
+                        &cs.frag_spv,
+                    )?);
+                    self.shader_overrides
+                        .insert("skinned_shadow".to_string(), shader);
+                    invalidate_skinned = true;
+                }
+                "skybox" | "skybox_swapchain" => {
+                    let shader =
+                        Arc::new(Shader::new(&self.device, name, &cs.vert_spv, &cs.frag_spv)?);
+                    self.shader_overrides.insert(name.clone(), shader);
+                    invalidate_skybox = true;
+                }
+                _ => {} // 2D shaders already handled by Renderer2DData
+            }
+        }
+
+        // Invalidate cached 3D pipelines so they are recreated with new shaders.
+        if invalidate_mesh3d {
+            self.mesh3d.pipeline = None;
+            self.mesh3d.offscreen_pipeline = None;
+            self.mesh3d.wireframe_pipeline = None;
+            self.mesh3d.wireframe_offscreen_pipeline = None;
+            self.mesh3d.transparent_pipeline = None;
+            self.mesh3d.transparent_offscreen_pipeline = None;
+            self.mesh3d.additive_pipeline = None;
+            self.mesh3d.additive_offscreen_pipeline = None;
+            log::info!(target: "gg_engine", "Invalidated mesh3d pipelines for hot-reload");
+        }
+        if invalidate_shadow {
+            self.shadow.pipeline = None;
+            self.shadow.pipeline_front = None;
+            self.shadow.alpha_pipeline = None;
+            log::info!(target: "gg_engine", "Invalidated shadow pipelines for hot-reload");
+        }
+        if invalidate_skinned {
+            self.skinned_pipeline = None;
+            self.skinned_offscreen_pipeline = None;
+            self.skinned_shadow_pipeline = None;
+            log::info!(target: "gg_engine", "Invalidated skinned pipelines for hot-reload");
+        }
+        if invalidate_skybox {
+            self.skybox_pipeline = None;
+            self.skybox_offscreen_pipeline = None;
+            log::info!(target: "gg_engine", "Invalidated skybox pipelines for hot-reload");
+        }
+
+        Ok(count)
     }
 
     // -- Built-in 2D renderer -------------------------------------------------
@@ -2665,19 +2786,25 @@ impl Renderer {
     fn create_skybox_pipeline(&self, offscreen: bool) -> EngineResult<Pipeline> {
         use super::shader::Shader;
 
-        let (vert_spv, frag_spv) = if offscreen {
-            (
-                super::shaders::SKYBOX_VERT_SPV,
-                super::shaders::SKYBOX_FRAG_SPV,
-            )
-        } else {
-            (
-                super::shaders::SKYBOX_SWAPCHAIN_VERT_SPV,
-                super::shaders::SKYBOX_SWAPCHAIN_FRAG_SPV,
-            )
+        let override_name = if offscreen { "skybox" } else { "skybox_swapchain" };
+        let shader_arc = match self.shader_overrides.get(override_name) {
+            Some(s) => Arc::clone(s),
+            None => {
+                let (vert_spv, frag_spv) = if offscreen {
+                    (
+                        super::shaders::SKYBOX_VERT_SPV,
+                        super::shaders::SKYBOX_FRAG_SPV,
+                    )
+                } else {
+                    (
+                        super::shaders::SKYBOX_SWAPCHAIN_VERT_SPV,
+                        super::shaders::SKYBOX_SWAPCHAIN_FRAG_SPV,
+                    )
+                };
+                Arc::new(Shader::new(&self.device, override_name, vert_spv, frag_spv)?)
+            }
         };
-
-        let shader = Shader::new(&self.device, "skybox", vert_spv, frag_spv)?;
+        let shader = &*shader_arc;
 
         // Skybox pipeline layout: set 0 = camera, set 1 = lighting (for env cubemap).
         let ds_layouts = [self.camera.ds_layout(), self.lighting.ds_layout()];
@@ -3044,11 +3171,15 @@ impl Renderer {
             let offscreen_rp = self.mesh3d.offscreen_render_pass.ok_or_else(|| {
                 EngineError::Gpu("No offscreen render pass set for mesh3d pipeline".to_string())
             })?;
-            let shader = self.create_shader(
-                "mesh3d",
-                super::shaders::MESH3D_VERT_SPV,
-                super::shaders::MESH3D_FRAG_SPV,
-            )?;
+            let shader = if let Some(s) = self.shader_overrides.get("mesh3d") {
+                Arc::clone(s)
+            } else {
+                self.create_shader(
+                    "mesh3d",
+                    super::shaders::MESH3D_VERT_SPV,
+                    super::shaders::MESH3D_FRAG_SPV,
+                )?
+            };
             let vertex_layout = super::mesh::Mesh::vertex_layout();
             let shadow_ds_layout = self
                 .shadow
@@ -3092,11 +3223,15 @@ impl Renderer {
             if let Some(ref pipeline) = cached {
                 return Ok(Arc::clone(pipeline));
             }
-            let shader = self.create_shader(
-                "mesh3d_swapchain",
-                super::shaders::MESH3D_SWAPCHAIN_VERT_SPV,
-                super::shaders::MESH3D_SWAPCHAIN_FRAG_SPV,
-            )?;
+            let shader = if let Some(s) = self.shader_overrides.get("mesh3d_swapchain") {
+                Arc::clone(s)
+            } else {
+                self.create_shader(
+                    "mesh3d_swapchain",
+                    super::shaders::MESH3D_SWAPCHAIN_VERT_SPV,
+                    super::shaders::MESH3D_SWAPCHAIN_FRAG_SPV,
+                )?
+            };
             let vertex_layout = super::mesh::Mesh::vertex_layout();
             let shadow_ds_layout = self
                 .shadow
@@ -3183,7 +3318,7 @@ impl Renderer {
             .expect("Shadow map system just initialized")
             .ds_layout();
 
-        let (render_pass, color_count, samples, shader_name, vert_spv, frag_spv) =
+        let (render_pass, color_count, samples, shader_name, override_key) =
             if self.mesh3d.use_offscreen {
                 let rp = self.mesh3d.offscreen_render_pass.ok_or_else(|| {
                     EngineError::Gpu(
@@ -3195,8 +3330,7 @@ impl Renderer {
                     self.mesh3d.offscreen_color_attachment_count,
                     self.mesh3d.offscreen_sample_count,
                     "mesh3d_blend",
-                    super::shaders::MESH3D_VERT_SPV,
-                    super::shaders::MESH3D_FRAG_SPV,
+                    "mesh3d",
                 )
             } else {
                 (
@@ -3204,12 +3338,26 @@ impl Renderer {
                     1,
                     vk::SampleCountFlags::TYPE_1,
                     "mesh3d_blend_swap",
+                    "mesh3d_swapchain",
+                )
+            };
+
+        let shader = if let Some(s) = self.shader_overrides.get(override_key) {
+            Arc::clone(s)
+        } else {
+            let (vert_spv, frag_spv) = if self.mesh3d.use_offscreen {
+                (
+                    super::shaders::MESH3D_VERT_SPV,
+                    super::shaders::MESH3D_FRAG_SPV,
+                )
+            } else {
+                (
                     super::shaders::MESH3D_SWAPCHAIN_VERT_SPV,
                     super::shaders::MESH3D_SWAPCHAIN_FRAG_SPV,
                 )
             };
-
-        let shader = self.create_shader(shader_name, vert_spv, frag_spv)?;
+            self.create_shader(shader_name, vert_spv, frag_spv)?
+        };
         let vertex_layout = super::mesh::Mesh::vertex_layout();
 
         let pipeline = Arc::new(pipeline::create_3d_pipeline(
@@ -3325,11 +3473,15 @@ impl Renderer {
                     "No offscreen render pass set for skinned pipeline".to_string(),
                 )
             })?;
-            let shader = self.create_shader(
-                "skinned_mesh3d",
-                super::shaders::SKINNED_MESH3D_VERT_SPV,
-                super::shaders::SKINNED_MESH3D_FRAG_SPV,
-            )?;
+            let shader = if let Some(s) = self.shader_overrides.get("skinned_mesh3d") {
+                Arc::clone(s)
+            } else {
+                self.create_shader(
+                    "skinned_mesh3d",
+                    super::shaders::SKINNED_MESH3D_VERT_SPV,
+                    super::shaders::SKINNED_MESH3D_FRAG_SPV,
+                )?
+            };
             let vertex_layout = super::mesh::SkinnedMesh::vertex_layout();
             let pipeline = Arc::new(pipeline::create_3d_pipeline(
                 &self.device,
@@ -3359,11 +3511,16 @@ impl Renderer {
             if let Some(ref pipeline) = self.skinned_pipeline {
                 return Ok(Arc::clone(pipeline));
             }
-            let shader = self.create_shader(
-                "skinned_mesh3d_swapchain",
-                super::shaders::SKINNED_MESH3D_SWAPCHAIN_VERT_SPV,
-                super::shaders::SKINNED_MESH3D_SWAPCHAIN_FRAG_SPV,
-            )?;
+            let shader =
+                if let Some(s) = self.shader_overrides.get("skinned_mesh3d_swapchain") {
+                    Arc::clone(s)
+                } else {
+                    self.create_shader(
+                        "skinned_mesh3d_swapchain",
+                        super::shaders::SKINNED_MESH3D_SWAPCHAIN_VERT_SPV,
+                        super::shaders::SKINNED_MESH3D_SWAPCHAIN_FRAG_SPV,
+                    )?
+                };
             let vertex_layout = super::mesh::SkinnedMesh::vertex_layout();
             let pipeline = Arc::new(pipeline::create_3d_pipeline(
                 &self.device,
