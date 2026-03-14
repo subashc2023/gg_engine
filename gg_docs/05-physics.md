@@ -1,12 +1,15 @@
-# 2D Physics
+# Physics (2D & 3D)
 
-The engine integrates [rapier2d](https://rapier.rs/) 0.22 for 2D rigid body physics.
+The engine integrates [rapier2d](https://rapier.rs/) 0.22 for 2D and [rapier3d](https://rapier.rs/) 0.22 for 3D rigid body physics.
 
 **Files:**
 - `gg_engine/src/scene/physics_2d.rs` — `PhysicsWorld2D`, collision collector, fixed timestep
+- `gg_engine/src/scene/physics_3d.rs` — `PhysicsWorld3D`, 3D collision collector
+- `gg_engine/src/scene/physics_3d_ops.rs` — 3D physics operations (impulse, force, velocity, raycast)
+- `gg_engine/src/scene/physics_common.rs` — Shared `PhysicsTimestep` accumulator
 - `gg_engine/src/scene/mod.rs` — Scene physics lifecycle, validation, interpolation writeback
 - `gg_engine/src/scene/script_engine.rs` — Lua collision callbacks
-- `gg_engine/src/scene/components.rs` — Physics component definitions
+- `gg_engine/src/scene/components.rs` — Physics component definitions (2D and 3D)
 
 ## PhysicsWorld2D
 
@@ -370,11 +373,113 @@ end
 ## Serialization
 
 All physics components are serialized to `.ggscene` files:
-- `RigidBody2DComponent`: body_type, fixed_rotation
-- `BoxCollider2DComponent`: offset, size, density, friction, restitution
-- `CircleCollider2DComponent`: offset, radius, density, friction, restitution
+- `RigidBody2DComponent`: body_type, fixed_rotation, linear_damping, angular_damping, gravity_scale
+- `BoxCollider2DComponent`: offset, size, density, friction, restitution, collision_layer, collision_mask, is_sensor
+- `CircleCollider2DComponent`: offset, radius, density, friction, restitution, collision_layer, collision_mask, is_sensor
+- `RigidBody3DComponent`: body_type, lock_rotation_x/y/z, linear_damping, angular_damping, gravity_scale
+- `BoxCollider3DComponent`: offset, size, density, friction, restitution, collision_layer, collision_mask, is_sensor
+- `SphereCollider3DComponent`: offset, radius, density, friction, restitution, collision_layer, collision_mask, is_sensor
+- `CapsuleCollider3DComponent`: offset, half_height, radius, density, friction, restitution, collision_layer, collision_mask, is_sensor
 
 Runtime handles (`runtime_body`, `runtime_fixture`) are **never** serialized.
+
+---
+
+## 3D Physics (PhysicsWorld3D)
+
+The 3D physics system mirrors the 2D architecture, using rapier3d 0.22.
+
+**File:** `gg_engine/src/scene/physics_3d.rs`
+
+`PhysicsWorld3D` wraps rapier3d pipeline components with the same fixed-timestep accumulator (shared `PhysicsTimestep` type from `physics_common.rs`). Default gravity: `(0, -9.81, 0)`.
+
+### 3D Components
+
+#### RigidBody3DComponent
+
+```rust
+struct RigidBody3DComponent {
+    pub body_type: RigidBody3DType,    // Static, Dynamic, Kinematic
+    pub lock_rotation_x: bool,         // per-axis rotation locks (unlike 2D's single fixed_rotation)
+    pub lock_rotation_y: bool,
+    pub lock_rotation_z: bool,
+    pub gravity_scale: f32,            // default 1.0
+    pub linear_damping: f32,           // default 0.0
+    pub angular_damping: f32,          // default 0.0
+    pub runtime_body: Option<RigidBodyHandle>,
+}
+```
+
+#### BoxCollider3DComponent
+
+```rust
+struct BoxCollider3DComponent {
+    pub offset: Vec3,
+    pub size: Vec3,                    // half-extents, default (0.5, 0.5, 0.5)
+    pub density: f32,                  // default 1.0
+    pub friction: f32,                 // default 0.5
+    pub restitution: f32,              // default 0.0
+    pub collision_layer: u32,          // default 0x0001
+    pub collision_mask: u32,           // default 0xFFFF
+    pub is_sensor: bool,
+    pub runtime_fixture: Option<ColliderHandle>,
+}
+```
+
+#### SphereCollider3DComponent
+
+```rust
+struct SphereCollider3DComponent {
+    pub offset: Vec3,
+    pub radius: f32,                   // default 0.5
+    pub density: f32,
+    pub friction: f32,
+    pub restitution: f32,
+    pub collision_layer: u32,
+    pub collision_mask: u32,
+    pub is_sensor: bool,
+    pub runtime_fixture: Option<ColliderHandle>,
+}
+```
+
+#### CapsuleCollider3DComponent
+
+```rust
+struct CapsuleCollider3DComponent {
+    pub offset: Vec3,
+    pub half_height: f32,              // excluding hemisphere caps, default 0.5
+    pub radius: f32,                   // hemisphere radius, default 0.25
+    pub density: f32,
+    pub friction: f32,
+    pub restitution: f32,
+    pub collision_layer: u32,
+    pub collision_mask: u32,
+    pub is_sensor: bool,
+    pub runtime_fixture: Option<ColliderHandle>,
+}
+```
+
+### Key Differences from 2D Physics
+
+| Aspect | 2D | 3D |
+|--------|----|----|
+| Rotation lock | Single `fixed_rotation` bool | Per-axis `lock_rotation_x/y/z` |
+| Collider types | Box, Circle | Box, Sphere, Capsule |
+| Gravity | `(0, -9.81)` | `(0, -9.81, 0)` |
+| Interpolation storage | `(x, y, angle)` | `(Vector3, UnitQuaternion)` |
+| Rapier crate | rapier2d 0.22 | rapier3d 0.22 |
+
+### 3D Lua API
+
+| Function | Description |
+|----------|-------------|
+| `Engine.apply_impulse_3d(entity_id, x, y, z)` | Apply impulse to 3D body |
+| `Engine.apply_force_3d(entity_id, x, y, z)` | Apply force to 3D body |
+| `Engine.get_linear_velocity_3d(entity_id)` | Returns `(x, y, z)` |
+| `Engine.set_linear_velocity_3d(entity_id, x, y, z)` | Set velocity |
+| `Engine.raycast_3d(ox, oy, oz, dx, dy, dz, max_dist)` | Returns `(entity_id, x, y, z, nx, ny, nz)` or nil |
+| `Engine.get_gravity_3d()` | Returns `(x, y, z)` |
+| `Engine.set_gravity_3d(x, y, z)` | Set 3D world gravity |
 
 ## Runtime Body Type Changes
 

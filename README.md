@@ -8,7 +8,7 @@ A 2D/3D game engine written in Rust with a Vulkan rendering backend. Build scene
 
 ## Features
 
-**Visual Scene Editor** with dockable panels, transform gizmos, tilemap painting, mouse picking, undo/redo, and auto-save recovery.
+**Visual Scene Editor** with dockable panels, transform gizmos, tilemap painting, mouse picking, undo/redo, auto-save recovery, and one-click project builds.
 
 **Entity Component System** built on [hecs](https://crates.io/crates/hecs) with parent-child hierarchies, sprites, circles (SDF), MSDF text, tilemaps, cameras, and audio sources.
 
@@ -16,17 +16,19 @@ A 2D/3D game engine written in Rust with a Vulkan rendering backend. Build scene
 
 **2D Physics** powered by [rapier2d](https://rapier.rs/) with rigid bodies, box/circle colliders, collision layers, fixed-timestep simulation, and interpolation.
 
-**3D Rendering** with glTF/GLB mesh loading, Blinn-Phong lighting (directional, point, ambient), PBR materials, cascaded shadow maps (4 cascades) with quality tiers (PCF to PCSS), and post-processing (bloom, tone mapping, color grading, contact shadows).
+**3D Rendering** with glTF/GLB mesh loading, Blinn-Phong lighting (directional, point, ambient), PBR materials, cascaded shadow maps (4 cascades) with quality tiers (PCF to PCSS), IBL environment maps (HDR skybox, irradiance, pre-filtered specular), skeletal animation (GPU bone palette skinning), and post-processing (bloom, tone mapping, color grading, contact shadows).
 
 **3D Physics** powered by [rapier3d](https://rapier.rs/) with rigid bodies, box/sphere/capsule colliders, collision events, and joints.
 
-**Vulkan Renderer** with bindless textures (4096 slots), batched quads/circles/lines/text, GPU particle system (compute shader), instanced sprite rendering with GPU-driven animation, and runtime shader hot-reload.
+**Vulkan Renderer** with bindless textures (4096 slots), batched quads/circles/lines/text, GPU particle system (compute shader), instanced sprite rendering with GPU-driven animation, runtime shader hot-reload, and a UI component system (rect, image with 9-slice, interactable, layout).
 
 **Sprite Animation** with named clips, sprite sheet editor timeline, per-entity CPU animation, GPU-driven instanced animation, and data-driven animation state machines.
 
 **Audio** via [kira](https://docs.rs/kira) supporting WAV/OGG/MP3/FLAC with volume, pitch, looping, streaming playback, and spatial audio with camera-relative panning.
 
 **Asset System** with UUID-based handles, a persistent YAML registry, async background loading, and LRU texture caching.
+
+**Input Action Mapping** with data-driven named actions (button/axis), multiple physical bindings (keyboard, mouse, gamepad), dead zone remapping, and an in-editor action editor.
 
 **Multi-threaded Jobs** using rayon with an Extract-Process-Writeback pattern for parallel transform computation, animation ticking, and frustum culling.
 
@@ -112,6 +114,7 @@ cargo clippy --all-targets          # Lint
 | Gizmo: None / Translate / Rotate / Scale | Q / W / E / R |
 | Snap (while using gizmo) | Hold Ctrl |
 | Reload Lua Scripts | Ctrl+R |
+| Build Project | Ctrl+Shift+B |
 | Toggle Eraser (tilemap) | X |
 
 ### Play Mode
@@ -160,7 +163,7 @@ The `fields` table is editable per-entity in the Properties panel -- override va
 | Category | Functions |
 |----------|-----------|
 | **Transform** | `get_translation`, `set_translation`, `get_rotation`, `set_rotation`, `get_scale`, `set_scale` |
-| **Input** | `is_key_down`, `is_key_pressed`, `is_mouse_button_down`, `is_mouse_button_pressed`, `get_mouse_position` |
+| **Input** | `is_key_down`, `is_key_pressed`, `is_key_released`, `is_mouse_button_down`, `is_mouse_button_pressed`, `get_mouse_position`, `get_mouse_delta`, `get_scroll_delta` |
 | **Physics** | `apply_impulse`, `apply_force`, `get_linear_velocity`, `set_linear_velocity`, `get_angular_velocity`, `set_angular_velocity` |
 | **Physics 3D** | `apply_impulse_3d`, `apply_force_3d`, `get_linear_velocity_3d`, `set_linear_velocity_3d`, `raycast_3d` |
 | **Entity** | `create_entity`, `destroy_entity`, `find_entity_by_name`, `get_entity_name`, `has_component` |
@@ -172,7 +175,9 @@ The `fields` table is editable per-entity in the Properties panel -- override va
 | **Cursor** | `set_cursor_mode`, `get_cursor_mode`, `get_window_size` |
 | **UI Anchors** | `set_ui_anchor`, `get_ui_anchor` |
 | **Settings** | `get_vsync`, `set_vsync`, `get_fullscreen`, `set_fullscreen`, `set_shadow_quality`, `set_gui_scale`, `quit`, `load_scene` |
-| **Math** | `vector_dot`, `vector_cross`, `vector_normalize` |
+| **Gamepad** | `is_gamepad_button_down`, `is_gamepad_button_pressed`, `is_gamepad_button_released`, `get_gamepad_axis`, `is_gamepad_connected` |
+| **Input Actions** | `is_action_pressed`, `is_action_just_pressed`, `is_action_just_released`, `get_action_value` |
+| **Math** | `distance`, `distance_2d`, `lerp`, `lerp_vec3`, `slerp`, `clamp`, `move_toward`, `move_toward_vec3`, `vector_length`, `vector_dot`, `vector_cross`, `vector_normalize` |
 | **Cross-Entity** | `get_script_field`, `set_script_field` |
 
 See [`gg_docs/07-scripting.md`](gg_docs/07-scripting.md) for the complete API reference with signatures and key name tables.
@@ -212,10 +217,10 @@ gg_player.exe MyGame.ggproject --width 1920 --height 1080 --vsync
 
 | Crate | Type | Lines | Description |
 |-------|------|-------|-------------|
-| `gg_engine` | lib | ~44,000 | Core engine -- Vulkan renderer, ECS, 2D/3D physics, scripting, audio, assets, jobs |
-| `gg_editor` | bin | ~15,000 | Scene editor -- dockable panels, gizmos, content browser, animation timeline |
-| `gg_player` | bin | ~520 | Standalone game runtime -- loads `.ggproject`, runs start scene |
-| `gg_sandbox` | bin | ~1,040 | Testing sandbox for engine features, 3D scenes, and stress tests |
+| `gg_engine` | lib | ~53,000 | Core engine -- Vulkan renderer, ECS, 2D/3D physics, scripting, audio, assets, jobs |
+| `gg_editor` | bin | ~17,000 | Scene editor -- dockable panels, gizmos, content browser, animation timeline |
+| `gg_player` | bin | ~560 | Standalone game runtime -- loads `.ggproject`, runs start scene |
+| `gg_sandbox` | bin | ~1,470 | Testing sandbox for engine features, 3D scenes, and stress tests |
 | `gg_tools` | bin | ~460 | CLI for analyzing Chrome Tracing JSON profiles (+ flame graph SVG) |
 
 ### Project Structure
@@ -224,7 +229,7 @@ gg_player.exe MyGame.ggproject --width 1920 --height 1080 --vsync
 GGEngine/
 ├── gg_engine/src/
 │   ├── renderer/          # Vulkan rendering (context, swapchain, batching, textures, 3D meshes, lighting, shadows, post-processing)
-│   │   └── shaders/       # GLSL sources (auto-compiled to SPIR-V, 16 shaders)
+│   │   └── shaders/       # GLSL sources (auto-compiled to SPIR-V, 22 shaders)
 │   ├── scene/             # ECS, components, 2D/3D physics, audio, Lua scripting, animation, hierarchy
 │   ├── asset/             # UUID-based asset system (registry, manager, async loader)
 │   └── jobs/              # Multi-threaded job system (thread pool, parallel helpers, command buffer)
@@ -235,7 +240,7 @@ GGEngine/
 ├── gg_player/src/         # Standalone game runtime
 ├── gg_sandbox/src/        # Testing sandbox
 ├── gg_tools/src/          # Profile analyzer
-└── gg_docs/               # Full documentation (12 topic files)
+└── gg_docs/               # Full documentation (14 topic files)
 ```
 
 ---
@@ -250,7 +255,7 @@ The [`gg_docs/`](gg_docs/) directory contains detailed documentation for every s
 | [`02-ecs.md`](gg_docs/02-ecs.md) | Scene, entities, components, hierarchy, queries |
 | [`03-editor.md`](gg_docs/03-editor.md) | Editor panels, undo, auto-save, play/stop, gizmos, tilemap painting |
 | [`04-engine-core.md`](gg_docs/04-engine-core.md) | Application trait, lifecycle, layers, input, events, egui integration |
-| [`05-physics.md`](gg_docs/05-physics.md) | rapier2d integration, fixed timestep, collisions, collision layers |
+| [`05-physics.md`](gg_docs/05-physics.md) | rapier2d/3d integration, fixed timestep, collisions, collision layers, joints |
 | [`06-rendering.md`](gg_docs/06-rendering.md) | Vulkan renderer, batching, bindless textures, MSDF text, GPU particles |
 | [`07-scripting.md`](gg_docs/07-scripting.md) | Lua API reference, script lifecycle, field overrides, error handling |
 | [`08-serialization.md`](gg_docs/08-serialization.md) | YAML scene format, intermediate structs, UUID system |
@@ -258,6 +263,8 @@ The [`gg_docs/`](gg_docs/) directory contains detailed documentation for every s
 | [`10-audio.md`](gg_docs/10-audio.md) | kira integration, spatial audio, streaming, Lua audio API |
 | [`11-player-and-project.md`](gg_docs/11-player-and-project.md) | Project system, .ggproject format, standalone player |
 | [`12-jobs-system.md`](gg_docs/12-jobs-system.md) | Multi-threaded ECS, EPW pattern, parallelized systems |
+| [`13-3d-rendering.md`](gg_docs/13-3d-rendering.md) | 3D meshes, materials, lighting, IBL/environment maps, shadows, skeletal animation, post-processing |
+| [`14-input-actions.md`](gg_docs/14-input-actions.md) | Data-driven input action mapping, bindings, dead zones, Lua API |
 
 ---
 

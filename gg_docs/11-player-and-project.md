@@ -12,7 +12,7 @@ The project system provides a structured way to organize game assets, scenes, an
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `schema_version` | `u32` | Project file format version (current: 1) |
+| `schema_version` | `u32` | Project file format version (current: 2) |
 | `name` | `String` | Human-readable project name |
 | `asset_directory` | `String` | Relative path to the assets root (typically `assets`) |
 | `script_module_path` | `String` | Relative path to the Lua scripts directory |
@@ -30,20 +30,31 @@ Project:
   StartScene: scenes/text.ggscene
 ```
 
-The `SchemaVersion` field is optional in the YAML and defaults to `CURRENT_SCHEMA_VERSION` (1) when absent. This means projects created before schema versioning was added are treated as version 1. When present:
+The `SchemaVersion` field is optional in the YAML and defaults to `CURRENT_SCHEMA_VERSION` (2) when absent. This means projects created before schema versioning was added are treated as version 1. When present:
 
 ```yaml
 Project:
-  SchemaVersion: 1
+  SchemaVersion: 2
   Name: MyGame
   AssetDirectory: assets
   ScriptModulePath: assets/scripts
   StartScene: scenes/main.ggscene
+  InputActions:
+    - Name: Jump
+      Type: Button
+      Bindings:
+        - Key: Space
+    - Name: MoveX
+      Type: Axis
+      Bindings:
+        - KeyComposite:
+            Negative: A
+            Positive: D
 ```
 
 ### Schema Versioning
 
-The `CURRENT_SCHEMA_VERSION` constant (currently `1`) tracks the project file format. Infrastructure is in place for future migrations:
+The `CURRENT_SCHEMA_VERSION` constant (currently `2`) tracks the project file format. Migrations are applied on load:
 
 - On load, if the file's schema version is **greater** than the current engine version, a warning is logged (forward compatibility).
 - The stored version is clamped to `CURRENT_SCHEMA_VERSION` via `.min()`.

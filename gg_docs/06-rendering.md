@@ -487,7 +487,7 @@ Animation timing is advanced separately by `Scene::on_update_animations(dt)`, wh
 
 For rendering many sprites with the same texture efficiently, the renderer provides instanced rendering via a static unit quad plus per-instance data buffers.
 
-### SpriteInstanceData (144 bytes, repr(C))
+### SpriteInstanceData (148 bytes, repr(C))
 
 | Field | Type | Description |
 |-------|------|-------------|
