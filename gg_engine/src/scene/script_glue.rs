@@ -308,6 +308,9 @@ pub fn register_all(lua: &Lua) -> LuaResult<()> {
         lua.create_function(lua_get_category_volume)?,
     )?;
 
+    engine.set("set_hrtf", lua.create_function(lua_set_hrtf)?)?;
+    engine.set("get_hrtf", lua.create_function(lua_get_hrtf)?)?;
+
     // Tilemap
     engine.set("set_tile", lua.create_function(lua_set_tile)?)?;
     engine.set("get_tile", lua.create_function(lua_get_tile)?)?;
@@ -622,16 +625,16 @@ fn key_name_to_keycode(name: &str) -> Option<KeyCode> {
         "Z" | "KeyZ" => Some(KeyCode::Z),
 
         // Digits
-        "0" | "Num0" => Some(KeyCode::Num0),
-        "1" | "Num1" => Some(KeyCode::Num1),
-        "2" | "Num2" => Some(KeyCode::Num2),
-        "3" | "Num3" => Some(KeyCode::Num3),
-        "4" | "Num4" => Some(KeyCode::Num4),
-        "5" | "Num5" => Some(KeyCode::Num5),
-        "6" | "Num6" => Some(KeyCode::Num6),
-        "7" | "Num7" => Some(KeyCode::Num7),
-        "8" | "Num8" => Some(KeyCode::Num8),
-        "9" | "Num9" => Some(KeyCode::Num9),
+        "0" | "Num0" | "Key0" | "Digit0" => Some(KeyCode::Num0),
+        "1" | "Num1" | "Key1" | "Digit1" => Some(KeyCode::Num1),
+        "2" | "Num2" | "Key2" | "Digit2" => Some(KeyCode::Num2),
+        "3" | "Num3" | "Key3" | "Digit3" => Some(KeyCode::Num3),
+        "4" | "Num4" | "Key4" | "Digit4" => Some(KeyCode::Num4),
+        "5" | "Num5" | "Key5" | "Digit5" => Some(KeyCode::Num5),
+        "6" | "Num6" | "Key6" | "Digit6" => Some(KeyCode::Num6),
+        "7" | "Num7" | "Key7" | "Digit7" => Some(KeyCode::Num7),
+        "8" | "Num8" | "Key8" | "Digit8" => Some(KeyCode::Num8),
+        "9" | "Num9" | "Key9" | "Digit9" => Some(KeyCode::Num9),
 
         // Arrow keys
         "Up" | "ArrowUp" => Some(KeyCode::Up),
@@ -1470,6 +1473,25 @@ fn lua_get_category_volume(lua: &Lua, cat_str: String) -> LuaResult<f32> {
             log::warn!("Unknown audio category '{cat_str}'. Use: sfx, music, ambient, voice.");
             1.0
         }
+    })
+}
+
+/// `Engine.set_hrtf(entity_id, enabled)` — enable/disable HRTF on an entity's audio source.
+fn lua_set_hrtf(lua: &Lua, (entity_id, enabled): (u64, bool)) -> LuaResult<()> {
+    with_entity_mut(lua, entity_id, (), |scene, entity| {
+        if let Some(mut asc) = scene.get_component_mut::<super::AudioSourceComponent>(entity) {
+            asc.hrtf = enabled;
+        }
+    })
+}
+
+/// `Engine.get_hrtf(entity_id)` — get whether HRTF is enabled on an entity's audio source.
+fn lua_get_hrtf(lua: &Lua, entity_id: u64) -> LuaResult<bool> {
+    with_entity_mut(lua, entity_id, false, |scene, entity| {
+        scene
+            .get_component::<super::AudioSourceComponent>(entity)
+            .map(|asc| asc.hrtf)
+            .unwrap_or(false)
     })
 }
 
@@ -3656,6 +3678,8 @@ mod tests {
         assert!(engine.get::<LuaFunction>("get_master_volume").is_ok());
         assert!(engine.get::<LuaFunction>("set_category_volume").is_ok());
         assert!(engine.get::<LuaFunction>("get_category_volume").is_ok());
+        assert!(engine.get::<LuaFunction>("set_hrtf").is_ok());
+        assert!(engine.get::<LuaFunction>("get_hrtf").is_ok());
         // Physics
         assert!(engine.get::<LuaFunction>("apply_impulse").is_ok());
         assert!(engine.get::<LuaFunction>("apply_impulse_at_point").is_ok());

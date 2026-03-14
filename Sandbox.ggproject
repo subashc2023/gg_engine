@@ -3,7 +3,7 @@ Project:
   Name: Sandbox
   AssetDirectory: assets
   ScriptModulePath: assets/scripts
-  StartScene: scenes/main_menu.ggscene
+  StartScene: scenes/hrtf_test.ggscene
   InputActions:
   - Name: move_horizontal
     Type: Axis

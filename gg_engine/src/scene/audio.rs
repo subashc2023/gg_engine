@@ -1,10 +1,15 @@
 use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 use std::time::Duration;
 
+use kira::listener::ListenerHandle;
 use kira::sound::static_sound::{StaticSoundData, StaticSoundHandle, StaticSoundSettings};
 use kira::sound::streaming::{StreamingSoundData, StreamingSoundHandle};
 use kira::sound::{FromFileError, PlaybackState};
+use kira::track::{SpatialTrackBuilder, SpatialTrackDistances};
 use kira::{AudioManager, AudioManagerSettings, Decibels, DefaultBackend, Panning, Tween};
+
+use super::hrtf::{BinauralEffectBuilder, BinauralHandle, BinauralParams};
 
 /// Unified handle for both static and streaming sounds.
 enum SoundHandle {
@@ -82,10 +87,27 @@ fn fade_tween(duration_secs: f32) -> Tween {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Spatial track state (per-entity)
+// ---------------------------------------------------------------------------
+
+/// Per-entity state for a kira spatial track with optional HRTF effect.
+pub(crate) struct SpatialTrackState {
+    pub track: kira::track::SpatialTrackHandle,
+    /// HRTF binaural handle (None if HRTF disabled for this source).
+    pub binaural: Option<BinauralHandle>,
+}
+
+// ---------------------------------------------------------------------------
+// AudioEngine
+// ---------------------------------------------------------------------------
+
 /// Wrapper around kira's AudioManager, providing entity-keyed playback.
 ///
 /// Supports multiple simultaneous sounds per entity (e.g. footsteps + breathing),
 /// streaming playback for music tracks, and spatial panning/attenuation.
+/// For HRTF-enabled sources, per-entity spatial tracks with binaural effects
+/// are created automatically.
 pub(crate) struct AudioEngine {
     manager: AudioManager,
     /// Active sound handles keyed by entity UUID. Each entity can have
@@ -99,24 +121,146 @@ pub(crate) struct AudioEngine {
     /// UUIDs for which the sound completion callback should be suppressed
     /// (stop was user-initiated via stop/fade_out, not natural completion).
     suppress_callback: HashSet<u64>,
+
+    // --- Spatial audio ---
+    /// kira listener handle (one per scene). Position/orientation updated per-frame.
+    listener: Option<ListenerHandle>,
+    /// Per-entity spatial track state. Created for entities with `spatial: true`.
+    spatial_tracks: HashMap<u64, SpatialTrackState>,
 }
 
 impl AudioEngine {
     pub fn new() -> Option<Self> {
         match AudioManager::<DefaultBackend>::new(AudioManagerSettings::default()) {
-            Ok(manager) => Some(Self {
-                manager,
-                active_sounds: HashMap::new(),
-                sound_cache: HashMap::new(),
-                cache_order: Vec::new(),
-                suppress_callback: HashSet::new(),
-            }),
+            Ok(mut manager) => {
+                // Create a single listener at the origin.
+                let listener = match manager
+                    .add_listener(glam::Vec3::ZERO, glam::Quat::IDENTITY)
+                {
+                    Ok(lh) => Some(lh),
+                    Err(e) => {
+                        log::error!("Failed to create audio listener: {}", e);
+                        None
+                    }
+                };
+                Some(Self {
+                    manager,
+                    active_sounds: HashMap::new(),
+                    sound_cache: HashMap::new(),
+                    cache_order: Vec::new(),
+                    suppress_callback: HashSet::new(),
+                    listener,
+                    spatial_tracks: HashMap::new(),
+                })
+            }
             Err(e) => {
                 log::error!("Failed to create AudioManager: {}", e);
                 None
             }
         }
     }
+
+    // ------------------------------------------------------------------
+    // Listener management
+    // ------------------------------------------------------------------
+
+    /// Update the kira listener's position and orientation.
+    pub fn update_listener(&mut self, position: glam::Vec3, orientation: glam::Quat) {
+        if let Some(ref mut lh) = self.listener {
+            lh.set_position(position, Tween::default());
+            lh.set_orientation(orientation, Tween::default());
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // Spatial track management
+    // ------------------------------------------------------------------
+
+    /// Ensure a spatial track exists for the given entity. Creates one if needed.
+    ///
+    /// All spatial tracks are created with a `BinauralEffect` so that HRTF can
+    /// be toggled at runtime via `BinauralParams::set_enabled()` without
+    /// recreating the track (which would interrupt playback).
+    pub fn ensure_spatial_track(
+        &mut self,
+        entity_uuid: u64,
+        position: glam::Vec3,
+        min_distance: f32,
+        max_distance: f32,
+        hrtf: bool,
+    ) {
+        if let Some(st) = self.spatial_tracks.get(&entity_uuid) {
+            // Toggle the binaural effect on/off to match current hrtf flag.
+            if let Some(ref bh) = st.binaural {
+                bh.params.set_enabled(hrtf);
+            }
+            return;
+        }
+
+        let listener_id = match &self.listener {
+            Some(lh) => lh.id(),
+            None => return,
+        };
+
+        // Always add the binaural effect so HRTF can be toggled without
+        // recreating the track. When hrtf is false, the effect starts disabled.
+        let (effect_builder, binaural_handle) = BinauralEffectBuilder::new();
+        if !hrtf {
+            binaural_handle.params.set_enabled(false);
+        }
+        // Disable kira's built-in panning — either the binaural effect handles
+        // it (hrtf on) or we get simple distance attenuation only (hrtf off).
+        let mut builder = SpatialTrackBuilder::new()
+            .distances(SpatialTrackDistances {
+                min_distance,
+                max_distance,
+            })
+            .persist_until_sounds_finish(true)
+            .spatialization_strength(0.0);
+        builder.add_effect(effect_builder);
+
+        match self.manager.add_spatial_sub_track(listener_id, position, builder) {
+            Ok(track) => {
+                let state = SpatialTrackState {
+                    track,
+                    binaural: Some(binaural_handle),
+                };
+                self.spatial_tracks.insert(entity_uuid, state);
+            }
+            Err(e) => {
+                log::error!(
+                    "Failed to create spatial track for entity {}: {}",
+                    entity_uuid,
+                    e
+                );
+            }
+        }
+    }
+
+    /// Update the position of an entity's spatial track.
+    pub fn update_spatial_position(&mut self, entity_uuid: u64, position: glam::Vec3) {
+        if let Some(st) = self.spatial_tracks.get_mut(&entity_uuid) {
+            st.track.set_position(position, Tween::default());
+        }
+    }
+
+    /// Get the binaural params for an entity's HRTF effect.
+    pub fn get_binaural_params(&self, entity_uuid: u64) -> Option<&Arc<BinauralParams>> {
+        self.spatial_tracks
+            .get(&entity_uuid)
+            .and_then(|st| st.binaural.as_ref())
+            .map(|bh| &bh.params)
+    }
+
+    /// Remove and drop the spatial track for an entity.
+    #[allow(dead_code)]
+    pub fn remove_spatial_track(&mut self, entity_uuid: u64) {
+        self.spatial_tracks.remove(&entity_uuid);
+    }
+
+    // ------------------------------------------------------------------
+    // Sound playback
+    // ------------------------------------------------------------------
 
     /// Play a sound for the given entity. Multiple sounds can overlap.
     /// Finished sounds are automatically pruned.
@@ -216,15 +360,34 @@ impl AudioEngine {
             settings = settings.loop_region(..);
         }
 
-        match self.manager.play(sound_data.with_settings(settings)) {
-            Ok(handle) => {
-                self.active_sounds
-                    .entry(entity_uuid)
-                    .or_default()
-                    .push(SoundHandle::Static(handle));
+        // Route to spatial track if one exists, otherwise play on main track.
+        if let Some(st) = self.spatial_tracks.get_mut(&entity_uuid) {
+            match st.track.play(sound_data.with_settings(settings)) {
+                Ok(handle) => {
+                    self.active_sounds
+                        .entry(entity_uuid)
+                        .or_default()
+                        .push(SoundHandle::Static(handle));
+                }
+                Err(e) => {
+                    log::error!(
+                        "Failed to play sound on spatial track for entity {}: {}",
+                        entity_uuid,
+                        e
+                    );
+                }
             }
-            Err(e) => {
-                log::error!("Failed to play sound for entity {}: {}", entity_uuid, e);
+        } else {
+            match self.manager.play(sound_data.with_settings(settings)) {
+                Ok(handle) => {
+                    self.active_sounds
+                        .entry(entity_uuid)
+                        .or_default()
+                        .push(SoundHandle::Static(handle));
+                }
+                Err(e) => {
+                    log::error!("Failed to play sound for entity {}: {}", entity_uuid, e);
+                }
             }
         }
     }
@@ -252,19 +415,38 @@ impl AudioEngine {
             data = data.loop_region(..);
         }
 
-        match self.manager.play(data) {
-            Ok(handle) => {
-                self.active_sounds
-                    .entry(entity_uuid)
-                    .or_default()
-                    .push(SoundHandle::Streaming(handle));
+        // Route to spatial track if one exists.
+        if let Some(st) = self.spatial_tracks.get_mut(&entity_uuid) {
+            match st.track.play(data) {
+                Ok(handle) => {
+                    self.active_sounds
+                        .entry(entity_uuid)
+                        .or_default()
+                        .push(SoundHandle::Streaming(handle));
+                }
+                Err(e) => {
+                    log::error!(
+                        "Failed to play streaming on spatial track for entity {}: {}",
+                        entity_uuid,
+                        e
+                    );
+                }
             }
-            Err(e) => {
-                log::error!(
-                    "Failed to play streaming sound for entity {}: {}",
-                    entity_uuid,
-                    e
-                );
+        } else {
+            match self.manager.play(data) {
+                Ok(handle) => {
+                    self.active_sounds
+                        .entry(entity_uuid)
+                        .or_default()
+                        .push(SoundHandle::Streaming(handle));
+                }
+                Err(e) => {
+                    log::error!(
+                        "Failed to play streaming sound for entity {}: {}",
+                        entity_uuid,
+                        e
+                    );
+                }
             }
         }
     }
@@ -293,7 +475,12 @@ impl AudioEngine {
 
     /// Fade in: resume paused sounds with a smooth volume ramp, or play if not active.
     /// Returns `true` if active sounds were found and faded in.
-    pub fn fade_in(&mut self, entity_uuid: u64, target_volume_db: f32, duration_secs: f32) -> bool {
+    pub fn fade_in(
+        &mut self,
+        entity_uuid: u64,
+        target_volume_db: f32,
+        duration_secs: f32,
+    ) -> bool {
         let tween = fade_tween(duration_secs);
         if let Some(handles) = self.active_sounds.get_mut(&entity_uuid) {
             let has_active = handles
@@ -344,6 +531,8 @@ impl AudioEngine {
                 handle.stop(Tween::default());
             }
         }
+        // Also remove the spatial track so it's recreated fresh next play.
+        self.spatial_tracks.remove(&entity_uuid);
     }
 
     /// Set volume for all active sounds on an entity.
@@ -375,6 +564,7 @@ impl AudioEngine {
                 handle.stop(Tween::default());
             }
         }
+        self.spatial_tracks.clear();
     }
 
     /// Drain entity UUIDs whose sounds have all finished (naturally, not explicitly stopped).
@@ -395,6 +585,9 @@ impl AudioEngine {
         // Clean remaining suppress entries for UUIDs no longer tracked.
         self.suppress_callback
             .retain(|uuid| self.active_sounds.contains_key(uuid));
+        // Clean up spatial tracks for entities with no active sounds.
+        let active = &self.active_sounds;
+        self.spatial_tracks.retain(|uuid, _| active.contains_key(uuid));
         completed
     }
 }

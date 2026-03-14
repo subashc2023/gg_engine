@@ -931,6 +931,10 @@ pub struct AudioSourceComponent {
     /// If true, panning and volume are computed from entity position
     /// relative to the listener (primary camera).
     pub spatial: bool,
+    /// If true, use binaural HRTF processing instead of simple stereo panning.
+    /// Provides convincing 3D audio cues (ITD, ILD, head shadow) for headphone
+    /// playback. Only effective when `spatial` is also true.
+    pub hrtf: bool,
     /// Distance below which spatial volume is at full strength (default 1.0).
     pub min_distance: f32,
     /// Distance above which spatial volume is zero (default 50.0).
@@ -951,6 +955,7 @@ impl Default for AudioSourceComponent {
             play_on_start: false,
             streaming: false,
             spatial: false,
+            hrtf: false,
             min_distance: 1.0,
             max_distance: 50.0,
             category: AudioCategory::default(),

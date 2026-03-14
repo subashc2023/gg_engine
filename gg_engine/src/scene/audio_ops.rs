@@ -18,30 +18,54 @@ impl Scene {
         self.audio_engine = Some(engine);
 
         // Collect entities that should auto-play.
-        let auto_play: Vec<(u64, String, f32, f32, bool, bool, AudioCategory)> = self
+        struct AutoPlayInfo {
+            uuid: u64,
+            path: String,
+            volume: f32,
+            pitch: f32,
+            looping: bool,
+            streaming: bool,
+            category: AudioCategory,
+            hrtf: bool,
+            min_distance: f32,
+            max_distance: f32,
+            position: glam::Vec3,
+        }
+
+        let auto_play: Vec<AutoPlayInfo> = self
             .world
-            .query::<(hecs::Entity, &IdComponent, &AudioSourceComponent)>()
+            .query::<(hecs::Entity, &IdComponent, &AudioSourceComponent, &TransformComponent)>()
             .iter()
-            .filter(|(_, _, asc)| asc.play_on_start && asc.resolved_path.is_some())
-            .map(|(_, id, asc)| {
-                (
-                    id.id.raw(),
-                    asc.resolved_path.clone().unwrap(),
-                    asc.volume,
-                    asc.pitch,
-                    asc.looping,
-                    asc.streaming,
-                    asc.category,
-                )
+            .filter(|(_, _, asc, _)| asc.play_on_start && asc.resolved_path.is_some())
+            .map(|(_, id, asc, tf)| AutoPlayInfo {
+                uuid: id.id.raw(),
+                path: asc.resolved_path.clone().unwrap(),
+                volume: asc.volume,
+                pitch: asc.pitch,
+                looping: asc.looping,
+                streaming: asc.streaming,
+                category: asc.category,
+                hrtf: asc.spatial && asc.hrtf,
+                min_distance: asc.min_distance,
+                max_distance: asc.max_distance,
+                position: tf.translation,
             })
             .collect();
 
         if let Some(ref mut engine) = self.audio_engine {
-            for (uuid, path, volume, pitch, looping, streaming, category) in auto_play {
-                let effective = volume
-                    * self.core.category_volumes[category as usize]
+            for info in &auto_play {
+                // Ensure spatial track for spatial sources.
+                if info.hrtf {
+                    engine.ensure_spatial_track(
+                        info.uuid, info.position, info.min_distance, info.max_distance, true,
+                    );
+                }
+                let effective = info.volume
+                    * self.core.category_volumes[info.category as usize]
                     * self.core.master_volume;
-                engine.play_sound(uuid, &path, effective, pitch, looping, streaming);
+                engine.play_sound(
+                    info.uuid, &info.path, effective, info.pitch, info.looping, info.streaming,
+                );
             }
         }
     }
@@ -169,7 +193,8 @@ impl Scene {
 
     /// Play audio for an entity (used by Lua scripts).
     pub fn play_entity_sound(&mut self, entity: Entity) {
-        let (uuid, path, effective_vol, pitch, looping, streaming) = {
+        // Extract all needed data before mutable borrow of audio_engine.
+        let (uuid, path, effective_vol, pitch, looping, streaming, spatial, hrtf, min_d, max_d, pos) = {
             let id = match self.get_component::<IdComponent>(entity) {
                 Some(id) => id.id.raw(),
                 None => return,
@@ -183,9 +208,21 @@ impl Scene {
                 None => return,
             };
             let vol = self.effective_volume(asc.volume, asc.category);
-            (id, path, vol, asc.pitch, asc.looping, asc.streaming)
+            let data = (
+                id, path, vol, asc.pitch, asc.looping, asc.streaming,
+                asc.spatial, asc.hrtf, asc.min_distance, asc.max_distance,
+            );
+            drop(asc);
+            let pos = self
+                .get_component::<TransformComponent>(entity)
+                .map(|t| t.translation)
+                .unwrap_or(glam::Vec3::ZERO);
+            (data.0, data.1, data.2, data.3, data.4, data.5, data.6, data.7, data.8, data.9, pos)
         };
         if let Some(ref mut engine) = self.audio_engine {
+            if spatial {
+                engine.ensure_spatial_track(uuid, pos, min_d, max_d, hrtf);
+            }
             engine.play_sound(uuid, &path, effective_vol, pitch, looping, streaming);
         }
     }
@@ -405,83 +442,150 @@ impl Scene {
     /// Update spatial audio: compute panning and distance attenuation for
     /// all spatial audio sources based on the listener position.
     ///
-    /// If an entity has an active [`AudioListenerComponent`], its position is
-    /// used as the listener. Otherwise, the primary camera position is used.
+    /// For HRTF sources, updates kira spatial track positions and binaural
+    /// effect parameters (azimuth/elevation).
+    ///
+    /// For non-HRTF spatial sources, kira spatial tracks handle distance
+    /// attenuation and panning natively.
+    ///
+    /// Non-spatial sources with `spatial: true` but without HRTF fall back
+    /// to the legacy manual panning/volume path when no spatial track exists.
     pub fn update_spatial_audio(&mut self) {
         if self.audio_engine.is_none() {
             return;
         }
 
-        // Also drain completed sounds (fires on_sound_finished callbacks).
+        // Drain completed sounds (fires on_sound_finished callbacks).
         self.dispatch_sound_finished_events();
 
-        // Prefer explicit AudioListenerComponent, fall back to primary camera.
-        let active_listeners: Vec<glam::Vec2> = self
-            .world
-            .query::<(&AudioListenerComponent, &TransformComponent)>()
-            .iter()
-            .filter(|(al, _)| al.active)
-            .map(|(_, tf)| tf.translation.truncate())
-            .collect();
-        if active_listeners.len() > 1 {
-            log::warn!(
-                "Multiple active AudioListenerComponents ({}) — using last found. \
-                 Disable extras to ensure deterministic behavior.",
-                active_listeners.len()
-            );
+        // ----- Determine listener position and orientation -----
+
+        let (listener_pos, listener_rot) = self.find_listener_transform();
+
+        // Update kira listener.
+        if let Some(ref mut engine) = self.audio_engine {
+            engine.update_listener(listener_pos, listener_rot);
         }
-        let listener_pos = active_listeners
-            .into_iter()
-            .last()
-            .or_else(|| {
-                self.world
-                    .query::<(&CameraComponent, &TransformComponent)>()
-                    .iter()
-                    .filter(|(cam, _)| cam.primary)
-                    .map(|(_, tf)| tf.translation.truncate())
-                    .last()
-            })
-            .unwrap_or(glam::Vec2::ZERO);
 
-        // Read master + category volumes for effective volume computation.
-        let master = self.master_volume;
-        let cat_vols = self.category_volumes;
+        // Master + category volumes are now handled by kira's spatial
+        // track volume, applied when playing the sound (effective_volume).
 
-        // Collect spatial updates (uuid, panning, effective_volume).
-        let updates: Vec<(u64, f32, f32)> = self
+        // ----- Collect spatial source data -----
+
+        struct SpatialUpdate {
+            uuid: u64,
+            position: glam::Vec3,
+            hrtf: bool,
+            min_distance: f32,
+            max_distance: f32,
+        }
+
+        let updates: Vec<SpatialUpdate> = self
             .world
             .query::<(&IdComponent, &AudioSourceComponent, &TransformComponent)>()
             .iter()
             .filter(|(_, asc, _)| asc.spatial)
-            .map(|(id, asc, tf)| {
-                let entity_pos = tf.translation.truncate();
-                let delta = entity_pos - listener_pos;
-                let dist = delta.length();
-                // Panning: proportional to horizontal offset relative to max_distance.
-                let panning = (delta.x / asc.max_distance.max(0.01)).clamp(-1.0, 1.0);
-                // Attenuation: linear falloff between min and max distance.
-                // Expressed in decibels: 0 dB at min_distance, -60 dB (silence) at max_distance.
-                let atten_db = if dist <= asc.min_distance {
-                    0.0
-                } else if dist >= asc.max_distance {
-                    -60.0
-                } else {
-                    let t = (dist - asc.min_distance) / (asc.max_distance - asc.min_distance);
-                    -60.0 * t
-                };
-                // Combine entity volume × category × master, then convert to dB.
-                let effective_linear = asc.volume * cat_vols[asc.category as usize] * master;
-                let volume_db = super::audio::linear_to_db(effective_linear);
-                let effective_volume = volume_db + atten_db;
-                (id.id.raw(), panning, effective_volume)
+            .map(|(id, asc, tf)| SpatialUpdate {
+                uuid: id.id.raw(),
+                position: tf.translation,
+                hrtf: asc.hrtf,
+                min_distance: asc.min_distance,
+                max_distance: asc.max_distance,
             })
             .collect();
 
         if let Some(ref mut engine) = self.audio_engine {
-            for (uuid, panning, volume) in updates {
-                engine.set_panning(uuid, panning);
-                engine.set_volume(uuid, volume);
+            let listener_inv_rot = listener_rot.inverse();
+
+            for update in &updates {
+                if update.hrtf {
+                    // ----- HRTF path -----
+                    // Ensure spatial track exists.
+                    engine.ensure_spatial_track(
+                        update.uuid,
+                        update.position,
+                        update.min_distance,
+                        update.max_distance,
+                        true,
+                    );
+                    // Update track position (kira handles distance attenuation).
+                    engine.update_spatial_position(update.uuid, update.position);
+
+                    // Compute listener-relative direction for the binaural effect.
+                    let relative_pos =
+                        listener_inv_rot * (update.position - listener_pos);
+                    let (azimuth, elevation) =
+                        super::hrtf::direction_to_azimuth_elevation(relative_pos);
+
+                    if let Some(params) = engine.get_binaural_params(update.uuid) {
+                        params.set_direction(azimuth, elevation);
+                    }
+                } else {
+                    // ----- Non-HRTF spatial path -----
+                    // Ensure spatial track exists (binaural effect disabled).
+                    engine.ensure_spatial_track(
+                        update.uuid,
+                        update.position,
+                        update.min_distance,
+                        update.max_distance,
+                        false,
+                    );
+                    engine.update_spatial_position(update.uuid, update.position);
+
+                    // Still update direction so the fallback stereo panning
+                    // in the disabled binaural effect knows the azimuth.
+                    let relative_pos =
+                        listener_inv_rot * (update.position - listener_pos);
+                    let (azimuth, elevation) =
+                        super::hrtf::direction_to_azimuth_elevation(relative_pos);
+                    if let Some(params) = engine.get_binaural_params(update.uuid) {
+                        params.set_direction(azimuth, elevation);
+                    }
+                }
+            }
+
+        }
+    }
+
+    /// Find the listener position and orientation from the scene.
+    ///
+    /// Prefers an active `AudioListenerComponent`, falls back to primary camera.
+    fn find_listener_transform(&self) -> (glam::Vec3, glam::Quat) {
+        // Check for explicit AudioListenerComponent.
+        let mut listener_count = 0u32;
+        let mut result = None;
+        for (al, tf) in self
+            .world
+            .query::<(&AudioListenerComponent, &TransformComponent)>()
+            .iter()
+        {
+            if al.active {
+                listener_count += 1;
+                result = Some((tf.translation, tf.rotation));
             }
         }
+        if listener_count > 1 {
+            log::warn!(
+                "Multiple active AudioListenerComponents ({}) — using last found. \
+                 Disable extras to ensure deterministic behavior.",
+                listener_count
+            );
+        }
+        if let Some(r) = result {
+            return r;
+        }
+
+        // Fall back to primary camera.
+        for (cam, tf) in self
+            .world
+            .query::<(&CameraComponent, &TransformComponent)>()
+            .iter()
+        {
+            if cam.primary {
+                return (tf.translation, tf.rotation);
+            }
+        }
+
+        (glam::Vec3::ZERO, glam::Quat::IDENTITY)
     }
 }

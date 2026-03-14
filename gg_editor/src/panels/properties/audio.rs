@@ -30,6 +30,7 @@ pub(crate) fn draw_audio_source_component(
                 mut play_on_start,
                 mut streaming,
                 mut spatial,
+                mut hrtf,
                 mut min_distance,
                 mut max_distance,
                 category,
@@ -43,6 +44,7 @@ pub(crate) fn draw_audio_source_component(
                     ac.play_on_start,
                     ac.streaming,
                     ac.spatial,
+                    ac.hrtf,
                     ac.min_distance,
                     ac.max_distance,
                     ac.category,
@@ -180,6 +182,22 @@ pub(crate) fn draw_audio_source_component(
         });
 
             if spatial {
+                // HRTF checkbox.
+                ui.horizontal(|ui| {
+                    if ui.checkbox(&mut hrtf, "HRTF (Binaural)").on_hover_text(
+                        "Enable binaural HRTF processing for 3D audio.\n\
+                         Provides ITD, ILD, and head-shadow cues for\n\
+                         convincing headphone spatialization.",
+                    ).changed() {
+                        if let Some(mut ac) =
+                            scene.get_component_mut::<AudioSourceComponent>(entity)
+                        {
+                            ac.hrtf = hrtf;
+                        }
+                        *scene_dirty = true;
+                    }
+                });
+
                 // Min distance.
                 ui.horizontal(|ui| {
                     ui.label("Min Distance");

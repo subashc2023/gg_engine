@@ -2,6 +2,7 @@ pub mod animation;
 pub(crate) mod audio;
 mod audio_ops;
 mod components;
+pub(crate) mod hrtf;
 pub(crate) mod core;
 mod entity;
 mod hierarchy;

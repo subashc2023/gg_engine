@@ -818,6 +818,8 @@ struct AudioSourceData {
     streaming: bool,
     #[serde(rename = "Spatial", default)]
     spatial: bool,
+    #[serde(rename = "HRTF", default)]
+    hrtf: bool,
     #[serde(
         rename = "MinDistance",
         default = "default_one_f32",
@@ -1644,6 +1646,7 @@ impl SceneSerializer {
                 play_on_start: asc.play_on_start,
                 streaming: asc.streaming,
                 spatial: asc.spatial,
+                hrtf: asc.hrtf,
                 min_distance: asc.min_distance,
                 max_distance: asc.max_distance,
                 category: match asc.category {
@@ -2214,6 +2217,7 @@ impl SceneSerializer {
                     play_on_start: asd.play_on_start,
                     streaming: asd.streaming,
                     spatial: asd.spatial,
+                    hrtf: asd.hrtf,
                     min_distance: asd.min_distance,
                     max_distance: asd.max_distance,
                     category: AudioCategory::from_str_loose(&asd.category).unwrap_or_default(),
@@ -2572,6 +2576,7 @@ mod tests {
             play_on_start: true,
             streaming: true,
             spatial: true,
+            hrtf: true,
             min_distance: 2.0,
             max_distance: 30.0,
             category: crate::scene::AudioCategory::Music,

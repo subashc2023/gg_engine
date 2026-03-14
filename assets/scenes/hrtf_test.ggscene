@@ -1,0 +1,332 @@
+Version: 2
+Scene: HRTF Audio Test
+Entities:
+# ── Camera / Listener ─────────────────────────────────────────
+# First-person camera at eye height. WASD + mouse look.
+- Entity: 100
+  TagComponent:
+    Tag: Camera
+  TransformComponent:
+    Translation:
+    - 0.0
+    - 1.5
+    - 0.0
+    Rotation:
+    - 0.0
+    - 0.0
+    - 0.0
+    - 1.0
+    Scale:
+    - 1.0
+    - 1.0
+    - 1.0
+  CameraComponent:
+    Camera:
+      ProjectionType: 0
+      PerspectiveFOV: 0.7853982
+      PerspectiveNear: 0.1
+      PerspectiveFar: 200.0
+      OrthographicSize: 10.0
+      OrthographicNear: -1.0
+      OrthographicFar: 1.0
+    Primary: true
+    FixedAspectRatio: false
+  AudioListenerComponent:
+    Active: true
+
+# ── Controller (Lua script) ──────────────────────────────────
+- Entity: 150
+  TagComponent:
+    Tag: Controller
+  TransformComponent:
+    Translation:
+    - 0.0
+    - 0.0
+    - 0.0
+    Rotation:
+    - 0.0
+    - 0.0
+    - 0.0
+    - 1.0
+    Scale:
+    - 1.0
+    - 1.0
+    - 1.0
+  LuaScriptComponent:
+    ScriptPath: assets/scripts/hrtf_test.lua
+
+# ── Orbiting HRTF Source (green sphere) ──────────────────────
+# Starts in front, orbits around listener at Y=1.
+- Entity: 200
+  TagComponent:
+    Tag: Orbiting Source
+  TransformComponent:
+    Translation:
+    - 0.0
+    - 1.0
+    - -8.0
+    Rotation:
+    - 0.0
+    - 0.0
+    - 0.0
+    - 1.0
+    Scale:
+    - 0.5
+    - 0.5
+    - 0.5
+  MeshRendererComponent:
+    Primitive: Sphere
+    Color:
+    - 0.2
+    - 0.9
+    - 0.3
+    - 1.0
+    Metallic: 0.0
+    Roughness: 0.8
+    EmissiveColor:
+    - 0.1
+    - 0.5
+    - 0.15
+    EmissiveStrength: 2.0
+  AudioSourceComponent:
+    AudioHandle: 1001
+    Volume: 0.8
+    Pitch: 0.8
+    Looping: true
+    PlayOnStart: false
+    Spatial: true
+    HRTF: true
+    MinDistance: 2.0
+    MaxDistance: 30.0
+
+# ── Static HRTF Source (orange sphere, behind-right) ─────────
+- Entity: 300
+  TagComponent:
+    Tag: Static Source
+  TransformComponent:
+    Translation:
+    - 5.0
+    - 1.0
+    - 5.0
+    Rotation:
+    - 0.0
+    - 0.0
+    - 0.0
+    - 1.0
+    Scale:
+    - 0.4
+    - 0.4
+    - 0.4
+  MeshRendererComponent:
+    Primitive: Sphere
+    Color:
+    - 0.9
+    - 0.5
+    - 0.1
+    - 1.0
+    Metallic: 0.0
+    Roughness: 0.8
+    EmissiveColor:
+    - 0.5
+    - 0.25
+    - 0.05
+    EmissiveStrength: 2.0
+  AudioSourceComponent:
+    AudioHandle: 1001
+    Volume: 0.5
+    Pitch: 1.5
+    Looping: true
+    PlayOnStart: false
+    Spatial: true
+    HRTF: true
+    MinDistance: 2.0
+    MaxDistance: 30.0
+
+# ── Ground Plane ─────────────────────────────────────────────
+- Entity: 400
+  TagComponent:
+    Tag: Ground
+  TransformComponent:
+    Translation:
+    - 0.0
+    - 0.0
+    - 0.0
+    Rotation:
+    - 0.0
+    - 0.0
+    - 0.0
+    - 1.0
+    Scale:
+    - 30.0
+    - 1.0
+    - 30.0
+  MeshRendererComponent:
+    Primitive: Plane
+    Color:
+    - 0.25
+    - 0.25
+    - 0.3
+    - 1.0
+    Metallic: 0.0
+    Roughness: 0.9
+    EmissiveColor:
+    - 0.0
+    - 0.0
+    - 0.0
+    EmissiveStrength: 1.0
+
+# ── Pillars (visual landmarks) ───────────────────────────────
+- Entity: 500
+  TagComponent:
+    Tag: Pillar N
+  TransformComponent:
+    Translation:
+    - 0.0
+    - 1.5
+    - -12.0
+    Rotation:
+    - 0.0
+    - 0.0
+    - 0.0
+    - 1.0
+    Scale:
+    - 0.3
+    - 3.0
+    - 0.3
+  MeshRendererComponent:
+    Primitive: Cube
+    Color:
+    - 0.7
+    - 0.7
+    - 0.7
+    - 1.0
+    Metallic: 0.0
+    Roughness: 0.5
+    EmissiveColor:
+    - 0.0
+    - 0.0
+    - 0.0
+    EmissiveStrength: 1.0
+
+- Entity: 501
+  TagComponent:
+    Tag: Pillar S
+  TransformComponent:
+    Translation:
+    - 0.0
+    - 1.5
+    - 12.0
+    Rotation:
+    - 0.0
+    - 0.0
+    - 0.0
+    - 1.0
+    Scale:
+    - 0.3
+    - 3.0
+    - 0.3
+  MeshRendererComponent:
+    Primitive: Cube
+    Color:
+    - 0.5
+    - 0.5
+    - 0.5
+    - 1.0
+    Metallic: 0.0
+    Roughness: 0.5
+    EmissiveColor:
+    - 0.0
+    - 0.0
+    - 0.0
+    EmissiveStrength: 1.0
+
+- Entity: 502
+  TagComponent:
+    Tag: Pillar E
+  TransformComponent:
+    Translation:
+    - 12.0
+    - 1.5
+    - 0.0
+    Rotation:
+    - 0.0
+    - 0.0
+    - 0.0
+    - 1.0
+    Scale:
+    - 0.3
+    - 3.0
+    - 0.3
+  MeshRendererComponent:
+    Primitive: Cube
+    Color:
+    - 0.6
+    - 0.3
+    - 0.3
+    - 1.0
+    Metallic: 0.0
+    Roughness: 0.5
+    EmissiveColor:
+    - 0.0
+    - 0.0
+    - 0.0
+    EmissiveStrength: 1.0
+
+- Entity: 503
+  TagComponent:
+    Tag: Pillar W
+  TransformComponent:
+    Translation:
+    - -12.0
+    - 1.5
+    - 0.0
+    Rotation:
+    - 0.0
+    - 0.0
+    - 0.0
+    - 1.0
+    Scale:
+    - 0.3
+    - 3.0
+    - 0.3
+  MeshRendererComponent:
+    Primitive: Cube
+    Color:
+    - 0.3
+    - 0.3
+    - 0.6
+    - 1.0
+    Metallic: 0.0
+    Roughness: 0.5
+    EmissiveColor:
+    - 0.0
+    - 0.0
+    - 0.0
+    EmissiveStrength: 1.0
+
+# ── Directional Light (sun) ──────────────────────────────────
+- Entity: 600
+  TagComponent:
+    Tag: Sun
+  TransformComponent:
+    Translation:
+    - 0.0
+    - 10.0
+    - 0.0
+    Rotation:
+    - -0.5
+    - 0.2
+    - 0.0
+    - 0.84
+    Scale:
+    - 1.0
+    - 1.0
+    - 1.0
+  DirectionalLightComponent:
+    Direction: null
+    Color:
+    - 1.0
+    - 0.95
+    - 0.9
+    Intensity: 1.2
+    CastShadows: true
