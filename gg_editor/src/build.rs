@@ -3,6 +3,7 @@ use std::path::{Path, PathBuf};
 use gg_engine::egui;
 use gg_engine::log;
 use gg_engine::prelude::*;
+use gg_engine::{cook_assets, BuildManifest};
 
 use super::GGEditor;
 
@@ -13,12 +14,14 @@ use super::GGEditor;
 pub(crate) struct BuildConfig {
     pub output_directory: String,
     pub build_name: String,
+    pub strip_unused: bool,
 }
 
 pub(crate) enum BuildResult {
     Success {
         output_path: PathBuf,
         bytes_copied: u64,
+        manifest: Option<BuildManifest>,
     },
     Error(String),
 }
@@ -26,6 +29,7 @@ pub(crate) enum BuildResult {
 pub(crate) struct BuildModal {
     pub output_directory: String,
     pub build_name: String,
+    pub strip_unused: bool,
     pub result: Option<BuildResult>,
 }
 
@@ -67,7 +71,7 @@ fn find_player_binary() -> Option<PathBuf> {
 }
 
 // ---------------------------------------------------------------------------
-// Recursive directory copy
+// Recursive directory copy (legacy — used when strip_unused is off)
 // ---------------------------------------------------------------------------
 
 fn copy_dir_recursive(src: &Path, dst: &Path) -> std::io::Result<u64> {
@@ -91,6 +95,35 @@ fn copy_dir_recursive(src: &Path, dst: &Path) -> std::io::Result<u64> {
             bytes_copied += copy_dir_recursive(&src_path, &dst_path)?;
         } else {
             bytes_copied += std::fs::copy(&src_path, &dst_path)?;
+        }
+    }
+
+    Ok(bytes_copied)
+}
+
+// ---------------------------------------------------------------------------
+// Manifest-based copy (used when strip_unused is on)
+// ---------------------------------------------------------------------------
+
+/// Copy only the files listed in the manifest from `asset_dir` to `dest_assets`.
+fn copy_from_manifest(
+    asset_dir: &Path,
+    dest_assets: &Path,
+    manifest: &BuildManifest,
+) -> std::io::Result<u64> {
+    let mut bytes_copied = 0u64;
+
+    for entry in &manifest.entries {
+        let src = asset_dir.join(&entry.path);
+        let dst = dest_assets.join(&entry.path);
+
+        // Ensure parent directory exists.
+        if let Some(parent) = dst.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+
+        if src.exists() {
+            bytes_copied += std::fs::copy(&src, &dst)?;
         }
     }
 
@@ -140,34 +173,89 @@ pub(crate) fn execute_build(config: &BuildConfig, project: &Project) -> BuildRes
     }
     total_bytes += dest_project.metadata().map(|m| m.len()).unwrap_or(0);
 
-    // Copy the assets directory (preserving structure).
+    // Copy the assets directory.
     let asset_dir = project.asset_directory_path();
     let asset_dir_name = project.config().asset_directory.clone();
     let dest_assets = output_dir.join(&asset_dir_name);
-    if asset_dir.exists() {
+
+    if !asset_dir.exists() {
+        return BuildResult::Success {
+            output_path: output_dir,
+            bytes_copied: total_bytes,
+            manifest: None,
+        };
+    }
+
+    if config.strip_unused {
+        // Compute script module subdir relative to asset dir.
+        let script_module_path = project.script_module_path();
+        let script_module_subdir = script_module_path
+            .strip_prefix(&asset_dir)
+            .map(|p| p.to_string_lossy().replace('\\', "/"))
+            .unwrap_or_else(|_| "scripts".to_string());
+
+        let manifest = cook_assets(&asset_dir, &script_module_subdir);
+
+        for warning in &manifest.warnings {
+            log::warn!("Build warning: {}", warning);
+        }
+
+        match copy_from_manifest(&asset_dir, &dest_assets, &manifest) {
+            Ok(bytes) => total_bytes += bytes,
+            Err(e) => {
+                return BuildResult::Error(format!("Failed to copy assets: {}", e));
+            }
+        }
+
+        log::info!(
+            "Build complete: {} ({:.1} MB, {} files included, {} excluded)",
+            output_dir.display(),
+            total_bytes as f64 / (1024.0 * 1024.0),
+            manifest.entries.len(),
+            manifest.excluded.len(),
+        );
+
+        BuildResult::Success {
+            output_path: output_dir,
+            bytes_copied: total_bytes,
+            manifest: Some(manifest),
+        }
+    } else {
         match copy_dir_recursive(&asset_dir, &dest_assets) {
             Ok(bytes) => total_bytes += bytes,
             Err(e) => {
                 return BuildResult::Error(format!("Failed to copy assets: {}", e));
             }
         }
-    }
 
-    log::info!(
-        "Build complete: {} ({:.1} MB)",
-        output_dir.display(),
-        total_bytes as f64 / (1024.0 * 1024.0)
-    );
+        log::info!(
+            "Build complete: {} ({:.1} MB)",
+            output_dir.display(),
+            total_bytes as f64 / (1024.0 * 1024.0)
+        );
 
-    BuildResult::Success {
-        output_path: output_dir,
-        bytes_copied: total_bytes,
+        BuildResult::Success {
+            output_path: output_dir,
+            bytes_copied: total_bytes,
+            manifest: None,
+        }
     }
 }
 
 // ---------------------------------------------------------------------------
 // Build modal UI
 // ---------------------------------------------------------------------------
+
+/// Format bytes as a human-readable size string.
+fn format_size(bytes: u64) -> String {
+    if bytes >= 1024 * 1024 {
+        format!("{:.1} MB", bytes as f64 / (1024.0 * 1024.0))
+    } else if bytes >= 1024 {
+        format!("{:.1} KB", bytes as f64 / 1024.0)
+    } else {
+        format!("{} B", bytes)
+    }
+}
 
 impl GGEditor {
     pub(super) fn build_modal_ui(&mut self, ctx: &egui::Context) {
@@ -200,16 +288,62 @@ impl GGEditor {
                         BuildResult::Success {
                             output_path,
                             bytes_copied,
+                            manifest,
                         } => {
                             ui.colored_label(
                                 egui::Color32::from_rgb(0x4E, 0xC9, 0xB0),
-                                format!(
-                                    "Build successful! ({:.1} MB)",
-                                    *bytes_copied as f64 / (1024.0 * 1024.0)
-                                ),
+                                format!("Build successful! ({})", format_size(*bytes_copied)),
                             );
                             ui.add_space(4.0);
                             ui.label(output_path.display().to_string());
+
+                            // Show manifest details if asset stripping was used.
+                            if let Some(manifest) = manifest {
+                                ui.add_space(8.0);
+                                ui.separator();
+                                ui.add_space(4.0);
+
+                                ui.label(
+                                    egui::RichText::new("Asset Summary").strong(),
+                                );
+                                ui.add_space(2.0);
+
+                                // Size breakdown by category.
+                                let sizes = manifest.size_by_category();
+                                let mut size_entries: Vec<_> = sizes.iter().collect();
+                                size_entries.sort_by(|a, b| b.1.cmp(a.1));
+
+                                egui::Grid::new("build_size_grid")
+                                    .num_columns(2)
+                                    .spacing([20.0, 2.0])
+                                    .show(ui, |ui| {
+                                        for (category, bytes) in &size_entries {
+                                            ui.label(category.label());
+                                            ui.label(format_size(**bytes));
+                                            ui.end_row();
+                                        }
+                                    });
+
+                                ui.add_space(4.0);
+                                ui.label(format!(
+                                    "{} files included, {} excluded (saved {})",
+                                    manifest.entries.len(),
+                                    manifest.excluded.len(),
+                                    format_size(manifest.total_excluded_bytes),
+                                ));
+
+                                // Show warnings if any.
+                                if !manifest.warnings.is_empty() {
+                                    ui.add_space(4.0);
+                                    for warning in &manifest.warnings {
+                                        ui.colored_label(
+                                            egui::Color32::from_rgb(0xFF, 0xCC, 0x00),
+                                            format!("Warning: {}", warning),
+                                        );
+                                    }
+                                }
+                            }
+
                             ui.add_space(8.0);
                             ui.horizontal(|ui| {
                                 if ui.button("Open Folder").clicked() {
@@ -262,6 +396,16 @@ impl GGEditor {
                             .weak(),
                     );
 
+                    ui.add_space(8.0);
+                    ui.checkbox(&mut modal.strip_unused, "Strip unused assets");
+                    ui.label(
+                        egui::RichText::new(
+                            "Only include assets referenced by scenes and scripts",
+                        )
+                        .small()
+                        .weak(),
+                    );
+
                     ui.add_space(12.0);
 
                     let can_build =
@@ -289,6 +433,7 @@ impl GGEditor {
             let config = BuildConfig {
                 output_directory: modal.output_directory.clone(),
                 build_name: modal.build_name.trim().to_string(),
+                strip_unused: modal.strip_unused,
             };
             let result = execute_build(&config, self.project_state.project.as_ref().unwrap());
             modal.result = Some(result);

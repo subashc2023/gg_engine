@@ -1,10 +1,12 @@
 mod asset_loader;
 mod asset_manager;
 mod asset_registry;
+pub mod cooking;
 
 pub use asset_loader::{AssetLoader, LoadResult};
 pub use asset_manager::EditorAssetManager;
 pub use asset_registry::AssetRegistry;
+pub use cooking::{cook_assets, BuildManifest, FileCategory, ManifestEntry};
 
 use crate::uuid::Uuid;
 

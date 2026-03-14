@@ -28,7 +28,10 @@ pub type Scope<T> = Box<T>;
 
 pub use application::{run, Application, WindowConfig};
 pub use ash;
-pub use asset::{AssetHandle, AssetMetadata, AssetRegistry, AssetType, EditorAssetManager};
+pub use asset::{
+    cook_assets, AssetHandle, AssetMetadata, AssetRegistry, AssetType, BuildManifest,
+    EditorAssetManager, FileCategory, ManifestEntry,
+};
 pub use cursor::{CursorMode, SoftwareCursor};
 pub use egui;
 pub use error::{EngineError, EngineResult};

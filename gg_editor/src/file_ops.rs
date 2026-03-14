@@ -498,6 +498,7 @@ impl GGEditor {
         self.ui.build_modal = Some(super::build::BuildModal {
             output_directory: String::new(),
             build_name,
+            strip_unused: true,
             result: None,
         });
     }
