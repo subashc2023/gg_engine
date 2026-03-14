@@ -379,6 +379,33 @@ impl GpuParticleSystem {
     }
 
     // -----------------------------------------------------------------------
+    // Compute pipeline hot-reload
+    // -----------------------------------------------------------------------
+
+    /// Replace the compute pipeline with one built from new SPIR-V bytecode.
+    /// The old shader module and pipeline are dropped (Vulkan objects destroyed).
+    pub fn reload_compute_pipeline(
+        &mut self,
+        comp_spv: &[u8],
+        pipeline_cache: vk::PipelineCache,
+    ) -> EngineResult<()> {
+        let new_shader = ComputeShader::new(&self.device, "particle_sim", comp_spv)?;
+        let new_pipeline = compute::create_compute_pipeline(
+            &self.device,
+            &new_shader,
+            &[self.compute_ds_layout],
+            std::mem::size_of::<ParticleSimPush>() as u32,
+            pipeline_cache,
+        )?;
+
+        // Old pipeline and shader drop here, destroying their Vulkan objects.
+        self._compute_shader = new_shader;
+        self.compute_pipeline = new_pipeline;
+
+        Ok(())
+    }
+
+    // -----------------------------------------------------------------------
     // Emission (CPU-side, queued for next dispatch)
     // -----------------------------------------------------------------------
 

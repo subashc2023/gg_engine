@@ -2006,6 +2006,12 @@ impl Scene {
         let mut light_env = self.collect_lights();
         light_env.camera_position = renderer.camera_position();
 
+        // Wire up the actual max prefilter mip from the environment map system
+        // instead of relying on the hardcoded default.
+        if let Some(env_map) = renderer.environment() {
+            light_env.max_prefilter_mip = env_map.max_prefilter_mip();
+        }
+
         // Check for cascade VP data stashed by a prior render_shadow_pass call.
         if light_env.shadow_cascade_vps.is_none() {
             if let Some((vps, splits, dist, tsizes)) = self.shadow_cascade_cache.write().take() {

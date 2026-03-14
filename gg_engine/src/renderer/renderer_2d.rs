@@ -1449,10 +1449,15 @@ impl Renderer2DData {
     /// Compiles each `.glsl` file with `glslc`, creates new shader modules,
     /// and rebuilds all pipelines. On failure, returns an error and keeps
     /// the old pipelines intact.
+    #[allow(clippy::type_complexity)]
     pub(super) fn reload_shaders(
         &mut self,
         shader_dir: &Path,
-    ) -> EngineResult<(u32, Vec<(String, shader_compiler::CompiledShader)>)> {
+    ) -> EngineResult<(
+        u32,
+        Vec<(String, shader_compiler::CompiledShader)>,
+        Vec<(String, shader_compiler::CompiledComputeShader)>,
+    )> {
         let entries: Vec<_> = std::fs::read_dir(shader_dir)
             .map_err(|e| {
                 EngineError::Gpu(format!(
@@ -1632,7 +1637,7 @@ impl Renderer2DData {
 
         let count = new_shaders.len() as u32;
         log::info!(target: "gg_engine", "Hot-reloaded {} shaders", count);
-        Ok((count, compiled))
+        Ok((count, compiled, compiled_compute))
     }
 
     // -- Accessors for GpuParticleSystem rendering ----------------------------

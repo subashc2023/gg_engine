@@ -545,13 +545,6 @@ impl EditorAssetManager {
         self.evict_lru();
     }
 
-    /// Unload a specific asset from GPU memory.
-    pub fn unload_asset(&mut self, handle: &AssetHandle) -> bool {
-        self.access_times.remove(handle);
-        self.untrack_gpu_bytes(handle);
-        self.loaded_assets.remove(handle).is_some()
-    }
-
     /// Unload assets that are only held by the cache (Arc strong_count == 1).
     /// Returns the number of assets evicted.
     pub fn unload_unused(&mut self) -> usize {
@@ -580,16 +573,6 @@ impl EditorAssetManager {
         self.access_times.clear();
         self.asset_gpu_bytes.clear();
         self.total_gpu_bytes = 0;
-    }
-
-    /// Number of currently loaded assets.
-    pub fn loaded_count(&self) -> usize {
-        self.loaded_assets.len()
-    }
-
-    /// Set the maximum number of cached textures. 0 = unlimited.
-    pub fn set_max_cached_textures(&mut self, max: usize) {
-        self.max_cached_textures = max;
     }
 
     /// Evict least-recently-used textures until the cache is within both the
@@ -678,8 +661,4 @@ impl EditorAssetManager {
         self.gpu_memory_budget = budget_bytes;
     }
 
-    /// Get the current GPU memory budget in bytes (0 = unlimited).
-    pub fn gpu_memory_budget(&self) -> u64 {
-        self.gpu_memory_budget
-    }
 }

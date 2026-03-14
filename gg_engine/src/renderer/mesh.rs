@@ -1536,7 +1536,7 @@ mod tests {
         if !path.exists() {
             return;
         }
-        let (document, buffers, _) = gltf::import(path).expect("Failed to import Fox.glb");
+        let (document, _buffers, _) = gltf::import(path).expect("Failed to import Fox.glb");
 
         // Print full scene graph with transforms.
         println!("=== Fox.glb scene graph ===");

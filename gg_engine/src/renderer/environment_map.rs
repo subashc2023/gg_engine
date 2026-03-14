@@ -7,7 +7,6 @@ use super::compute::{create_compute_pipeline, ComputePipeline, ComputeShader};
 use super::cubemap::Cubemap;
 use super::gpu_allocation::{GpuAllocator, MemoryLocation};
 use super::lighting::LightingSystem;
-use super::pipeline::Pipeline;
 use super::texture::{ImageFormat, Texture2D, TextureSpecification};
 use super::vertex_array::VertexArray;
 use super::{BufferElement, BufferLayout, RendererResources, ShaderDataType};
@@ -62,12 +61,6 @@ struct PrefilterPush {
     sample_count: i32,
 }
 
-#[repr(C)]
-#[derive(Clone, Copy)]
-struct BrdfLutPush {
-    size: i32,
-}
-
 /// Push constants for the skybox shader.
 #[repr(C)]
 #[derive(Clone, Copy)]
@@ -101,7 +94,6 @@ pub(crate) struct EnvironmentMapSystem {
     equirect_to_cube_pipeline: ComputePipeline,
     irradiance_pipeline: ComputePipeline,
     prefilter_pipeline: ComputePipeline,
-    brdf_pipeline: ComputePipeline,
 
     // Compute descriptor set resources.
     compute_ds_pool: vk::DescriptorPool,
@@ -113,16 +105,9 @@ pub(crate) struct EnvironmentMapSystem {
     skybox_vertex_array: VertexArray,
 
     device: ash::Device,
-    allocator: Arc<Mutex<GpuAllocator>>,
-    command_pool: vk::CommandPool,
-    graphics_queue: vk::Queue,
-    pipeline_cache: vk::PipelineCache,
 
     /// Whether a real environment map has been loaded (vs fallback).
     has_environment: bool,
-
-    /// Whether the BRDF LUT has been generated (only done once, ever).
-    brdf_generated: bool,
 }
 
 impl EnvironmentMapSystem {
@@ -316,15 +301,6 @@ impl EnvironmentMapSystem {
             pipeline_cache,
         )?;
 
-        let brdf_shader = ComputeShader::new(device, "brdf_lut", shaders::BRDF_LUT_COMP_SPV)?;
-        let brdf_pipeline = create_compute_pipeline(
-            device,
-            &brdf_shader,
-            &[compute_brdf_ds_layout],
-            std::mem::size_of::<BrdfLutPush>() as u32,
-            pipeline_cache,
-        )?;
-
         // --- Skybox unit cube vertex array ---
         let skybox_vertex_array = Self::create_skybox_cube(allocator, device)?;
 
@@ -349,19 +325,13 @@ impl EnvironmentMapSystem {
             equirect_to_cube_pipeline,
             irradiance_pipeline,
             prefilter_pipeline,
-            brdf_pipeline,
             compute_ds_pool,
             compute_sampler2d_ds_layout,
-            compute_sampler_cube_ds_layout: compute_sampler_cube_ds_layout,
+            compute_sampler_cube_ds_layout,
             compute_brdf_ds_layout,
             skybox_vertex_array,
             device: device.clone(),
-            allocator: allocator.clone(),
-            command_pool,
-            graphics_queue,
-            pipeline_cache,
             has_environment: false,
-            brdf_generated: false,
         })
     }
 
@@ -407,11 +377,6 @@ impl EnvironmentMapSystem {
         }
     }
 
-    /// Get the BRDF integration LUT.
-    pub fn brdf_lut(&self) -> &Texture2D {
-        &self.brdf_lut
-    }
-
     /// Update the lighting system's IBL descriptors with the current active textures.
     pub fn update_lighting_descriptors(&self, lighting: &LightingSystem) {
         let irr = self.active_irradiance();
@@ -432,15 +397,12 @@ impl EnvironmentMapSystem {
     /// Load an HDR equirectangular image and run the full IBL preprocessing chain.
     ///
     /// `pixels_rgba_f16` is RGBA half-float data (8 bytes/pixel, R16G16B16A16_SFLOAT).
-    #[allow(clippy::too_many_arguments)]
     pub fn load_hdr(
         &mut self,
         allocator: &Arc<Mutex<GpuAllocator>>,
         device: &ash::Device,
         command_pool: vk::CommandPool,
         queue: vk::Queue,
-        descriptor_pool: vk::DescriptorPool,
-        texture_ds_layout: vk::DescriptorSetLayout,
         pixels_rgba_f16: &[u8],
         width: u32,
         height: u32,
@@ -602,7 +564,7 @@ impl EnvironmentMapSystem {
                         push_bytes,
                     );
                 }
-                let groups = (ENV_CUBEMAP_SIZE + 15) / 16;
+                let groups = ENV_CUBEMAP_SIZE.div_ceil(16);
                 unsafe {
                     device.cmd_dispatch(cmd_buf, groups, groups, 1);
                 }
@@ -685,8 +647,8 @@ impl EnvironmentMapSystem {
                     );
                     device.cmd_dispatch(
                         cmd_buf,
-                        (IRRADIANCE_SIZE + 7) / 8,
-                        (IRRADIANCE_SIZE + 7) / 8,
+                        IRRADIANCE_SIZE.div_ceil(8),
+                        IRRADIANCE_SIZE.div_ceil(8),
                         1,
                     );
                 }
@@ -768,7 +730,7 @@ impl EnvironmentMapSystem {
                             0,
                             push_bytes,
                         );
-                        let groups = (mip_size + 15) / 16;
+                        let groups = mip_size.div_ceil(16);
                         device.cmd_dispatch(cmd_buf, groups, groups, 1);
                     }
                 }
@@ -954,7 +916,7 @@ impl EnvironmentMapSystem {
         const PI: f32 = std::f32::consts::PI;
 
         fn radical_inverse_vdc(mut bits: u32) -> f32 {
-            bits = (bits << 16) | (bits >> 16);
+            bits = bits.rotate_right(16);
             bits = ((bits & 0x55555555) << 1) | ((bits & 0xAAAAAAAA) >> 1);
             bits = ((bits & 0x33333333) << 2) | ((bits & 0xCCCCCCCC) >> 2);
             bits = ((bits & 0x0F0F0F0F) << 4) | ((bits & 0xF0F0F0F0) >> 4);

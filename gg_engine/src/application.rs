@@ -294,9 +294,14 @@ struct EngineRunner<T: Application> {
     window_config: WindowConfig,
     current_present_mode: PresentMode,
     current_cursor_mode: CursorMode,
-    /// Software cursor position in logical pixels, tracked via raw mouse deltas.
-    /// Independent of OS cursor to avoid platform quirks with hidden/confined cursors.
+    /// 1x1 transparent cursor image used in Confined mode. Replaces the OS cursor
+    /// icon so `CursorMoved` events keep firing (unlike `set_cursor_visible(false)`
+    /// which silences them on Windows).
+    transparent_cursor: Option<winit::window::CustomCursor>,
+    /// Software cursor position in logical pixels, driven by OS `CursorMoved` events.
     software_cursor_pos: (f64, f64),
+    /// True when the OS cursor is inside the window's client area.
+    cursor_in_window: bool,
     default_camera: OrthographicCamera,
     last_frame_time: Instant,
     /// Exponential moving average of frame dt for smooth camera/movement.
@@ -326,6 +331,10 @@ struct EngineRunner<T: Application> {
     // Vulkan context must be dropped before window (surface references native handle).
     vulkan_context: Option<VulkanContext>,
     window: Option<Arc<Window>>,
+
+    // Gamepad backend - gilrs polls OS gamepad events and feeds them to Input.
+    #[cfg(feature = "gamepad")]
+    gilrs: Option<gilrs::Gilrs>,
 }
 
 impl<T: Application> Drop for EngineRunner<T> {
@@ -402,6 +411,14 @@ impl<T: Application> ApplicationHandler for EngineRunner<T> {
                 log::info!(target: "gg_engine", "Window created: \"{}\" ({}x{})",
                     self.window_config.title, self.window_config.width, self.window_config.height);
                 let window = Arc::new(window);
+
+                // Create a 1x1 transparent cursor for Confined mode.
+                if let Ok(source) =
+                    winit::window::CustomCursor::from_rgba(vec![0u8; 4], 1, 1, 0, 0)
+                {
+                    self.transparent_cursor =
+                        Some(event_loop.create_custom_cursor(source));
+                }
 
                 // Initialize the job thread pool for parallel ECS work.
                 crate::jobs::init();
@@ -520,6 +537,18 @@ impl<T: Application> ApplicationHandler for EngineRunner<T> {
                                             self.input.set_action_map(action_map);
                                         }
 
+                                        // Apply initial cursor mode so the transparent cursor is
+                                        // set from the very first frame.
+                                        let initial_cursor = self.app.cursor_mode();
+                                        if initial_cursor != CursorMode::Normal {
+                                            apply_cursor_mode(
+                                                &window,
+                                                initial_cursor,
+                                                self.transparent_cursor.as_ref(),
+                                            );
+                                            self.current_cursor_mode = initial_cursor;
+                                        }
+
                                         // If any viewport has a multi-attachment framebuffer, create
                                         // an offscreen batch pipeline compatible with its render pass.
                                         // All viewports share the same attachment formats, so we only
@@ -588,23 +617,9 @@ impl<T: Application> ApplicationHandler for EngineRunner<T> {
         event: winit::event::DeviceEvent,
     ) {
         if let winit::event::DeviceEvent::MouseMotion { delta: (dx, dy) } = event {
+            // Accumulate raw deltas for Input::mouse_delta() — used by Locked
+            // mode (FPS camera look) and any game code that wants raw motion.
             self.input.accumulate_mouse_delta(dx, dy);
-
-            // Update software cursor position from raw deltas (reliable even
-            // when the OS cursor is hidden/confined).
-            if self.current_cursor_mode == CursorMode::Confined {
-                let (cx, cy) = self.software_cursor_pos;
-                // Get logical window size for clamping.
-                let (max_x, max_y) = if let Some(window) = &self.window {
-                    let size = window.inner_size();
-                    let scale = window.scale_factor();
-                    (size.width as f64 / scale, size.height as f64 / scale)
-                } else {
-                    (1280.0, 720.0)
-                };
-                self.software_cursor_pos =
-                    ((cx + dx).clamp(0.0, max_x), (cy + dy).clamp(0.0, max_y));
-            }
         }
     }
 
@@ -633,16 +648,22 @@ impl<T: Application> ApplicationHandler for EngineRunner<T> {
             }
             winit::event::WindowEvent::CursorMoved { position, .. } => {
                 self.input.set_mouse_position(position.x, position.y);
-                // Keep software cursor position in sync when in Normal mode,
-                // so it starts at the right place when switching to Confined.
-                if self.current_cursor_mode != CursorMode::Confined {
-                    let scale = self
-                        .window
-                        .as_ref()
-                        .map(|w| w.scale_factor())
-                        .unwrap_or(1.0);
-                    self.software_cursor_pos = (position.x / scale, position.y / scale);
-                }
+                // Always sync software cursor from OS cursor position (logical
+                // pixels). In Confined mode the OS cursor is transparent but
+                // still tracked, so CursorMoved events give OS-accelerated,
+                // DPI-correct positions.
+                let scale = self
+                    .window
+                    .as_ref()
+                    .map(|w| w.scale_factor())
+                    .unwrap_or(1.0);
+                self.software_cursor_pos = (position.x / scale, position.y / scale);
+            }
+            winit::event::WindowEvent::CursorEntered { .. } => {
+                self.cursor_in_window = true;
+            }
+            winit::event::WindowEvent::CursorLeft { .. } => {
+                self.cursor_in_window = false;
             }
             winit::event::WindowEvent::MouseInput { state, button, .. } => {
                 if let Some(btn) = map_mouse_button(*button) {
@@ -664,18 +685,27 @@ impl<T: Application> ApplicationHandler for EngineRunner<T> {
                     // Clear all pressed keys/buttons on focus loss to prevent
                     // "stuck" keys when the user Alt+Tabs away while holding keys.
                     self.input.clear_all();
-                    // Release cursor grab on focus loss so the user can interact
-                    // with other windows. The mode is re-applied on focus gain.
-                    if self.current_cursor_mode != CursorMode::Normal {
+                    // Release cursor grab on focus loss (only Locked mode uses
+                    // a grab — Confined mode has no grab). Re-applied on gain.
+                    if self.current_cursor_mode == CursorMode::Locked {
                         if let Some(window) = &self.window {
-                            apply_cursor_mode(window, CursorMode::Normal);
+                            apply_cursor_mode(
+                                window,
+                                CursorMode::Normal,
+                                self.transparent_cursor.as_ref(),
+                            );
                         }
                     }
                 } else {
-                    // Re-apply cursor mode on focus gain.
+                    // Re-apply cursor mode on focus gain (restores Locked grab
+                    // or Confined transparent cursor).
                     if self.current_cursor_mode != CursorMode::Normal {
                         if let Some(window) = &self.window {
-                            apply_cursor_mode(window, self.current_cursor_mode);
+                            apply_cursor_mode(
+                                window,
+                                self.current_cursor_mode,
+                                self.transparent_cursor.as_ref(),
+                            );
                         }
                     }
                 }
@@ -785,19 +815,6 @@ impl<T: Application> ApplicationHandler for EngineRunner<T> {
         }
 
         if !self.minimized {
-            // In Confined mode, CursorMoved events may stop on Windows when the
-            // OS cursor is hidden. Sync the Input mouse position from our
-            // delta-tracked software cursor so scripts see correct values.
-            if self.current_cursor_mode == CursorMode::Confined {
-                let scale = self
-                    .window
-                    .as_ref()
-                    .map(|w| w.scale_factor())
-                    .unwrap_or(1.0);
-                let (lx, ly) = self.software_cursor_pos;
-                self.input.set_mouse_position(lx * scale, ly * scale);
-            }
-
             // Sync input action map from the application. This supports
             // hot-reload when the editor loads a project after startup.
             // Only clone when the action count changes to avoid per-frame allocation.
@@ -808,6 +825,10 @@ impl<T: Application> ApplicationHandler for EngineRunner<T> {
                     self.input.set_action_map(action_map);
                 }
             }
+
+            // Poll gamepad events from gilrs and feed them to Input.
+            #[cfg(feature = "gamepad")]
+            self.poll_gamepads();
 
             // Evaluate input action bindings before update callbacks.
             self.input.update_actions();
@@ -822,7 +843,11 @@ impl<T: Application> ApplicationHandler for EngineRunner<T> {
             let desired_cursor = self.app.cursor_mode();
             if desired_cursor != self.current_cursor_mode {
                 if let Some(window) = &self.window {
-                    apply_cursor_mode(window, desired_cursor);
+                    apply_cursor_mode(
+                        window,
+                        desired_cursor,
+                        self.transparent_cursor.as_ref(),
+                    );
                 }
                 self.current_cursor_mode = desired_cursor;
             }
@@ -919,15 +944,16 @@ impl<T: Application> ApplicationHandler for EngineRunner<T> {
             let window_ref = Arc::clone(window);
             // Capture cursor state before the closure borrows `app` mutably.
             let cursor_mode = self.current_cursor_mode;
-            // Use delta-tracked software cursor position (already in logical pixels).
             let cursor_pos = self.software_cursor_pos;
+            let cursor_visible = self.cursor_in_window;
             let custom_cursor = app.software_cursor();
             let full_output = egui_ctx.run(raw_input, |ctx| {
                 let _timer = ProfileTimer::new("Application::on_egui");
                 app.on_egui(ctx, &window_ref);
 
-                // Draw software cursor on top of everything in Confined mode.
-                if cursor_mode == CursorMode::Confined {
+                // Draw software cursor on top of everything in Confined mode,
+                // but only when the OS cursor is inside the window.
+                if cursor_mode == CursorMode::Confined && cursor_visible {
                     if let Some(ref sc) = custom_cursor {
                         cursor::draw_custom_cursor(ctx, cursor_pos, sc);
                     } else {
@@ -943,6 +969,16 @@ impl<T: Application> ApplicationHandler for EngineRunner<T> {
 
             // Handle platform output (cursor, clipboard, etc).
             egui_state.handle_platform_output(window, full_output.platform_output);
+
+            // egui's handle_platform_output sets window.set_cursor(CursorIcon::Default)
+            // on its first frame (internal state transition), which overrides our
+            // transparent cursor. Re-apply every frame in Confined mode to ensure
+            // the software cursor is the only one visible.
+            if self.current_cursor_mode == CursorMode::Confined {
+                if let Some(tc) = &self.transparent_cursor {
+                    window.set_cursor(tc.clone());
+                }
+            }
 
             // Tessellate.
             let primitives = {
@@ -1412,7 +1448,7 @@ fn render_frame<T: Application>(
                     &barriers,
                 );
 
-                // Pixel readback: copy 1×1 region from the target attachment
+                // Pixel readback: copy 1x1 region from the target attachment
                 // to the staging buffer for CPU readback next frame.
                 if let (Some((_, x, y)), Some(readback_image)) =
                     (fb.pending_readback, fb.readback_image)
@@ -1444,7 +1480,7 @@ fn render_frame<T: Application>(
                         &[pre_barrier],
                     );
 
-                    // Copy 1×1 pixel.
+                    // Copy 1x1 pixel.
                     let region = vk::BufferImageCopy {
                         buffer_offset: (swapchain.current_frame() * std::mem::size_of::<i32>())
                             as u64,
@@ -1686,6 +1722,104 @@ fn render_frame<T: Application>(
 }
 
 // ---------------------------------------------------------------------------
+// Gamepad integration (gilrs)
+// ---------------------------------------------------------------------------
+
+#[cfg(feature = "gamepad")]
+fn map_gilrs_button(button: gilrs::Button) -> Option<crate::events::gamepad::GamepadButton> {
+    use crate::events::gamepad::GamepadButton;
+    match button {
+        gilrs::Button::South => Some(GamepadButton::South),
+        gilrs::Button::East => Some(GamepadButton::East),
+        gilrs::Button::West => Some(GamepadButton::West),
+        gilrs::Button::North => Some(GamepadButton::North),
+        gilrs::Button::LeftTrigger => Some(GamepadButton::LeftBumper),
+        gilrs::Button::LeftTrigger2 => Some(GamepadButton::LeftTrigger),
+        gilrs::Button::RightTrigger => Some(GamepadButton::RightBumper),
+        gilrs::Button::RightTrigger2 => Some(GamepadButton::RightTrigger),
+        gilrs::Button::Select => Some(GamepadButton::Select),
+        gilrs::Button::Start => Some(GamepadButton::Start),
+        gilrs::Button::Mode => Some(GamepadButton::Guide),
+        gilrs::Button::LeftThumb => Some(GamepadButton::LeftStick),
+        gilrs::Button::RightThumb => Some(GamepadButton::RightStick),
+        gilrs::Button::DPadUp => Some(GamepadButton::DPadUp),
+        gilrs::Button::DPadDown => Some(GamepadButton::DPadDown),
+        gilrs::Button::DPadLeft => Some(GamepadButton::DPadLeft),
+        gilrs::Button::DPadRight => Some(GamepadButton::DPadRight),
+        _ => None,
+    }
+}
+
+#[cfg(feature = "gamepad")]
+fn map_gilrs_axis(axis: gilrs::Axis) -> Option<crate::events::gamepad::GamepadAxis> {
+    use crate::events::gamepad::GamepadAxis;
+    match axis {
+        gilrs::Axis::LeftStickX => Some(GamepadAxis::LeftStickX),
+        gilrs::Axis::LeftStickY => Some(GamepadAxis::LeftStickY),
+        gilrs::Axis::RightStickX => Some(GamepadAxis::RightStickX),
+        gilrs::Axis::RightStickY => Some(GamepadAxis::RightStickY),
+        _ => None,
+    }
+}
+
+#[cfg(feature = "gamepad")]
+impl<T: Application> EngineRunner<T> {
+    /// Drain all pending gamepad events from gilrs and feed them into [].
+    fn poll_gamepads(&mut self) {
+        let Some(gilrs) = &mut self.gilrs else {
+            return;
+        };
+
+        while let Some(gilrs::Event { id, event, .. }) = gilrs.next_event() {
+            let gamepad_id: usize = id.into();
+
+            match event {
+                gilrs::EventType::Connected => {
+                    log::info!(target: "gg_engine", "Gamepad {gamepad_id} connected");
+                    self.input.gamepad_connect(gamepad_id);
+                }
+                gilrs::EventType::Disconnected => {
+                    log::info!(target: "gg_engine", "Gamepad {gamepad_id} disconnected");
+                    self.input.gamepad_disconnect(gamepad_id);
+                }
+                gilrs::EventType::ButtonPressed(button, _) => {
+                    if let Some(mapped) = map_gilrs_button(button) {
+                        self.input.press_gamepad_button(gamepad_id, mapped);
+                    }
+                }
+                gilrs::EventType::ButtonReleased(button, _) => {
+                    if let Some(mapped) = map_gilrs_button(button) {
+                        self.input.release_gamepad_button(gamepad_id, mapped);
+                    }
+                }
+                gilrs::EventType::AxisChanged(axis, value, _) => {
+                    if let Some(mapped) = map_gilrs_axis(axis) {
+                        self.input.set_gamepad_axis(gamepad_id, mapped, value);
+                    }
+                }
+                gilrs::EventType::ButtonChanged(button, value, _) => {
+                    // Analog trigger values reported as ButtonChanged.
+                    // Map trigger buttons to their corresponding axes.
+                    use crate::events::gamepad::GamepadAxis;
+                    match button {
+                        gilrs::Button::LeftTrigger2 => {
+                            self.input
+                                .set_gamepad_axis(gamepad_id, GamepadAxis::LeftTrigger, value);
+                        }
+                        gilrs::Button::RightTrigger2 => {
+                            self.input
+                                .set_gamepad_axis(gamepad_id, GamepadAxis::RightTrigger, value);
+                        }
+                        _ => {}
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // run()
 // ---------------------------------------------------------------------------
 
@@ -1739,7 +1873,9 @@ pub fn run<T: Application>() {
         window_config,
         current_present_mode,
         current_cursor_mode: CursorMode::Normal,
+        transparent_cursor: None,
         software_cursor_pos: (0.0, 0.0),
+        cursor_in_window: false,
         default_camera,
         last_frame_time: Instant::now(),
         smoothed_dt: 1.0 / 60.0,
@@ -1758,6 +1894,8 @@ pub fn run<T: Application>() {
         allocator: None,
         vulkan_context: None,
         window: None,
+        #[cfg(feature = "gamepad")]
+        gilrs: gilrs::Gilrs::new().ok(),
     };
 
     event_loop.run_app(&mut runner).expect("event loop error");
@@ -1965,20 +2103,33 @@ fn map_mouse_button(button: winit::event::MouseButton) -> Option<MouseButton> {
 // Cursor mode
 // ---------------------------------------------------------------------------
 
-/// Apply a [`CursorMode`] to the winit window (grab + visibility).
-fn apply_cursor_mode(window: &Window, mode: CursorMode) {
+/// Apply a [`CursorMode`] to the winit window (cursor icon + grab).
+///
+/// In `Confined` mode the OS cursor is replaced with a transparent image (no grab)
+/// so `CursorMoved` events keep firing. The cursor is free to leave the window —
+/// standard windowed behaviour matching how shipped games handle software cursors.
+fn apply_cursor_mode(
+    window: &Window,
+    mode: CursorMode,
+    transparent: Option<&winit::window::CustomCursor>,
+) {
     use winit::window::CursorGrabMode;
     match mode {
         CursorMode::Normal => {
             let _ = window.set_cursor_grab(CursorGrabMode::None);
             window.set_cursor_visible(true);
+            window.set_cursor(winit::window::CursorIcon::Default);
         }
         CursorMode::Confined => {
-            // Confine cursor to window; fall back to no grab if unsupported.
-            if window.set_cursor_grab(CursorGrabMode::Confined).is_err() {
-                let _ = window.set_cursor_grab(CursorGrabMode::None);
+            // No OS-level grab — cursor is free to leave the window, which is
+            // standard windowed behaviour. The software cursor provides the
+            // visual; CursorEntered/CursorLeft track whether to draw it.
+            let _ = window.set_cursor_grab(CursorGrabMode::None);
+            if let Some(tc) = transparent {
+                window.set_cursor(tc.clone());
+            } else {
+                window.set_cursor_visible(false);
             }
-            window.set_cursor_visible(false);
         }
         CursorMode::Locked => {
             // Lock cursor (best for raw deltas); fall back to Confined.

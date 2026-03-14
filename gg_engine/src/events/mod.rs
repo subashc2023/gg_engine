@@ -15,7 +15,6 @@ pub enum Event {
     Window(WindowEvent),
     Key(KeyEvent),
     Mouse(MouseEvent),
-    Gamepad(GamepadEvent),
 }
 
 impl fmt::Display for Event {
@@ -24,7 +23,6 @@ impl fmt::Display for Event {
             Event::Window(e) => write!(f, "{e}"),
             Event::Key(e) => write!(f, "{e}"),
             Event::Mouse(e) => write!(f, "{e}"),
-            Event::Gamepad(e) => write!(f, "{e}"),
         }
     }
 }

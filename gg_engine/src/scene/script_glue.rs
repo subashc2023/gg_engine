@@ -411,6 +411,26 @@ pub fn register_all(lua: &Lua) -> LuaResult<()> {
     engine.set("overlap_sphere", lua.create_function(lua_overlap_sphere)?)?;
     engine.set("overlap_box_3d", lua.create_function(lua_overlap_box_3d)?)?;
 
+    // Spatial grid queries (non-physics, transform-based)
+    engine.set(
+        "rebuild_spatial_grid",
+        lua.create_function(lua_rebuild_spatial_grid)?,
+    )?;
+    engine.set(
+        "rebuild_spatial_grid_3d",
+        lua.create_function(lua_rebuild_spatial_grid_3d)?,
+    )?;
+    engine.set("query_region", lua.create_function(lua_query_region)?)?;
+    engine.set("query_radius", lua.create_function(lua_query_radius)?)?;
+    engine.set(
+        "query_region_3d",
+        lua.create_function(lua_query_region_3d)?,
+    )?;
+    engine.set(
+        "query_radius_3d",
+        lua.create_function(lua_query_radius_3d)?,
+    )?;
+
     // Joints (2D)
     engine.set(
         "create_revolute_joint",
@@ -1980,6 +2000,100 @@ fn lua_overlap_box_3d(
 }
 
 // ---------------------------------------------------------------------------
+// Spatial grid queries (non-physics, transform-based)
+// ---------------------------------------------------------------------------
+
+/// Helper: convert a `Vec<Entity>` (hecs entities) to a `Vec<u64>` of UUIDs.
+fn entities_to_uuids(scene: &Scene, entities: Vec<Entity>) -> Vec<u64> {
+    entities
+        .into_iter()
+        .filter_map(|entity| {
+            scene
+                .get_component::<super::IdComponent>(entity)
+                .map(|id| id.id.raw())
+        })
+        .collect()
+}
+
+/// `Engine.rebuild_spatial_grid(cell_size)` — rebuild the 2D spatial grid.
+fn lua_rebuild_spatial_grid(lua: &Lua, cell_size: f32) -> LuaResult<()> {
+    with_scene_mut(lua, (), |scene| {
+        scene.rebuild_spatial_grid(cell_size);
+    })
+}
+
+/// `Engine.rebuild_spatial_grid_3d(cell_size)` — rebuild the 3D spatial grid.
+fn lua_rebuild_spatial_grid_3d(lua: &Lua, cell_size: f32) -> LuaResult<()> {
+    with_scene_mut(lua, (), |scene| {
+        scene.rebuild_spatial_grid_3d(cell_size);
+    })
+}
+
+/// `Engine.query_region(min_x, min_y, max_x, max_y)` — find entities in a 2D region.
+fn lua_query_region(
+    lua: &Lua,
+    (min_x, min_y, max_x, max_y): (f32, f32, f32, f32),
+) -> LuaResult<LuaTable> {
+    let ctx = match lua.app_data_mut::<SceneScriptContext>() {
+        Some(ctx) => ctx,
+        None => return lua.create_table(),
+    };
+    let scene = unsafe { ctx.scene() };
+    let results = scene.query_entities_in_region(
+        glam::Vec2::new(min_x, min_y),
+        glam::Vec2::new(max_x, max_y),
+    );
+    let uuids = entities_to_uuids(scene, results);
+    uuid_vec_to_lua_table(lua, uuids)
+}
+
+/// `Engine.query_radius(x, y, radius)` — find entities within a 2D radius.
+fn lua_query_radius(lua: &Lua, (x, y, radius): (f32, f32, f32)) -> LuaResult<LuaTable> {
+    let ctx = match lua.app_data_mut::<SceneScriptContext>() {
+        Some(ctx) => ctx,
+        None => return lua.create_table(),
+    };
+    let scene = unsafe { ctx.scene() };
+    let results = scene.query_entities_in_radius(glam::Vec2::new(x, y), radius);
+    let uuids = entities_to_uuids(scene, results);
+    uuid_vec_to_lua_table(lua, uuids)
+}
+
+/// `Engine.query_region_3d(min_x, min_y, min_z, max_x, max_y, max_z)` — 3D region query.
+#[allow(clippy::too_many_arguments)]
+fn lua_query_region_3d(
+    lua: &Lua,
+    (min_x, min_y, min_z, max_x, max_y, max_z): (f32, f32, f32, f32, f32, f32),
+) -> LuaResult<LuaTable> {
+    let ctx = match lua.app_data_mut::<SceneScriptContext>() {
+        Some(ctx) => ctx,
+        None => return lua.create_table(),
+    };
+    let scene = unsafe { ctx.scene() };
+    let results = scene.query_entities_in_region_3d(
+        glam::Vec3::new(min_x, min_y, min_z),
+        glam::Vec3::new(max_x, max_y, max_z),
+    );
+    let uuids = entities_to_uuids(scene, results);
+    uuid_vec_to_lua_table(lua, uuids)
+}
+
+/// `Engine.query_radius_3d(x, y, z, radius)` — find entities within a 3D radius.
+fn lua_query_radius_3d(
+    lua: &Lua,
+    (x, y, z, radius): (f32, f32, f32, f32),
+) -> LuaResult<LuaTable> {
+    let ctx = match lua.app_data_mut::<SceneScriptContext>() {
+        Some(ctx) => ctx,
+        None => return lua.create_table(),
+    };
+    let scene = unsafe { ctx.scene() };
+    let results = scene.query_entities_in_radius_3d(glam::Vec3::new(x, y, z), radius);
+    let uuids = entities_to_uuids(scene, results);
+    uuid_vec_to_lua_table(lua, uuids)
+}
+
+// ---------------------------------------------------------------------------
 // Joints (2D)
 // ---------------------------------------------------------------------------
 
@@ -3519,6 +3633,15 @@ mod tests {
         assert!(engine.get::<LuaFunction>("aabb_query_3d").is_ok());
         assert!(engine.get::<LuaFunction>("overlap_sphere").is_ok());
         assert!(engine.get::<LuaFunction>("overlap_box_3d").is_ok());
+        // Spatial grid queries
+        assert!(engine.get::<LuaFunction>("rebuild_spatial_grid").is_ok());
+        assert!(engine
+            .get::<LuaFunction>("rebuild_spatial_grid_3d")
+            .is_ok());
+        assert!(engine.get::<LuaFunction>("query_region").is_ok());
+        assert!(engine.get::<LuaFunction>("query_radius").is_ok());
+        assert!(engine.get::<LuaFunction>("query_region_3d").is_ok());
+        assert!(engine.get::<LuaFunction>("query_radius_3d").is_ok());
         // Joints (2D)
         assert!(engine.get::<LuaFunction>("create_revolute_joint").is_ok());
         assert!(engine.get::<LuaFunction>("create_fixed_joint").is_ok());

@@ -239,11 +239,11 @@ impl Renderer {
         let device = vk_ctx.device();
         let api = RendererAPI::Vulkan(VulkanRendererAPI::new(device));
 
-        // Create descriptor pool for texture samplers + camera/material/lighting/shadow UBO sets.
-        // Camera + material + lighting + shadow-camera UBOs each need one
-        // descriptor set per (frame, viewport) slot. Shadow also needs sampler sets.
+        // Create descriptor pool for texture samplers + camera/material/lighting UBO sets.
+        // Camera + material + lighting UBOs each need one descriptor set per
+        // (frame, viewport) slot. Shadow also needs sampler sets (allocated separately).
         let ubo_slot_count = (super::MAX_FRAMES_IN_FLIGHT * super::MAX_VIEWPORTS) as u32;
-        let total_ubo_sets = ubo_slot_count * 4; // camera + material + lighting + shadow camera
+        let total_ubo_sets = ubo_slot_count * 3; // camera + material + lighting
         let total_sampler_descriptors = 100 + ubo_slot_count * 2 // textures + shadow map (2 samplers per set: PCF + PCSS blocker)
             + ubo_slot_count * 4; // IBL: irradiance + prefiltered + brdf_lut + env_cubemap (4 per lighting slot)
         let bone_palette_sets = super::MAX_FRAMES_IN_FLIGHT as u32; // one SSBO per frame-in-flight
@@ -820,7 +820,6 @@ impl Renderer {
             &self.device,
             &shader,
             sm.render_pass(),
-            sm.camera_ds_layout(),
             self.pipeline_cache,
             front_face_cull,
         )?);
@@ -1307,15 +1306,6 @@ impl Renderer {
         self.mesh3d.wireframe_mode
     }
 
-    /// Temporarily enable/disable wireframe for both 2D and 3D renderers.
-    /// Used for the overlay pass (render filled, then wireframe on top).
-    pub fn set_wireframe_active(&mut self, wireframe: bool) {
-        self.mesh3d.wireframe_active = wireframe;
-        if let Some(data) = &mut self.renderer_2d {
-            data.set_wireframe(wireframe);
-        }
-    }
-
     // -- GPU Profiling -----------------------------------------------------------
 
     /// Initialize the GPU timestamp profiler.
@@ -1422,11 +1412,23 @@ impl Renderer {
                     .device_wait_idle()
                     .map_err(|e| EngineError::Gpu(format!("device_wait_idle failed: {e}")))?;
             }
-            let (mut count, compiled) = data.reload_shaders(shader_dir)?;
+            let (mut count, compiled, compiled_compute) = data.reload_shaders(shader_dir)?;
 
             // Also hot-reload post-processing pipelines (contact shadows, bloom, etc.).
             if let Some(pp) = &mut self.postprocess {
                 count += pp.reload_shaders(&compiled)?;
+            }
+
+            // Hot-reload compute pipelines (IBL shaders are run once at load
+            // time, so only particle_sim is reloaded here).
+            for (name, cs) in &compiled_compute {
+                if name.as_str() == "particle_sim" {
+                    if let Some(ps) = &mut self.gpu_particles {
+                        ps.reload_compute_pipeline(&cs.comp_spv, self.pipeline_cache)?;
+                        count += 1;
+                        log::info!(target: "gg_engine", "Hot-reloaded compute pipeline: {name}");
+                    }
+                }
             }
 
             Ok(count)
@@ -2528,11 +2530,11 @@ impl Renderer {
     pub fn has_environment_map(&self) -> bool {
         self.environment
             .as_ref()
-            .map_or(false, |e| e.has_environment())
+            .is_some_and(|e| e.has_environment())
     }
 
     /// Access the environment map system (if initialized).
-    pub fn environment(&self) -> Option<&environment_map::EnvironmentMapSystem> {
+    pub(crate) fn environment(&self) -> Option<&environment_map::EnvironmentMapSystem> {
         self.environment.as_ref()
     }
 
@@ -2553,8 +2555,6 @@ impl Renderer {
             &self.device,
             self.command_pool,
             self.graphics_queue,
-            self.descriptor_pool,
-            self.texture_descriptor_set_layout,
             pixels_rgba_f16,
             width,
             height,

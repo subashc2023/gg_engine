@@ -38,12 +38,7 @@ pub enum ShaderDataType {
     Float3,
     Float4,
     Int,
-    Int2,
-    Int3,
     Int4,
-    Mat3,
-    Mat4,
-    Bool,
 }
 
 impl ShaderDataType {
@@ -55,24 +50,17 @@ impl ShaderDataType {
             Self::Float3 => 4 * 3,
             Self::Float4 => 4 * 4,
             Self::Int => 4,
-            Self::Int2 => 4 * 2,
-            Self::Int3 => 4 * 3,
             Self::Int4 => 4 * 4,
-            Self::Mat3 => 4 * 3 * 3,
-            Self::Mat4 => 4 * 4 * 4,
-            Self::Bool => 4,
         }
     }
 
     /// Number of scalar components (e.g. Float3 → 3).
     pub fn component_count(self) -> u32 {
         match self {
-            Self::Float | Self::Int | Self::Bool => 1,
-            Self::Float2 | Self::Int2 => 2,
-            Self::Float3 | Self::Int3 => 3,
+            Self::Float | Self::Int => 1,
+            Self::Float2 => 2,
+            Self::Float3 => 3,
             Self::Float4 | Self::Int4 => 4,
-            Self::Mat3 => 3 * 3,
-            Self::Mat4 => 4 * 4,
         }
     }
 
@@ -84,17 +72,7 @@ impl ShaderDataType {
             Self::Float3 => vk::Format::R32G32B32_SFLOAT,
             Self::Float4 => vk::Format::R32G32B32A32_SFLOAT,
             Self::Int => vk::Format::R32_SINT,
-            Self::Int2 => vk::Format::R32G32_SINT,
-            Self::Int3 => vk::Format::R32G32B32_SINT,
             Self::Int4 => vk::Format::R32G32B32A32_SINT,
-            Self::Bool => vk::Format::R32_SINT,
-            Self::Mat3 | Self::Mat4 => {
-                panic!(
-                    "ShaderDataType::{:?} cannot be represented as a single vertex attribute; \
-                     matrix types require one attribute per column (not yet implemented)",
-                    self
-                )
-            }
         }
     }
 }
@@ -124,10 +102,6 @@ impl BufferElement {
         }
     }
 
-    pub fn normalized(mut self, normalized: bool) -> Self {
-        self.normalized = normalized;
-        self
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -159,10 +133,6 @@ impl BufferLayout {
         };
         layout.calculate_offsets_and_stride();
         layout
-    }
-
-    pub fn stride(&self) -> u32 {
-        self.stride
     }
 
     pub fn elements(&self) -> &[BufferElement] {

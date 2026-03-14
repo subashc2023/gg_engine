@@ -22,7 +22,7 @@ pub struct Cubemap {
     face_mip_views: Vec<vk::ImageView>,
     width: u32,
     mip_levels: u32,
-    format: vk::Format,
+    _format: vk::Format,
     device: ash::Device,
 }
 
@@ -158,7 +158,7 @@ impl Cubemap {
             face_mip_views,
             width,
             mip_levels,
-            format,
+            _format: format,
             device: device.clone(),
         })
     }
@@ -193,30 +193,9 @@ impl Cubemap {
         self.mip_levels
     }
 
-    /// Vulkan format.
-    pub fn format(&self) -> vk::Format {
-        self.format
-    }
-
     /// Resolution at a given mip level.
     pub fn mip_width(&self, mip: u32) -> u32 {
         (self.width >> mip).max(1)
-    }
-
-    /// Estimated GPU memory usage in bytes (all faces, all mips).
-    pub fn gpu_memory_bytes(&self) -> u64 {
-        let bpp: u64 = match self.format {
-            vk::Format::R16G16B16A16_SFLOAT => 8,
-            vk::Format::R16G16_SFLOAT => 4,
-            vk::Format::R8G8B8A8_SRGB | vk::Format::R8G8B8A8_UNORM => 4,
-            _ => 8, // conservative default
-        };
-        let mut total = 0u64;
-        for mip in 0..self.mip_levels {
-            let w = self.mip_width(mip) as u64;
-            total += w * w * bpp * Self::NUM_FACES as u64;
-        }
-        total
     }
 
     /// Insert a pipeline barrier transitioning all 6 faces (all mips) between layouts.

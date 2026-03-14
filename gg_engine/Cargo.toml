@@ -7,9 +7,10 @@ rust-version.workspace = true
 publish.workspace = true
 
 [features]
-default = ["profiling", "lua-scripting"]
+default = ["profiling", "lua-scripting", "gamepad"]
 profiling = []
 lua-scripting = ["mlua"]
+gamepad = ["gilrs"]
 
 [dependencies]
 log.workspace = true
@@ -30,6 +31,7 @@ rand.workspace = true
 rapier2d.workspace = true
 rapier3d.workspace = true
 mlua = { workspace = true, optional = true }
+gilrs = { workspace = true, optional = true }
 ttf-parser.workspace = true
 gltf.workspace = true
 gpu-allocator.workspace = true

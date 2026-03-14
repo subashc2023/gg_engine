@@ -7,9 +7,10 @@ rust-version.workspace = true
 publish.workspace = true
 
 [features]
-default = ["profiling", "lua-scripting"]
+default = ["profiling", "lua-scripting", "gamepad"]
 profiling = ["gg_engine/profiling"]
 lua-scripting = ["gg_engine/lua-scripting"]
+gamepad = ["gg_engine/gamepad"]
 
 [dependencies]
 gg_engine = { path = "../gg_engine", default-features = false }

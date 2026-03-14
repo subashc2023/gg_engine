@@ -194,18 +194,6 @@ impl AssetLoader {
         results
     }
 
-    pub fn is_texture_pending(&self, handle: &Uuid) -> bool {
-        self.pending_textures.contains(handle)
-    }
-
-    pub fn is_font_pending(&self, font_key: &PathBuf) -> bool {
-        self.pending_fonts.contains(font_key)
-    }
-
-    pub fn is_mesh_pending(&self, handle: &Uuid) -> bool {
-        self.pending_meshes.contains(handle)
-    }
-
     /// Number of pending (in-flight) load requests (textures + fonts + meshes + skinned meshes).
     pub fn pending_count(&self) -> usize {
         self.pending_textures.len()

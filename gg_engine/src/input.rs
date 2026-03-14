@@ -231,12 +231,12 @@ impl Input {
         self.scroll_delta_y += dy;
     }
 
-    #[allow(dead_code)]
+    #[cfg_attr(not(feature = "gamepad"), allow(dead_code))]
     pub(crate) fn gamepad_connect(&mut self, gamepad: GamepadId) {
         self.connected_gamepads.insert(gamepad);
     }
 
-    #[allow(dead_code)]
+    #[cfg_attr(not(feature = "gamepad"), allow(dead_code))]
     pub(crate) fn gamepad_disconnect(&mut self, gamepad: GamepadId) {
         self.connected_gamepads.remove(&gamepad);
         self.gamepad_buttons.remove(&gamepad);
@@ -244,7 +244,7 @@ impl Input {
         self.gamepad_axes.remove(&gamepad);
     }
 
-    #[allow(dead_code)]
+    #[cfg_attr(not(feature = "gamepad"), allow(dead_code))]
     pub(crate) fn press_gamepad_button(&mut self, gamepad: GamepadId, button: GamepadButton) {
         self.gamepad_buttons
             .entry(gamepad)
@@ -252,14 +252,14 @@ impl Input {
             .insert(button);
     }
 
-    #[allow(dead_code)]
+    #[cfg_attr(not(feature = "gamepad"), allow(dead_code))]
     pub(crate) fn release_gamepad_button(&mut self, gamepad: GamepadId, button: GamepadButton) {
         if let Some(buttons) = self.gamepad_buttons.get_mut(&gamepad) {
             buttons.remove(&button);
         }
     }
 
-    #[allow(dead_code)]
+    #[cfg_attr(not(feature = "gamepad"), allow(dead_code))]
     pub(crate) fn set_gamepad_axis(&mut self, gamepad: GamepadId, axis: GamepadAxis, value: f32) {
         self.gamepad_axes
             .entry(gamepad)

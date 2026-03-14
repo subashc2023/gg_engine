@@ -82,7 +82,7 @@ impl Aabb2D {
 /// **Note**: This can degenerate when a perspective camera is tilted nearly
 /// parallel to the z=0 plane. For robust entity-level frustum culling, prefer
 /// [`Frustum2D`] which uses half-plane tests instead.
-#[allow(dead_code)]
+#[cfg(test)]
 pub fn camera_frustum_aabb(vp_inv: &glam::Mat4) -> Aabb2D {
     let mut min = glam::Vec2::splat(f32::INFINITY);
     let mut max = glam::Vec2::splat(f32::NEG_INFINITY);
@@ -368,15 +368,6 @@ impl Aabb3D {
     #[inline]
     pub fn is_valid(&self) -> bool {
         self.min.is_finite() && self.max.is_finite()
-    }
-
-    /// Expand the AABB by `margin` in all directions.
-    #[inline]
-    pub fn expand(&self, margin: f32) -> Self {
-        Self {
-            min: self.min - glam::Vec3::splat(margin),
-            max: self.max + glam::Vec3::splat(margin),
-        }
     }
 
     /// Returns true if the point is inside the AABB (inclusive).

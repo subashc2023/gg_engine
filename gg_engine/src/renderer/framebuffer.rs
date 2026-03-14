@@ -689,11 +689,6 @@ impl Framebuffer {
             .map(|da| da.image)
     }
 
-    /// Whether MSAA is active on this framebuffer.
-    pub fn is_msaa(&self) -> bool {
-        self.sample_count != vk::SampleCountFlags::TYPE_1
-    }
-
     /// Returns the MSAA sample count as a u32 (1 = no MSAA).
     pub fn sample_count_u32(&self) -> u32 {
         match self.sample_count {

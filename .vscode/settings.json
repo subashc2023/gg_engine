@@ -15,5 +15,10 @@
     "[rust]": {
         "editor.formatOnSave": true,
         "editor.defaultFormatter": "rust-lang.rust-analyzer"
+    },
+    "files.exclude": {
+        "**/.cargo": true,
+        "**/.github": true,
+        "**/.vscode": true
     }
 }

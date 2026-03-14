@@ -67,6 +67,9 @@ thiserror = "2"
 parking_lot = "0.12"
 static_assertions = "1"
 
+# Gamepad
+gilrs = "0.11"
+
 # Misc
 rfd = "0.15"
 rand = "0.9"

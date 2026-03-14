@@ -133,7 +133,6 @@ impl std::fmt::Display for PresentMode {
 /// Which rendering API the engine is using.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RendererBackend {
-    None,
     Vulkan,
 }
 
@@ -146,7 +145,6 @@ impl RendererBackend {
 impl std::fmt::Display for RendererBackend {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::None => write!(f, "None"),
             Self::Vulkan => write!(f, "Vulkan"),
         }
     }

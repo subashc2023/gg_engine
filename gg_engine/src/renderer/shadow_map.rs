@@ -25,8 +25,8 @@ pub const DEFAULT_SHADOW_MAP_SIZE: u32 = 4096;
 /// Manages the depth-only shadow map for directional light shadows.
 ///
 /// Owns a depth image (D32_SFLOAT), a comparison sampler, a dedicated
-/// render pass + framebuffer, a light-VP UBO, and descriptor sets for
-/// binding the shadow map in the main 3D fragment shader (set 4).
+/// render pass + framebuffer, and descriptor sets for binding the shadow
+/// map in the main 3D fragment shader (set 4).
 ///
 /// Follows the same slot pattern as LightingSystem / CameraSystem.
 pub(crate) struct ShadowMapSystem {
@@ -52,8 +52,8 @@ pub(crate) struct ShadowMapSystem {
     width: u32,
     height: u32,
 
-    // Light VP UBO — retained for descriptor pool accounting but no longer
-    // written per-frame (push constants replaced it for cascade correctness).
+    // Light VP UBO — retained for RAII (GPU buffer cleanup on drop).
+    // No longer written per-frame (push constants replaced it for cascade correctness).
     #[allow(dead_code)]
     light_vp_ubo: UniformBuffer,
 
@@ -62,15 +62,7 @@ pub(crate) struct ShadowMapSystem {
     shadow_ds_layout: vk::DescriptorSetLayout,
     shadow_descriptor_sets: Vec<vk::DescriptorSet>,
 
-    // Descriptor set layout for the shadow pass itself (set 0):
-    //   binding 0 = UBO (light VP matrix) — retained for descriptor pool sizing.
-    shadow_camera_ds_layout: vk::DescriptorSetLayout,
-    #[allow(dead_code)]
-    shadow_camera_descriptor_sets: Vec<vk::DescriptorSet>,
-
     device: ash::Device,
-    #[allow(dead_code)] // Kept for potential resize operations.
-    allocator: Arc<Mutex<GpuAllocator>>,
 }
 
 impl ShadowMapSystem {
@@ -138,23 +130,6 @@ impl ShadowMapSystem {
         // --- Light VP UBO (64 bytes = mat4) ---
         let light_vp_ubo = UniformBuffer::new(allocator, device, std::mem::size_of::<[f32; 16]>())?;
 
-        // --- Shadow camera descriptor set layout (for shadow pass, set 0) ---
-        //     binding 0: UBO (light VP matrix), vertex stage
-        let shadow_camera_binding = vk::DescriptorSetLayoutBinding::default()
-            .binding(0)
-            .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
-            .descriptor_count(1)
-            .stage_flags(vk::ShaderStageFlags::VERTEX);
-        let shadow_camera_layout_info = vk::DescriptorSetLayoutCreateInfo::default()
-            .bindings(std::slice::from_ref(&shadow_camera_binding));
-        let shadow_camera_ds_layout =
-            unsafe { device.create_descriptor_set_layout(&shadow_camera_layout_info, None) }
-                .map_err(|e| {
-                    EngineError::Gpu(format!(
-                        "Failed to create shadow camera descriptor set layout: {e}"
-                    ))
-                })?;
-
         // --- Shadow map descriptor set layout (for main pass, set 4) ---
         //     binding 0: comparison sampler (sampler2DArrayShadow) for PCF
         //     binding 1: non-comparison sampler (sampler2DArray) for PCSS blocker search
@@ -183,34 +158,6 @@ impl ShadowMapSystem {
 
         // --- Allocate descriptor sets ---
         let total_slots = MAX_FRAMES_IN_FLIGHT * MAX_VIEWPORTS;
-
-        // Shadow camera sets (UBO)
-        let camera_layouts = vec![shadow_camera_ds_layout; total_slots];
-        let camera_alloc_info = vk::DescriptorSetAllocateInfo::default()
-            .descriptor_pool(descriptor_pool)
-            .set_layouts(&camera_layouts);
-        let shadow_camera_descriptor_sets =
-            unsafe { device.allocate_descriptor_sets(&camera_alloc_info) }.map_err(|e| {
-                EngineError::Gpu(format!(
-                    "Failed to allocate shadow camera descriptor sets: {e}"
-                ))
-            })?;
-
-        // Write UBO to each shadow camera descriptor set
-        for (i, &ds) in shadow_camera_descriptor_sets.iter().enumerate() {
-            let buffer_info = vk::DescriptorBufferInfo::default()
-                .buffer(light_vp_ubo.buffer(i))
-                .offset(0)
-                .range(std::mem::size_of::<[f32; 16]>() as u64);
-            let write = vk::WriteDescriptorSet::default()
-                .dst_set(ds)
-                .dst_binding(0)
-                .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
-                .buffer_info(std::slice::from_ref(&buffer_info));
-            unsafe {
-                device.update_descriptor_sets(&[write], &[]);
-            }
-        }
 
         // Shadow map sets (sampler) — all point to the same shadow depth image
         let sampler_layouts = vec![shadow_ds_layout; total_slots];
@@ -265,10 +212,7 @@ impl ShadowMapSystem {
             light_vp_ubo,
             shadow_ds_layout,
             shadow_descriptor_sets,
-            shadow_camera_ds_layout,
-            shadow_camera_descriptor_sets,
             device: device.clone(),
-            allocator: allocator.clone(),
         })
     }
 
@@ -279,26 +223,9 @@ impl ShadowMapSystem {
         self.shadow_ds_layout
     }
 
-    /// Descriptor set layout for the shadow pass (set 0 = light VP UBO).
-    pub fn camera_ds_layout(&self) -> vk::DescriptorSetLayout {
-        self.shadow_camera_ds_layout
-    }
-
     /// Shadow map descriptor set for the main pass (set 4).
     pub fn descriptor_set(&self, current_frame: usize, viewport_index: usize) -> vk::DescriptorSet {
         self.shadow_descriptor_sets[UniformBuffer::slot(current_frame, viewport_index)]
-    }
-
-    /// Shadow camera descriptor set (set 0 in shadow pass).
-    /// Retained for API completeness; no longer used since push constants
-    /// replaced the UBO for per-cascade light VP.
-    #[allow(dead_code)]
-    pub fn camera_descriptor_set(
-        &self,
-        current_frame: usize,
-        viewport_index: usize,
-    ) -> vk::DescriptorSet {
-        self.shadow_camera_descriptor_sets[UniformBuffer::slot(current_frame, viewport_index)]
     }
 
     /// The shadow depth-only render pass.
@@ -319,21 +246,6 @@ impl ShadowMapSystem {
     /// Shadow map height in texels.
     pub fn height(&self) -> u32 {
         self.height
-    }
-
-    /// Write the light-space VP matrix to the UBO for the given slot.
-    /// Retained for API completeness; no longer called since push constants
-    /// replaced the UBO for per-cascade light VP.
-    #[allow(dead_code)]
-    pub fn write_light_vp(&self, light_vp: &Mat4, current_frame: usize, viewport_index: usize) {
-        let slot = UniformBuffer::slot(current_frame, viewport_index);
-        let bytes = unsafe {
-            std::slice::from_raw_parts(
-                light_vp as *const Mat4 as *const u8,
-                std::mem::size_of::<Mat4>(),
-            )
-        };
-        self.light_vp_ubo.update(slot, bytes);
     }
 
     // -- Resource creation helpers --
@@ -568,8 +480,6 @@ impl Drop for ShadowMapSystem {
             self.device.destroy_image(self.depth_image, None);
             self.device
                 .destroy_descriptor_set_layout(self.shadow_ds_layout, None);
-            self.device
-                .destroy_descriptor_set_layout(self.shadow_camera_ds_layout, None);
         }
         // depth_allocation is dropped automatically (GpuAllocation::Drop frees memory).
     }
@@ -890,7 +800,6 @@ pub(crate) fn create_shadow_pipeline(
     device: &ash::Device,
     shader: &Shader,
     render_pass: vk::RenderPass,
-    _shadow_camera_ds_layout: vk::DescriptorSetLayout,
     pipeline_cache: vk::PipelineCache,
     front_face_cull: bool,
 ) -> EngineResult<Pipeline> {

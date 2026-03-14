@@ -140,24 +140,6 @@ impl EdgeSegment {
         }
     }
 
-    #[allow(dead_code)]
-    fn start_point(&self) -> Vec2 {
-        match self {
-            Self::Linear { p0, .. } => *p0,
-            Self::Quadratic { p0, .. } => *p0,
-            Self::Cubic { p0, .. } => *p0,
-        }
-    }
-
-    #[allow(dead_code)]
-    fn end_point(&self) -> Vec2 {
-        match self {
-            Self::Linear { p1, .. } => *p1,
-            Self::Quadratic { p2, .. } => *p2,
-            Self::Cubic { p3, .. } => *p3,
-        }
-    }
-
     fn direction_at_start(&self) -> Vec2 {
         match self {
             Self::Linear { p0, p1, .. } => p1.sub(*p0),
