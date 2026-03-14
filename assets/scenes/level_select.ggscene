@@ -1,0 +1,395 @@
+Version: 2
+Scene: Level Select
+Entities:
+# ── Camera ────────────────────────────────────────────────────
+- Entity: 2000
+  TagComponent:
+    Tag: Camera
+  TransformComponent:
+    Translation:
+    - 0.0
+    - 0.0
+    - 0.0
+    Rotation:
+    - 0.0
+    - 0.0
+    - 0.0
+    Scale:
+    - 1.0
+    - 1.0
+    - 1.0
+  CameraComponent:
+    Camera:
+      ProjectionType: 1
+      PerspectiveFOV: 0.7853982
+      PerspectiveNear: 0.01
+      PerspectiveFar: 1000.0
+      OrthographicSize: 10.0
+      OrthographicNear: -1.0
+      OrthographicFar: 1.0
+    Primary: true
+    FixedAspectRatio: false
+
+# ── Background ────────────────────────────────────────────────
+- Entity: 2001
+  TagComponent:
+    Tag: Background
+  TransformComponent:
+    Translation:
+    - 0.0
+    - 0.0
+    - 0.9
+    Rotation:
+    - 0.0
+    - 0.0
+    - 0.0
+    Scale:
+    - 40.0
+    - 25.0
+    - 1.0
+  SpriteRendererComponent:
+    Color:
+    - 0.06
+    - 0.06
+    - 0.10
+    - 1.0
+    TilingFactor: 1.0
+    SortingLayer: -10
+
+# ── Game Manager (Lua script) ─────────────────────────────────
+- Entity: 2002
+  TagComponent:
+    Tag: GameManager
+  TransformComponent:
+    Translation:
+    - 0.0
+    - 0.0
+    - 0.0
+    Rotation:
+    - 0.0
+    - 0.0
+    - 0.0
+    Scale:
+    - 1.0
+    - 1.0
+    - 1.0
+  LuaScriptComponent:
+    ScriptPath: assets/scripts/level_select.lua
+
+# ── Title ─────────────────────────────────────────────────────
+- Entity: 2010
+  TagComponent:
+    Tag: TitleText
+  TransformComponent:
+    Translation:
+    - 0.0
+    - 0.0
+    - 0.0
+    Rotation:
+    - 0.0
+    - 0.0
+    - 0.0
+    Scale:
+    - 1.0
+    - 1.0
+    - 1.0
+  TextComponent:
+    Text: Select Level
+    FontPath: assets/fonts/JetBrainsMono-Regular.ttf
+    FontSize: 0.65
+    Color:
+    - 1.0
+    - 1.0
+    - 1.0
+    - 1.0
+    LineSpacing: 1.0
+    Kerning: 0.0
+  UIAnchorComponent:
+    Anchor:
+    - 0.0
+    - 0.0
+    Offset:
+    - 1.5
+    - -1.2
+
+# ── Accent bar ────────────────────────────────────────────────
+- Entity: 2060
+  TagComponent:
+    Tag: AccentBar
+  TransformComponent:
+    Translation:
+    - 0.0
+    - 0.0
+    - 0.1
+    Rotation:
+    - 0.0
+    - 0.0
+    - 0.0
+    Scale:
+    - 20.0
+    - 0.03
+    - 1.0
+  SpriteRendererComponent:
+    Color:
+    - 0.25
+    - 0.55
+    - 1.0
+    - 1.0
+    TilingFactor: 1.0
+  UIAnchorComponent:
+    Anchor:
+    - 0.0
+    - 0.0
+    Offset:
+    - 10.5
+    - -1.8
+
+# ══════════════════════════════════════════════════════════════
+# Level Entries
+# ══════════════════════════════════════════════════════════════
+
+- Entity: 2020
+  TagComponent:
+    Tag: Level1Btn
+  TransformComponent:
+    Translation:
+    - 0.0
+    - 0.0
+    - 0.0
+    Rotation:
+    - 0.0
+    - 0.0
+    - 0.0
+    Scale:
+    - 1.0
+    - 1.0
+    - 1.0
+  TextComponent:
+    Text: Physics Playground
+    FontPath: assets/fonts/JetBrainsMono-Regular.ttf
+    FontSize: 0.40
+    Color:
+    - 0.7
+    - 0.7
+    - 0.7
+    - 1.0
+    LineSpacing: 1.0
+    Kerning: 0.0
+  UIAnchorComponent:
+    Anchor:
+    - 0.0
+    - 0.0
+    Offset:
+    - 1.5
+    - -2.8
+
+- Entity: 2021
+  TagComponent:
+    Tag: Level2Btn
+  TransformComponent:
+    Translation:
+    - 0.0
+    - 0.0
+    - 0.0
+    Rotation:
+    - 0.0
+    - 0.0
+    - 0.0
+    Scale:
+    - 1.0
+    - 1.0
+    - 1.0
+  TextComponent:
+    Text: PBR Showcase
+    FontPath: assets/fonts/JetBrainsMono-Regular.ttf
+    FontSize: 0.40
+    Color:
+    - 0.7
+    - 0.7
+    - 0.7
+    - 1.0
+    LineSpacing: 1.0
+    Kerning: 0.0
+  UIAnchorComponent:
+    Anchor:
+    - 0.0
+    - 0.0
+    Offset:
+    - 1.5
+    - -3.6
+
+- Entity: 2022
+  TagComponent:
+    Tag: Level3Btn
+  TransformComponent:
+    Translation:
+    - 0.0
+    - 0.0
+    - 0.0
+    Rotation:
+    - 0.0
+    - 0.0
+    - 0.0
+    Scale:
+    - 1.0
+    - 1.0
+    - 1.0
+  TextComponent:
+    Text: Particle Demo
+    FontPath: assets/fonts/JetBrainsMono-Regular.ttf
+    FontSize: 0.40
+    Color:
+    - 0.7
+    - 0.7
+    - 0.7
+    - 1.0
+    LineSpacing: 1.0
+    Kerning: 0.0
+  UIAnchorComponent:
+    Anchor:
+    - 0.0
+    - 0.0
+    Offset:
+    - 1.5
+    - -4.4
+
+- Entity: 2023
+  TagComponent:
+    Tag: Level4Btn
+  TransformComponent:
+    Translation:
+    - 0.0
+    - 0.0
+    - 0.0
+    Rotation:
+    - 0.0
+    - 0.0
+    - 0.0
+    Scale:
+    - 1.0
+    - 1.0
+    - 1.0
+  TextComponent:
+    Text: Audio Test
+    FontPath: assets/fonts/JetBrainsMono-Regular.ttf
+    FontSize: 0.40
+    Color:
+    - 0.7
+    - 0.7
+    - 0.7
+    - 1.0
+    LineSpacing: 1.0
+    Kerning: 0.0
+  UIAnchorComponent:
+    Anchor:
+    - 0.0
+    - 0.0
+    Offset:
+    - 1.5
+    - -5.2
+
+- Entity: 2024
+  TagComponent:
+    Tag: Level5Btn
+  TransformComponent:
+    Translation:
+    - 0.0
+    - 0.0
+    - 0.0
+    Rotation:
+    - 0.0
+    - 0.0
+    - 0.0
+    Scale:
+    - 1.0
+    - 1.0
+    - 1.0
+  TextComponent:
+    Text: Input Actions
+    FontPath: assets/fonts/JetBrainsMono-Regular.ttf
+    FontSize: 0.40
+    Color:
+    - 0.7
+    - 0.7
+    - 0.7
+    - 1.0
+    LineSpacing: 1.0
+    Kerning: 0.0
+  UIAnchorComponent:
+    Anchor:
+    - 0.0
+    - 0.0
+    Offset:
+    - 1.5
+    - -6.0
+
+# ══════════════════════════════════════════════════════════════
+# Back Button
+# ══════════════════════════════════════════════════════════════
+
+- Entity: 2030
+  TagComponent:
+    Tag: BackBtn
+  TransformComponent:
+    Translation:
+    - 0.0
+    - 0.0
+    - 0.0
+    Rotation:
+    - 0.0
+    - 0.0
+    - 0.0
+    Scale:
+    - 1.0
+    - 1.0
+    - 1.0
+  TextComponent:
+    Text: Back
+    FontPath: assets/fonts/JetBrainsMono-Regular.ttf
+    FontSize: 0.40
+    Color:
+    - 0.7
+    - 0.7
+    - 0.7
+    - 1.0
+    LineSpacing: 1.0
+    Kerning: 0.0
+  UIAnchorComponent:
+    Anchor:
+    - 0.0
+    - 0.0
+    Offset:
+    - 1.5
+    - -7.4
+
+# ── Selection indicator ───────────────────────────────────────
+- Entity: 2070
+  TagComponent:
+    Tag: Selector
+  TransformComponent:
+    Translation:
+    - 0.0
+    - 0.0
+    - 0.2
+    Rotation:
+    - 0.0
+    - 0.0
+    - 0.0
+    Scale:
+    - 0.15
+    - 0.15
+    - 1.0
+  SpriteRendererComponent:
+    Color:
+    - 0.3
+    - 0.6
+    - 1.0
+    - 1.0
+    TilingFactor: 1.0
+  UIAnchorComponent:
+    Anchor:
+    - 0.0
+    - 0.0
+    Offset:
+    - 0.8
+    - -3.0

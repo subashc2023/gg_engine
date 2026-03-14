@@ -2588,13 +2588,14 @@ mod tests {
         let mut scene = Scene::new();
         SceneSerializer::deserialize_from_string(&mut scene, yaml)
             .expect("Failed to deserialize demo scene");
-        assert_eq!(scene.entity_count(), 6);
+        assert_eq!(scene.entity_count(), 7);
 
         let entities = scene.each_entity_with_tag();
         let names: Vec<&str> = entities.iter().map(|(_, name)| name.as_str()).collect();
         assert!(names.contains(&"Camera"));
         assert!(names.contains(&"Player"));
         assert!(names.contains(&"Ground"));
+        assert!(names.contains(&"GameSession"));
 
         // Verify Lua scripts were loaded.
         let (player, _) = entities.iter().find(|(_, n)| n == "Player").unwrap();
@@ -2630,7 +2631,7 @@ mod tests {
         let mut scene = Scene::new();
         SceneSerializer::deserialize_from_string(&mut scene, yaml)
             .expect("Failed to deserialize audio_test scene");
-        assert_eq!(scene.entity_count(), 11);
+        assert_eq!(scene.entity_count(), 12);
 
         let entities = scene.each_entity_with_tag();
 

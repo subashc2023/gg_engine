@@ -266,8 +266,7 @@ function activate_item(item)
     if not item then return end
 
     if item.name == "play" then
-        Engine.log("Play pressed — no gameplay scene configured")
-        -- Engine.load_scene("assets/scenes/gameplay.ggscene")
+        Engine.load_scene("assets/scenes/level_select.ggscene")
     elseif item.name == "settings" then
         switch_to_settings()
     elseif item.name == "quit" then

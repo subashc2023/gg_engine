@@ -732,3 +732,14 @@ Entities:
     MeshAsset: 6001
     EmissiveColor: [0.0, 0.0, 0.0]
     EmissiveStrength: 1.0
+
+# ── Game Session (Escape → level select) ───────────────────────
+- Entity: 900
+  TagComponent:
+    Tag: GameSession
+  TransformComponent:
+    Translation: [0.0, 0.0, 0.0]
+    Rotation: [0.0, 0.0, 0.0, 1.0]
+    Scale: [1.0, 1.0, 1.0]
+  LuaScriptComponent:
+    ScriptPath: assets/scripts/game_session.lua

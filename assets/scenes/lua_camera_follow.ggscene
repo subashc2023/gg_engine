@@ -229,3 +229,23 @@ Entities:
     Friction: 0.5
     Restitution: 0.0
     RestitutionThreshold: 0.5
+
+# ── Game Session (Escape → level select) ───────────────────────
+- Entity: 900
+  TagComponent:
+    Tag: GameSession
+  TransformComponent:
+    Translation:
+    - 0.0
+    - 0.0
+    - 0.0
+    Rotation:
+    - 0.0
+    - 0.0
+    - 0.0
+    Scale:
+    - 1.0
+    - 1.0
+    - 1.0
+  LuaScriptComponent:
+    ScriptPath: assets/scripts/game_session.lua
