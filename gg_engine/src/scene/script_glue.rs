@@ -570,6 +570,11 @@ pub fn register_all(lua: &Lua) -> LuaResult<()> {
         lua.create_function(lua_stop_all_coroutines)?,
     )?;
 
+    // Event bus
+    engine.set("emit", lua.create_function(lua_emit)?)?;
+    engine.set("on", lua.create_function(lua_on)?)?;
+    engine.set("off", lua.create_function(lua_off)?)?;
+
     // Physics: gravity
     engine.set("set_gravity", lua.create_function(lua_set_gravity)?)?;
     engine.set("get_gravity", lua.create_function(lua_get_gravity)?)?;
@@ -2941,6 +2946,72 @@ fn lua_stop_all_coroutines(lua: &Lua, (): ()) -> LuaResult<()> {
 
     if let Some(mut ops) = lua.app_data_mut::<PendingCoroutineOps>() {
         ops.cancels_entity.push(entity_uuid);
+    }
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Event bus
+// ---------------------------------------------------------------------------
+
+/// `Engine.emit(event_name, data?)` — broadcast an event to all listeners.
+/// `data` is an optional Lua value (typically a table) passed to listener callbacks.
+fn lua_emit(lua: &Lua, (event_name, data): (String, Option<LuaValue>)) -> LuaResult<()> {
+    use super::script_engine::{PendingEmit, PendingEventBusOps};
+
+    let data_key = match data {
+        Some(val) if !val.is_nil() => Some(lua.create_registry_value(val)?),
+        _ => None,
+    };
+
+    let mut ops = lua
+        .app_data_mut::<PendingEventBusOps>()
+        .ok_or_else(|| mlua::Error::RuntimeError("Event bus not available".into()))?;
+
+    ops.emits.push(PendingEmit {
+        event_name,
+        data_key,
+    });
+
+    Ok(())
+}
+
+/// `Engine.on(event_name, callback)` — register a listener for an event.
+/// Tied to the calling entity. One listener per entity per event (last wins).
+fn lua_on(lua: &Lua, (event_name, callback): (String, LuaFunction)) -> LuaResult<()> {
+    use super::script_engine::{CurrentEntityUuid, PendingEventBusOps, PendingEventRegister};
+
+    let entity_uuid = lua
+        .app_data_ref::<CurrentEntityUuid>()
+        .map(|u| u.0)
+        .unwrap_or(0);
+
+    let callback_key = lua.create_registry_value(callback)?;
+
+    let mut ops = lua
+        .app_data_mut::<PendingEventBusOps>()
+        .ok_or_else(|| mlua::Error::RuntimeError("Event bus not available".into()))?;
+
+    ops.registers.push(PendingEventRegister {
+        event_name,
+        entity_uuid,
+        callback_key,
+    });
+
+    Ok(())
+}
+
+/// `Engine.off(event_name)` — unregister listener for an event from calling entity.
+fn lua_off(lua: &Lua, event_name: String) -> LuaResult<()> {
+    use super::script_engine::{CurrentEntityUuid, PendingEventBusOps};
+
+    let entity_uuid = lua
+        .app_data_ref::<CurrentEntityUuid>()
+        .map(|u| u.0)
+        .unwrap_or(0);
+
+    if let Some(mut ops) = lua.app_data_mut::<PendingEventBusOps>() {
+        ops.unregisters.push((event_name, entity_uuid));
     }
     Ok(())
 }
@@ -5525,6 +5596,49 @@ mod tests {
         assert!(is_fn);
         let is_fn: bool = lua
             .load("type(Engine.wait_frame) == 'function'")
+            .eval()
+            .unwrap();
+        assert!(is_fn);
+    }
+
+    #[test]
+    fn emit_no_context_errors_gracefully() {
+        let lua = setup();
+        let result = lua.load("Engine.emit('test')").exec();
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn on_no_context_errors_gracefully() {
+        let lua = setup();
+        let result = lua
+            .load("Engine.on('test', function() end)")
+            .exec();
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn off_no_context_no_error() {
+        let lua = setup();
+        // Without PendingEventBusOps, off silently succeeds.
+        lua.load("Engine.off('test')").exec().unwrap();
+    }
+
+    #[test]
+    fn event_bus_functions_exist() {
+        let lua = setup();
+        let is_fn: bool = lua
+            .load("type(Engine.emit) == 'function'")
+            .eval()
+            .unwrap();
+        assert!(is_fn);
+        let is_fn: bool = lua
+            .load("type(Engine.on) == 'function'")
+            .eval()
+            .unwrap();
+        assert!(is_fn);
+        let is_fn: bool = lua
+            .load("type(Engine.off) == 'function'")
             .eval()
             .unwrap();
         assert!(is_fn);

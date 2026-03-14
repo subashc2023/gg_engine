@@ -313,9 +313,10 @@ impl Scene {
         };
         guard.engine_mut().lua().set_app_data(ctx);
 
-        // Initialize deferred ops so Lua timer/coroutine bindings work during scripts.
+        // Initialize deferred ops so Lua timer/coroutine/event bindings work during scripts.
         guard.engine_mut().init_pending_timer_ops();
         guard.engine_mut().init_pending_coroutine_ops();
+        guard.engine_mut().init_pending_event_bus_ops();
 
         for uuid in &uuids {
             guard
@@ -341,6 +342,10 @@ impl Scene {
         guard.engine_mut().init_pending_coroutine_ops();
         guard.engine_mut().tick_coroutines(dt.seconds());
         guard.engine_mut().apply_pending_coroutine_ops();
+
+        // Dispatch event bus — fires listeners for events emitted during on_update,
+        // timers, and coroutines. Cascading events handled via internal drain loop.
+        guard.engine_mut().dispatch_events();
 
         // Guard drop restores engine and cleans up SceneScriptContext.
         drop(guard);

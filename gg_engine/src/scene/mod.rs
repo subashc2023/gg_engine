@@ -268,12 +268,13 @@ impl Scene {
 
         for uuid in uuids {
             if let Some(entity) = self.core.find_entity_by_uuid(uuid) {
-                // Clean up script engine state (Lua environment, timers, coroutines)
-                // before destroying the entity, so they don't fire on dead entities.
+                // Clean up script engine state (Lua environment, timers, coroutines,
+                // event listeners) before destroying the entity.
                 #[cfg(feature = "lua-scripting")]
                 if let Some(ref mut engine) = self.script_engine {
                     engine.remove_entity_timers(uuid);
                     engine.remove_entity_coroutines(uuid);
+                    engine.remove_entity_event_listeners(uuid);
                     engine.remove_entity_env(uuid);
                 }
 

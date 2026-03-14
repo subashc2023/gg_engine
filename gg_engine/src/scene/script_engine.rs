@@ -123,6 +123,42 @@ pub(crate) struct PendingCoroutineCreate {
     pub thread_key: LuaRegistryKey,
 }
 
+// -----------------------------------------------------------------
+// Event bus system
+// -----------------------------------------------------------------
+
+/// A registered event listener tied to a specific entity.
+pub(crate) struct EventListener {
+    /// Entity that registered this listener.
+    pub entity_uuid: u64,
+    /// Lua registry key for the callback function.
+    pub callback_key: LuaRegistryKey,
+}
+
+/// Deferred event bus operations queued by Lua scripts during execution.
+/// Stored in Lua app_data (same pattern as `PendingTimerOps`).
+pub(crate) struct PendingEventBusOps {
+    /// Events emitted this frame.
+    pub emits: Vec<PendingEmit>,
+    /// Listener registrations queued this frame.
+    pub registers: Vec<PendingEventRegister>,
+    /// Listener removals queued this frame: (event_name, entity_uuid).
+    pub unregisters: Vec<(String, u64)>,
+}
+
+pub(crate) struct PendingEmit {
+    pub event_name: String,
+    /// Registry key holding the data Lua value (table, number, string, nil).
+    /// `None` means no data was passed (callback receives nil).
+    pub data_key: Option<LuaRegistryKey>,
+}
+
+pub(crate) struct PendingEventRegister {
+    pub event_name: String,
+    pub entity_uuid: u64,
+    pub callback_key: LuaRegistryKey,
+}
+
 pub struct ScriptEngine {
     lua: Lua,
     /// Per-entity Lua environments keyed by entity UUID (u64).
@@ -136,6 +172,8 @@ pub struct ScriptEngine {
     pub(crate) next_timer_id: usize,
     /// Active coroutines (all entities).
     pub(crate) coroutines: Vec<ScriptCoroutine>,
+    /// Event bus: event_name → list of listeners.
+    pub(crate) event_listeners: HashMap<String, Vec<EventListener>>,
 }
 
 impl Default for ScriptEngine {
@@ -196,6 +234,7 @@ impl ScriptEngine {
             timers: HashMap::new(),
             next_timer_id: 0,
             coroutines: Vec::new(),
+            event_listeners: HashMap::new(),
         }
     }
 
@@ -1095,6 +1134,155 @@ impl ScriptEngine {
     pub fn remove_entity_coroutines(&mut self, entity_uuid: u64) {
         self.coroutines.retain(|c| c.entity_uuid != entity_uuid);
     }
+
+    // -----------------------------------------------------------------
+    // Event bus system
+    // -----------------------------------------------------------------
+
+    /// Initialize pending event bus ops in Lua app_data before script execution.
+    pub fn init_pending_event_bus_ops(&mut self) {
+        self.lua.set_app_data(PendingEventBusOps {
+            emits: Vec::new(),
+            registers: Vec::new(),
+            unregisters: Vec::new(),
+        });
+    }
+
+    /// Apply deferred listener registrations/unregistrations.
+    fn apply_event_registrations(&mut self, ops: &mut PendingEventBusOps) {
+        // Process unregistrations first.
+        for (event_name, entity_uuid) in ops.unregisters.drain(..) {
+            if let Some(listeners) = self.event_listeners.get_mut(&event_name) {
+                if let Some(pos) = listeners.iter().position(|l| l.entity_uuid == entity_uuid) {
+                    let removed = listeners.swap_remove(pos);
+                    self.lua.remove_registry_value(removed.callback_key).ok();
+                }
+                if listeners.is_empty() {
+                    self.event_listeners.remove(&event_name);
+                }
+            }
+        }
+
+        // Process registrations (one listener per entity per event — last wins).
+        for reg in ops.registers.drain(..) {
+            let listeners = self.event_listeners.entry(reg.event_name).or_default();
+            // Remove any existing listener for this entity on this event.
+            if let Some(pos) = listeners.iter().position(|l| l.entity_uuid == reg.entity_uuid) {
+                let removed = listeners.swap_remove(pos);
+                self.lua.remove_registry_value(removed.callback_key).ok();
+            }
+            listeners.push(EventListener {
+                entity_uuid: reg.entity_uuid,
+                callback_key: reg.callback_key,
+            });
+        }
+    }
+
+    /// Dispatch all emitted events to registered listeners.
+    ///
+    /// Handles cascading events (emitted during dispatch callbacks) via a
+    /// drain loop with a safety limit.
+    pub fn dispatch_events(&mut self) {
+        const MAX_DISPATCH_ROUNDS: usize = 100;
+
+        for round in 0..MAX_DISPATCH_ROUNDS {
+            let Some(mut ops) = self.lua.remove_app_data::<PendingEventBusOps>() else {
+                return;
+            };
+
+            // Apply any registrations/unregistrations first.
+            self.apply_event_registrations(&mut ops);
+
+            if ops.emits.is_empty() {
+                return;
+            }
+
+            let emits: Vec<PendingEmit> = ops.emits.drain(..).collect();
+
+            // Re-insert fresh ops so callbacks can emit new events.
+            self.lua.set_app_data(PendingEventBusOps {
+                emits: Vec::new(),
+                registers: Vec::new(),
+                unregisters: Vec::new(),
+            });
+
+            for emit in emits {
+                // Retrieve the data value from the registry.
+                let data_value: LuaValue = emit
+                    .data_key
+                    .as_ref()
+                    .and_then(|key| self.lua.registry_value(key).ok())
+                    .unwrap_or(LuaValue::Nil);
+
+                // Collect listener callbacks to avoid borrow conflict.
+                let targets: Vec<(u64, LuaFunction)> = self
+                    .event_listeners
+                    .get(&emit.event_name)
+                    .map(|listeners| {
+                        listeners
+                            .iter()
+                            .filter_map(|l| {
+                                self.lua
+                                    .registry_value::<LuaFunction>(&l.callback_key)
+                                    .ok()
+                                    .map(|f| (l.entity_uuid, f))
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default();
+
+                for (target_uuid, func) in &targets {
+                    self.lua.set_app_data(CurrentEntityUuid(*target_uuid));
+                    if let Err(e) = func.call::<()>(data_value.clone()) {
+                        log::error!(
+                            "EventBus: error dispatching '{}' to entity {}: {}",
+                            emit.event_name,
+                            target_uuid,
+                            e
+                        );
+                    }
+                    self.lua.remove_app_data::<CurrentEntityUuid>();
+                }
+
+                // Clean up the data registry key.
+                if let Some(key) = emit.data_key {
+                    self.lua.remove_registry_value(key).ok();
+                }
+            }
+
+            if round == MAX_DISPATCH_ROUNDS - 1 {
+                log::warn!(
+                    "EventBus: hit max dispatch rounds ({}), possible infinite event loop",
+                    MAX_DISPATCH_ROUNDS
+                );
+            }
+        }
+
+        // Clean up any remaining ops.
+        self.lua.remove_app_data::<PendingEventBusOps>();
+    }
+
+    /// Remove all event listeners owned by a specific entity.
+    pub fn remove_entity_event_listeners(&mut self, entity_uuid: u64) {
+        let mut empty_events = Vec::new();
+        for (event_name, listeners) in &mut self.event_listeners {
+            let mut i = 0;
+            while i < listeners.len() {
+                if listeners[i].entity_uuid == entity_uuid {
+                    let removed = listeners.swap_remove(i);
+                    self.lua.remove_registry_value(removed.callback_key).ok();
+                } else {
+                    i += 1;
+                }
+            }
+            if listeners.is_empty() {
+                empty_events.push(event_name.clone());
+            }
+        }
+        for event_name in empty_events {
+            self.event_listeners.remove(&event_name);
+        }
+    }
 }
 
 #[cfg(test)]
@@ -1635,5 +1823,220 @@ end
             ),
         };
         assert!(n.abs() < 0.001);
+    }
+
+    // -----------------------------------------------------------------
+    // Event bus tests
+    // -----------------------------------------------------------------
+
+    #[test]
+    fn event_bus_basic_emit_on() {
+        let mut engine = ScriptEngine::new();
+
+        // Register a listener via direct API (simulate what Lua would do).
+        let callback: LuaFunction = engine
+            .lua()
+            .load("return function(data) event_received = data.msg end")
+            .eval()
+            .unwrap();
+        let key = engine.lua().create_registry_value(callback).unwrap();
+        engine
+            .event_listeners
+            .entry("test_event".to_string())
+            .or_default()
+            .push(EventListener {
+                entity_uuid: 1,
+                callback_key: key,
+            });
+
+        // Emit an event with data.
+        let data_table = engine.lua().create_table().unwrap();
+        data_table.set("msg", "hello").unwrap();
+        let data_key = engine.lua().create_registry_value(data_table).unwrap();
+
+        engine.lua().set_app_data(PendingEventBusOps {
+            emits: vec![PendingEmit {
+                event_name: "test_event".to_string(),
+                data_key: Some(data_key),
+            }],
+            registers: Vec::new(),
+            unregisters: Vec::new(),
+        });
+
+        engine.dispatch_events();
+
+        let result: String = engine.lua().globals().get("event_received").unwrap();
+        assert_eq!(result, "hello");
+    }
+
+    #[test]
+    fn event_bus_no_listeners_no_crash() {
+        let mut engine = ScriptEngine::new();
+
+        engine.lua().set_app_data(PendingEventBusOps {
+            emits: vec![PendingEmit {
+                event_name: "nobody_listens".to_string(),
+                data_key: None,
+            }],
+            registers: Vec::new(),
+            unregisters: Vec::new(),
+        });
+
+        // Should not panic.
+        engine.dispatch_events();
+    }
+
+    #[test]
+    fn event_bus_remove_entity_listeners() {
+        let mut engine = ScriptEngine::new();
+
+        // Add listeners for two entities.
+        for uuid in [10, 20] {
+            let callback: LuaFunction = engine
+                .lua()
+                .load("function() end")
+                .eval()
+                .unwrap();
+            let key = engine.lua().create_registry_value(callback).unwrap();
+            engine
+                .event_listeners
+                .entry("dmg".to_string())
+                .or_default()
+                .push(EventListener {
+                    entity_uuid: uuid,
+                    callback_key: key,
+                });
+        }
+
+        assert_eq!(engine.event_listeners["dmg"].len(), 2);
+        engine.remove_entity_event_listeners(10);
+        assert_eq!(engine.event_listeners["dmg"].len(), 1);
+        assert_eq!(engine.event_listeners["dmg"][0].entity_uuid, 20);
+
+        engine.remove_entity_event_listeners(20);
+        assert!(engine.event_listeners.is_empty());
+    }
+
+    #[test]
+    fn event_bus_deferred_register_and_emit() {
+        let mut engine = ScriptEngine::new();
+
+        // Simulate: entity registers a listener, another entity emits.
+        let callback: LuaFunction = engine
+            .lua()
+            .load("function(data) deferred_result = 'got it' end")
+            .eval()
+            .unwrap();
+        let callback_key = engine.lua().create_registry_value(callback).unwrap();
+
+        engine.lua().set_app_data(PendingEventBusOps {
+            emits: vec![PendingEmit {
+                event_name: "ping".to_string(),
+                data_key: None,
+            }],
+            registers: vec![PendingEventRegister {
+                event_name: "ping".to_string(),
+                entity_uuid: 1,
+                callback_key,
+            }],
+            unregisters: Vec::new(),
+        });
+
+        // Registrations are applied before emits are dispatched.
+        engine.dispatch_events();
+
+        let result: String = engine.lua().globals().get("deferred_result").unwrap();
+        assert_eq!(result, "got it");
+    }
+
+    #[test]
+    fn event_bus_unregister_prevents_delivery() {
+        let mut engine = ScriptEngine::new();
+
+        // Pre-register a listener.
+        let callback: LuaFunction = engine
+            .lua()
+            .load("function() should_not_fire = true end")
+            .eval()
+            .unwrap();
+        let key = engine.lua().create_registry_value(callback).unwrap();
+        engine
+            .event_listeners
+            .entry("bye".to_string())
+            .or_default()
+            .push(EventListener {
+                entity_uuid: 42,
+                callback_key: key,
+            });
+
+        // Unregister + emit in the same frame.
+        engine.lua().set_app_data(PendingEventBusOps {
+            emits: vec![PendingEmit {
+                event_name: "bye".to_string(),
+                data_key: None,
+            }],
+            registers: Vec::new(),
+            unregisters: vec![("bye".to_string(), 42)],
+        });
+
+        engine.dispatch_events();
+
+        // The callback should not have fired.
+        let fired: LuaValue = engine.lua().globals().get("should_not_fire").unwrap();
+        assert!(fired.is_nil());
+    }
+
+    #[test]
+    fn event_bus_cascading_emit() {
+        let mut engine = ScriptEngine::new();
+
+        // Set up a chain: event "a" listener emits "b", "b" listener sets a global.
+        // First, register listener for "b".
+        let callback_b: LuaFunction = engine
+            .lua()
+            .load("function() chain_result = 'chain_complete' end")
+            .eval()
+            .unwrap();
+        let key_b = engine.lua().create_registry_value(callback_b).unwrap();
+        engine
+            .event_listeners
+            .entry("b".to_string())
+            .or_default()
+            .push(EventListener {
+                entity_uuid: 2,
+                callback_key: key_b,
+            });
+
+        // Register listener for "a" that emits "b".
+        // We need PendingEventBusOps in app_data during the callback for emit to work.
+        let callback_a: LuaFunction = engine
+            .lua()
+            .load("function() Engine.emit('b') end")
+            .eval()
+            .unwrap();
+        let key_a = engine.lua().create_registry_value(callback_a).unwrap();
+        engine
+            .event_listeners
+            .entry("a".to_string())
+            .or_default()
+            .push(EventListener {
+                entity_uuid: 1,
+                callback_key: key_a,
+            });
+
+        // Emit "a".
+        engine.lua().set_app_data(PendingEventBusOps {
+            emits: vec![PendingEmit {
+                event_name: "a".to_string(),
+                data_key: None,
+            }],
+            registers: Vec::new(),
+            unregisters: Vec::new(),
+        });
+
+        engine.dispatch_events();
+
+        let result: String = engine.lua().globals().get("chain_result").unwrap();
+        assert_eq!(result, "chain_complete");
     }
 }
