@@ -574,6 +574,16 @@ pub fn register_all(lua: &Lua) -> LuaResult<()> {
     engine.set("get_gui_scale", lua.create_function(lua_get_gui_scale)?)?;
     engine.set("set_gui_scale", lua.create_function(lua_set_gui_scale)?)?;
 
+    // Loading screen
+    engine.set(
+        "set_loading_screen_color",
+        lua.create_function(lua_set_loading_screen_color)?,
+    )?;
+    engine.set(
+        "get_loading_screen_color",
+        lua.create_function(lua_get_loading_screen_color)?,
+    )?;
+
     // Component manipulation
     engine.set("add_component", lua.create_function(lua_add_component)?)?;
     engine.set(
@@ -2977,6 +2987,33 @@ fn lua_set_gui_scale(lua: &Lua, scale: f32) -> LuaResult<()> {
 }
 
 // ---------------------------------------------------------------------------
+// Loading screen
+// ---------------------------------------------------------------------------
+
+/// `Engine.set_loading_screen_color(r, g, b)` — set the background color shown
+/// during scene transitions. RGB values are 0.0–1.0. Alpha is always 1.0.
+fn lua_set_loading_screen_color(lua: &Lua, (r, g, b): (f32, f32, f32)) -> LuaResult<()> {
+    let ctx = match lua.app_data_mut::<SceneScriptContext>() {
+        Some(ctx) => ctx,
+        None => return Ok(()),
+    };
+    let scene = unsafe { ctx.scene() };
+    scene.set_loading_screen_color([r, g, b, 1.0]);
+    Ok(())
+}
+
+/// `Engine.get_loading_screen_color()` → (r, g, b).
+fn lua_get_loading_screen_color(lua: &Lua, _: ()) -> LuaResult<(f32, f32, f32)> {
+    let ctx = match lua.app_data_mut::<SceneScriptContext>() {
+        Some(ctx) => ctx,
+        None => return Ok((0.0, 0.0, 0.0)),
+    };
+    let scene = unsafe { ctx.scene() };
+    let c = scene.loading_screen_color();
+    Ok((c[0], c[1], c[2]))
+}
+
+// ---------------------------------------------------------------------------
 // UI Anchor
 // ---------------------------------------------------------------------------
 
@@ -4043,6 +4080,13 @@ mod tests {
         assert!(engine.get::<LuaFunction>("load_scene").is_ok());
         assert!(engine.get::<LuaFunction>("get_gui_scale").is_ok());
         assert!(engine.get::<LuaFunction>("set_gui_scale").is_ok());
+        // Loading screen
+        assert!(engine
+            .get::<LuaFunction>("set_loading_screen_color")
+            .is_ok());
+        assert!(engine
+            .get::<LuaFunction>("get_loading_screen_color")
+            .is_ok());
         // Component manipulation
         assert!(engine.get::<LuaFunction>("add_component").is_ok());
         assert!(engine.get::<LuaFunction>("remove_component").is_ok());
@@ -4893,5 +4937,65 @@ mod tests {
         // Cleanup.
         lua.remove_app_data::<SceneScriptContext>();
         let _ = std::fs::remove_dir_all(&temp_dir);
+    }
+
+    // -----------------------------------------------------------------------
+    // Loading screen color tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn loading_screen_color_default() {
+        let lua = setup();
+        lua.load("r, g, b = Engine.get_loading_screen_color()")
+            .exec()
+            .unwrap();
+        let r: f32 = lua.globals().get("r").unwrap();
+        let g: f32 = lua.globals().get("g").unwrap();
+        let b: f32 = lua.globals().get("b").unwrap();
+        // No context → default (0, 0, 0).
+        assert_eq!(r, 0.0);
+        assert_eq!(g, 0.0);
+        assert_eq!(b, 0.0);
+    }
+
+    #[test]
+    fn loading_screen_color_roundtrip_with_context() {
+        let lua = setup();
+        let mut scene = Scene::new();
+        let ctx = SceneScriptContext {
+            scene: &mut scene as *mut Scene,
+            input: std::ptr::null(),
+        };
+        lua.set_app_data(ctx);
+
+        // Default is black.
+        lua.load("r, g, b = Engine.get_loading_screen_color()")
+            .exec()
+            .unwrap();
+        let r: f32 = lua.globals().get("r").unwrap();
+        assert_eq!(r, 0.0);
+
+        // Set to a custom color.
+        lua.load("Engine.set_loading_screen_color(0.2, 0.4, 0.8)")
+            .exec()
+            .unwrap();
+        lua.load("r2, g2, b2 = Engine.get_loading_screen_color()")
+            .exec()
+            .unwrap();
+        let r2: f32 = lua.globals().get("r2").unwrap();
+        let g2: f32 = lua.globals().get("g2").unwrap();
+        let b2: f32 = lua.globals().get("b2").unwrap();
+        assert!((r2 - 0.2).abs() < 1e-6);
+        assert!((g2 - 0.4).abs() < 1e-6);
+        assert!((b2 - 0.8).abs() < 1e-6);
+
+        // Verify on the Rust side too.
+        let color = scene.loading_screen_color();
+        assert!((color[0] - 0.2).abs() < 1e-6);
+        assert!((color[1] - 0.4).abs() < 1e-6);
+        assert!((color[2] - 0.8).abs() < 1e-6);
+        assert_eq!(color[3], 1.0);
+
+        lua.remove_app_data::<SceneScriptContext>();
     }
 }

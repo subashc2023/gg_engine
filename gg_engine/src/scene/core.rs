@@ -132,6 +132,11 @@ pub struct SceneCore {
     /// editor/player before runtime start. Defaults to `<project_dir>/saves/`.
     pub(super) save_data_directory: Option<PathBuf>,
 
+    // Loading screen
+    /// Background color shown during scene transitions. RGBA, 0.0–1.0 range.
+    /// Configurable from Lua via `Engine.set_loading_screen_color()`.
+    pub(super) loading_screen_color: Mutex<[f32; 4]>,
+
     // UI interaction state
     /// UUID of the currently hovered UI entity.
     pub(super) ui_hovered_entity: Option<u64>,
@@ -185,6 +190,7 @@ impl SceneCore {
             gui_scale: Mutex::new(1.0),
             script_module_search_path: None,
             save_data_directory: None,
+            loading_screen_color: Mutex::new([0.0, 0.0, 0.0, 1.0]),
             ui_hovered_entity: None,
             ui_pressed_entity: None,
             ui_draw_order_cache: Vec::new(),
@@ -752,6 +758,17 @@ impl SceneCore {
     /// Get the save data directory, if configured.
     pub fn save_data_directory(&self) -> Option<&std::path::Path> {
         self.save_data_directory.as_deref()
+    }
+
+    /// Set the loading screen background color (RGBA, 0.0–1.0).
+    /// Used by the player during scene transitions.
+    pub fn set_loading_screen_color(&self, color: [f32; 4]) {
+        *self.loading_screen_color.lock() = color;
+    }
+
+    /// Get the loading screen background color (RGBA, 0.0–1.0).
+    pub fn loading_screen_color(&self) -> [f32; 4] {
+        *self.loading_screen_color.lock()
     }
 
     /// Current viewport dimensions in physical pixels.

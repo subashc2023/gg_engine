@@ -413,6 +413,9 @@ impl Scene {
         // Copy save data directory.
         new_scene.core.save_data_directory = source.core.save_data_directory.clone();
 
+        // Copy loading screen color.
+        *new_scene.core.loading_screen_color.lock() = *source.core.loading_screen_color.lock();
+
         new_scene
     }
 

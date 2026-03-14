@@ -183,6 +183,8 @@ impl GGPlayer {
         if let Some(save_dir) = self.scene.save_data_directory() {
             new_scene.set_save_data_directory(save_dir.to_path_buf());
         }
+        // Preserve loading screen color.
+        new_scene.set_loading_screen_color(self.scene.loading_screen_color());
 
         // Swap scenes — old scene goes to deferred destroy.
         let old = std::mem::replace(&mut self.scene, new_scene);
@@ -327,6 +329,15 @@ impl Application for GGPlayer {
 
     fn input_action_map(&self) -> Option<InputActionMap> {
         Some(self.input_actions.clone())
+    }
+
+    fn clear_color(&self) -> [f32; 4] {
+        // During scene transitions (splash consumed), use the Lua-configured
+        // loading screen color instead of the default near-black.
+        if !self.runtime_started && self.splash_texture.is_none() {
+            return self.scene.loading_screen_color();
+        }
+        [0.01, 0.01, 0.01, 1.0]
     }
 
     fn present_mode(&self) -> PresentMode {
