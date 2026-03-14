@@ -1,9 +1,11 @@
 #[cfg(feature = "lua-scripting")]
 use super::lua_ops::ScriptEngineGuard;
 use super::{
-    Entity, IdComponent, NativeScript, NativeScriptComponent, RigidBody2DComponent,
-    RigidBody3DComponent, Scene, TransformComponent,
+    Entity, IdComponent, NativeScript, NativeScriptComponent, RigidBody2DComponent, Scene,
+    TransformComponent,
 };
+#[cfg(feature = "physics-3d")]
+use super::RigidBody3DComponent;
 use crate::input::Input;
 use crate::timestep::Timestep;
 
@@ -18,6 +20,7 @@ impl Scene {
     pub fn on_runtime_start(&mut self) {
         let _timer = crate::profiling::ProfileTimer::new("Scene::on_runtime_start");
         self.on_physics_2d_start();
+        #[cfg(feature = "physics-3d")]
         self.on_physics_3d_start();
         #[cfg(feature = "lua-scripting")]
         self.on_lua_scripting_start();
@@ -33,6 +36,7 @@ impl Scene {
         self.on_native_scripting_stop();
         #[cfg(feature = "lua-scripting")]
         self.on_lua_scripting_stop();
+        #[cfg(feature = "physics-3d")]
         self.on_physics_3d_stop();
         self.on_physics_2d_stop();
     }
@@ -78,6 +82,7 @@ impl Scene {
     /// without initializing scripts — physics only.
     pub fn on_simulation_start(&mut self) {
         self.on_physics_2d_start();
+        #[cfg(feature = "physics-3d")]
         self.on_physics_3d_start();
     }
 
@@ -85,6 +90,7 @@ impl Scene {
     ///
     /// Call this when exiting simulate mode.
     pub fn on_simulation_stop(&mut self) {
+        #[cfg(feature = "physics-3d")]
         self.on_physics_3d_stop();
         self.on_physics_2d_stop();
     }
@@ -107,7 +113,10 @@ impl Scene {
         let _timer = crate::profiling::ProfileTimer::new("Scene::on_update_all_physics");
 
         let has_2d = self.physics_world.is_some();
+        #[cfg(feature = "physics-3d")]
         let has_3d = self.physics_world_3d.is_some();
+        #[cfg(not(feature = "physics-3d"))]
+        let has_3d = false;
 
         if !has_2d && !has_3d {
             return;
@@ -117,6 +126,7 @@ impl Scene {
         if let Some(p) = self.physics_world.as_mut() {
             p.accumulate(dt.seconds());
         }
+        #[cfg(feature = "physics-3d")]
         if let Some(p) = self.physics_world_3d.as_mut() {
             p.accumulate(dt.seconds());
         }
@@ -124,13 +134,23 @@ impl Scene {
         let fixed_dt = if let Some(p) = self.physics_world.as_ref() {
             p.fixed_timestep()
         } else {
-            self.physics_world_3d.as_ref().unwrap().fixed_timestep()
+            #[cfg(feature = "physics-3d")]
+            {
+                self.physics_world_3d.as_ref().unwrap().fixed_timestep()
+            }
+            #[cfg(not(feature = "physics-3d"))]
+            {
+                return;
+            }
         };
 
         // Unified fixed-step loop.
         loop {
             let can_2d = self.physics_world.as_ref().is_some_and(|p| p.can_step());
+            #[cfg(feature = "physics-3d")]
             let can_3d = self.physics_world_3d.as_ref().is_some_and(|p| p.can_step());
+            #[cfg(not(feature = "physics-3d"))]
+            let can_3d = false;
 
             if !can_2d && !can_3d {
                 break;
@@ -141,6 +161,7 @@ impl Scene {
             if can_2d {
                 self.physics_world.as_mut().unwrap().reset_all_forces();
             }
+            #[cfg(feature = "physics-3d")]
             if can_3d {
                 self.physics_world_3d.as_mut().unwrap().reset_all_forces();
             }
@@ -159,6 +180,7 @@ impl Scene {
                 p.snapshot_transforms();
                 p.step_once();
             }
+            #[cfg(feature = "physics-3d")]
             if can_3d {
                 let p = self.physics_world_3d.as_mut().unwrap();
                 p.snapshot_transforms();
@@ -171,6 +193,7 @@ impl Scene {
                 if can_2d {
                     self.dispatch_collision_events();
                 }
+                #[cfg(feature = "physics-3d")]
                 if can_3d {
                     self.dispatch_collision_events_3d();
                 }
@@ -182,6 +205,7 @@ impl Scene {
         if has_2d {
             self.interpolate_2d_transforms();
         }
+        #[cfg(feature = "physics-3d")]
         if has_3d {
             self.interpolate_3d_transforms();
         }
@@ -224,6 +248,7 @@ impl Scene {
     }
 
     /// Interpolate 3D rigid body transforms for smooth rendering.
+    #[cfg(feature = "physics-3d")]
     fn interpolate_3d_transforms(&mut self) {
         let physics = self.physics_world_3d.as_ref().unwrap();
         let alpha = physics.alpha();
@@ -306,7 +331,7 @@ impl Scene {
     }
 
     /// Drain 3D collision events and dispatch to Lua scripts.
-    #[cfg(feature = "lua-scripting")]
+    #[cfg(all(feature = "lua-scripting", feature = "physics-3d"))]
     pub(super) fn dispatch_collision_events_3d(&mut self) {
         let events = match self.physics_world_3d.as_ref() {
             Some(physics) => physics.drain_collision_events(),

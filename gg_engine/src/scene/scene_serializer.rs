@@ -14,15 +14,19 @@ use crate::scene::LuaScriptComponent;
 use crate::scene::{
     AmbientLightComponent, AnimationClip, AnimationControllerComponent, AnimationTransition,
     AudioCategory, AudioListenerComponent, AudioSourceComponent, BoxCollider2DComponent,
-    BoxCollider3DComponent, CameraComponent, CapsuleCollider3DComponent, CircleCollider2DComponent,
-    CircleRendererComponent, DirectionalLightComponent, EnvironmentComponent, FloatOrdering,
-    IdComponent, InstancedSpriteAnimator, MeshPrimitive, MeshRendererComponent, MeshSource,
-    ParticleEmitterComponent, PointLightComponent, RelationshipComponent, RigidBody2DComponent,
-    RigidBody2DType, RigidBody3DComponent, RigidBody3DType, Scene, SkeletalAnimationComponent,
-    SphereCollider3DComponent, SpriteAnimatorComponent, SpriteRendererComponent, TagComponent,
+    CameraComponent, CircleCollider2DComponent, CircleRendererComponent, DirectionalLightComponent,
+    EnvironmentComponent, FloatOrdering, IdComponent, InstancedSpriteAnimator, MeshPrimitive,
+    MeshRendererComponent, MeshSource, ParticleEmitterComponent, PointLightComponent,
+    RelationshipComponent, RigidBody2DComponent, RigidBody2DType, Scene,
+    SkeletalAnimationComponent, SpriteAnimatorComponent, SpriteRendererComponent, TagComponent,
     TextComponent, TilemapComponent, TransformComponent, TransitionCondition, UIAnchorComponent,
     UIImageComponent, UIInteractableComponent, UILayoutAlignment, UILayoutComponent,
     UILayoutDirection, UIRectComponent,
+};
+#[cfg(feature = "physics-3d")]
+use crate::scene::{
+    BoxCollider3DComponent, CapsuleCollider3DComponent, RigidBody3DComponent, RigidBody3DType,
+    SphereCollider3DComponent,
 };
 
 /// Default value for collision layer/mask fields — all bits set (collides with everything).
@@ -1462,6 +1466,7 @@ impl SceneSerializer {
                 _restitution_threshold: 0.0,
             });
 
+        #[cfg(feature = "physics-3d")]
         let rigidbody_3d_data = scene
             .get_component::<RigidBody3DComponent>(entity)
             .map(|rb| {
@@ -1480,7 +1485,10 @@ impl SceneSerializer {
                     angular_damping: rb.angular_damping,
                 }
             });
+        #[cfg(not(feature = "physics-3d"))]
+        let rigidbody_3d_data: Option<RigidBody3DData> = None;
 
+        #[cfg(feature = "physics-3d")]
         let box_collider_3d_data =
             scene
                 .get_component::<BoxCollider3DComponent>(entity)
@@ -1494,7 +1502,10 @@ impl SceneSerializer {
                     collision_mask: bc.collision_mask,
                     is_sensor: bc.is_sensor,
                 });
+        #[cfg(not(feature = "physics-3d"))]
+        let box_collider_3d_data: Option<BoxCollider3DData> = None;
 
+        #[cfg(feature = "physics-3d")]
         let sphere_collider_3d_data = scene
             .get_component::<SphereCollider3DComponent>(entity)
             .map(|sc| SphereCollider3DData {
@@ -1507,7 +1518,10 @@ impl SceneSerializer {
                 collision_mask: sc.collision_mask,
                 is_sensor: sc.is_sensor,
             });
+        #[cfg(not(feature = "physics-3d"))]
+        let sphere_collider_3d_data: Option<SphereCollider3DData> = None;
 
+        #[cfg(feature = "physics-3d")]
         let capsule_collider_3d_data = scene
             .get_component::<CapsuleCollider3DComponent>(entity)
             .map(|cc| CapsuleCollider3DData {
@@ -1521,6 +1535,8 @@ impl SceneSerializer {
                 collision_mask: cc.collision_mask,
                 is_sensor: cc.is_sensor,
             });
+        #[cfg(not(feature = "physics-3d"))]
+        let capsule_collider_3d_data: Option<CapsuleCollider3DData> = None;
 
         #[cfg(feature = "lua-scripting")]
         let lua_script_data = scene
@@ -1992,6 +2008,7 @@ impl SceneSerializer {
         }
 
         // RigidBody3DComponent
+        #[cfg(feature = "physics-3d")]
         if let Some(ref rbd) = entity_data.rigidbody_3d {
             let body_type = match rbd.body_type.as_str() {
                 "Dynamic" => RigidBody3DType::Dynamic,
@@ -2009,6 +2026,7 @@ impl SceneSerializer {
         }
 
         // BoxCollider3DComponent
+        #[cfg(feature = "physics-3d")]
         if let Some(ref bcd) = entity_data.box_collider_3d {
             scene.add_component(
                 entity,
@@ -2027,6 +2045,7 @@ impl SceneSerializer {
         }
 
         // SphereCollider3DComponent
+        #[cfg(feature = "physics-3d")]
         if let Some(ref scd) = entity_data.sphere_collider_3d {
             scene.add_component(
                 entity,
@@ -2045,6 +2064,7 @@ impl SceneSerializer {
         }
 
         // CapsuleCollider3DComponent
+        #[cfg(feature = "physics-3d")]
         if let Some(ref ccd) = entity_data.capsule_collider_3d {
             scene.add_component(
                 entity,

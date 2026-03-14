@@ -9,7 +9,9 @@ mod hierarchy;
 mod lua_ops;
 pub mod native_script;
 mod physics_2d;
+#[cfg(feature = "physics-3d")]
 mod physics_3d;
+#[cfg(feature = "physics-3d")]
 mod physics_3d_ops;
 mod physics_common;
 mod physics_ops;
@@ -31,18 +33,23 @@ pub use animation::{
 pub use components::LuaScriptComponent;
 pub use components::{
     AmbientLightComponent, AudioCategory, AudioListenerComponent, AudioSourceComponent,
-    BoxCollider2DComponent, BoxCollider3DComponent, CameraComponent, CapsuleCollider3DComponent,
-    CircleCollider2DComponent, CircleRendererComponent, DirectionalLightComponent,
-    EnvironmentComponent, IdComponent, MeshPrimitive, MeshRendererComponent, MeshSource,
-    NativeScriptComponent, ParticleEmitterComponent, PointLightComponent, RelationshipComponent,
-    RigidBody2DComponent, RigidBody2DType, RigidBody3DComponent, RigidBody3DType, RigidBodyType,
-    SkeletalAnimationComponent, SphereCollider3DComponent, SpriteRendererComponent, TagComponent,
+    BoxCollider2DComponent, CameraComponent, CircleCollider2DComponent, CircleRendererComponent,
+    DirectionalLightComponent, EnvironmentComponent, IdComponent, MeshPrimitive,
+    MeshRendererComponent, MeshSource, NativeScriptComponent, ParticleEmitterComponent,
+    PointLightComponent, RelationshipComponent, RigidBody2DComponent, RigidBody2DType,
+    RigidBodyType, SkeletalAnimationComponent, SpriteRendererComponent, TagComponent,
     TextComponent, TilemapComponent, TransformComponent, UIAnchorComponent, UIEvent,
     UIImageComponent, UIInteractableComponent, UIInteractionState, UILayoutAlignment,
     UILayoutComponent, UILayoutDirection, UIRectComponent, TILE_FLIP_H, TILE_FLIP_V, TILE_ID_MASK,
 };
+#[cfg(feature = "physics-3d")]
+pub use components::{
+    BoxCollider3DComponent, CapsuleCollider3DComponent, RigidBody3DComponent, RigidBody3DType,
+    SphereCollider3DComponent,
+};
 pub use entity::Entity;
 pub use native_script::NativeScript;
+#[cfg(feature = "physics-3d")]
 pub use physics_3d::RaycastHit3D;
 pub use scene_serializer::SceneSerializer;
 #[cfg(feature = "lua-scripting")]
@@ -52,6 +59,7 @@ pub use spatial::{Aabb2D, Aabb3D, Frustum2D, Frustum3D, SpatialGrid, SpatialGrid
 use std::collections::HashMap;
 
 use physics_2d::PhysicsWorld2D;
+#[cfg(feature = "physics-3d")]
 use physics_3d::PhysicsWorld3D;
 
 /// Per-frame frustum culling statistics.
@@ -97,6 +105,7 @@ pub struct Scene {
 
     // -- !Send subsystems (physics, scripting, audio) --
     pub(super) physics_world: Option<PhysicsWorld2D>,
+    #[cfg(feature = "physics-3d")]
     pub(super) physics_world_3d: Option<PhysicsWorld3D>,
     #[cfg(feature = "lua-scripting")]
     pub(super) script_engine: Option<ScriptEngine>,
@@ -134,10 +143,6 @@ macro_rules! for_each_cloneable_component {
             RigidBody2DComponent,
             BoxCollider2DComponent,
             CircleCollider2DComponent,
-            RigidBody3DComponent,
-            BoxCollider3DComponent,
-            SphereCollider3DComponent,
-            CapsuleCollider3DComponent,
             RelationshipComponent,
             SpriteAnimatorComponent,
             InstancedSpriteAnimator,
@@ -157,6 +162,13 @@ macro_rules! for_each_cloneable_component {
             UIInteractableComponent,
             UILayoutComponent,
             SkeletalAnimationComponent,
+        );
+        #[cfg(feature = "physics-3d")]
+        $callback!(
+            RigidBody3DComponent,
+            BoxCollider3DComponent,
+            SphereCollider3DComponent,
+            CapsuleCollider3DComponent,
         );
     };
 }
@@ -194,8 +206,13 @@ macro_rules! for_each_addable_component {
             ($crate::scene::AudioSourceComponent, "Audio Source"),
             ($crate::scene::AudioListenerComponent, "Audio Listener"),
             ($crate::scene::ParticleEmitterComponent, "Particle Emitter"),
-            ($crate::scene::RigidBody3DComponent, "Rigidbody 3D"),
             // 3D colliders handled manually in editor for mesh-aware defaults.
+        );
+        #[cfg(feature = "physics-3d")]
+        $callback!(
+            ($crate::scene::RigidBody3DComponent, "Rigidbody 3D"),
+        );
+        $callback!(
             ($crate::scene::MeshRendererComponent, "Mesh Renderer"),
             (
                 $crate::scene::DirectionalLightComponent,
@@ -219,6 +236,7 @@ impl Scene {
         Self {
             core: SceneCore::new(),
             physics_world: None,
+            #[cfg(feature = "physics-3d")]
             physics_world_3d: None,
             #[cfg(feature = "lua-scripting")]
             script_engine: None,
@@ -283,27 +301,30 @@ impl Scene {
                 }
 
                 // Also clean up 3D physics bodies.
-                let body_handle_3d = self
-                    .core
-                    .get_component::<RigidBody3DComponent>(entity)
-                    .and_then(|rb| rb.runtime_body);
-
-                if let (Some(handle), Some(ref mut physics)) =
-                    (body_handle_3d, &mut self.physics_world_3d)
+                #[cfg(feature = "physics-3d")]
                 {
-                    if let Some(body) = physics.bodies.get(handle) {
-                        for &collider_handle in body.colliders() {
-                            physics.collider_to_uuid.remove(&collider_handle);
+                    let body_handle_3d = self
+                        .core
+                        .get_component::<RigidBody3DComponent>(entity)
+                        .and_then(|rb| rb.runtime_body);
+
+                    if let (Some(handle), Some(ref mut physics)) =
+                        (body_handle_3d, &mut self.physics_world_3d)
+                    {
+                        if let Some(body) = physics.bodies.get(handle) {
+                            for &collider_handle in body.colliders() {
+                                physics.collider_to_uuid.remove(&collider_handle);
+                            }
                         }
+                        physics.bodies.remove(
+                            handle,
+                            &mut physics.island_manager,
+                            &mut physics.colliders,
+                            &mut physics.impulse_joints,
+                            &mut physics.multibody_joints,
+                            true,
+                        );
                     }
-                    physics.bodies.remove(
-                        handle,
-                        &mut physics.island_manager,
-                        &mut physics.colliders,
-                        &mut physics.impulse_joints,
-                        &mut physics.multibody_joints,
-                        true,
-                    );
                 }
 
                 let _ = self.core.destroy_entity(entity);
@@ -771,18 +792,22 @@ mod tests {
     /// `for_each_cloneable_component!`, update EXPECTED_COUNT here.
     #[test]
     fn for_each_cloneable_component_count() {
+        let mut count = 0usize;
         macro_rules! count_types {
             ($($t:ty),* $(,)?) => {
-                const MACRO_COUNT: usize = 0 $(+ { let _ = std::mem::size_of::<$t>(); 1 })*;
+                $(let _ = std::mem::size_of::<$t>(); count += 1;)*
             };
         }
         for_each_cloneable_component!(count_types);
-        const EXPECTED_COUNT: usize = 31;
+        #[cfg(feature = "physics-3d")]
+        let expected: usize = 31;
+        #[cfg(not(feature = "physics-3d"))]
+        let expected: usize = 27;
         assert_eq!(
-            MACRO_COUNT, EXPECTED_COUNT,
+            count, expected,
             "for_each_cloneable_component! has {} types but expected {}. \
-             Update EXPECTED_COUNT if you intentionally added/removed a component.",
-            MACRO_COUNT, EXPECTED_COUNT
+             Update expected if you intentionally added/removed a component.",
+            count, expected
         );
     }
 

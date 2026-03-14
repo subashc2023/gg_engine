@@ -409,6 +409,7 @@ impl RigidBodyType {
         }
     }
 
+    #[cfg(feature = "physics-3d")]
     pub(crate) fn to_rapier_3d(self) -> rapier3d::dynamics::RigidBodyType {
         match self {
             Self::Static => rapier3d::dynamics::RigidBodyType::Fixed,
@@ -614,12 +615,14 @@ impl Default for CircleCollider2DComponent {
 }
 
 // ---------------------------------------------------------------------------
-// 3D Physics Components
+// 3D Physics Components (feature-gated behind "physics-3d")
 // ---------------------------------------------------------------------------
 
 /// Backward-compatible alias for 3D rigid body type.
+#[cfg(feature = "physics-3d")]
 pub type RigidBody3DType = RigidBodyType;
 
+#[cfg(feature = "physics-3d")]
 /// 3D rigid body attached to an entity for physics simulation.
 ///
 /// Requires a [`TransformComponent`] on the same entity. At runtime start
@@ -641,6 +644,7 @@ pub struct RigidBody3DComponent {
     pub(crate) runtime_body: Option<rapier3d::dynamics::RigidBodyHandle>,
 }
 
+#[cfg(feature = "physics-3d")]
 impl RigidBody3DComponent {
     pub fn new(body_type: RigidBody3DType) -> Self {
         Self {
@@ -656,6 +660,7 @@ impl RigidBody3DComponent {
     }
 }
 
+#[cfg(feature = "physics-3d")]
 impl Clone for RigidBody3DComponent {
     fn clone(&self) -> Self {
         Self {
@@ -671,6 +676,7 @@ impl Clone for RigidBody3DComponent {
     }
 }
 
+#[cfg(feature = "physics-3d")]
 impl Default for RigidBody3DComponent {
     fn default() -> Self {
         Self {
@@ -686,6 +692,7 @@ impl Default for RigidBody3DComponent {
     }
 }
 
+#[cfg(feature = "physics-3d")]
 /// 3D box collider attached to an entity for collision detection.
 ///
 /// Requires a [`RigidBody3DComponent`] on the same entity. The collider
@@ -707,6 +714,7 @@ pub struct BoxCollider3DComponent {
     pub(crate) runtime_fixture: Option<rapier3d::geometry::ColliderHandle>,
 }
 
+#[cfg(feature = "physics-3d")]
 impl Clone for BoxCollider3DComponent {
     fn clone(&self) -> Self {
         Self {
@@ -723,6 +731,7 @@ impl Clone for BoxCollider3DComponent {
     }
 }
 
+#[cfg(feature = "physics-3d")]
 impl Default for BoxCollider3DComponent {
     fn default() -> Self {
         Self {
@@ -739,6 +748,7 @@ impl Default for BoxCollider3DComponent {
     }
 }
 
+#[cfg(feature = "physics-3d")]
 /// 3D sphere collider attached to an entity for collision detection.
 ///
 /// Requires a [`RigidBody3DComponent`] on the same entity.
@@ -755,6 +765,7 @@ pub struct SphereCollider3DComponent {
     pub(crate) runtime_fixture: Option<rapier3d::geometry::ColliderHandle>,
 }
 
+#[cfg(feature = "physics-3d")]
 impl Clone for SphereCollider3DComponent {
     fn clone(&self) -> Self {
         Self {
@@ -771,6 +782,7 @@ impl Clone for SphereCollider3DComponent {
     }
 }
 
+#[cfg(feature = "physics-3d")]
 impl Default for SphereCollider3DComponent {
     fn default() -> Self {
         Self {
@@ -787,6 +799,7 @@ impl Default for SphereCollider3DComponent {
     }
 }
 
+#[cfg(feature = "physics-3d")]
 /// 3D capsule collider attached to an entity for collision detection.
 ///
 /// Requires a [`RigidBody3DComponent`] on the same entity. The capsule
@@ -806,6 +819,7 @@ pub struct CapsuleCollider3DComponent {
     pub(crate) runtime_fixture: Option<rapier3d::geometry::ColliderHandle>,
 }
 
+#[cfg(feature = "physics-3d")]
 impl Clone for CapsuleCollider3DComponent {
     fn clone(&self) -> Self {
         Self {
@@ -823,6 +837,7 @@ impl Clone for CapsuleCollider3DComponent {
     }
 }
 
+#[cfg(feature = "physics-3d")]
 impl Default for CapsuleCollider3DComponent {
     fn default() -> Self {
         Self {

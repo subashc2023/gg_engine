@@ -9,6 +9,7 @@ use mlua::prelude::*;
 use super::{CameraComponent, Entity, Scene, TransformComponent};
 
 /// Lua return type for 3D raycast: `(entity_uuid?, hx, hy, hz, nx, ny, nz, toi)`.
+#[cfg(feature = "physics-3d")]
 type LuaRaycastHit3D = (Option<u64>, f32, f32, f32, f32, f32, f32, f32);
 use crate::events::gamepad::{GamepadAxis, GamepadButton};
 use crate::events::{KeyCode, MouseButton};
@@ -355,61 +356,70 @@ pub fn register_all(lua: &Lua) -> LuaResult<()> {
     engine.set("screen_to_world", lua.create_function(lua_screen_to_world)?)?;
 
     // 3D Physics
-    engine.set(
-        "apply_impulse_3d",
-        lua.create_function(lua_apply_impulse_3d)?,
-    )?;
-    engine.set(
-        "apply_impulse_at_point_3d",
-        lua.create_function(lua_apply_impulse_at_point_3d)?,
-    )?;
-    engine.set("apply_force_3d", lua.create_function(lua_apply_force_3d)?)?;
-    engine.set(
-        "apply_torque_impulse_3d",
-        lua.create_function(lua_apply_torque_impulse_3d)?,
-    )?;
-    engine.set("apply_torque_3d", lua.create_function(lua_apply_torque_3d)?)?;
-    engine.set(
-        "get_linear_velocity_3d",
-        lua.create_function(lua_get_linear_velocity_3d)?,
-    )?;
-    engine.set(
-        "set_linear_velocity_3d",
-        lua.create_function(lua_set_linear_velocity_3d)?,
-    )?;
-    engine.set(
-        "get_angular_velocity_3d",
-        lua.create_function(lua_get_angular_velocity_3d)?,
-    )?;
-    engine.set(
-        "set_angular_velocity_3d",
-        lua.create_function(lua_set_angular_velocity_3d)?,
-    )?;
-    engine.set("raycast_3d", lua.create_function(lua_raycast_3d)?)?;
-    engine.set("set_gravity_3d", lua.create_function(lua_set_gravity_3d)?)?;
-    engine.set("get_gravity_3d", lua.create_function(lua_get_gravity_3d)?)?;
+    #[cfg(feature = "physics-3d")]
+    {
+        engine.set(
+            "apply_impulse_3d",
+            lua.create_function(lua_apply_impulse_3d)?,
+        )?;
+        engine.set(
+            "apply_impulse_at_point_3d",
+            lua.create_function(lua_apply_impulse_at_point_3d)?,
+        )?;
+        engine.set("apply_force_3d", lua.create_function(lua_apply_force_3d)?)?;
+        engine.set(
+            "apply_torque_impulse_3d",
+            lua.create_function(lua_apply_torque_impulse_3d)?,
+        )?;
+        engine.set("apply_torque_3d", lua.create_function(lua_apply_torque_3d)?)?;
+        engine.set(
+            "get_linear_velocity_3d",
+            lua.create_function(lua_get_linear_velocity_3d)?,
+        )?;
+        engine.set(
+            "set_linear_velocity_3d",
+            lua.create_function(lua_set_linear_velocity_3d)?,
+        )?;
+        engine.set(
+            "get_angular_velocity_3d",
+            lua.create_function(lua_get_angular_velocity_3d)?,
+        )?;
+        engine.set(
+            "set_angular_velocity_3d",
+            lua.create_function(lua_set_angular_velocity_3d)?,
+        )?;
+        engine.set("raycast_3d", lua.create_function(lua_raycast_3d)?)?;
+        engine.set("set_gravity_3d", lua.create_function(lua_set_gravity_3d)?)?;
+        engine.set("get_gravity_3d", lua.create_function(lua_get_gravity_3d)?)?;
+    }
 
     // Runtime body type changes
     engine.set("set_body_type", lua.create_function(lua_set_body_type)?)?;
     engine.set("get_body_type", lua.create_function(lua_get_body_type)?)?;
-    engine.set(
-        "set_body_type_3d",
-        lua.create_function(lua_set_body_type_3d)?,
-    )?;
-    engine.set(
-        "get_body_type_3d",
-        lua.create_function(lua_get_body_type_3d)?,
-    )?;
+    #[cfg(feature = "physics-3d")]
+    {
+        engine.set(
+            "set_body_type_3d",
+            lua.create_function(lua_set_body_type_3d)?,
+        )?;
+        engine.set(
+            "get_body_type_3d",
+            lua.create_function(lua_get_body_type_3d)?,
+        )?;
+    }
 
     // Shape overlap queries
     engine.set("point_query", lua.create_function(lua_point_query)?)?;
     engine.set("aabb_query", lua.create_function(lua_aabb_query)?)?;
     engine.set("overlap_circle", lua.create_function(lua_overlap_circle)?)?;
     engine.set("overlap_box", lua.create_function(lua_overlap_box)?)?;
-    engine.set("point_query_3d", lua.create_function(lua_point_query_3d)?)?;
-    engine.set("aabb_query_3d", lua.create_function(lua_aabb_query_3d)?)?;
-    engine.set("overlap_sphere", lua.create_function(lua_overlap_sphere)?)?;
-    engine.set("overlap_box_3d", lua.create_function(lua_overlap_box_3d)?)?;
+    #[cfg(feature = "physics-3d")]
+    {
+        engine.set("point_query_3d", lua.create_function(lua_point_query_3d)?)?;
+        engine.set("aabb_query_3d", lua.create_function(lua_aabb_query_3d)?)?;
+        engine.set("overlap_sphere", lua.create_function(lua_overlap_sphere)?)?;
+        engine.set("overlap_box_3d", lua.create_function(lua_overlap_box_3d)?)?;
+    }
 
     // Spatial grid queries (non-physics, transform-based)
     engine.set(
@@ -447,23 +457,26 @@ pub fn register_all(lua: &Lua) -> LuaResult<()> {
     engine.set("remove_joint", lua.create_function(lua_remove_joint)?)?;
 
     // Joints (3D)
-    engine.set(
-        "create_revolute_joint_3d",
-        lua.create_function(lua_create_revolute_joint_3d)?,
-    )?;
-    engine.set(
-        "create_fixed_joint_3d",
-        lua.create_function(lua_create_fixed_joint_3d)?,
-    )?;
-    engine.set(
-        "create_ball_joint_3d",
-        lua.create_function(lua_create_ball_joint_3d)?,
-    )?;
-    engine.set(
-        "create_prismatic_joint_3d",
-        lua.create_function(lua_create_prismatic_joint_3d)?,
-    )?;
-    engine.set("remove_joint_3d", lua.create_function(lua_remove_joint_3d)?)?;
+    #[cfg(feature = "physics-3d")]
+    {
+        engine.set(
+            "create_revolute_joint_3d",
+            lua.create_function(lua_create_revolute_joint_3d)?,
+        )?;
+        engine.set(
+            "create_fixed_joint_3d",
+            lua.create_function(lua_create_fixed_joint_3d)?,
+        )?;
+        engine.set(
+            "create_ball_joint_3d",
+            lua.create_function(lua_create_ball_joint_3d)?,
+        )?;
+        engine.set(
+            "create_prismatic_joint_3d",
+            lua.create_function(lua_create_prismatic_joint_3d)?,
+        )?;
+        engine.set("remove_joint_3d", lua.create_function(lua_remove_joint_3d)?)?;
+    }
 
     // Entity queries
     engine.set(
@@ -702,6 +715,7 @@ fn set_translation(lua: &Lua, (entity_id, x, y, z): (u64, f32, f32, f32)) -> Lua
             tc.translation = glam::Vec3::new(x, y, z);
         }
         scene.sync_physics_translation(entity, x, y);
+        #[cfg(feature = "physics-3d")]
         scene.sync_physics_translation_3d(entity, x, y, z);
     })
 }
@@ -985,9 +999,13 @@ fn has_component(lua: &Lua, (entity_id, name): (u64, String)) -> LuaResult<bool>
         "SpriteAnimator" => scene.has_component::<super::SpriteAnimatorComponent>(entity),
         "InstancedSpriteAnimator" => scene.has_component::<super::InstancedSpriteAnimator>(entity),
         "AnimationController" => scene.has_component::<super::AnimationControllerComponent>(entity),
+        #[cfg(feature = "physics-3d")]
         "RigidBody3D" => scene.has_component::<super::RigidBody3DComponent>(entity),
+        #[cfg(feature = "physics-3d")]
         "BoxCollider3D" => scene.has_component::<super::BoxCollider3DComponent>(entity),
+        #[cfg(feature = "physics-3d")]
         "SphereCollider3D" => scene.has_component::<super::SphereCollider3DComponent>(entity),
+        #[cfg(feature = "physics-3d")]
         "CapsuleCollider3D" => scene.has_component::<super::CapsuleCollider3DComponent>(entity),
         "MeshRenderer" => scene.has_component::<super::MeshRendererComponent>(entity),
         "DirectionalLight" => scene.has_component::<super::DirectionalLightComponent>(entity),
@@ -1664,9 +1682,10 @@ fn lua_screen_to_world(lua: &Lua, (sx, sy): (f64, f64)) -> LuaResult<(f32, f32)>
 }
 
 // ---------------------------------------------------------------------------
-// 3D Physics bindings
+// 3D Physics bindings (feature-gated behind "physics-3d")
 // ---------------------------------------------------------------------------
 
+#[cfg(feature = "physics-3d")]
 /// `Engine.apply_impulse_3d(entity_id, ix, iy, iz)`
 fn lua_apply_impulse_3d(lua: &Lua, (entity_id, ix, iy, iz): (u64, f32, f32, f32)) -> LuaResult<()> {
     with_entity_mut(lua, entity_id, (), |scene, entity| {
@@ -1674,6 +1693,7 @@ fn lua_apply_impulse_3d(lua: &Lua, (entity_id, ix, iy, iz): (u64, f32, f32, f32)
     })
 }
 
+#[cfg(feature = "physics-3d")]
 /// `Engine.apply_impulse_at_point_3d(entity_id, ix, iy, iz, px, py, pz)`
 fn lua_apply_impulse_at_point_3d(
     lua: &Lua,
@@ -1688,6 +1708,7 @@ fn lua_apply_impulse_at_point_3d(
     })
 }
 
+#[cfg(feature = "physics-3d")]
 /// `Engine.apply_force_3d(entity_id, fx, fy, fz)`
 fn lua_apply_force_3d(lua: &Lua, (entity_id, fx, fy, fz): (u64, f32, f32, f32)) -> LuaResult<()> {
     with_entity_mut(lua, entity_id, (), |scene, entity| {
@@ -1695,6 +1716,7 @@ fn lua_apply_force_3d(lua: &Lua, (entity_id, fx, fy, fz): (u64, f32, f32, f32)) 
     })
 }
 
+#[cfg(feature = "physics-3d")]
 /// `Engine.apply_torque_impulse_3d(entity_id, tx, ty, tz)`
 fn lua_apply_torque_impulse_3d(
     lua: &Lua,
@@ -1705,6 +1727,7 @@ fn lua_apply_torque_impulse_3d(
     })
 }
 
+#[cfg(feature = "physics-3d")]
 /// `Engine.apply_torque_3d(entity_id, tx, ty, tz)`
 fn lua_apply_torque_3d(lua: &Lua, (entity_id, tx, ty, tz): (u64, f32, f32, f32)) -> LuaResult<()> {
     with_entity_mut(lua, entity_id, (), |scene, entity| {
@@ -1712,6 +1735,7 @@ fn lua_apply_torque_3d(lua: &Lua, (entity_id, tx, ty, tz): (u64, f32, f32, f32))
     })
 }
 
+#[cfg(feature = "physics-3d")]
 /// `Engine.get_linear_velocity_3d(entity_id)` — returns `(vx, vy, vz)`.
 fn lua_get_linear_velocity_3d(lua: &Lua, entity_id: u64) -> LuaResult<(f32, f32, f32)> {
     with_entity(lua, entity_id, (0.0, 0.0, 0.0), |scene, entity| {
@@ -1722,6 +1746,7 @@ fn lua_get_linear_velocity_3d(lua: &Lua, entity_id: u64) -> LuaResult<(f32, f32,
     })
 }
 
+#[cfg(feature = "physics-3d")]
 /// `Engine.set_linear_velocity_3d(entity_id, vx, vy, vz)`
 fn lua_set_linear_velocity_3d(
     lua: &Lua,
@@ -1732,6 +1757,7 @@ fn lua_set_linear_velocity_3d(
     })
 }
 
+#[cfg(feature = "physics-3d")]
 /// `Engine.get_angular_velocity_3d(entity_id)` — returns `(wx, wy, wz)` in rad/s.
 fn lua_get_angular_velocity_3d(lua: &Lua, entity_id: u64) -> LuaResult<(f32, f32, f32)> {
     with_entity(lua, entity_id, (0.0, 0.0, 0.0), |scene, entity| {
@@ -1742,6 +1768,7 @@ fn lua_get_angular_velocity_3d(lua: &Lua, entity_id: u64) -> LuaResult<(f32, f32
     })
 }
 
+#[cfg(feature = "physics-3d")]
 /// `Engine.set_angular_velocity_3d(entity_id, wx, wy, wz)`
 fn lua_set_angular_velocity_3d(
     lua: &Lua,
@@ -1752,6 +1779,7 @@ fn lua_set_angular_velocity_3d(
     })
 }
 
+#[cfg(feature = "physics-3d")]
 /// `Engine.raycast_3d(ox, oy, oz, dx, dy, dz, max_distance, exclude_entity_id)`
 ///
 /// Returns `(hit_entity_id, hx, hy, hz, nx, ny, nz, distance)` or `nil` values on miss.
@@ -1797,11 +1825,13 @@ fn lua_raycast_3d(
         .unwrap_or(zero))
 }
 
+#[cfg(feature = "physics-3d")]
 /// `Engine.set_gravity_3d(x, y, z)`
 fn lua_set_gravity_3d(lua: &Lua, (x, y, z): (f32, f32, f32)) -> LuaResult<()> {
     with_scene_mut(lua, (), |scene| scene.set_gravity_3d(x, y, z))
 }
 
+#[cfg(feature = "physics-3d")]
 /// `Engine.get_gravity_3d()` — returns `(x, y, z)`.
 fn lua_get_gravity_3d(lua: &Lua, _: ()) -> LuaResult<(f32, f32, f32)> {
     let ctx = match lua.app_data_mut::<SceneScriptContext>() {
@@ -1840,6 +1870,7 @@ fn lua_get_body_type(lua: &Lua, entity_id: u64) -> LuaResult<Option<String>> {
     })
 }
 
+#[cfg(feature = "physics-3d")]
 /// `Engine.set_body_type_3d(entity_id, type_str)` — change 3D body type at runtime.
 fn lua_set_body_type_3d(lua: &Lua, (entity_id, type_str): (u64, String)) -> LuaResult<()> {
     let body_type = match super::RigidBody3DType::from_str_loose(&type_str) {
@@ -1854,6 +1885,7 @@ fn lua_set_body_type_3d(lua: &Lua, (entity_id, type_str): (u64, String)) -> LuaR
     })
 }
 
+#[cfg(feature = "physics-3d")]
 /// `Engine.get_body_type_3d(entity_id)` — returns "static", "dynamic", or "kinematic".
 fn lua_get_body_type_3d(lua: &Lua, entity_id: u64) -> LuaResult<Option<String>> {
     with_entity(lua, entity_id, None, |scene, entity| {
@@ -1935,6 +1967,7 @@ fn lua_overlap_box(
     uuid_vec_to_lua_table(lua, results)
 }
 
+#[cfg(feature = "physics-3d")]
 /// `Engine.point_query_3d(x, y, z)` — find all entities at a 3D point.
 fn lua_point_query_3d(lua: &Lua, (x, y, z): (f32, f32, f32)) -> LuaResult<LuaTable> {
     let ctx = match lua.app_data_mut::<SceneScriptContext>() {
@@ -1946,6 +1979,7 @@ fn lua_point_query_3d(lua: &Lua, (x, y, z): (f32, f32, f32)) -> LuaResult<LuaTab
     uuid_vec_to_lua_table(lua, results)
 }
 
+#[cfg(feature = "physics-3d")]
 /// `Engine.aabb_query_3d(min_x, min_y, min_z, max_x, max_y, max_z)` — 3D AABB query.
 #[allow(clippy::too_many_arguments)]
 fn lua_aabb_query_3d(
@@ -1964,6 +1998,7 @@ fn lua_aabb_query_3d(
     uuid_vec_to_lua_table(lua, results)
 }
 
+#[cfg(feature = "physics-3d")]
 /// `Engine.overlap_sphere(cx, cy, cz, radius, exclude_entity_id)` — sphere overlap test.
 fn lua_overlap_sphere(
     lua: &Lua,
@@ -1979,6 +2014,7 @@ fn lua_overlap_sphere(
     uuid_vec_to_lua_table(lua, results)
 }
 
+#[cfg(feature = "physics-3d")]
 /// `Engine.overlap_box_3d(cx, cy, cz, hx, hy, hz, exclude_entity_id)` — 3D box overlap.
 #[allow(clippy::too_many_arguments)]
 fn lua_overlap_box_3d(
@@ -2180,9 +2216,10 @@ fn lua_remove_joint(lua: &Lua, joint_id: i64) -> LuaResult<()> {
 }
 
 // ---------------------------------------------------------------------------
-// Joints (3D)
+// Joints (3D) — feature-gated behind "physics-3d"
 // ---------------------------------------------------------------------------
 
+#[cfg(feature = "physics-3d")]
 /// `Engine.create_revolute_joint_3d(ea, eb, ax, ay, az, bx, by, bz, axis_x, axis_y, axis_z)`
 #[allow(clippy::too_many_arguments)]
 fn lua_create_revolute_joint_3d(
@@ -2225,6 +2262,7 @@ fn lua_create_revolute_joint_3d(
         .map(|id| id as i64))
 }
 
+#[cfg(feature = "physics-3d")]
 /// `Engine.create_fixed_joint_3d(ea, eb, ax, ay, az, bx, by, bz)`
 #[allow(clippy::too_many_arguments)]
 fn lua_create_fixed_joint_3d(
@@ -2254,6 +2292,7 @@ fn lua_create_fixed_joint_3d(
         .map(|id| id as i64))
 }
 
+#[cfg(feature = "physics-3d")]
 /// `Engine.create_ball_joint_3d(ea, eb, ax, ay, az, bx, by, bz)`
 #[allow(clippy::too_many_arguments)]
 fn lua_create_ball_joint_3d(
@@ -2283,6 +2322,7 @@ fn lua_create_ball_joint_3d(
         .map(|id| id as i64))
 }
 
+#[cfg(feature = "physics-3d")]
 /// `Engine.create_prismatic_joint_3d(ea, eb, ax, ay, az, bx, by, bz, dx, dy, dz)`
 #[allow(clippy::too_many_arguments)]
 fn lua_create_prismatic_joint_3d(
@@ -2325,6 +2365,7 @@ fn lua_create_prismatic_joint_3d(
         .map(|id| id as i64))
 }
 
+#[cfg(feature = "physics-3d")]
 /// `Engine.remove_joint_3d(joint_id)` — remove a 3D joint.
 fn lua_remove_joint_3d(lua: &Lua, joint_id: i64) -> LuaResult<()> {
     with_scene_mut(lua, (), |scene| scene.remove_joint_3d(joint_id as u64))
@@ -2569,9 +2610,13 @@ fn lua_find_entities_with_component(lua: &Lua, name: String) -> LuaResult<LuaTab
         "SpriteAnimator" => collect_uuids!(super::SpriteAnimatorComponent),
         "InstancedSpriteAnimator" => collect_uuids!(super::InstancedSpriteAnimator),
         "AnimationController" => collect_uuids!(super::AnimationControllerComponent),
+        #[cfg(feature = "physics-3d")]
         "RigidBody3D" => collect_uuids!(super::RigidBody3DComponent),
+        #[cfg(feature = "physics-3d")]
         "BoxCollider3D" => collect_uuids!(super::BoxCollider3DComponent),
+        #[cfg(feature = "physics-3d")]
         "SphereCollider3D" => collect_uuids!(super::SphereCollider3DComponent),
+        #[cfg(feature = "physics-3d")]
         "CapsuleCollider3D" => collect_uuids!(super::CapsuleCollider3DComponent),
         "MeshRenderer" => collect_uuids!(super::MeshRendererComponent),
         "DirectionalLight" => collect_uuids!(super::DirectionalLightComponent),
@@ -3622,17 +3667,23 @@ mod tests {
         // Body type
         assert!(engine.get::<LuaFunction>("set_body_type").is_ok());
         assert!(engine.get::<LuaFunction>("get_body_type").is_ok());
-        assert!(engine.get::<LuaFunction>("set_body_type_3d").is_ok());
-        assert!(engine.get::<LuaFunction>("get_body_type_3d").is_ok());
+        #[cfg(feature = "physics-3d")]
+        {
+            assert!(engine.get::<LuaFunction>("set_body_type_3d").is_ok());
+            assert!(engine.get::<LuaFunction>("get_body_type_3d").is_ok());
+        }
         // Shape overlap queries
         assert!(engine.get::<LuaFunction>("point_query").is_ok());
         assert!(engine.get::<LuaFunction>("aabb_query").is_ok());
         assert!(engine.get::<LuaFunction>("overlap_circle").is_ok());
         assert!(engine.get::<LuaFunction>("overlap_box").is_ok());
-        assert!(engine.get::<LuaFunction>("point_query_3d").is_ok());
-        assert!(engine.get::<LuaFunction>("aabb_query_3d").is_ok());
-        assert!(engine.get::<LuaFunction>("overlap_sphere").is_ok());
-        assert!(engine.get::<LuaFunction>("overlap_box_3d").is_ok());
+        #[cfg(feature = "physics-3d")]
+        {
+            assert!(engine.get::<LuaFunction>("point_query_3d").is_ok());
+            assert!(engine.get::<LuaFunction>("aabb_query_3d").is_ok());
+            assert!(engine.get::<LuaFunction>("overlap_sphere").is_ok());
+            assert!(engine.get::<LuaFunction>("overlap_box_3d").is_ok());
+        }
         // Spatial grid queries
         assert!(engine.get::<LuaFunction>("rebuild_spatial_grid").is_ok());
         assert!(engine
@@ -3648,15 +3699,18 @@ mod tests {
         assert!(engine.get::<LuaFunction>("create_prismatic_joint").is_ok());
         assert!(engine.get::<LuaFunction>("remove_joint").is_ok());
         // Joints (3D)
-        assert!(engine
-            .get::<LuaFunction>("create_revolute_joint_3d")
-            .is_ok());
-        assert!(engine.get::<LuaFunction>("create_fixed_joint_3d").is_ok());
-        assert!(engine.get::<LuaFunction>("create_ball_joint_3d").is_ok());
-        assert!(engine
-            .get::<LuaFunction>("create_prismatic_joint_3d")
-            .is_ok());
-        assert!(engine.get::<LuaFunction>("remove_joint_3d").is_ok());
+        #[cfg(feature = "physics-3d")]
+        {
+            assert!(engine
+                .get::<LuaFunction>("create_revolute_joint_3d")
+                .is_ok());
+            assert!(engine.get::<LuaFunction>("create_fixed_joint_3d").is_ok());
+            assert!(engine.get::<LuaFunction>("create_ball_joint_3d").is_ok());
+            assert!(engine
+                .get::<LuaFunction>("create_prismatic_joint_3d")
+                .is_ok());
+            assert!(engine.get::<LuaFunction>("remove_joint_3d").is_ok());
+        }
         // Cursor
         assert!(engine.get::<LuaFunction>("set_cursor_mode").is_ok());
         assert!(engine.get::<LuaFunction>("get_cursor_mode").is_ok());

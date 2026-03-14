@@ -132,6 +132,22 @@ impl AssetLoader {
         true
     }
 
+    /// Like [`request_texture`](Self::request_texture) but unconditionally
+    /// enqueues the load even if the handle was already pending. Used by
+    /// texture hot-reload where the previous result should be discarded.
+    pub fn force_request_texture(
+        &mut self,
+        handle: Uuid,
+        path: PathBuf,
+        spec: TextureSpecification,
+    ) {
+        self.pending_textures.insert(handle);
+        let inner = self.ensure_started();
+        let _ = inner
+            .request_tx
+            .send(LoadRequest::Texture { handle, path, spec });
+    }
+
     /// Request async font loading. Returns false if already pending.
     pub fn request_font(&mut self, font_key: PathBuf) -> bool {
         if !self.pending_fonts.insert(font_key.clone()) {

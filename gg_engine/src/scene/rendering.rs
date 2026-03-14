@@ -2,11 +2,13 @@ use super::{
     AmbientLightComponent, AnimationControllerComponent, CircleRendererComponent,
     DirectionalLightComponent, Entity, EnvironmentComponent, IdComponent, InstancedSpriteAnimator,
     MeshPrimitive, MeshRendererComponent, MeshSource, ParticleEmitterComponent,
-    PointLightComponent, RigidBody3DComponent, RigidBody3DType, Scene, SkeletalAnimationComponent,
-    SpriteAnimatorComponent, SpriteRendererComponent, TextComponent, TilemapComponent,
-    TransformComponent, UIAnchorComponent, UIImageComponent, UIInteractableComponent,
-    UIInteractionState, UIRectComponent, TILE_FLIP_H, TILE_FLIP_V, TILE_ID_MASK,
+    PointLightComponent, Scene, SkeletalAnimationComponent, SpriteAnimatorComponent,
+    SpriteRendererComponent, TextComponent, TilemapComponent, TransformComponent,
+    UIAnchorComponent, UIImageComponent, UIInteractableComponent, UIInteractionState,
+    UIRectComponent, TILE_FLIP_H, TILE_FLIP_V, TILE_ID_MASK,
 };
+#[cfg(feature = "physics-3d")]
+use super::{RigidBody3DComponent, RigidBody3DType};
 use crate::renderer::shadow_map::{
     compute_cascade_vps, compute_directional_light_vp, ShadowCameraInfo,
 };
@@ -22,6 +24,78 @@ struct RenderSortKey {
     /// 0 = Sprite, 1 = Circle, 2 = Text, 3 = Tilemap, 4 = UIImage
     kind: u8,
     entity: hecs::Entity,
+}
+
+/// Pre-allocated buffers reused across frames to avoid per-frame heap allocations
+/// in rendering and animation hot paths.
+///
+/// Held behind a `Mutex` on [`SceneCore`] so that `&self` render methods can
+/// borrow and clear these buffers instead of allocating fresh `Vec`s every frame.
+/// The mutex is uncontested (rendering is single-threaded) so lock cost is ~5 ns.
+pub(super) struct RenderBufferPool {
+    /// 2D renderable sort keys (sprites, circles, text, tilemaps, UI images).
+    sort_keys: Vec<RenderSortKey>,
+    /// Sprite entity handles + sorting fields for frustum culling input.
+    sprite_handles: Vec<(hecs::Entity, i32, i32)>,
+    /// Circle renderable sort keys (kept separate before merge).
+    circle_keys: Vec<RenderSortKey>,
+    /// 3D mesh entity handles + world transforms.
+    mesh_handles: Vec<(hecs::Entity, glam::Mat4)>,
+    /// Skinned mesh entity handles + world transforms.
+    skinned_handles: Vec<(hecs::Entity, glam::Mat4)>,
+    /// Skinned mesh draw list (entity + world transform + bone offset).
+    skinned_draw_list: Vec<(hecs::Entity, glam::Mat4, u32)>,
+    /// Shadow pass mesh list (entity + world transform + alpha flag).
+    shadow_meshes: Vec<(hecs::Entity, glam::Mat4, bool)>,
+    /// Shadow pass skinned mesh list.
+    shadow_skinned: Vec<(hecs::Entity, glam::Mat4)>,
+    /// Shadow pass per-mesh bounding volumes.
+    shadow_bounds: Vec<Option<super::spatial::Aabb3D>>,
+    /// Shadow pass skinned draw data.
+    shadow_skinned_draw: Vec<(hecs::Entity, glam::Mat4, u32)>,
+    /// Animation work items for extract-process-writeback.
+    anim_work: Vec<AnimWork>,
+    /// Finished animation events (uuid, clip_name, default_clip).
+    anim_finished: Vec<(u64, String, String)>,
+    /// Animation controller transitions to apply.
+    anim_transitions: Vec<(u64, String)>,
+}
+
+impl Default for RenderBufferPool {
+    fn default() -> Self {
+        Self {
+            sort_keys: Vec::new(),
+            sprite_handles: Vec::new(),
+            circle_keys: Vec::new(),
+            mesh_handles: Vec::new(),
+            skinned_handles: Vec::new(),
+            skinned_draw_list: Vec::new(),
+            shadow_meshes: Vec::new(),
+            shadow_skinned: Vec::new(),
+            shadow_bounds: Vec::new(),
+            shadow_skinned_draw: Vec::new(),
+            anim_work: Vec::new(),
+            anim_finished: Vec::new(),
+            anim_transitions: Vec::new(),
+        }
+    }
+}
+
+/// Per-entity animation work item for parallel extract-process-writeback.
+struct AnimWork {
+    entity: hecs::Entity,
+    uuid: u64,
+    frame_timer: f32,
+    current_frame: u32,
+    playing: bool,
+    speed_scale: f32,
+    clip_start_frame: u32,
+    clip_end_frame: u32,
+    clip_fps: f32,
+    clip_looping: bool,
+    clip_name: String,
+    default_clip: String,
+    finished: bool,
 }
 
 impl Scene {
@@ -46,47 +120,40 @@ impl Scene {
         self.global_time += dt as f64;
         self.last_dt = dt;
 
-        // Phase 1: extract + parallel tick SpriteAnimatorComponent timers.
-        struct AnimWork {
-            entity: hecs::Entity,
-            uuid: u64,
-            frame_timer: f32,
-            current_frame: u32,
-            playing: bool,
-            speed_scale: f32,
-            clip_start_frame: u32,
-            clip_end_frame: u32,
-            clip_fps: f32,
-            clip_looping: bool,
-            clip_name: String,
-            default_clip: String,
-            finished: bool,
-        }
+        // Take reusable buffers from pool (avoids per-frame heap allocations).
+        let mut pool = self.core.render_buffers.lock();
+        let mut work = std::mem::take(&mut pool.anim_work);
+        let mut finished_events = std::mem::take(&mut pool.anim_finished);
+        drop(pool);
 
-        let mut work: Vec<AnimWork> = self
-            .world
-            .query::<(hecs::Entity, &IdComponent, &SpriteAnimatorComponent)>()
-            .iter()
-            .filter(|(_, _, anim)| anim.playing)
-            .map(|(entity, id, anim)| {
-                let clip = anim.current_clip_index().and_then(|i| anim.clips.get(i));
-                AnimWork {
-                    entity,
-                    uuid: id.id.raw(),
-                    frame_timer: anim.frame_timer,
-                    current_frame: anim.current_frame,
-                    playing: true,
-                    speed_scale: anim.speed_scale,
-                    clip_start_frame: clip.map(|c| c.start_frame).unwrap_or(0),
-                    clip_end_frame: clip.map(|c| c.end_frame).unwrap_or(0),
-                    clip_fps: clip.map(|c| c.fps).unwrap_or(0.0),
-                    clip_looping: clip.map(|c| c.looping).unwrap_or(true),
-                    clip_name: clip.map(|c| c.name.clone()).unwrap_or_default(),
-                    default_clip: anim.default_clip.clone(),
-                    finished: false,
-                }
-            })
-            .collect();
+        work.clear();
+        finished_events.clear();
+
+        // Phase 1: extract + parallel tick SpriteAnimatorComponent timers.
+        work.extend(
+            self.world
+                .query::<(hecs::Entity, &IdComponent, &SpriteAnimatorComponent)>()
+                .iter()
+                .filter(|(_, _, anim)| anim.playing)
+                .map(|(entity, id, anim)| {
+                    let clip = anim.current_clip_index().and_then(|i| anim.clips.get(i));
+                    AnimWork {
+                        entity,
+                        uuid: id.id.raw(),
+                        frame_timer: anim.frame_timer,
+                        current_frame: anim.current_frame,
+                        playing: true,
+                        speed_scale: anim.speed_scale,
+                        clip_start_frame: clip.map(|c| c.start_frame).unwrap_or(0),
+                        clip_end_frame: clip.map(|c| c.end_frame).unwrap_or(0),
+                        clip_fps: clip.map(|c| c.fps).unwrap_or(0.0),
+                        clip_looping: clip.map(|c| c.looping).unwrap_or(true),
+                        clip_name: clip.map(|c| c.name.clone()).unwrap_or_default(),
+                        default_clip: anim.default_clip.clone(),
+                        finished: false,
+                    }
+                }),
+        );
 
         // Parallel tick (pure per-entity computation, no cross-entity deps).
         crate::jobs::parallel::par_for_each_mut(&mut work, |item| {
@@ -112,7 +179,6 @@ impl Scene {
         });
 
         // Writeback + collect finished events.
-        let mut finished_events: Vec<(u64, String, String)> = Vec::new();
         for item in &work {
             if let Ok(mut anim) = self.world.get::<&mut SpriteAnimatorComponent>(item.entity) {
                 anim.frame_timer = item.frame_timer;
@@ -170,39 +236,41 @@ impl Scene {
             }
         }
 
-        if finished_events.is_empty() {
-            self.evaluate_animation_controllers();
-            return;
-        }
+        if !finished_events.is_empty() {
+            // Phase 3: dispatch Lua callbacks.
+            #[cfg(feature = "lua-scripting")]
+            self.dispatch_animation_finished_events(&finished_events);
 
-        // Phase 3: dispatch Lua callbacks.
-        #[cfg(feature = "lua-scripting")]
-        self.dispatch_animation_finished_events(&finished_events);
-
-        // Phase 4: transition to default clip for entities that have one.
-        let gt = self.global_time;
-        for (uuid, _, default_clip) in &finished_events {
-            if default_clip.is_empty() {
-                continue;
-            }
-            if let Some(entity) = self.find_entity_by_uuid(*uuid) {
-                let has_sa = self.has_component::<SpriteAnimatorComponent>(entity);
-                if has_sa {
-                    if let Some(mut animator) =
-                        self.get_component_mut::<SpriteAnimatorComponent>(entity)
+            // Phase 4: transition to default clip for entities that have one.
+            let gt = self.global_time;
+            for (uuid, _, default_clip) in &finished_events {
+                if default_clip.is_empty() {
+                    continue;
+                }
+                if let Some(entity) = self.find_entity_by_uuid(*uuid) {
+                    let has_sa = self.has_component::<SpriteAnimatorComponent>(entity);
+                    if has_sa {
+                        if let Some(mut animator) =
+                            self.get_component_mut::<SpriteAnimatorComponent>(entity)
+                        {
+                            animator.play(default_clip);
+                        }
+                    } else if let Some(mut anim) =
+                        self.get_component_mut::<InstancedSpriteAnimator>(entity)
                     {
-                        animator.play(default_clip);
+                        anim.play_by_name(default_clip, gt);
                     }
-                } else if let Some(mut anim) =
-                    self.get_component_mut::<InstancedSpriteAnimator>(entity)
-                {
-                    anim.play_by_name(default_clip, gt);
                 }
             }
         }
 
         // Phase 5: evaluate animation controllers.
         self.evaluate_animation_controllers();
+
+        // Return buffers to pool for reuse next frame.
+        let mut pool = self.core.render_buffers.lock();
+        pool.anim_work = work;
+        pool.anim_finished = finished_events;
     }
 
     /// Evaluate all [`AnimationControllerComponent`]s and apply transitions.
@@ -210,8 +278,12 @@ impl Scene {
     /// Checks each entity that has both a controller and an animator.
     /// If a transition fires, plays the target clip on the animator.
     fn evaluate_animation_controllers(&mut self) {
-        // Collect transitions to apply (uuid, target_clip).
-        let mut to_play: Vec<(u64, String)> = Vec::new();
+        // Reuse pooled buffer for transitions.
+        let mut pool = self.core.render_buffers.lock();
+        let mut to_play = std::mem::take(&mut pool.anim_transitions);
+        drop(pool);
+
+        to_play.clear();
 
         for (id_comp, animator, ctrl) in self.world.query_mut::<(
             &IdComponent,
@@ -225,15 +297,19 @@ impl Scene {
             }
         }
 
-        for (uuid, target) in to_play {
-            if let Some(entity) = self.find_entity_by_uuid(uuid) {
+        for (uuid, target) in &to_play {
+            if let Some(entity) = self.find_entity_by_uuid(*uuid) {
                 if let Some(mut animator) =
                     self.get_component_mut::<SpriteAnimatorComponent>(entity)
                 {
-                    animator.play(&target);
+                    animator.play(target);
                 }
             }
         }
+
+        // Return buffer to pool.
+        let mut pool = self.core.render_buffers.lock();
+        pool.anim_transitions = to_play;
     }
 
     /// Advance animations only for entities with `previewing` set (editor preview).
@@ -849,6 +925,60 @@ impl Scene {
         self.textures_all_resolved = false;
     }
 
+    /// Clear all runtime texture references (`Option<Ref<Texture2D>>`) for
+    /// components whose `texture_handle` matches the given asset handle.
+    ///
+    /// This forces `resolve_texture_handles_async` to re-resolve them from the
+    /// asset cache on the next frame, picking up the newly-loaded version after
+    /// a hot-reload.
+    pub fn clear_texture_refs_for_handle(&mut self, asset_handle: crate::uuid::Uuid) {
+        // Sprite renderers
+        for comp in self.world.query::<&mut SpriteRendererComponent>().iter() {
+            if comp.texture_handle == asset_handle {
+                comp.texture = None;
+            }
+        }
+        // Tilemaps
+        for comp in self.world.query::<&mut TilemapComponent>().iter() {
+            if comp.texture_handle == asset_handle {
+                comp.texture = None;
+            }
+        }
+        // 3D meshes (albedo + normal)
+        for comp in self.world.query::<&mut MeshRendererComponent>().iter() {
+            if comp.texture_handle == asset_handle {
+                comp.texture = None;
+            }
+            if comp.normal_texture_handle == asset_handle {
+                comp.normal_texture = None;
+            }
+        }
+        // UI images
+        for comp in self.world.query::<&mut UIImageComponent>().iter() {
+            if comp.texture_handle == asset_handle {
+                comp.texture = None;
+            }
+        }
+        // Sprite animator clips
+        for animator in self.world.query::<&mut SpriteAnimatorComponent>().iter() {
+            for clip in &mut animator.clips {
+                if clip.texture_handle == asset_handle {
+                    clip.texture = None;
+                }
+            }
+        }
+        // Instanced sprite animator clips
+        for animator in self.world.query::<&mut InstancedSpriteAnimator>().iter() {
+            for clip in &mut animator.clips {
+                if clip.texture_handle == asset_handle {
+                    clip.texture = None;
+                }
+            }
+        }
+
+        self.textures_all_resolved = false;
+    }
+
     /// Resolve the scene's [`EnvironmentComponent`] HDR asset handle by loading
     /// the environment map into the GPU if not already loaded.
     ///
@@ -1020,6 +1150,17 @@ impl Scene {
             val
         };
 
+        // Take reusable buffers from pool (avoids per-frame heap allocations).
+        let mut pool = self.render_buffers.lock();
+        let mut sprites = std::mem::take(&mut pool.sprite_handles);
+        let mut renderables = std::mem::take(&mut pool.sort_keys);
+        let mut circle_renderables = std::mem::take(&mut pool.circle_keys);
+        drop(pool);
+
+        sprites.clear();
+        renderables.clear();
+        circle_renderables.clear();
+
         // Collect all renderable entities with sort keys.
         // Sprites and circles are frustum-culled via AABB overlap test.
         // Text is not culled (bounds depend on string content).
@@ -1029,15 +1170,15 @@ impl Scene {
         let mut culled: u32 = 0;
 
         // --- Parallel frustum culling for sprites ---
-        let sprites: Vec<(hecs::Entity, i32, i32)> = self
-            .world
-            .query::<(hecs::Entity, &SpriteRendererComponent)>()
-            .iter()
-            .map(|(h, s)| (h, s.sorting_layer, s.order_in_layer))
-            .collect();
+        sprites.extend(
+            self.world
+                .query::<(hecs::Entity, &SpriteRendererComponent)>()
+                .iter()
+                .map(|(h, s)| (h, s.sorting_layer, s.order_in_layer)),
+        );
         total_cullable += sprites.len() as u32;
 
-        let sprite_renderables: Vec<RenderSortKey> = {
+        {
             use crate::jobs::parallel::PAR_THRESHOLD;
             let make_key =
                 |handle: hecs::Entity, sorting_layer: i32, order_in_layer: i32, wt: &glam::Mat4| {
@@ -1051,7 +1192,9 @@ impl Scene {
                 };
             if sprites.len() >= PAR_THRESHOLD {
                 use rayon::prelude::*;
-                crate::jobs::pool().install(|| {
+                // Rayon's par_iter().filter_map().collect() allocates internally;
+                // extend renderables from the result to reuse the renderables buffer.
+                let par_result: Vec<RenderSortKey> = crate::jobs::pool().install(|| {
                     sprites
                         .par_iter()
                         .filter_map(|&(handle, sorting_layer, order_in_layer)| {
@@ -1063,25 +1206,28 @@ impl Scene {
                             Some(make_key(handle, sorting_layer, order_in_layer, wt))
                         })
                         .collect()
-                })
+                });
+                culled += sprites.len() as u32 - par_result.len() as u32;
+                renderables.extend_from_slice(&par_result);
             } else {
-                sprites
-                    .iter()
-                    .filter_map(|&(handle, sorting_layer, order_in_layer)| {
-                        let wt = wt_cache.get(&handle)?;
-                        let aabb = super::spatial::Aabb2D::from_unit_quad_transform(wt);
-                        if !frustum.contains_aabb(&aabb) {
-                            return None;
-                        }
-                        Some(make_key(handle, sorting_layer, order_in_layer, wt))
-                    })
-                    .collect()
+                let before = renderables.len();
+                renderables.extend(
+                    sprites
+                        .iter()
+                        .filter_map(|&(handle, sorting_layer, order_in_layer)| {
+                            let wt = wt_cache.get(&handle)?;
+                            let aabb = super::spatial::Aabb2D::from_unit_quad_transform(wt);
+                            if !frustum.contains_aabb(&aabb) {
+                                return None;
+                            }
+                            Some(make_key(handle, sorting_layer, order_in_layer, wt))
+                        }),
+                );
+                culled += sprites.len() as u32 - (renderables.len() - before) as u32;
             }
-        };
-        culled += sprites.len() as u32 - sprite_renderables.len() as u32;
+        }
 
         // --- Circles (usually few, keep sequential) ---
-        let mut circle_renderables: Vec<RenderSortKey> = Vec::new();
         for (handle, circle) in self
             .world
             .query::<(hecs::Entity, &CircleRendererComponent)>()
@@ -1112,8 +1258,7 @@ impl Scene {
         };
 
         // --- Text & tilemaps (sequential, usually few) ---
-        let mut renderables = sprite_renderables;
-        renderables.extend(circle_renderables);
+        renderables.extend(circle_renderables.iter().copied());
 
         for (handle, text) in self.world.query::<(hecs::Entity, &TextComponent)>().iter() {
             let z = wt_cache.get(&handle).map(|m| m.w_axis.z).unwrap_or(0.0);
@@ -1565,6 +1710,12 @@ impl Scene {
 
         // Emit and render GPU particles from all active ParticleEmitterComponents.
         self.emit_and_render_particles(renderer);
+
+        // Return buffers to pool for reuse next frame.
+        let mut pool = self.render_buffers.lock();
+        pool.sort_keys = renderables;
+        pool.sprite_handles = sprites;
+        pool.circle_keys = circle_renderables;
     }
 
     /// Find the primary ECS camera and return its frustum info for shadow
@@ -1690,37 +1841,55 @@ impl Scene {
         let (_, world_rot, _) = world.to_scale_rotation_translation();
         let direction = DirectionalLightComponent::direction(world_rot);
 
+        // Take reusable buffers from pool.
+        let mut pool = self.render_buffers.lock();
+        let mut meshes = std::mem::take(&mut pool.shadow_meshes);
+        let mut skinned_meshes = std::mem::take(&mut pool.shadow_skinned);
+        let mut mesh_bounds = std::mem::take(&mut pool.shadow_bounds);
+        let mut skinned_draw_data = std::mem::take(&mut pool.shadow_skinned_draw);
+        drop(pool);
+
+        meshes.clear();
+        skinned_meshes.clear();
+        mesh_bounds.clear();
+        skinned_draw_data.clear();
+
         // Collect meshes, tagging each as opaque or alpha-tested.
-        let meshes: Vec<(hecs::Entity, glam::Mat4, bool)> = self
-            .world
-            .query::<(hecs::Entity, &MeshRendererComponent)>()
-            .iter()
-            .filter_map(|(h, mc)| {
-                if mc.vertex_array.is_some() {
-                    let w = self.get_world_transform(super::Entity::new(h));
-                    Some((h, w, mc.cast_alpha_shadow))
-                } else {
-                    None
-                }
-            })
-            .collect();
+        meshes.extend(
+            self.world
+                .query::<(hecs::Entity, &MeshRendererComponent)>()
+                .iter()
+                .filter_map(|(h, mc)| {
+                    if mc.vertex_array.is_some() {
+                        let w = self.get_world_transform(super::Entity::new(h));
+                        Some((h, w, mc.cast_alpha_shadow))
+                    } else {
+                        None
+                    }
+                }),
+        );
 
         // Collect skinned meshes for shadow rendering.
-        let skinned_meshes: Vec<(hecs::Entity, glam::Mat4)> = self
-            .world
-            .query::<(hecs::Entity, &SkeletalAnimationComponent)>()
-            .iter()
-            .filter_map(|(h, sac)| {
-                if sac.skinned_vertex_array.is_some() {
-                    let w = self.get_world_transform(super::Entity::new(h));
-                    Some((h, w))
-                } else {
-                    None
-                }
-            })
-            .collect();
+        skinned_meshes.extend(
+            self.world
+                .query::<(hecs::Entity, &SkeletalAnimationComponent)>()
+                .iter()
+                .filter_map(|(h, sac)| {
+                    if sac.skinned_vertex_array.is_some() {
+                        let w = self.get_world_transform(super::Entity::new(h));
+                        Some((h, w))
+                    } else {
+                        None
+                    }
+                }),
+        );
 
         if meshes.is_empty() && skinned_meshes.is_empty() {
+            let mut pool = self.render_buffers.lock();
+            pool.shadow_meshes = meshes;
+            pool.shadow_skinned = skinned_meshes;
+            pool.shadow_bounds = mesh_bounds;
+            pool.shadow_skinned_draw = skinned_draw_data;
             return;
         }
 
@@ -1730,6 +1899,11 @@ impl Scene {
         if !renderer.has_shadow_pipeline() {
             if let Err(e) = renderer.init_shadow_pipeline() {
                 log::error!("Failed to create shadow pipeline: {e}");
+                let mut pool = self.render_buffers.lock();
+                pool.shadow_meshes = meshes;
+                pool.shadow_skinned = skinned_meshes;
+                pool.shadow_bounds = mesh_bounds;
+                pool.shadow_skinned_draw = skinned_draw_data;
                 return;
             }
         }
@@ -1759,20 +1933,16 @@ impl Scene {
             };
 
         // Pre-compute world-space AABBs for per-cascade frustum culling.
-        let mesh_bounds: Vec<Option<super::spatial::Aabb3D>> = meshes
-            .iter()
-            .map(|(h, w, _)| {
-                let mc = self.world.get::<&MeshRendererComponent>(*h).unwrap();
-                mc.local_bounds
-                    .map(|(lmin, lmax)| super::spatial::Aabb3D::from_local_bounds(lmin, lmax, w))
-            })
-            .collect();
+        mesh_bounds.extend(meshes.iter().map(|(h, w, _)| {
+            let mc = self.world.get::<&MeshRendererComponent>(*h).unwrap();
+            mc.local_bounds
+                .map(|(lmin, lmax)| super::spatial::Aabb3D::from_local_bounds(lmin, lmax, w))
+        }));
 
         let use_alpha_pipeline = has_alpha && renderer.has_shadow_alpha_pipeline();
 
         // Pre-compute bone poses for skinned meshes (shared across cascades).
         let has_skinned = !skinned_meshes.is_empty();
-        let mut skinned_draw_data: Vec<(hecs::Entity, glam::Mat4, u32)> = Vec::new();
         if has_skinned {
             if let Err(e) = renderer.ensure_bone_palette() {
                 log::error!("Failed to init bone palette for shadow: {e}");
@@ -1897,6 +2067,13 @@ impl Scene {
             effective_shadow_far,
             texel_sizes,
         ));
+
+        // Return buffers to pool.
+        let mut pool = self.render_buffers.lock();
+        pool.shadow_meshes = meshes;
+        pool.shadow_skinned = skinned_meshes;
+        pool.shadow_bounds = mesh_bounds;
+        pool.shadow_skinned_draw = skinned_draw_data;
     }
 
     /// Compute a conservative AABB for shadow frustum fitting.
@@ -1915,11 +2092,14 @@ impl Scene {
 
         // First pass: AABB from non-dynamic meshes only (stable frustum).
         for (handle, world_transform, _) in meshes {
+            #[cfg(feature = "physics-3d")]
             let is_dynamic = self
                 .world
                 .get::<&RigidBody3DComponent>(*handle)
                 .map(|rb| rb.body_type == RigidBody3DType::Dynamic)
                 .unwrap_or(false);
+            #[cfg(not(feature = "physics-3d"))]
+            let is_dynamic = false;
 
             if is_dynamic {
                 continue;
@@ -1983,22 +2163,29 @@ impl Scene {
     }
 
     fn render_meshes(&self, renderer: &mut Renderer) {
-        // Check if there are any mesh entities before creating the pipeline.
-        let meshes: Vec<(hecs::Entity, glam::Mat4)> = self
-            .world
-            .query::<(hecs::Entity, &MeshRendererComponent)>()
-            .iter()
-            .filter_map(|(handle, mesh_comp)| {
-                if mesh_comp.vertex_array.is_some() {
-                    let world = self.get_world_transform(super::Entity::new(handle));
-                    Some((handle, world))
-                } else {
-                    None
-                }
-            })
-            .collect();
+        // Take reusable buffer from pool.
+        let mut pool = self.render_buffers.lock();
+        let mut meshes = std::mem::take(&mut pool.mesh_handles);
+        drop(pool);
+
+        meshes.clear();
+        meshes.extend(
+            self.world
+                .query::<(hecs::Entity, &MeshRendererComponent)>()
+                .iter()
+                .filter_map(|(handle, mesh_comp)| {
+                    if mesh_comp.vertex_array.is_some() {
+                        let world = self.get_world_transform(super::Entity::new(handle));
+                        Some((handle, world))
+                    } else {
+                        None
+                    }
+                }),
+        );
 
         if meshes.is_empty() {
+            // Return buffer even on early exit.
+            self.render_buffers.lock().mesh_handles = meshes;
             return;
         }
 
@@ -2060,6 +2247,7 @@ impl Scene {
             Ok(p) => p,
             Err(e) => {
                 log::error!("Failed to get mesh3d pipeline: {e}");
+                self.render_buffers.lock().mesh_handles = meshes;
                 return;
             }
         };
@@ -2095,39 +2283,53 @@ impl Scene {
                 );
             }
         }
+
+        // Return buffer to pool.
+        self.render_buffers.lock().mesh_handles = meshes;
     }
 
     /// Render all [`SkeletalAnimationComponent`] entities using the skinned
     /// mesh pipeline. Computes bone poses, writes bone matrices to the SSBO,
     /// and issues draw calls.
     fn render_skinned_meshes(&self, renderer: &mut Renderer) {
-        // Collect skinned entities that have uploaded vertex arrays.
-        let skinned: Vec<(hecs::Entity, glam::Mat4)> = self
-            .world
-            .query::<(hecs::Entity, &SkeletalAnimationComponent)>()
-            .iter()
-            .filter_map(|(handle, sac)| {
-                if sac.skinned_vertex_array.is_some() {
-                    let world = self.get_world_transform(super::Entity::new(handle));
-                    Some((handle, world))
-                } else {
-                    None
-                }
-            })
-            .collect();
+        // Take reusable buffers from pool.
+        let mut pool = self.render_buffers.lock();
+        let mut skinned = std::mem::take(&mut pool.skinned_handles);
+        let mut draw_list = std::mem::take(&mut pool.skinned_draw_list);
+        drop(pool);
+
+        skinned.clear();
+        draw_list.clear();
+
+        skinned.extend(
+            self.world
+                .query::<(hecs::Entity, &SkeletalAnimationComponent)>()
+                .iter()
+                .filter_map(|(handle, sac)| {
+                    if sac.skinned_vertex_array.is_some() {
+                        let world = self.get_world_transform(super::Entity::new(handle));
+                        Some((handle, world))
+                    } else {
+                        None
+                    }
+                }),
+        );
 
         if skinned.is_empty() {
+            let mut pool = self.render_buffers.lock();
+            pool.skinned_handles = skinned;
+            pool.skinned_draw_list = draw_list;
             return;
         }
 
         // Ensure bone palette is initialized and reset for this frame.
         if let Err(e) = renderer.ensure_bone_palette() {
             log::error!("Failed to init bone palette: {e}");
+            let mut pool = self.render_buffers.lock();
+            pool.skinned_handles = skinned;
+            pool.skinned_draw_list = draw_list;
             return;
         }
-
-        // Compute bone poses and write to SSBO.
-        let mut draw_list: Vec<(hecs::Entity, glam::Mat4, u32)> = Vec::new();
         for (handle, world_transform) in &skinned {
             let sac = self
                 .world
@@ -2154,6 +2356,9 @@ impl Scene {
         }
 
         if draw_list.is_empty() {
+            let mut pool = self.render_buffers.lock();
+            pool.skinned_handles = skinned;
+            pool.skinned_draw_list = draw_list;
             return;
         }
 
@@ -2162,6 +2367,9 @@ impl Scene {
             Ok(p) => p,
             Err(e) => {
                 log::error!("Failed to get skinned mesh3d pipeline: {e}");
+                let mut pool = self.render_buffers.lock();
+                pool.skinned_handles = skinned;
+                pool.skinned_draw_list = draw_list;
                 return;
             }
         };
@@ -2201,6 +2409,11 @@ impl Scene {
                 );
             }
         }
+
+        // Return buffers to pool.
+        let mut pool = self.render_buffers.lock();
+        pool.skinned_handles = skinned;
+        pool.skinned_draw_list = draw_list;
     }
 
     /// Emit particles from all active [`ParticleEmitterComponent`]s and

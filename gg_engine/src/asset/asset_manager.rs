@@ -661,4 +661,51 @@ impl EditorAssetManager {
         self.gpu_memory_budget = budget_bytes;
     }
 
+    /// Evict a loaded texture from the cache and re-enqueue it for async loading.
+    ///
+    /// The old GPU texture is unregistered from the bindless array (freeing its
+    /// slot) and dropped. On the next `poll_loaded` cycle the new version will
+    /// be uploaded and components will pick it up via `resolve_texture_handles_async`.
+    ///
+    /// Returns `true` if the texture was in the cache and a reload was enqueued.
+    pub fn reload_texture(&mut self, handle: &AssetHandle, renderer: &Renderer) -> bool {
+        let metadata = match self.registry.get(handle) {
+            Some(m) => m.clone(),
+            None => return false,
+        };
+
+        if metadata.asset_type != AssetType::Texture2D {
+            return false;
+        }
+
+        // Remove from cache and unregister the old texture's bindless slot.
+        if let Some(AssetData::Texture(old_tex)) = self.loaded_assets.remove(handle) {
+            renderer.unregister_texture(&old_tex);
+            self.access_times.remove(handle);
+            self.untrack_gpu_bytes(handle);
+        }
+
+        // Re-enqueue for async load from disk.
+        if !validate_asset_path(&metadata.file_path) {
+            return false;
+        }
+        let abs_path = self.asset_directory.join(&metadata.file_path);
+        if !abs_path.exists() {
+            log::warn!(
+                "Texture file not found for reload: {}",
+                abs_path.display()
+            );
+            return false;
+        }
+
+        // Force-clear the pending set so the loader accepts the request even if
+        // a previous load for this handle completed moments ago.
+        self.loader.force_request_texture(*handle, abs_path, TextureSpecification::default());
+        log::info!(
+            "Hot-reloading texture '{}' (handle: {})",
+            metadata.file_path,
+            handle
+        );
+        true
+    }
 }

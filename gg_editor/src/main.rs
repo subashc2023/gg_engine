@@ -292,6 +292,10 @@ struct GGEditor {
     /// an automatic [`Scene::reload_lua_scripts`] call.
     #[cfg(feature = "lua-scripting")]
     script_reload_pending: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    /// File watcher that monitors the assets directory for texture changes.
+    _asset_watcher: Option<notify::RecommendedWatcher>,
+    /// Receiver for texture file paths changed on disk (relative to assets root).
+    asset_reload_rx: std::sync::mpsc::Receiver<String>,
     /// Input action map loaded from the project config.
     input_actions: InputActionMap,
 }
@@ -408,6 +412,14 @@ impl Application for GGEditor {
             None
         };
 
+        // --- File watcher for automatic texture hot-reload -----------------
+        let (asset_reload_tx, asset_reload_rx) = std::sync::mpsc::channel::<String>();
+        let _asset_watcher = if editor_mode == EditorMode::Editor {
+            create_asset_watcher(&assets_root, asset_reload_tx)
+        } else {
+            None
+        };
+
         let input_actions = project
             .as_ref()
             .map(|p| p.input_actions().clone())
@@ -512,6 +524,8 @@ impl Application for GGEditor {
             _script_watcher,
             #[cfg(feature = "lua-scripting")]
             script_reload_pending,
+            _asset_watcher,
+            asset_reload_rx,
             input_actions,
         }
     }
@@ -1237,6 +1251,25 @@ impl Application for GGEditor {
 
         if self.editor_mode == EditorMode::Hub {
             return;
+        }
+
+        // Hot-reload textures modified on disk.
+        {
+            let mut reloaded_any = false;
+            while let Ok(relative_path) = self.asset_reload_rx.try_recv() {
+                if let Some(ref mut am) = self.project_state.asset_manager {
+                    if let Some(handle) = am.registry().find_by_path(&relative_path) {
+                        if am.is_loaded(&handle) {
+                            am.reload_texture(&handle, renderer);
+                            self.scene.clear_texture_refs_for_handle(handle);
+                            reloaded_any = true;
+                        }
+                    }
+                }
+            }
+            if reloaded_any {
+                self.scene.invalidate_texture_cache();
+            }
         }
 
         // Step 1: Poll completed async loads (textures + fonts).
@@ -2423,6 +2456,73 @@ fn create_script_watcher(
         }
         Err(e) => {
             warn!("Failed to create script file watcher: {e}");
+            None
+        }
+    }
+}
+
+/// Texture file extensions eligible for hot-reload.
+const TEXTURE_EXTENSIONS: &[&str] = &["png", "jpg", "jpeg"];
+
+/// Create a file watcher that monitors the assets directory for texture
+/// changes (create/modify) and sends the relative path through `tx`.
+fn create_asset_watcher(
+    assets_dir: &std::path::Path,
+    tx: std::sync::mpsc::Sender<String>,
+) -> Option<notify::RecommendedWatcher> {
+    use notify::{RecursiveMode, Watcher};
+
+    if !assets_dir.is_dir() {
+        info!(
+            "Assets directory '{}' not found — texture hot-reload disabled",
+            assets_dir.display()
+        );
+        return None;
+    }
+
+    let assets_dir_owned = assets_dir.to_path_buf();
+    let assets_dir_for_closure = assets_dir_owned.clone();
+    match notify::recommended_watcher(move |res: Result<notify::Event, notify::Error>| {
+        if let Ok(event) = res {
+            if !matches!(
+                event.kind,
+                notify::EventKind::Modify(_) | notify::EventKind::Create(_)
+            ) {
+                return;
+            }
+            for path in &event.paths {
+                let is_texture = path
+                    .extension()
+                    .and_then(|e| e.to_str())
+                    .is_some_and(|ext| {
+                        let lower = ext.to_lowercase();
+                        TEXTURE_EXTENSIONS.iter().any(|t| *t == lower)
+                    });
+                if !is_texture {
+                    continue;
+                }
+                // Convert absolute path to relative (forward slashes).
+                if let Ok(rel) = path.strip_prefix(&assets_dir_for_closure) {
+                    let relative = rel.to_string_lossy().replace('\\', "/");
+                    let _ = tx.send(relative);
+                }
+            }
+        }
+    }) {
+        Ok(mut watcher) => {
+            if let Err(e) = watcher.watch(&assets_dir_owned, RecursiveMode::Recursive) {
+                warn!("Failed to watch assets directory for textures: {e}");
+                None
+            } else {
+                info!(
+                    "Watching {} for texture changes (hot-reload)",
+                    assets_dir_owned.display()
+                );
+                Some(watcher)
+            }
+        }
+        Err(e) => {
+            warn!("Failed to create asset file watcher: {e}");
             None
         }
     }

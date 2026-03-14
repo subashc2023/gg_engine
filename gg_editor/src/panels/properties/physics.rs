@@ -1,4 +1,5 @@
 use gg_engine::egui;
+#[cfg(feature = "physics-3d")]
 use gg_engine::glam::Vec3;
 use gg_engine::prelude::*;
 
@@ -408,6 +409,7 @@ fn draw_collider_material_ui(
     changed
 }
 
+#[cfg(feature = "physics-3d")]
 /// Shared UI for a Vec3 offset field.
 fn draw_offset_3d(ui: &mut egui::Ui, offset: &mut Vec3) -> bool {
     let mut changed = false;
@@ -438,6 +440,7 @@ fn draw_offset_3d(ui: &mut egui::Ui, offset: &mut Vec3) -> bool {
     changed
 }
 
+#[cfg(feature = "physics-3d")]
 pub(crate) fn draw_rigidbody3d_component(
     ui: &mut egui::Ui,
     scene: &mut Scene,
@@ -561,6 +564,7 @@ pub(crate) fn draw_rigidbody3d_component(
     )
 }
 
+#[cfg(feature = "physics-3d")]
 pub(crate) fn draw_box_collider3d_component(
     ui: &mut egui::Ui,
     scene: &mut Scene,
@@ -663,6 +667,7 @@ pub(crate) fn draw_box_collider3d_component(
     )
 }
 
+#[cfg(feature = "physics-3d")]
 pub(crate) fn draw_sphere_collider3d_component(
     ui: &mut egui::Ui,
     scene: &mut Scene,
@@ -748,6 +753,7 @@ pub(crate) fn draw_sphere_collider3d_component(
     )
 }
 
+#[cfg(feature = "physics-3d")]
 pub(crate) fn draw_capsule_collider3d_component(
     ui: &mut egui::Ui,
     scene: &mut Scene,

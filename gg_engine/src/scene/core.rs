@@ -14,6 +14,7 @@ use super::components::{
     UIInteractableComponent, UIInteractionState, UILayoutAlignment, UILayoutComponent,
     UILayoutDirection, UIRectComponent,
 };
+use super::rendering::RenderBufferPool;
 use super::entity::Entity;
 use super::spatial::{Aabb2D, Aabb3D, SpatialGrid, SpatialGrid3D};
 use super::{CullingStats, FullscreenMode};
@@ -133,6 +134,11 @@ pub struct SceneCore {
     pub(super) ui_pressed_entity: Option<u64>,
     /// Cached UI draw order (front-to-back UUIDs) for hit testing.
     pub(super) ui_draw_order_cache: Vec<u64>,
+
+    // -- Reusable per-frame buffers ----------------------------------------
+    /// Pre-allocated buffers for rendering and animation, reused across frames
+    /// to avoid per-frame heap allocations. See [`RenderBufferPool`].
+    pub(super) render_buffers: Mutex<RenderBufferPool>,
 }
 
 // Compile-time verification that SceneCore is Send + Sync.
@@ -176,6 +182,7 @@ impl SceneCore {
             ui_hovered_entity: None,
             ui_pressed_entity: None,
             ui_draw_order_cache: Vec::new(),
+            render_buffers: Mutex::new(RenderBufferPool::default()),
         }
     }
 

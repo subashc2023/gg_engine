@@ -7,10 +7,11 @@ rust-version.workspace = true
 publish.workspace = true
 
 [features]
-default = ["profiling", "lua-scripting", "gamepad"]
+default = ["profiling", "lua-scripting", "gamepad", "physics-3d"]
 profiling = []
 lua-scripting = ["mlua"]
 gamepad = ["gilrs"]
+physics-3d = ["rapier3d"]
 
 [dependencies]
 log.workspace = true
@@ -29,7 +30,7 @@ serde_yaml_ng.workspace = true
 rfd.workspace = true
 rand.workspace = true
 rapier2d.workspace = true
-rapier3d.workspace = true
+rapier3d = { workspace = true, optional = true }
 mlua = { workspace = true, optional = true }
 gilrs = { workspace = true, optional = true }
 ttf-parser.workspace = true

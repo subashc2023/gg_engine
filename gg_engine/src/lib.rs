@@ -60,16 +60,20 @@ pub use scene::{Aabb2D, Aabb3D, CullingStats, Frustum3D, SpatialGrid, SpatialGri
 pub use scene::{
     AmbientLightComponent, AnimationClip, AnimationControllerComponent, AnimationTransition,
     AudioCategory, AudioListenerComponent, AudioSourceComponent, BoxCollider2DComponent,
-    BoxCollider3DComponent, CameraComponent, CapsuleCollider3DComponent, CircleCollider2DComponent,
-    CircleRendererComponent, DirectionalLightComponent, Entity, FloatOrdering, FullscreenMode,
-    IdComponent, InstancedSpriteAnimator, MeshPrimitive, MeshRendererComponent, MeshSource,
-    NativeScript, NativeScriptComponent, ParticleEmitterComponent, PointLightComponent,
-    RelationshipComponent, RigidBody2DComponent, RigidBody2DType, RigidBody3DComponent,
-    RigidBody3DType, RigidBodyType, Scene, SceneSerializer, SkeletalAnimationComponent,
-    SphereCollider3DComponent, SpriteAnimatorComponent, SpriteRendererComponent, TagComponent,
+    CameraComponent, CircleCollider2DComponent, CircleRendererComponent,
+    DirectionalLightComponent, Entity, FloatOrdering, FullscreenMode, IdComponent,
+    InstancedSpriteAnimator, MeshPrimitive, MeshRendererComponent, MeshSource, NativeScript,
+    NativeScriptComponent, ParticleEmitterComponent, PointLightComponent, RelationshipComponent,
+    RigidBody2DComponent, RigidBody2DType, RigidBodyType, Scene, SceneSerializer,
+    SkeletalAnimationComponent, SpriteAnimatorComponent, SpriteRendererComponent, TagComponent,
     TextComponent, TilemapComponent, TransformComponent, TransitionCondition, UIAnchorComponent,
     UIEvent, UIImageComponent, UIInteractableComponent, UIInteractionState, UILayoutAlignment,
     UILayoutComponent, UILayoutDirection, UIRectComponent, TILE_FLIP_H, TILE_FLIP_V, TILE_ID_MASK,
+};
+#[cfg(feature = "physics-3d")]
+pub use scene::{
+    BoxCollider3DComponent, CapsuleCollider3DComponent, RigidBody3DComponent, RigidBody3DType,
+    SphereCollider3DComponent,
 };
 #[cfg(feature = "lua-scripting")]
 pub use scene::{LuaScriptComponent, ScriptEngine, ScriptFieldValue};
@@ -113,18 +117,21 @@ pub mod prelude {
     pub use crate::scene::{
         AmbientLightComponent, AnimationClip, AnimationControllerComponent, AnimationTransition,
         AudioCategory, AudioListenerComponent, AudioSourceComponent, BoxCollider2DComponent,
-        BoxCollider3DComponent, CameraComponent, CapsuleCollider3DComponent,
-        CircleCollider2DComponent, CircleRendererComponent, DirectionalLightComponent, Entity,
-        EnvironmentComponent, FloatOrdering, FullscreenMode, IdComponent, InstancedSpriteAnimator,
-        MeshPrimitive, MeshRendererComponent, MeshSource, NativeScript, NativeScriptComponent,
-        ParticleEmitterComponent, PointLightComponent, RelationshipComponent, RigidBody2DComponent,
-        RigidBody2DType, RigidBody3DComponent, RigidBody3DType, RigidBodyType, Scene,
-        SceneSerializer, SkeletalAnimationComponent, SphereCollider3DComponent,
-        SpriteAnimatorComponent, SpriteRendererComponent, TagComponent, TextComponent,
-        TilemapComponent, TransformComponent, TransitionCondition, UIAnchorComponent, UIEvent,
-        UIImageComponent, UIInteractableComponent, UIInteractionState, UILayoutAlignment,
-        UILayoutComponent, UILayoutDirection, UIRectComponent, TILE_FLIP_H, TILE_FLIP_V,
-        TILE_ID_MASK,
+        CameraComponent, CircleCollider2DComponent, CircleRendererComponent,
+        DirectionalLightComponent, Entity, EnvironmentComponent, FloatOrdering, FullscreenMode,
+        IdComponent, InstancedSpriteAnimator, MeshPrimitive, MeshRendererComponent, MeshSource,
+        NativeScript, NativeScriptComponent, ParticleEmitterComponent, PointLightComponent,
+        RelationshipComponent, RigidBody2DComponent, RigidBody2DType, RigidBodyType, Scene,
+        SceneSerializer, SkeletalAnimationComponent, SpriteAnimatorComponent,
+        SpriteRendererComponent, TagComponent, TextComponent, TilemapComponent,
+        TransformComponent, TransitionCondition, UIAnchorComponent, UIEvent, UIImageComponent,
+        UIInteractableComponent, UIInteractionState, UILayoutAlignment, UILayoutComponent,
+        UILayoutDirection, UIRectComponent, TILE_FLIP_H, TILE_FLIP_V, TILE_ID_MASK,
+    };
+    #[cfg(feature = "physics-3d")]
+    pub use crate::scene::{
+        BoxCollider3DComponent, CapsuleCollider3DComponent, RigidBody3DComponent, RigidBody3DType,
+        SphereCollider3DComponent,
     };
     #[cfg(feature = "lua-scripting")]
     pub use crate::scene::{LuaScriptComponent, ScriptEngine, ScriptFieldValue};

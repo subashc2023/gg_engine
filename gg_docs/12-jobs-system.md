@@ -128,24 +128,24 @@ cmds.flush(scene);                                      // Apply all ops to the 
 
 **Called by:** Game loop, every frame (`scene.on_update_animations(dt)`).
 
-**Strategy:** Extract playing `SpriteAnimatorComponent` state into `AnimWork` structs, tick frame timers in parallel, write results back.
+**Strategy:** Extract playing `SpriteAnimatorComponent` state into `AnimWork` structs, tick frame timers in parallel, write results back. All buffers are taken from `RenderBufferPool` (on `SceneCore`), cleared, used, and returned — zero per-frame heap allocations after the first frame.
 
 **Phases:**
-1. **Extract:** Query `(Entity, IdComponent, SpriteAnimatorComponent)`, filter to playing animators, copy clip parameters and runtime state into `Vec<AnimWork>`.
+1. **Extract:** Query `(Entity, IdComponent, SpriteAnimatorComponent)`, filter to playing animators, copy clip parameters and runtime state into pooled `Vec<AnimWork>`.
 2. **Parallel tick:** `par_for_each_mut` advances `frame_timer`, computes `current_frame`, detects clip completion. Pure arithmetic — no World access.
-3. **Writeback:** Iterate `AnimWork`, write `frame_timer`, `current_frame`, `playing` back into components. Collect finished events.
+3. **Writeback:** Iterate `AnimWork`, write `frame_timer`, `current_frame`, `playing` back into components. Collect finished events into pooled `Vec`.
 4. **Sequential:** `InstancedSpriteAnimator` completion check, Lua `on_animation_finished` callbacks, default clip transitions, controller evaluation. These remain sequential (small N, require `&mut self`).
 
 ### render_scene frustum culling (rendering.rs)
 
 **Called by:** `render_scene()`, every frame.
 
-**Strategy:** Extract sprite sort keys, cull AABBs against the view frustum in parallel, sort the final renderable list in parallel.
+**Strategy:** Extract sprite sort keys, cull AABBs against the view frustum in parallel, sort the final renderable list in parallel. All buffers (`sort_keys`, `sprite_handles`, `circle_keys`) are taken from `RenderBufferPool`, cleared, used, and returned — zero per-frame allocations after warmup.
 
 **Phases:**
-1. **Extract:** Query `(Entity, SpriteRendererComponent)`, copy `(handle, sorting_layer, order_in_layer)` into a Vec.
-2. **Parallel cull:** `sprites.par_iter().filter_map()` — each sprite looks up its world transform in the pre-computed cache, builds an AABB, tests against the frustum. Culled sprites are dropped; visible sprites produce sort key tuples.
-3. **Circles/text/tilemaps:** Collected sequentially (usually few entities).
+1. **Extract:** Query `(Entity, SpriteRendererComponent)`, extend pooled `sprite_handles` Vec.
+2. **Parallel cull:** `sprites.par_iter().filter_map()` — each sprite looks up its world transform in the pre-computed cache, builds an AABB, tests against the frustum. Culled sprites are dropped; visible sprites produce sort key tuples extended into pooled `sort_keys`.
+3. **Circles/text/tilemaps:** Collected sequentially into pooled buffers (usually few entities).
 4. **Parallel sort:** `renderables.par_sort_by()` on `(sorting_layer, order_in_layer, z)`.
 5. **Sequential draw:** The actual Vulkan draw calls remain sequential (renderer is `!Send`).
 
