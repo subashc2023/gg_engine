@@ -24,6 +24,8 @@ impl GGEditor {
         if let Some(ref project) = self.project_state.project {
             self.scene
                 .set_script_module_search_path(project.script_module_path());
+            self.scene
+                .set_save_data_directory(project.project_directory().join("saves"));
         }
 
         self.scene.on_runtime_start();

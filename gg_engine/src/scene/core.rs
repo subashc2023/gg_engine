@@ -127,6 +127,11 @@ pub struct SceneCore {
     /// Module names are resolved as `<module_search_path>/<name>.lua`.
     pub(super) script_module_search_path: Option<PathBuf>,
 
+    // Save data system
+    /// Directory for Lua `Engine.save_data()` / `Engine.load_data()`. Set by the
+    /// editor/player before runtime start. Defaults to `<project_dir>/saves/`.
+    pub(super) save_data_directory: Option<PathBuf>,
+
     // UI interaction state
     /// UUID of the currently hovered UI entity.
     pub(super) ui_hovered_entity: Option<u64>,
@@ -179,6 +184,7 @@ impl SceneCore {
             shadow_quality_state: AtomicI32::new(3),
             gui_scale: Mutex::new(1.0),
             script_module_search_path: None,
+            save_data_directory: None,
             ui_hovered_entity: None,
             ui_pressed_entity: None,
             ui_draw_order_cache: Vec::new(),
@@ -735,6 +741,17 @@ impl SceneCore {
     /// Get the module search path for Lua `require()`, if configured.
     pub fn script_module_search_path(&self) -> Option<&std::path::Path> {
         self.script_module_search_path.as_deref()
+    }
+
+    /// Set the save data directory for Lua `Engine.save_data()` / `Engine.load_data()`.
+    /// Call before runtime start. Typically `<project_dir>/saves/`.
+    pub fn set_save_data_directory(&mut self, path: PathBuf) {
+        self.save_data_directory = Some(path);
+    }
+
+    /// Get the save data directory, if configured.
+    pub fn save_data_directory(&self) -> Option<&std::path::Path> {
+        self.save_data_directory.as_deref()
     }
 
     /// Current viewport dimensions in physical pixels.

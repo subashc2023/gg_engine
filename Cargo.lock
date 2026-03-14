@@ -1297,6 +1297,7 @@ dependencies = [
  "rayon",
  "rfd",
  "serde",
+ "serde_json",
  "serde_yaml_ng",
  "static_assertions",
  "thiserror 2.0.18",

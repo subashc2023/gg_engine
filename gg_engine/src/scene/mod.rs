@@ -410,6 +410,9 @@ impl Scene {
         // Copy script module search path.
         new_scene.core.script_module_search_path = source.core.script_module_search_path.clone();
 
+        // Copy save data directory.
+        new_scene.core.save_data_directory = source.core.save_data_directory.clone();
+
         new_scene
     }
 

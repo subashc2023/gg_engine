@@ -584,6 +584,13 @@ pub fn register_all(lua: &Lua) -> LuaResult<()> {
     // Logging
     engine.set("log", lua.create_function(lua_log)?)?;
 
+    // Save/load game data
+    engine.set("save_data", lua.create_function(lua_save_data)?)?;
+    engine.set("load_data", lua.create_function(lua_load_data)?)?;
+    engine.set("delete_save", lua.create_function(lua_delete_save)?)?;
+    engine.set("save_exists", lua.create_function(lua_save_exists)?)?;
+    engine.set("list_saves", lua.create_function(lua_list_saves)?)?;
+
     lua.globals().set("Engine", engine)?;
 
     log::info!("ScriptGlue: registered Engine.* functions");
@@ -3578,6 +3585,283 @@ fn lua_log(lua: &Lua, args: mlua::Variadic<LuaValue>) -> LuaResult<()> {
     Ok(())
 }
 
+// ---------------------------------------------------------------------------
+// Save/load game data — Lua table ↔ JSON file persistence
+// ---------------------------------------------------------------------------
+
+/// Validate a save slot name: non-empty, no path separators, no `.`.
+fn validate_slot_name(name: &str) -> LuaResult<()> {
+    if name.is_empty() {
+        return Err(mlua::Error::runtime("Save slot name cannot be empty"));
+    }
+    if name.contains('/') || name.contains('\\') || name.contains("..") {
+        return Err(mlua::Error::runtime(
+            "Save slot name must not contain path separators or '..'",
+        ));
+    }
+    Ok(())
+}
+
+/// Resolve the save file path for a given slot. Returns `None` if save directory is not configured.
+fn resolve_save_path(lua: &Lua, slot: &str) -> LuaResult<Option<std::path::PathBuf>> {
+    let ctx = match lua.app_data_mut::<SceneScriptContext>() {
+        Some(ctx) => ctx,
+        None => return Ok(None),
+    };
+    let scene = unsafe { ctx.scene() };
+    match scene.save_data_directory() {
+        Some(dir) => Ok(Some(dir.join(format!("{}.json", slot)))),
+        None => Ok(None),
+    }
+}
+
+/// Convert a Lua value to a `serde_json::Value`.
+fn lua_value_to_json(value: &LuaValue) -> LuaResult<serde_json::Value> {
+    match value {
+        LuaValue::Nil => Ok(serde_json::Value::Null),
+        LuaValue::Boolean(b) => Ok(serde_json::Value::Bool(*b)),
+        LuaValue::Integer(n) => Ok(serde_json::Value::Number(
+            serde_json::Number::from(*n),
+        )),
+        LuaValue::Number(n) => {
+            if n.is_finite() {
+                Ok(serde_json::Value::Number(
+                    serde_json::Number::from_f64(*n)
+                        .unwrap_or_else(|| serde_json::Number::from(0)),
+                ))
+            } else {
+                Ok(serde_json::Value::Null)
+            }
+        }
+        LuaValue::String(s) => Ok(serde_json::Value::String(s.to_str()?.to_owned())),
+        LuaValue::Table(t) => lua_table_to_json(t),
+        _ => Err(mlua::Error::runtime(format!(
+            "Cannot serialize Lua type '{}' to JSON",
+            value.type_name()
+        ))),
+    }
+}
+
+/// Convert a Lua table to a JSON value (array or object).
+///
+/// Tables with consecutive integer keys starting at 1 become JSON arrays.
+/// All other tables become JSON objects (keys converted to strings).
+fn lua_table_to_json(table: &LuaTable) -> LuaResult<serde_json::Value> {
+    // Check if it looks like an array: keys 1..N with no gaps.
+    let len = table.raw_len();
+    let mut is_array = len > 0;
+
+    if is_array {
+        // Verify there are no non-integer keys beyond the array portion.
+        let mut count = 0u64;
+        for pair in table.pairs::<LuaValue, LuaValue>() {
+            let _ = pair?;
+            count += 1;
+        }
+        is_array = count == len as u64;
+    }
+
+    if is_array {
+        let mut arr = Vec::with_capacity(len as usize);
+        for i in 1..=len {
+            let v: LuaValue = table.raw_get(i)?;
+            arr.push(lua_value_to_json(&v)?);
+        }
+        Ok(serde_json::Value::Array(arr))
+    } else {
+        let mut map = serde_json::Map::new();
+        for pair in table.pairs::<LuaValue, LuaValue>() {
+            let (k, v) = pair?;
+            let key = match &k {
+                LuaValue::String(s) => s.to_str()?.to_owned(),
+                LuaValue::Integer(n) => n.to_string(),
+                LuaValue::Number(n) => n.to_string(),
+                _ => {
+                    return Err(mlua::Error::runtime(format!(
+                        "Cannot use Lua type '{}' as JSON key",
+                        k.type_name()
+                    )));
+                }
+            };
+            map.insert(key, lua_value_to_json(&v)?);
+        }
+        Ok(serde_json::Value::Object(map))
+    }
+}
+
+/// Convert a `serde_json::Value` to a Lua value.
+fn json_to_lua_value(lua: &Lua, value: &serde_json::Value) -> LuaResult<LuaValue> {
+    match value {
+        serde_json::Value::Null => Ok(LuaValue::Nil),
+        serde_json::Value::Bool(b) => Ok(LuaValue::Boolean(*b)),
+        serde_json::Value::Number(n) => {
+            if let Some(i) = n.as_i64() {
+                Ok(LuaValue::Integer(i))
+            } else {
+                Ok(LuaValue::Number(n.as_f64().unwrap_or(0.0)))
+            }
+        }
+        serde_json::Value::String(s) => Ok(LuaValue::String(lua.create_string(s)?)),
+        serde_json::Value::Array(arr) => {
+            let table = lua.create_table()?;
+            for (i, v) in arr.iter().enumerate() {
+                table.raw_set(i + 1, json_to_lua_value(lua, v)?)?;
+            }
+            Ok(LuaValue::Table(table))
+        }
+        serde_json::Value::Object(map) => {
+            let table = lua.create_table()?;
+            for (k, v) in map {
+                table.raw_set(k.as_str(), json_to_lua_value(lua, v)?)?;
+            }
+            Ok(LuaValue::Table(table))
+        }
+    }
+}
+
+/// `Engine.save_data(slot_name, data)` — serialize a Lua table to `saves/<slot>.json`.
+///
+/// Returns `true` on success, `false` on failure (error is logged).
+fn lua_save_data(lua: &Lua, (slot, data): (String, LuaTable)) -> LuaResult<bool> {
+    validate_slot_name(&slot)?;
+
+    let save_path = match resolve_save_path(lua, &slot)? {
+        Some(p) => p,
+        None => {
+            log::warn!("Engine.save_data: no save directory configured");
+            return Ok(false);
+        }
+    };
+
+    let json_value = lua_table_to_json(&data)?;
+    let json_string = match serde_json::to_string_pretty(&json_value) {
+        Ok(s) => s,
+        Err(e) => {
+            log::error!("Engine.save_data: JSON serialization failed: {}", e);
+            return Ok(false);
+        }
+    };
+
+    // Ensure the saves directory exists.
+    if let Some(parent) = save_path.parent() {
+        if let Err(e) = std::fs::create_dir_all(parent) {
+            log::error!("Engine.save_data: failed to create saves directory: {}", e);
+            return Ok(false);
+        }
+    }
+
+    match crate::platform_utils::atomic_write(&save_path, &json_string) {
+        Ok(()) => {
+            log::info!("Engine.save_data: saved to '{}'", save_path.display());
+            Ok(true)
+        }
+        Err(e) => {
+            log::error!("Engine.save_data: write failed: {}", e);
+            Ok(false)
+        }
+    }
+}
+
+/// `Engine.load_data(slot_name)` — load a Lua table from `saves/<slot>.json`.
+///
+/// Returns the table on success, or `nil` if the file doesn't exist or fails to parse.
+fn lua_load_data(lua: &Lua, slot: String) -> LuaResult<LuaValue> {
+    validate_slot_name(&slot)?;
+
+    let save_path = match resolve_save_path(lua, &slot)? {
+        Some(p) => p,
+        None => {
+            log::warn!("Engine.load_data: no save directory configured");
+            return Ok(LuaValue::Nil);
+        }
+    };
+
+    let json_string = match std::fs::read_to_string(&save_path) {
+        Ok(s) => s,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(LuaValue::Nil),
+        Err(e) => {
+            log::error!("Engine.load_data: read failed: {}", e);
+            return Ok(LuaValue::Nil);
+        }
+    };
+
+    let json_value: serde_json::Value = match serde_json::from_str(&json_string) {
+        Ok(v) => v,
+        Err(e) => {
+            log::error!("Engine.load_data: JSON parse failed: {}", e);
+            return Ok(LuaValue::Nil);
+        }
+    };
+
+    json_to_lua_value(lua, &json_value)
+}
+
+/// `Engine.delete_save(slot_name)` — delete a save file. Returns `true` if deleted.
+fn lua_delete_save(lua: &Lua, slot: String) -> LuaResult<bool> {
+    validate_slot_name(&slot)?;
+
+    let save_path = match resolve_save_path(lua, &slot)? {
+        Some(p) => p,
+        None => return Ok(false),
+    };
+
+    match std::fs::remove_file(&save_path) {
+        Ok(()) => Ok(true),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(e) => {
+            log::error!("Engine.delete_save: {}", e);
+            Ok(false)
+        }
+    }
+}
+
+/// `Engine.save_exists(slot_name)` — check if a save file exists.
+fn lua_save_exists(lua: &Lua, slot: String) -> LuaResult<bool> {
+    validate_slot_name(&slot)?;
+
+    let save_path = match resolve_save_path(lua, &slot)? {
+        Some(p) => p,
+        None => return Ok(false),
+    };
+
+    Ok(save_path.exists())
+}
+
+/// `Engine.list_saves()` — return an array of all save slot names.
+fn lua_list_saves(lua: &Lua, _: ()) -> LuaResult<LuaTable> {
+    let table = lua.create_table()?;
+
+    let ctx = match lua.app_data_mut::<SceneScriptContext>() {
+        Some(ctx) => ctx,
+        None => return Ok(table),
+    };
+    let scene = unsafe { ctx.scene() };
+    let save_dir = match scene.save_data_directory() {
+        Some(d) => d.to_path_buf(),
+        None => return Ok(table),
+    };
+    // Drop the borrow before doing I/O.
+    drop(ctx);
+
+    let entries = match std::fs::read_dir(&save_dir) {
+        Ok(entries) => entries,
+        Err(_) => return Ok(table),
+    };
+
+    let mut idx = 1i64;
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.extension().is_some_and(|ext| ext == "json") {
+            if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
+                table.raw_set(idx, stem)?;
+                idx += 1;
+            }
+        }
+    }
+
+    Ok(table)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -3762,6 +4046,12 @@ mod tests {
         // Component manipulation
         assert!(engine.get::<LuaFunction>("add_component").is_ok());
         assert!(engine.get::<LuaFunction>("remove_component").is_ok());
+        // Save/load
+        assert!(engine.get::<LuaFunction>("save_data").is_ok());
+        assert!(engine.get::<LuaFunction>("load_data").is_ok());
+        assert!(engine.get::<LuaFunction>("delete_save").is_ok());
+        assert!(engine.get::<LuaFunction>("save_exists").is_ok());
+        assert!(engine.get::<LuaFunction>("list_saves").is_ok());
     }
 
     #[test]
@@ -4353,5 +4643,255 @@ mod tests {
             .unwrap();
         let val: f32 = lua.globals().get("val").unwrap();
         assert!(val.abs() < 0.001);
+    }
+
+    // -----------------------------------------------------------------------
+    // Save/load tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn save_data_no_context_returns_false() {
+        let lua = setup();
+        lua.load(r#"result = Engine.save_data("slot1", {level = 5})"#)
+            .exec()
+            .unwrap();
+        let result: bool = lua.globals().get("result").unwrap();
+        assert!(!result);
+    }
+
+    #[test]
+    fn load_data_no_context_returns_nil() {
+        let lua = setup();
+        lua.load(r#"result = Engine.load_data("slot1")"#)
+            .exec()
+            .unwrap();
+        let result: LuaValue = lua.globals().get("result").unwrap();
+        assert!(result.is_nil());
+    }
+
+    #[test]
+    fn delete_save_no_context_returns_false() {
+        let lua = setup();
+        lua.load(r#"result = Engine.delete_save("slot1")"#)
+            .exec()
+            .unwrap();
+        let result: bool = lua.globals().get("result").unwrap();
+        assert!(!result);
+    }
+
+    #[test]
+    fn save_exists_no_context_returns_false() {
+        let lua = setup();
+        lua.load(r#"result = Engine.save_exists("slot1")"#)
+            .exec()
+            .unwrap();
+        let result: bool = lua.globals().get("result").unwrap();
+        assert!(!result);
+    }
+
+    #[test]
+    fn list_saves_no_context_returns_empty() {
+        let lua = setup();
+        lua.load("result = Engine.list_saves()")
+            .exec()
+            .unwrap();
+        let result: LuaTable = lua.globals().get("result").unwrap();
+        assert_eq!(result.len().unwrap(), 0);
+    }
+
+    #[test]
+    fn save_slot_validation_rejects_path_traversal() {
+        let lua = setup();
+        let result = lua
+            .load(r#"Engine.save_data("../evil", {x = 1})"#)
+            .exec();
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn save_slot_validation_rejects_slashes() {
+        let lua = setup();
+        let result = lua
+            .load(r#"Engine.save_data("foo/bar", {x = 1})"#)
+            .exec();
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn save_slot_validation_rejects_empty() {
+        let lua = setup();
+        let result = lua.load(r#"Engine.save_data("", {x = 1})"#).exec();
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn lua_table_to_json_roundtrip() {
+        let lua = setup();
+
+        // Create a Lua table with mixed data types.
+        lua.load(
+            r#"
+            test_table = {
+                name = "Player1",
+                level = 42,
+                health = 99.5,
+                alive = true,
+                inventory = {"sword", "shield", "potion"},
+                stats = { str = 10, dex = 15 },
+            }
+            "#,
+        )
+        .exec()
+        .unwrap();
+
+        let table: LuaTable = lua.globals().get("test_table").unwrap();
+        let json = lua_table_to_json(&table).unwrap();
+
+        // Verify JSON structure.
+        assert_eq!(json["name"], "Player1");
+        assert_eq!(json["level"], 42);
+        assert!((json["health"].as_f64().unwrap() - 99.5).abs() < 0.001);
+        assert_eq!(json["alive"], true);
+        assert!(json["inventory"].is_array());
+        assert_eq!(json["inventory"][0], "sword");
+        assert_eq!(json["inventory"].as_array().unwrap().len(), 3);
+        assert_eq!(json["stats"]["str"], 10);
+        assert_eq!(json["stats"]["dex"], 15);
+
+        // Roundtrip: JSON → Lua table.
+        let lua_val = json_to_lua_value(&lua, &json).unwrap();
+        let rt_table = match lua_val {
+            LuaValue::Table(t) => t,
+            _ => panic!("Expected table"),
+        };
+        let name: String = rt_table.get("name").unwrap();
+        assert_eq!(name, "Player1");
+        let level: i64 = rt_table.get("level").unwrap();
+        assert_eq!(level, 42);
+        let alive: bool = rt_table.get("alive").unwrap();
+        assert!(alive);
+    }
+
+    #[test]
+    fn lua_table_to_json_array_detection() {
+        let lua = setup();
+
+        // Pure array (consecutive integer keys 1..N).
+        lua.load("arr = {10, 20, 30}").exec().unwrap();
+        let arr: LuaTable = lua.globals().get("arr").unwrap();
+        let json = lua_table_to_json(&arr).unwrap();
+        assert!(json.is_array());
+        assert_eq!(json.as_array().unwrap().len(), 3);
+
+        // Mixed table (has string keys) → object.
+        lua.load("mixed = {10, 20, foo = 'bar'}").exec().unwrap();
+        let mixed: LuaTable = lua.globals().get("mixed").unwrap();
+        let json = lua_table_to_json(&mixed).unwrap();
+        assert!(json.is_object());
+    }
+
+    #[test]
+    fn lua_table_to_json_rejects_functions() {
+        let lua = setup();
+        lua.load("bad = {callback = function() end}").exec().unwrap();
+        let table: LuaTable = lua.globals().get("bad").unwrap();
+        let result = lua_table_to_json(&table);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn save_load_with_context() {
+        // Integration test: set up a real Scene with a save directory,
+        // inject SceneScriptContext, and do a full save/load cycle.
+        let lua = setup();
+        let temp_dir = std::env::temp_dir().join("gg_test_saves");
+        let _ = std::fs::remove_dir_all(&temp_dir);
+
+        let mut scene = Scene::new();
+        scene.set_save_data_directory(temp_dir.clone());
+
+        // Set up the SceneScriptContext.
+        let ctx = SceneScriptContext {
+            scene: &mut scene as *mut Scene,
+            input: std::ptr::null(),
+        };
+        lua.set_app_data(ctx);
+
+        // save_exists should return false for non-existent slot.
+        lua.load(r#"exists_before = Engine.save_exists("test_slot")"#)
+            .exec()
+            .unwrap();
+        let exists: bool = lua.globals().get("exists_before").unwrap();
+        assert!(!exists);
+
+        // save_data should succeed.
+        lua.load(
+            r#"
+            save_ok = Engine.save_data("test_slot", {
+                level = 7,
+                name = "Hero",
+                items = {"axe", "bow"},
+            })
+            "#,
+        )
+        .exec()
+        .unwrap();
+        let save_ok: bool = lua.globals().get("save_ok").unwrap();
+        assert!(save_ok);
+
+        // save_exists should now return true.
+        lua.load(r#"exists_after = Engine.save_exists("test_slot")"#)
+            .exec()
+            .unwrap();
+        let exists: bool = lua.globals().get("exists_after").unwrap();
+        assert!(exists);
+
+        // load_data should return the saved table.
+        lua.load(
+            r#"
+            loaded = Engine.load_data("test_slot")
+            loaded_level = loaded.level
+            loaded_name = loaded.name
+            loaded_item1 = loaded.items[1]
+            "#,
+        )
+        .exec()
+        .unwrap();
+        let level: i64 = lua.globals().get("loaded_level").unwrap();
+        assert_eq!(level, 7);
+        let name: String = lua.globals().get("loaded_name").unwrap();
+        assert_eq!(name, "Hero");
+        let item1: String = lua.globals().get("loaded_item1").unwrap();
+        assert_eq!(item1, "axe");
+
+        // list_saves should include "test_slot".
+        lua.load(
+            r#"
+            saves = Engine.list_saves()
+            num_saves = #saves
+            "#,
+        )
+        .exec()
+        .unwrap();
+        let num_saves: i64 = lua.globals().get("num_saves").unwrap();
+        assert_eq!(num_saves, 1);
+
+        // delete_save should succeed.
+        lua.load(r#"deleted = Engine.delete_save("test_slot")"#)
+            .exec()
+            .unwrap();
+        let deleted: bool = lua.globals().get("deleted").unwrap();
+        assert!(deleted);
+
+        // save_exists should return false again.
+        lua.load(r#"exists_final = Engine.save_exists("test_slot")"#)
+            .exec()
+            .unwrap();
+        let exists: bool = lua.globals().get("exists_final").unwrap();
+        assert!(!exists);
+
+        // Cleanup.
+        lua.remove_app_data::<SceneScriptContext>();
+        let _ = std::fs::remove_dir_all(&temp_dir);
     }
 }

@@ -179,6 +179,10 @@ impl GGPlayer {
         if let Some(search_path) = self.scene.script_module_search_path() {
             new_scene.set_script_module_search_path(search_path.to_path_buf());
         }
+        // Preserve save data directory for the new scene.
+        if let Some(save_dir) = self.scene.save_data_directory() {
+            new_scene.set_save_data_directory(save_dir.to_path_buf());
+        }
 
         // Swap scenes — old scene goes to deferred destroy.
         let old = std::mem::replace(&mut self.scene, new_scene);
@@ -276,6 +280,7 @@ impl Application for GGPlayer {
         scene.set_vsync_enabled(config.vsync);
         scene.set_cursor_mode(gg_engine::cursor::CursorMode::Confined);
         scene.set_script_module_search_path(project.script_module_path());
+        scene.set_save_data_directory(project.project_directory().join("saves"));
 
         let input_actions = project.input_actions().clone();
 
