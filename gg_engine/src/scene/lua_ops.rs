@@ -313,8 +313,9 @@ impl Scene {
         };
         guard.engine_mut().lua().set_app_data(ctx);
 
-        // Initialize deferred timer ops so Lua timer bindings work during scripts.
+        // Initialize deferred ops so Lua timer/coroutine bindings work during scripts.
         guard.engine_mut().init_pending_timer_ops();
+        guard.engine_mut().init_pending_coroutine_ops();
 
         for uuid in &uuids {
             guard
@@ -322,8 +323,9 @@ impl Scene {
                 .call_entity_on_update(*uuid, dt.seconds());
         }
 
-        // Apply any timer creates/cancels that scripts requested.
+        // Apply any timer/coroutine creates/cancels that scripts requested.
         guard.engine_mut().apply_pending_timer_ops();
+        guard.engine_mut().apply_pending_coroutine_ops();
 
         // Tick timers (set_timeout / set_interval).
         // Context must be active so timer callbacks can access the scene.
@@ -333,6 +335,12 @@ impl Scene {
         };
         guard.engine_mut().lua().set_app_data(timer_ctx);
         guard.engine_mut().tick_timers(dt.seconds());
+
+        // Tick coroutines — resume any that are ready.
+        // Re-init pending ops so coroutines can start new coroutines or timers.
+        guard.engine_mut().init_pending_coroutine_ops();
+        guard.engine_mut().tick_coroutines(dt.seconds());
+        guard.engine_mut().apply_pending_coroutine_ops();
 
         // Guard drop restores engine and cleans up SceneScriptContext.
         drop(guard);

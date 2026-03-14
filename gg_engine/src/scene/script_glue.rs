@@ -560,6 +560,16 @@ pub fn register_all(lua: &Lua) -> LuaResult<()> {
     engine.set("set_interval", lua.create_function(lua_set_interval)?)?;
     engine.set("cancel_timer", lua.create_function(lua_cancel_timer)?)?;
 
+    // Coroutines
+    engine.set(
+        "start_coroutine",
+        lua.create_function(lua_start_coroutine)?,
+    )?;
+    engine.set(
+        "stop_all_coroutines",
+        lua.create_function(lua_stop_all_coroutines)?,
+    )?;
+
     // Physics: gravity
     engine.set("set_gravity", lua.create_function(lua_set_gravity)?)?;
     engine.set("get_gravity", lua.create_function(lua_get_gravity)?)?;
@@ -654,6 +664,20 @@ pub fn register_all(lua: &Lua) -> LuaResult<()> {
     engine.set("list_saves", lua.create_function(lua_list_saves)?)?;
 
     lua.globals().set("Engine", engine)?;
+
+    // Register coroutine helpers as Lua closures on the Engine table.
+    // These must run after Engine is in globals so they can index it.
+    lua.load(
+        r#"
+        Engine.wait = function(seconds)
+            coroutine.yield(seconds or 0)
+        end
+        Engine.wait_frame = function()
+            coroutine.yield(0)
+        end
+        "#,
+    )
+    .exec()?;
 
     log::info!("ScriptGlue: registered Engine.* functions");
     Ok(())
@@ -2872,6 +2896,51 @@ fn lua_cancel_timer(lua: &Lua, timer_id: usize) -> LuaResult<()> {
 
     if let Some(mut ops) = lua.app_data_mut::<PendingTimerOps>() {
         ops.cancels.push(timer_id);
+    }
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Coroutines
+// ---------------------------------------------------------------------------
+
+/// `Engine.start_coroutine(fn)` — start a coroutine that runs `fn`.
+///
+/// The function can call `Engine.wait(seconds)` or `coroutine.yield()` to
+/// pause execution. It resumes automatically on subsequent frames.
+fn lua_start_coroutine(lua: &Lua, func: LuaFunction) -> LuaResult<()> {
+    use super::script_engine::{CurrentEntityUuid, PendingCoroutineCreate, PendingCoroutineOps};
+
+    let entity_uuid = lua
+        .app_data_ref::<CurrentEntityUuid>()
+        .map(|u| u.0)
+        .unwrap_or(0);
+
+    // Create a Lua coroutine thread from the function.
+    let thread = lua.create_thread(func)?;
+    let thread_key = lua.create_registry_value(thread)?;
+
+    let mut ops = lua
+        .app_data_mut::<PendingCoroutineOps>()
+        .ok_or_else(|| mlua::Error::RuntimeError("Coroutine system not available".into()))?;
+    ops.creates.push(PendingCoroutineCreate {
+        entity_uuid,
+        thread_key,
+    });
+    Ok(())
+}
+
+/// `Engine.stop_all_coroutines()` — cancel all coroutines for the calling entity.
+fn lua_stop_all_coroutines(lua: &Lua, (): ()) -> LuaResult<()> {
+    use super::script_engine::{CurrentEntityUuid, PendingCoroutineOps};
+
+    let entity_uuid = lua
+        .app_data_ref::<CurrentEntityUuid>()
+        .map(|u| u.0)
+        .unwrap_or(0);
+
+    if let Some(mut ops) = lua.app_data_mut::<PendingCoroutineOps>() {
+        ops.cancels_entity.push(entity_uuid);
     }
     Ok(())
 }
@@ -5424,5 +5493,40 @@ mod tests {
             .unwrap();
         let result: bool = lua.globals().get("result").unwrap();
         assert!(!result);
+    }
+
+    #[test]
+    fn start_coroutine_no_context_errors_gracefully() {
+        let lua = setup();
+        // Without PendingCoroutineOps in app_data, start_coroutine should error.
+        let result = lua
+            .load("Engine.start_coroutine(function() end)")
+            .exec();
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn stop_all_coroutines_no_context_no_error() {
+        let lua = setup();
+        // Without PendingCoroutineOps, stop_all_coroutines silently succeeds.
+        lua.load("Engine.stop_all_coroutines()")
+            .exec()
+            .unwrap();
+    }
+
+    #[test]
+    fn wait_and_wait_frame_exist() {
+        let lua = setup();
+        // Verify Engine.wait and Engine.wait_frame are callable functions.
+        let is_fn: bool = lua
+            .load("type(Engine.wait) == 'function'")
+            .eval()
+            .unwrap();
+        assert!(is_fn);
+        let is_fn: bool = lua
+            .load("type(Engine.wait_frame) == 'function'")
+            .eval()
+            .unwrap();
+        assert!(is_fn);
     }
 }

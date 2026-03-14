@@ -7,6 +7,7 @@ use std::path::Path;
 /// Lua standard libraries allowed in game scripts.
 /// Excludes: io, os, package (filesystem/process access), debug, ffi.
 fn script_stdlib() -> StdLib {
+    // Note: LuaJIT includes `coroutine` in its base library — no separate flag needed.
     StdLib::TABLE | StdLib::STRING | StdLib::MATH | StdLib::BIT | StdLib::JIT
 }
 
@@ -95,6 +96,33 @@ pub(crate) struct PendingTimerCreate {
     pub callback_key: LuaRegistryKey,
 }
 
+// -----------------------------------------------------------------
+// Coroutine system
+// -----------------------------------------------------------------
+
+/// A running coroutine associated with an entity.
+pub(crate) struct ScriptCoroutine {
+    /// Entity that owns this coroutine.
+    pub entity_uuid: u64,
+    /// Lua coroutine thread stored in the registry.
+    pub thread_key: LuaRegistryKey,
+    /// Time remaining before the coroutine can be resumed (0.0 = next frame).
+    pub wait_remaining: f32,
+}
+
+/// Deferred coroutine operations queued by Lua scripts during execution.
+/// Stored in Lua app_data because `scene.script_engine` is temporarily
+/// taken during script execution (same pattern as `PendingTimerOps`).
+pub(crate) struct PendingCoroutineOps {
+    pub creates: Vec<PendingCoroutineCreate>,
+    pub cancels_entity: Vec<u64>,
+}
+
+pub(crate) struct PendingCoroutineCreate {
+    pub entity_uuid: u64,
+    pub thread_key: LuaRegistryKey,
+}
+
 pub struct ScriptEngine {
     lua: Lua,
     /// Per-entity Lua environments keyed by entity UUID (u64).
@@ -106,6 +134,8 @@ pub struct ScriptEngine {
     pub(crate) timers: HashMap<usize, ScriptTimer>,
     /// Next timer ID (monotonically increasing to avoid reuse within a session).
     pub(crate) next_timer_id: usize,
+    /// Active coroutines (all entities).
+    pub(crate) coroutines: Vec<ScriptCoroutine>,
 }
 
 impl Default for ScriptEngine {
@@ -165,6 +195,7 @@ impl ScriptEngine {
             error_counts: HashMap::new(),
             timers: HashMap::new(),
             next_timer_id: 0,
+            coroutines: Vec::new(),
         }
     }
 
@@ -961,6 +992,109 @@ impl ScriptEngine {
             self.timers.insert(op.id, timer);
         }
     }
+
+    // -----------------------------------------------------------------
+    // Coroutine system
+    // -----------------------------------------------------------------
+
+    /// Initialize pending coroutine ops in Lua app_data before script execution.
+    pub fn init_pending_coroutine_ops(&mut self) {
+        self.lua.set_app_data(PendingCoroutineOps {
+            creates: Vec::new(),
+            cancels_entity: Vec::new(),
+        });
+    }
+
+    /// Drain pending coroutine ops from Lua app_data into the engine.
+    pub fn apply_pending_coroutine_ops(&mut self) {
+        let Some(pending) = self.lua.remove_app_data::<PendingCoroutineOps>() else {
+            return;
+        };
+
+        // Process entity-level cancellations first.
+        for uuid in pending.cancels_entity {
+            self.coroutines.retain(|c| c.entity_uuid != uuid);
+        }
+
+        // Process creations.
+        for op in pending.creates {
+            self.coroutines.push(ScriptCoroutine {
+                entity_uuid: op.entity_uuid,
+                wait_remaining: 0.0,
+                thread_key: op.thread_key,
+            });
+        }
+    }
+
+    /// Resume all ready coroutines, decrementing wait timers by `dt`.
+    ///
+    /// A coroutine can yield one of:
+    /// - `nil` / no value → resume next frame
+    /// - a number → wait that many seconds before resuming
+    ///
+    /// Dead or errored coroutines are removed automatically.
+    pub fn tick_coroutines(&mut self, dt: f32) {
+        // Decrement wait timers.
+        for co in &mut self.coroutines {
+            co.wait_remaining = (co.wait_remaining - dt).max(0.0);
+        }
+
+        // Resume ready coroutines. We swap-remove dead ones after.
+        let mut dead = Vec::new();
+        for (i, co) in self.coroutines.iter_mut().enumerate() {
+            if co.wait_remaining > 0.0 {
+                continue;
+            }
+
+            let thread: mlua::Thread = match self.lua.registry_value(&co.thread_key) {
+                Ok(t) => t,
+                Err(_) => {
+                    dead.push(i);
+                    continue;
+                }
+            };
+
+            // Check if already dead before resuming.
+            if thread.status() != mlua::ThreadStatus::Resumable {
+                dead.push(i);
+                continue;
+            }
+
+            match thread.resume::<LuaValue>(()) {
+                Ok(value) => {
+                    // Check if coroutine completed.
+                    if thread.status() != mlua::ThreadStatus::Resumable {
+                        dead.push(i);
+                    } else {
+                        // Interpret yielded value: number = wait seconds, else next frame.
+                        match value {
+                            LuaValue::Number(n) => co.wait_remaining = n as f32,
+                            LuaValue::Integer(n) => co.wait_remaining = n as f32,
+                            _ => co.wait_remaining = 0.0,
+                        }
+                    }
+                }
+                Err(e) => {
+                    log::error!(
+                        "ScriptEngine: coroutine error for entity {}: {}",
+                        co.entity_uuid,
+                        e
+                    );
+                    dead.push(i);
+                }
+            }
+        }
+
+        // Remove dead coroutines in reverse index order to preserve indices.
+        for i in dead.into_iter().rev() {
+            self.coroutines.swap_remove(i);
+        }
+    }
+
+    /// Remove all coroutines owned by a specific entity.
+    pub fn remove_entity_coroutines(&mut self, entity_uuid: u64) {
+        self.coroutines.retain(|c| c.entity_uuid != entity_uuid);
+    }
 }
 
 #[cfg(test)]
@@ -1310,5 +1444,196 @@ end
         assert_eq!(engine.entity_uuids().len(), 1);
 
         std::fs::remove_file(&path).ok();
+    }
+
+    // -----------------------------------------------------------------
+    // Coroutine tests
+    // -----------------------------------------------------------------
+
+    #[test]
+    fn coroutine_runs_to_completion() {
+        let mut engine = ScriptEngine::new();
+
+        // Create a coroutine that sets a global and yields once.
+        engine
+            .lua()
+            .load(
+                r#"
+                co_step = 0
+                local thread = coroutine.create(function()
+                    co_step = 1
+                    coroutine.yield()
+                    co_step = 2
+                end)
+                "#,
+            )
+            .exec()
+            .unwrap();
+
+        // Manually create the thread and add it as a coroutine.
+        let thread: mlua::Thread = engine
+            .lua()
+            .load("coroutine.create(function() co_step = 10; coroutine.yield(); co_step = 20 end)")
+            .eval()
+            .unwrap();
+        let key = engine.lua().create_registry_value(thread).unwrap();
+        engine.coroutines.push(ScriptCoroutine {
+            entity_uuid: 1,
+            wait_remaining: 0.0,
+            thread_key: key,
+        });
+
+        // First tick: resumes, sets co_step=10, yields.
+        engine.tick_coroutines(0.016);
+        let step: i32 = engine.lua().globals().get("co_step").unwrap();
+        assert_eq!(step, 10);
+        assert_eq!(engine.coroutines.len(), 1);
+
+        // Second tick: resumes, sets co_step=20, completes, gets cleaned up.
+        engine.tick_coroutines(0.016);
+        let step: i32 = engine.lua().globals().get("co_step").unwrap();
+        assert_eq!(step, 20);
+        assert_eq!(engine.coroutines.len(), 0);
+    }
+
+    #[test]
+    fn coroutine_wait_seconds() {
+        let mut engine = ScriptEngine::new();
+
+        let thread: mlua::Thread = engine
+            .lua()
+            .load(
+                r#"coroutine.create(function()
+                    wait_result = "before"
+                    coroutine.yield(0.5)  -- wait 0.5 seconds
+                    wait_result = "after"
+                end)"#,
+            )
+            .eval()
+            .unwrap();
+        let key = engine.lua().create_registry_value(thread).unwrap();
+        engine.coroutines.push(ScriptCoroutine {
+            entity_uuid: 1,
+            wait_remaining: 0.0,
+            thread_key: key,
+        });
+
+        // First tick: sets "before", yields with 0.5s wait.
+        engine.tick_coroutines(0.016);
+        let r: String = engine.lua().globals().get("wait_result").unwrap();
+        assert_eq!(r, "before");
+        assert_eq!(engine.coroutines.len(), 1);
+
+        // Tick a few frames (not enough time yet).
+        engine.tick_coroutines(0.016); // ~0.032 total
+        engine.tick_coroutines(0.016); // ~0.048 total
+        let r: String = engine.lua().globals().get("wait_result").unwrap();
+        assert_eq!(r, "before"); // Still waiting
+
+        // Tick with a large dt to pass the 0.5s mark.
+        engine.tick_coroutines(0.5);
+        let r: String = engine.lua().globals().get("wait_result").unwrap();
+        assert_eq!(r, "after");
+        assert_eq!(engine.coroutines.len(), 0);
+    }
+
+    #[test]
+    fn coroutine_error_removes_it() {
+        let mut engine = ScriptEngine::new();
+
+        let thread: mlua::Thread = engine
+            .lua()
+            .load(
+                r#"coroutine.create(function()
+                    error("intentional error")
+                end)"#,
+            )
+            .eval()
+            .unwrap();
+        let key = engine.lua().create_registry_value(thread).unwrap();
+        engine.coroutines.push(ScriptCoroutine {
+            entity_uuid: 1,
+            wait_remaining: 0.0,
+            thread_key: key,
+        });
+
+        engine.tick_coroutines(0.016);
+        // Errored coroutine should be removed.
+        assert_eq!(engine.coroutines.len(), 0);
+    }
+
+    #[test]
+    fn remove_entity_coroutines() {
+        let mut engine = ScriptEngine::new();
+
+        // Add coroutines for two different entities.
+        for uuid in [10, 20, 10] {
+            let thread: mlua::Thread = engine
+                .lua()
+                .load("coroutine.create(function() coroutine.yield() end)")
+                .eval()
+                .unwrap();
+            let key = engine.lua().create_registry_value(thread).unwrap();
+            engine.coroutines.push(ScriptCoroutine {
+                entity_uuid: uuid,
+                wait_remaining: 0.0,
+                thread_key: key,
+            });
+        }
+
+        assert_eq!(engine.coroutines.len(), 3);
+        engine.remove_entity_coroutines(10);
+        assert_eq!(engine.coroutines.len(), 1);
+        assert_eq!(engine.coroutines[0].entity_uuid, 20);
+    }
+
+    #[test]
+    fn coroutine_engine_wait_function() {
+        // Test that Engine.wait() is callable and yields the correct value.
+        let engine = ScriptEngine::new();
+
+        let thread: mlua::Thread = engine
+            .lua()
+            .load(
+                r#"coroutine.create(function()
+                    Engine.wait(1.5)
+                end)"#,
+            )
+            .eval()
+            .unwrap();
+
+        // Resume: should yield with 1.5.
+        let value: LuaValue = thread.resume(()).unwrap();
+        match value {
+            LuaValue::Number(n) => assert!((n - 1.5).abs() < 0.001),
+            _ => panic!("Expected number from Engine.wait yield, got {:?}", value),
+        }
+    }
+
+    #[test]
+    fn coroutine_engine_wait_frame_function() {
+        let engine = ScriptEngine::new();
+
+        let thread: mlua::Thread = engine
+            .lua()
+            .load(
+                r#"coroutine.create(function()
+                    Engine.wait_frame()
+                end)"#,
+            )
+            .eval()
+            .unwrap();
+
+        // Resume: should yield with 0.
+        let value: LuaValue = thread.resume(()).unwrap();
+        let n = match value {
+            LuaValue::Number(n) => n,
+            LuaValue::Integer(n) => n as f64,
+            _ => panic!(
+                "Expected number from Engine.wait_frame yield, got {:?}",
+                value
+            ),
+        };
+        assert!(n.abs() < 0.001);
     }
 }
