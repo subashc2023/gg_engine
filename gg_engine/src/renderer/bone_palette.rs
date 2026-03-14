@@ -29,7 +29,13 @@ pub struct BonePaletteSystem {
     current_offset: usize,
 }
 
-// Safety: mapped_ptrs are only accessed from the main thread during rendering.
+// SAFETY: BonePaletteSystem contains raw `*mut u8` mapped pointers and Vulkan
+// handles (non-Send). These are only written/read on the main (render) thread
+// during `begin_frame` / `write_bones` / draw submission. Frame-in-flight
+// fencing ensures no GPU-side data race: each frame's SSBO is written only
+// after its fence signals, and the GPU reads only from the previously submitted
+// frame's SSBO. The struct is stored inside `Renderer` which is `!Send` at the
+// application level, so cross-thread access cannot occur in practice.
 unsafe impl Send for BonePaletteSystem {}
 unsafe impl Sync for BonePaletteSystem {}
 

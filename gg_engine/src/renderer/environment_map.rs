@@ -1054,8 +1054,12 @@ impl EnvironmentMapSystem {
         let alloc_info = vk::DescriptorSetAllocateInfo::default()
             .descriptor_pool(pool)
             .set_layouts(&layouts);
-        let ds = unsafe { device.allocate_descriptor_sets(&alloc_info) }
-            .expect("Failed to allocate compute descriptor set")[0];
+        let sets = unsafe { device.allocate_descriptor_sets(&alloc_info) }
+            .expect("Failed to allocate compute descriptor set (GPU OOM or pool exhausted)");
+        let ds = sets
+            .into_iter()
+            .next()
+            .expect("allocate_descriptor_sets returned empty vec");
 
         let sampler_info = vk::DescriptorImageInfo::default()
             .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)

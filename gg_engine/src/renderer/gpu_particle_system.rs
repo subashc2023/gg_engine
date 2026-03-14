@@ -209,7 +209,13 @@ pub struct GpuParticleSystem {
     device: ash::Device,
 }
 
-// Safety: Buffers are accessed with proper frame-in-flight synchronization.
+// SAFETY: GpuParticleSystem contains raw `*mut u8` mapped pointers (indirect
+// draw buffers) and Vulkan handles (non-Send). All CPU access occurs on the
+// main (render) thread during `begin_frame` / `emit_particles` / dispatch /
+// draw. Per-frame buffers are indexed by `current_frame`, and frame-in-flight
+// fences guarantee the GPU has finished reading before the CPU writes again.
+// The struct lives inside `Renderer` which is `!Send` at the application level,
+// preventing cross-thread access.
 unsafe impl Send for GpuParticleSystem {}
 unsafe impl Sync for GpuParticleSystem {}
 

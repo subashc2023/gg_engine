@@ -25,6 +25,13 @@ pub(crate) struct SceneScriptContext {
     pub input: *const Input,
 }
 
+// SAFETY: SceneScriptContext contains raw pointers to Scene and Input.
+// It is only stored as mlua `app_data` for the duration of a single Lua
+// dispatch (on_create / on_update / on_destroy), then immediately removed.
+// The take-modify-replace pattern in `lua_ops.rs` guarantees exclusive access
+// to Scene while scripts run. The `input` pointer is valid for the entire
+// frame (stack-borrowed in `on_update_lua_scripts`). No cross-thread access
+// is possible: mlua::Lua is `!Send` and runs on the main thread only.
 unsafe impl Send for SceneScriptContext {}
 unsafe impl Sync for SceneScriptContext {}
 

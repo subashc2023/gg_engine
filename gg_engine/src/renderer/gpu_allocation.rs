@@ -136,8 +136,13 @@ pub struct GpuAllocation {
     allocator: Arc<Mutex<GpuAllocator>>,
 }
 
-// Safety: Same contract as the buffers that contain these allocations.
-// Access is gated by frame-in-flight fencing.
+// SAFETY: GpuAllocation wraps a `gpu_allocator::vulkan::Allocation` (which is
+// not Send/Sync because it holds raw Vulkan memory handles). The allocation is
+// freed on Drop via `Arc<Mutex<GpuAllocator>>`, so deallocation is thread-safe.
+// All read access to the mapped pointer / memory handle occurs on the main
+// (render) thread, gated by frame-in-flight fencing. GpuAllocations are stored
+// inside renderer-owned structs that are themselves `!Send` at the application
+// level.
 unsafe impl Send for GpuAllocation {}
 unsafe impl Sync for GpuAllocation {}
 
