@@ -162,6 +162,30 @@ pub struct BonePose {
     pub matrices: Vec<Mat4>,
 }
 
+impl BonePose {
+    /// Linearly interpolate between two poses per-bone.
+    ///
+    /// `t = 0.0` returns `a`, `t = 1.0` returns `b`.
+    /// Works well for short crossfade durations (0.1–0.5 s) where the minor
+    /// volume distortion from matrix lerp is imperceptible.
+    pub fn blend(a: &BonePose, b: &BonePose, t: f32) -> BonePose {
+        let t = t.clamp(0.0, 1.0);
+        let len = a.matrices.len().min(b.matrices.len());
+        let matrices = (0..len)
+            .map(|i| {
+                let ma = a.matrices[i].to_cols_array();
+                let mb = b.matrices[i].to_cols_array();
+                let mut out = [0.0f32; 16];
+                for k in 0..16 {
+                    out[k] = ma[k] + (mb[k] - ma[k]) * t;
+                }
+                Mat4::from_cols_array(&out)
+            })
+            .collect();
+        BonePose { matrices }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Keyframe sampling (linear interpolation)
 // ---------------------------------------------------------------------------
@@ -327,5 +351,65 @@ mod tests {
         // Child bone: translate(1,0,0) * translate(0,1,0) * I = translate(1,1,0)
         let child_pos = pose.matrices[1].w_axis.truncate();
         assert!((child_pos - Vec3::new(1.0, 1.0, 0.0)).length() < 0.001);
+    }
+
+    #[test]
+    fn blend_pose_endpoints() {
+        let a = BonePose {
+            matrices: vec![Mat4::IDENTITY],
+        };
+        let b = BonePose {
+            matrices: vec![Mat4::from_translation(Vec3::new(2.0, 0.0, 0.0))],
+        };
+        // t=0 → a
+        let p0 = BonePose::blend(&a, &b, 0.0);
+        assert!((p0.matrices[0] - Mat4::IDENTITY).abs_diff_eq(Mat4::ZERO, 0.001));
+        // t=1 → b
+        let p1 = BonePose::blend(&a, &b, 1.0);
+        let pos = p1.matrices[0].w_axis.truncate();
+        assert!((pos - Vec3::new(2.0, 0.0, 0.0)).length() < 0.001);
+    }
+
+    #[test]
+    fn blend_pose_midpoint() {
+        let a = BonePose {
+            matrices: vec![Mat4::from_translation(Vec3::ZERO)],
+        };
+        let b = BonePose {
+            matrices: vec![Mat4::from_translation(Vec3::new(4.0, 0.0, 0.0))],
+        };
+        let mid = BonePose::blend(&a, &b, 0.5);
+        let pos = mid.matrices[0].w_axis.truncate();
+        assert!((pos - Vec3::new(2.0, 0.0, 0.0)).length() < 0.001);
+    }
+
+    #[test]
+    fn blend_pose_clamps_t() {
+        let a = BonePose {
+            matrices: vec![Mat4::IDENTITY],
+        };
+        let b = BonePose {
+            matrices: vec![Mat4::from_translation(Vec3::X)],
+        };
+        // t < 0 clamped to 0
+        let p = BonePose::blend(&a, &b, -1.0);
+        assert!((p.matrices[0] - Mat4::IDENTITY).abs_diff_eq(Mat4::ZERO, 0.001));
+        // t > 1 clamped to 1
+        let p = BonePose::blend(&a, &b, 5.0);
+        let pos = p.matrices[0].w_axis.truncate();
+        assert!((pos - Vec3::X).length() < 0.001);
+    }
+
+    #[test]
+    fn blend_pose_different_lengths() {
+        // Shorter array determines output length.
+        let a = BonePose {
+            matrices: vec![Mat4::IDENTITY; 3],
+        };
+        let b = BonePose {
+            matrices: vec![Mat4::IDENTITY; 2],
+        };
+        let result = BonePose::blend(&a, &b, 0.5);
+        assert_eq!(result.matrices.len(), 2);
     }
 }

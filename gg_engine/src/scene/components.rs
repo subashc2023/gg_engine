@@ -1738,6 +1738,17 @@ pub struct SkeletalAnimationComponent {
     pub looping: bool,
     /// Whether animation is actively playing.
     pub playing: bool,
+
+    // -- Blend / crossfade state ------------------------------------------
+    /// Previous clip being blended out (index into `clips`).
+    pub blend_from_clip: Option<usize>,
+    /// Playback time of the "from" clip (advances during blend).
+    pub blend_from_time: f32,
+    /// Elapsed real-time since the blend started (seconds).
+    pub blend_elapsed: f32,
+    /// Total blend duration (seconds). 0.0 = no blend active.
+    pub blend_duration: f32,
+
     /// Runtime-only: the uploaded skinned mesh vertex array.
     pub(crate) skinned_vertex_array: Option<crate::renderer::VertexArray>,
     /// Runtime-only: the loaded skinned mesh data (shared via Arc).
@@ -1755,6 +1766,10 @@ impl Clone for SkeletalAnimationComponent {
             speed: self.speed,
             looping: self.looping,
             playing: self.playing,
+            blend_from_clip: self.blend_from_clip,
+            blend_from_time: self.blend_from_time,
+            blend_elapsed: self.blend_elapsed,
+            blend_duration: self.blend_duration,
             skinned_vertex_array: None, // Runtime-only, not copied.
             loaded_skinned_mesh: self.loaded_skinned_mesh.clone(), // Arc clone.
         }
@@ -1773,6 +1788,10 @@ impl SkeletalAnimationComponent {
             speed: 1.0,
             looping: true,
             playing: !data.clips.is_empty(),
+            blend_from_clip: None,
+            blend_from_time: 0.0,
+            blend_elapsed: 0.0,
+            blend_duration: 0.0,
             skinned_vertex_array: None,
             loaded_skinned_mesh: Some(crate::Ref::new(data.mesh.clone())),
         }
@@ -1797,6 +1816,10 @@ impl SkeletalAnimationComponent {
             speed: 1.0,
             looping: true,
             playing: false,
+            blend_from_clip: None,
+            blend_from_time: 0.0,
+            blend_elapsed: 0.0,
+            blend_duration: 0.0,
             skinned_vertex_array: None,
             loaded_skinned_mesh: None,
         }
@@ -1807,25 +1830,69 @@ impl SkeletalAnimationComponent {
         self.skeleton.joint_count() > 0
     }
 
-    /// Play a clip by index.
+    /// Play a clip by index (hard cut, no blend).
     pub fn play(&mut self, clip_index: usize) {
         if clip_index < self.clips.len() {
+            self.blend_from_clip = None;
+            self.blend_elapsed = 0.0;
+            self.blend_duration = 0.0;
             self.current_clip = Some(clip_index);
             self.playback_time = 0.0;
             self.playing = true;
         }
     }
 
-    /// Play a clip by name.
+    /// Play a clip by name (hard cut, no blend).
     pub fn play_by_name(&mut self, name: &str) {
         if let Some(idx) = self.clips.iter().position(|c| c.name == name) {
             self.play(idx);
         }
     }
 
+    /// Play a clip by index with crossfade blending from the current pose.
+    ///
+    /// `blend_secs` is the real-time duration of the crossfade. During the
+    /// blend both the outgoing and incoming clips advance at `speed`.
+    pub fn play_blended(&mut self, clip_index: usize, blend_secs: f32) {
+        if clip_index >= self.clips.len() {
+            return;
+        }
+        if blend_secs <= 0.0 || self.current_clip.is_none() {
+            self.play(clip_index);
+            return;
+        }
+        // Snapshot current playback as the "from" side of the blend.
+        self.blend_from_clip = self.current_clip;
+        self.blend_from_time = self.playback_time;
+        self.blend_elapsed = 0.0;
+        self.blend_duration = blend_secs;
+        // Start the new clip.
+        self.current_clip = Some(clip_index);
+        self.playback_time = 0.0;
+        self.playing = true;
+    }
+
+    /// Play a clip by name with crossfade blending. Returns `true` if found.
+    pub fn play_by_name_blended(&mut self, name: &str, blend_secs: f32) -> bool {
+        if let Some(idx) = self.clips.iter().position(|c| c.name == name) {
+            self.play_blended(idx, blend_secs);
+            true
+        } else {
+            false
+        }
+    }
+
     /// Stop playback (freeze at current pose).
     pub fn stop(&mut self) {
         self.playing = false;
+        self.blend_from_clip = None;
+        self.blend_elapsed = 0.0;
+        self.blend_duration = 0.0;
+    }
+
+    /// Whether a crossfade blend is in progress.
+    pub fn is_blending(&self) -> bool {
+        self.blend_from_clip.is_some() && self.blend_duration > 0.0
     }
 
     /// Get the name of the currently playing clip.
@@ -1833,6 +1900,35 @@ impl SkeletalAnimationComponent {
         self.current_clip
             .and_then(|i| self.clips.get(i))
             .map(|c| c.name.as_str())
+    }
+
+    /// Compute the pose for the current frame, handling blending if active.
+    pub fn compute_current_pose(&self) -> crate::renderer::skeleton::BonePose {
+        use crate::renderer::skeleton::BonePose;
+
+        let to_pose = if let Some(clip_idx) = self.current_clip {
+            if let Some(clip) = self.clips.get(clip_idx) {
+                self.skeleton.compute_pose(clip, self.playback_time)
+            } else {
+                self.skeleton.bind_pose()
+            }
+        } else {
+            self.skeleton.bind_pose()
+        };
+
+        if let Some(from_idx) = self.blend_from_clip {
+            if self.blend_duration > 0.0 {
+                let from_pose = if let Some(clip) = self.clips.get(from_idx) {
+                    self.skeleton.compute_pose(clip, self.blend_from_time)
+                } else {
+                    self.skeleton.bind_pose()
+                };
+                let t = (self.blend_elapsed / self.blend_duration).clamp(0.0, 1.0);
+                return BonePose::blend(&from_pose, &to_pose, t);
+            }
+        }
+
+        to_pose
     }
 }
 

@@ -957,6 +957,13 @@ struct SkeletalAnimationData {
     /// Name of the clip to play on load (empty = first clip).
     #[serde(rename = "DefaultClip", default)]
     default_clip: String,
+    /// Default blend duration for clip transitions (seconds). 0 = hard cut.
+    #[serde(
+        rename = "BlendDuration",
+        default,
+        skip_serializing_if = "is_zero_f32"
+    )]
+    blend_duration: f32,
 }
 
 fn default_anim_speed() -> f32 {
@@ -1877,6 +1884,7 @@ impl SceneSerializer {
                     looping: sac.looping,
                     playing: sac.playing,
                     default_clip: sac.current_clip_name().unwrap_or("").to_string(),
+                    blend_duration: sac.blend_duration,
                 }),
             directional_light: scene
                 .get_component::<DirectionalLightComponent>(entity)
@@ -2441,6 +2449,7 @@ impl SceneSerializer {
                 sac.speed = sad.speed;
                 sac.looping = sad.looping;
                 sac.playing = sad.playing;
+                sac.blend_duration = sad.blend_duration;
                 // default_clip is resolved after asset loads (clip names not available yet).
                 scene.add_component(entity, sac);
             }

@@ -30,6 +30,8 @@ pub(crate) fn draw_skeletal_animation_component(
                 mut speed,
                 mut looping,
                 mut playing,
+                mut blend_duration,
+                is_blending,
                 joint_count,
             ) = {
                 let sac = scene
@@ -43,6 +45,8 @@ pub(crate) fn draw_skeletal_animation_component(
                     sac.speed,
                     sac.looping,
                     sac.playing,
+                    sac.blend_duration,
+                    sac.is_blending(),
                     sac.skeleton.joint_count(),
                 )
             };
@@ -136,6 +140,20 @@ pub(crate) fn draw_skeletal_animation_component(
             if ui.checkbox(&mut playing, "Playing").changed() {
                 changed = true;
             }
+            if ui
+                .add(
+                    egui::Slider::new(&mut blend_duration, 0.0..=2.0)
+                        .text("Blend Duration")
+                        .suffix(" s"),
+                )
+                .on_hover_text("Crossfade duration when transitioning between clips (0 = hard cut)")
+                .changed()
+            {
+                changed = true;
+            }
+            if is_blending {
+                ui.label("Blending...");
+            }
 
             if changed {
                 if let Some(mut sac) = scene.get_component_mut::<SkeletalAnimationComponent>(entity)
@@ -143,6 +161,7 @@ pub(crate) fn draw_skeletal_animation_component(
                     sac.speed = speed;
                     sac.looping = looping;
                     sac.playing = playing;
+                    sac.blend_duration = blend_duration;
                 }
                 *scene_dirty = true;
             }

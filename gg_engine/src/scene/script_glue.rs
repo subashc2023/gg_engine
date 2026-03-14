@@ -281,6 +281,40 @@ pub fn register_all(lua: &Lua) -> LuaResult<()> {
     engine.set("set_anim_param", lua.create_function(lua_set_anim_param)?)?;
     engine.set("get_anim_param", lua.create_function(lua_get_anim_param)?)?;
 
+    // Skeletal animation
+    engine.set(
+        "play_skeletal_animation",
+        lua.create_function(lua_play_skeletal_animation)?,
+    )?;
+    engine.set(
+        "play_skeletal_animation_blended",
+        lua.create_function(lua_play_skeletal_animation_blended)?,
+    )?;
+    engine.set(
+        "stop_skeletal_animation",
+        lua.create_function(lua_stop_skeletal_animation)?,
+    )?;
+    engine.set(
+        "is_skeletal_animation_playing",
+        lua.create_function(lua_is_skeletal_animation_playing)?,
+    )?;
+    engine.set(
+        "get_skeletal_animation",
+        lua.create_function(lua_get_skeletal_animation)?,
+    )?;
+    engine.set(
+        "set_skeletal_animation_speed",
+        lua.create_function(lua_set_skeletal_animation_speed)?,
+    )?;
+    engine.set(
+        "get_skeletal_animation_time",
+        lua.create_function(lua_get_skeletal_animation_time)?,
+    )?;
+    engine.set(
+        "list_skeletal_animations",
+        lua.create_function(lua_list_skeletal_animations)?,
+    )?;
+
     // Audio
     engine.set("play_sound", lua.create_function(lua_play_sound)?)?;
     engine.set("stop_sound", lua.create_function(lua_stop_sound)?)?;
@@ -1387,6 +1421,119 @@ fn lua_get_anim_param(lua: &Lua, (entity_id, name): (u64, String)) -> LuaResult<
         }
         LuaValue::Nil
     })
+}
+
+// ---------------------------------------------------------------------------
+// Skeletal animation bindings
+// ---------------------------------------------------------------------------
+
+/// `Engine.play_skeletal_animation(entity_id, name)` — play a skeletal
+/// animation clip by name (hard cut). Returns true if the clip was found.
+fn lua_play_skeletal_animation(lua: &Lua, (entity_id, name): (u64, String)) -> LuaResult<bool> {
+    with_entity_mut(lua, entity_id, false, |scene, entity| {
+        if let Some(mut sac) =
+            scene.get_component_mut::<super::SkeletalAnimationComponent>(entity)
+        {
+            let found = sac.clips.iter().position(|c| c.name == name);
+            if let Some(idx) = found {
+                sac.play(idx);
+                return true;
+            }
+        }
+        false
+    })
+}
+
+/// `Engine.play_skeletal_animation_blended(entity_id, name, blend_duration)`
+/// — crossfade to a skeletal animation clip. Returns true if the clip was found.
+fn lua_play_skeletal_animation_blended(
+    lua: &Lua,
+    (entity_id, name, blend_secs): (u64, String, f32),
+) -> LuaResult<bool> {
+    with_entity_mut(lua, entity_id, false, |scene, entity| {
+        scene
+            .get_component_mut::<super::SkeletalAnimationComponent>(entity)
+            .map(|mut sac| sac.play_by_name_blended(&name, blend_secs))
+            .unwrap_or(false)
+    })
+}
+
+/// `Engine.stop_skeletal_animation(entity_id)` — stop skeletal animation playback.
+fn lua_stop_skeletal_animation(lua: &Lua, entity_id: u64) -> LuaResult<()> {
+    with_entity_mut(lua, entity_id, (), |scene, entity| {
+        if let Some(mut sac) =
+            scene.get_component_mut::<super::SkeletalAnimationComponent>(entity)
+        {
+            sac.stop();
+        }
+    })
+}
+
+/// `Engine.is_skeletal_animation_playing(entity_id)` — returns true if a
+/// skeletal animation is currently playing.
+fn lua_is_skeletal_animation_playing(lua: &Lua, entity_id: u64) -> LuaResult<bool> {
+    with_entity(lua, entity_id, false, |scene, entity| {
+        scene
+            .get_component::<super::SkeletalAnimationComponent>(entity)
+            .map(|sac| sac.playing)
+            .unwrap_or(false)
+    })
+}
+
+/// `Engine.get_skeletal_animation(entity_id)` — returns the name of the
+/// currently playing skeletal clip, or `nil`.
+fn lua_get_skeletal_animation(lua: &Lua, entity_id: u64) -> LuaResult<LuaValue> {
+    let name = with_entity(lua, entity_id, None, |scene, entity| {
+        scene
+            .get_component::<super::SkeletalAnimationComponent>(entity)
+            .and_then(|sac| sac.current_clip_name().map(|s| s.to_owned()))
+    })?;
+    match name {
+        Some(s) => Ok(LuaValue::String(lua.create_string(&s)?)),
+        None => Ok(LuaValue::Nil),
+    }
+}
+
+/// `Engine.set_skeletal_animation_speed(entity_id, speed)` — set the
+/// playback speed multiplier for skeletal animation.
+fn lua_set_skeletal_animation_speed(
+    lua: &Lua,
+    (entity_id, speed): (u64, f32),
+) -> LuaResult<()> {
+    with_entity_mut(lua, entity_id, (), |scene, entity| {
+        if let Some(mut sac) =
+            scene.get_component_mut::<super::SkeletalAnimationComponent>(entity)
+        {
+            sac.speed = speed;
+        }
+    })
+}
+
+/// `Engine.get_skeletal_animation_time(entity_id)` — returns the current
+/// playback time (seconds) of the skeletal animation, or 0.
+fn lua_get_skeletal_animation_time(lua: &Lua, entity_id: u64) -> LuaResult<f32> {
+    with_entity(lua, entity_id, 0.0, |scene, entity| {
+        scene
+            .get_component::<super::SkeletalAnimationComponent>(entity)
+            .map(|sac| sac.playback_time)
+            .unwrap_or(0.0)
+    })
+}
+
+/// `Engine.list_skeletal_animations(entity_id)` — returns a table of clip
+/// names, or an empty table if the entity has no skeletal animation.
+fn lua_list_skeletal_animations(lua: &Lua, entity_id: u64) -> LuaResult<LuaValue> {
+    let names: Vec<String> = with_entity(lua, entity_id, Vec::new(), |scene, entity| {
+        scene
+            .get_component::<super::SkeletalAnimationComponent>(entity)
+            .map(|sac| sac.clips.iter().map(|c| c.name.clone()).collect())
+            .unwrap_or_default()
+    })?;
+    let table = lua.create_table()?;
+    for (i, name) in names.iter().enumerate() {
+        table.set(i as i64 + 1, name.as_str())?;
+    }
+    Ok(LuaValue::Table(table))
 }
 
 // ---------------------------------------------------------------------------
@@ -3979,6 +4126,25 @@ mod tests {
         assert!(engine.get::<LuaFunction>("get_current_animation").is_ok());
         assert!(engine.get::<LuaFunction>("get_animation_frame").is_ok());
         assert!(engine.get::<LuaFunction>("set_animation_speed").is_ok());
+        // Skeletal animation
+        assert!(engine.get::<LuaFunction>("play_skeletal_animation").is_ok());
+        assert!(engine
+            .get::<LuaFunction>("play_skeletal_animation_blended")
+            .is_ok());
+        assert!(engine.get::<LuaFunction>("stop_skeletal_animation").is_ok());
+        assert!(engine
+            .get::<LuaFunction>("is_skeletal_animation_playing")
+            .is_ok());
+        assert!(engine.get::<LuaFunction>("get_skeletal_animation").is_ok());
+        assert!(engine
+            .get::<LuaFunction>("set_skeletal_animation_speed")
+            .is_ok());
+        assert!(engine
+            .get::<LuaFunction>("get_skeletal_animation_time")
+            .is_ok());
+        assert!(engine
+            .get::<LuaFunction>("list_skeletal_animations")
+            .is_ok());
         // Sprite
         assert!(engine.get::<LuaFunction>("set_sprite_texture").is_ok());
         // Tilemap
@@ -4501,6 +4667,84 @@ mod tests {
         lua.load("Engine.set_animation_speed(12345, 2.0)")
             .exec()
             .unwrap();
+    }
+
+    // -- Skeletal animation (no context) --
+
+    #[test]
+    fn play_skeletal_animation_no_context_returns_false() {
+        let lua = setup();
+        lua.load(r#"result = Engine.play_skeletal_animation(12345, "idle")"#)
+            .exec()
+            .unwrap();
+        let result: bool = lua.globals().get("result").unwrap();
+        assert!(!result);
+    }
+
+    #[test]
+    fn play_skeletal_animation_blended_no_context_returns_false() {
+        let lua = setup();
+        lua.load(r#"result = Engine.play_skeletal_animation_blended(12345, "run", 0.3)"#)
+            .exec()
+            .unwrap();
+        let result: bool = lua.globals().get("result").unwrap();
+        assert!(!result);
+    }
+
+    #[test]
+    fn stop_skeletal_animation_no_context_no_error() {
+        let lua = setup();
+        lua.load("Engine.stop_skeletal_animation(12345)")
+            .exec()
+            .unwrap();
+    }
+
+    #[test]
+    fn is_skeletal_animation_playing_no_context_returns_false() {
+        let lua = setup();
+        lua.load("result = Engine.is_skeletal_animation_playing(12345)")
+            .exec()
+            .unwrap();
+        let result: bool = lua.globals().get("result").unwrap();
+        assert!(!result);
+    }
+
+    #[test]
+    fn get_skeletal_animation_no_context_returns_nil() {
+        let lua = setup();
+        lua.load("result = Engine.get_skeletal_animation(12345)")
+            .exec()
+            .unwrap();
+        let result: LuaValue = lua.globals().get("result").unwrap();
+        assert!(result == LuaValue::Nil);
+    }
+
+    #[test]
+    fn set_skeletal_animation_speed_no_context_no_error() {
+        let lua = setup();
+        lua.load("Engine.set_skeletal_animation_speed(12345, 2.0)")
+            .exec()
+            .unwrap();
+    }
+
+    #[test]
+    fn get_skeletal_animation_time_no_context_returns_zero() {
+        let lua = setup();
+        lua.load("result = Engine.get_skeletal_animation_time(12345)")
+            .exec()
+            .unwrap();
+        let result: f32 = lua.globals().get("result").unwrap();
+        assert_eq!(result, 0.0);
+    }
+
+    #[test]
+    fn list_skeletal_animations_no_context_returns_empty() {
+        let lua = setup();
+        lua.load("result = Engine.list_skeletal_animations(12345)")
+            .exec()
+            .unwrap();
+        let result: mlua::Table = lua.globals().get("result").unwrap();
+        assert_eq!(result.len().unwrap(), 0);
     }
 
     #[test]

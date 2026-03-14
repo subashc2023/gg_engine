@@ -211,7 +211,7 @@ impl Scene {
             }
         }
 
-        // Phase 2b: advance skeletal animation playback times.
+        // Phase 2b: advance skeletal animation playback times + blend state.
         for sac in self
             .world
             .query_mut::<&mut SkeletalAnimationComponent>()
@@ -220,6 +220,7 @@ impl Scene {
             if !sac.playing {
                 continue;
             }
+            // Advance the current clip.
             if let Some(clip_idx) = sac.current_clip {
                 if let Some(clip) = sac.clips.get(clip_idx) {
                     let duration = clip.duration;
@@ -232,6 +233,27 @@ impl Scene {
                             sac.playing = false;
                         }
                     }
+                }
+            }
+            // Advance the crossfade blend (if active).
+            if sac.blend_from_clip.is_some() && sac.blend_duration > 0.0 {
+                // Advance the "from" clip playback so it doesn't freeze.
+                if let Some(from_clip) = sac
+                    .blend_from_clip
+                    .and_then(|i| sac.clips.get(i))
+                {
+                    let from_dur = from_clip.duration;
+                    sac.blend_from_time += dt * sac.speed;
+                    if from_dur > 0.0 && sac.blend_from_time >= from_dur {
+                        sac.blend_from_time %= from_dur;
+                    }
+                }
+                // Advance blend timer (real-time, not speed-scaled).
+                sac.blend_elapsed += dt;
+                if sac.blend_elapsed >= sac.blend_duration {
+                    sac.blend_from_clip = None;
+                    sac.blend_elapsed = 0.0;
+                    sac.blend_duration = 0.0;
                 }
             }
         }
@@ -275,8 +297,8 @@ impl Scene {
 
     /// Evaluate all [`AnimationControllerComponent`]s and apply transitions.
     ///
-    /// Checks each entity that has both a controller and an animator.
-    /// If a transition fires, plays the target clip on the animator.
+    /// Checks each entity that has both a controller and an animator
+    /// (sprite or skeletal). If a transition fires, plays the target clip.
     fn evaluate_animation_controllers(&mut self) {
         // Reuse pooled buffer for transitions.
         let mut pool = self.core.render_buffers.lock();
@@ -285,6 +307,7 @@ impl Scene {
 
         to_play.clear();
 
+        // Sprite animators.
         for (id_comp, animator, ctrl) in self.world.query_mut::<(
             &IdComponent,
             &SpriteAnimatorComponent,
@@ -303,6 +326,31 @@ impl Scene {
                     self.get_component_mut::<SpriteAnimatorComponent>(entity)
                 {
                     animator.play(target);
+                }
+            }
+        }
+
+        // Skeletal animators (separate pass — entities may have skeletal but not sprite).
+        to_play.clear();
+
+        for (id_comp, sac, ctrl) in self.world.query_mut::<(
+            &IdComponent,
+            &SkeletalAnimationComponent,
+            &AnimationControllerComponent,
+        )>() {
+            let current = sac.current_clip_name();
+            let finished = !sac.playing && sac.current_clip.is_some();
+            if let Some(target) = ctrl.evaluate(current, finished) {
+                to_play.push((id_comp.id.raw(), target.to_owned()));
+            }
+        }
+
+        for (uuid, target) in &to_play {
+            if let Some(entity) = self.find_entity_by_uuid(*uuid) {
+                if let Some(mut sac) =
+                    self.get_component_mut::<SkeletalAnimationComponent>(entity)
+                {
+                    sac.play_by_name(&target);
                 }
             }
         }
@@ -1954,15 +2002,7 @@ impl Scene {
                         .world
                         .get::<&SkeletalAnimationComponent>(*handle)
                         .unwrap();
-                    let pose = if let Some(clip_idx) = sac.current_clip {
-                        if let Some(clip) = sac.clips.get(clip_idx) {
-                            sac.skeleton.compute_pose(clip, sac.playback_time)
-                        } else {
-                            sac.skeleton.bind_pose()
-                        }
-                    } else {
-                        sac.skeleton.bind_pose()
-                    };
+                    let pose = sac.compute_current_pose();
                     if let Some(bone_offset) = renderer.write_bone_matrices(&pose.matrices) {
                         skinned_draw_data.push((*handle, *world_transform, bone_offset));
                     }
@@ -2402,16 +2442,8 @@ impl Scene {
                 .get::<&SkeletalAnimationComponent>(*handle)
                 .unwrap();
 
-            // Compute the pose for the current clip + time.
-            let pose = if let Some(clip_idx) = sac.current_clip {
-                if let Some(clip) = sac.clips.get(clip_idx) {
-                    sac.skeleton.compute_pose(clip, sac.playback_time)
-                } else {
-                    sac.skeleton.bind_pose()
-                }
-            } else {
-                sac.skeleton.bind_pose()
-            };
+            // Compute the pose (handles blending internally).
+            let pose = sac.compute_current_pose();
 
             // Write bone matrices to the SSBO.
             if let Some(bone_offset) = renderer.write_bone_matrices(&pose.matrices) {
