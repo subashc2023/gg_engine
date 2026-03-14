@@ -11,6 +11,9 @@ pub enum EngineError {
     Yaml(#[from] serde_yaml_ng::Error),
 
     #[error("{0}")]
+    Json(#[from] serde_json::Error),
+
+    #[error("{0}")]
     Gpu(String),
 
     #[error("{0}")]

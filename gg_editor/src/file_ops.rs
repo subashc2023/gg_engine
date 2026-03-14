@@ -670,7 +670,9 @@ impl GGEditor {
     }
 
     pub(super) fn perform_undo(&mut self) {
-        // Capture selected entities' UUIDs before replacing the scene,
+        use crate::undo::UndoAction;
+
+        // Capture selected entities' UUIDs before potential scene replacement,
         // since hecs entity IDs change after deserialization.
         let selected_uuids: Vec<u64> = self
             .selection
@@ -681,25 +683,39 @@ impl GGEditor {
                     .map(|id| id.id.raw())
             })
             .collect();
-        if let Some(restored) = self.undo_system.undo(&self.scene) {
-            let old = std::mem::replace(&mut self.scene, restored);
-            self.scene_ctx.pending_drop_scenes.push(old);
-            // Restore selection by IdComponent UUID (stable across serialization).
-            self.selection.clear();
-            for uuid in selected_uuids {
+
+        match self.undo_system.undo(&mut self.scene) {
+            Some(UndoAction::SceneRestored(restored)) => {
+                let old = std::mem::replace(&mut self.scene, restored);
+                self.scene_ctx.pending_drop_scenes.push(old);
+                // Restore selection by UUID (entity handles change across scenes).
+                self.selection.clear();
+                for uuid in selected_uuids {
+                    if let Some(entity) = self.scene.find_entity_by_uuid(uuid) {
+                        self.selection.add(entity);
+                    }
+                }
+                let (w, h) = self.viewport.size;
+                if w > 0 && h > 0 {
+                    self.scene.on_viewport_resize(w, h);
+                }
+                self.scene_ctx.dirty = true;
+            }
+            Some(UndoAction::EntityRestored(uuid)) => {
+                // Entity was modified in-place — just refresh the selection handle.
+                self.selection.clear();
                 if let Some(entity) = self.scene.find_entity_by_uuid(uuid) {
                     self.selection.add(entity);
                 }
+                self.scene_ctx.dirty = true;
             }
-            let (w, h) = self.viewport.size;
-            if w > 0 && h > 0 {
-                self.scene.on_viewport_resize(w, h);
-            }
-            self.scene_ctx.dirty = true;
+            None => {}
         }
     }
 
     pub(super) fn perform_redo(&mut self) {
+        use crate::undo::UndoAction;
+
         let selected_uuids: Vec<u64> = self
             .selection
             .iter()
@@ -709,20 +725,31 @@ impl GGEditor {
                     .map(|id| id.id.raw())
             })
             .collect();
-        if let Some(restored) = self.undo_system.redo(&self.scene) {
-            let old = std::mem::replace(&mut self.scene, restored);
-            self.scene_ctx.pending_drop_scenes.push(old);
-            self.selection.clear();
-            for uuid in selected_uuids {
+
+        match self.undo_system.redo(&mut self.scene) {
+            Some(UndoAction::SceneRestored(restored)) => {
+                let old = std::mem::replace(&mut self.scene, restored);
+                self.scene_ctx.pending_drop_scenes.push(old);
+                self.selection.clear();
+                for uuid in selected_uuids {
+                    if let Some(entity) = self.scene.find_entity_by_uuid(uuid) {
+                        self.selection.add(entity);
+                    }
+                }
+                let (w, h) = self.viewport.size;
+                if w > 0 && h > 0 {
+                    self.scene.on_viewport_resize(w, h);
+                }
+                self.scene_ctx.dirty = true;
+            }
+            Some(UndoAction::EntityRestored(uuid)) => {
+                self.selection.clear();
                 if let Some(entity) = self.scene.find_entity_by_uuid(uuid) {
                     self.selection.add(entity);
                 }
+                self.scene_ctx.dirty = true;
             }
-            let (w, h) = self.viewport.size;
-            if w > 0 && h > 0 {
-                self.scene.on_viewport_resize(w, h);
-            }
-            self.scene_ctx.dirty = true;
+            None => {}
         }
     }
 

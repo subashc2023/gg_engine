@@ -1215,6 +1215,112 @@ impl SceneSerializer {
         Ok(())
     }
 
+    // -- JSON snapshot API (fast undo/redo) ------------------------------------
+
+    /// Serialize a scene to a JSON string. ~5-10× faster than YAML.
+    pub fn serialize_scene_to_json(scene: &Scene) -> EngineResult<String> {
+        let scene_data = Self::scene_to_data(scene, None);
+        let json = serde_json::to_string(&scene_data)?;
+        Ok(json)
+    }
+
+    /// Deserialize a scene from a JSON string.
+    pub fn deserialize_scene_from_json(scene: &mut Scene, json: &str) -> EngineResult<()> {
+        let scene_data: SceneData = serde_json::from_str(json)?;
+        Self::data_to_scene(scene, &scene_data);
+        Ok(())
+    }
+
+    /// Serialize a single entity to a JSON string.
+    pub fn serialize_entity_to_json(scene: &Scene, entity: Entity) -> EngineResult<String> {
+        let entity_data = Self::entity_to_data(scene, entity);
+        let json = serde_json::to_string(&entity_data)?;
+        Ok(json)
+    }
+
+    /// Restore a single entity's components from a JSON snapshot.
+    ///
+    /// Finds the entity by UUID, strips all serializable components, and
+    /// re-applies from the snapshot. Returns an error if the entity is not
+    /// found. Tag, transform, and all optional components are restored;
+    /// relationships and IdComponent are preserved as-is.
+    pub fn restore_entity_from_json(scene: &mut Scene, uuid: u64, json: &str) -> EngineResult<()> {
+        let entity_data: EntityData = serde_json::from_str(json)?;
+        let entity = scene
+            .find_entity_by_uuid(uuid)
+            .ok_or_else(|| crate::error::EngineError::Asset(
+                format!("Entity with UUID {} not found for undo restore", uuid),
+            ))?;
+
+        // Strip all optional serializable components so that removed components
+        // are not left behind (e.g. undoing "Add SpriteRenderer").
+        Self::strip_serializable_components(scene, entity);
+
+        // Update tag if present.
+        if let Some(ref td) = entity_data.tag {
+            if let Some(mut tc) = scene.get_component_mut::<TagComponent>(entity) {
+                tc.tag = td.tag.clone();
+            }
+        }
+
+        // Re-apply all components from the snapshot.
+        Self::apply_entity_data(scene, entity, &entity_data);
+
+        // Restore relationship if present in the snapshot.
+        if let Some(ref rd) = entity_data.relationship {
+            scene.add_component(
+                entity,
+                RelationshipComponent {
+                    parent: rd.parent,
+                    children: rd.children.clone(),
+                },
+            );
+        }
+
+        Ok(())
+    }
+
+    /// Remove all optional serializable components from an entity.
+    ///
+    /// Preserves IdComponent, TagComponent, TransformComponent, and
+    /// RelationshipComponent (which are always present or handled separately).
+    fn strip_serializable_components(scene: &mut Scene, entity: Entity) {
+        scene.remove_component::<CameraComponent>(entity);
+        scene.remove_component::<SpriteRendererComponent>(entity);
+        scene.remove_component::<CircleRendererComponent>(entity);
+        scene.remove_component::<TextComponent>(entity);
+        scene.remove_component::<RigidBody2DComponent>(entity);
+        scene.remove_component::<BoxCollider2DComponent>(entity);
+        scene.remove_component::<CircleCollider2DComponent>(entity);
+        #[cfg(feature = "physics-3d")]
+        {
+            scene.remove_component::<RigidBody3DComponent>(entity);
+            scene.remove_component::<BoxCollider3DComponent>(entity);
+            scene.remove_component::<SphereCollider3DComponent>(entity);
+            scene.remove_component::<CapsuleCollider3DComponent>(entity);
+        }
+        #[cfg(feature = "lua-scripting")]
+        scene.remove_component::<LuaScriptComponent>(entity);
+        scene.remove_component::<SpriteAnimatorComponent>(entity);
+        scene.remove_component::<InstancedSpriteAnimator>(entity);
+        scene.remove_component::<AnimationControllerComponent>(entity);
+        scene.remove_component::<AudioSourceComponent>(entity);
+        scene.remove_component::<AudioListenerComponent>(entity);
+        scene.remove_component::<TilemapComponent>(entity);
+        scene.remove_component::<ParticleEmitterComponent>(entity);
+        scene.remove_component::<MeshRendererComponent>(entity);
+        scene.remove_component::<SkeletalAnimationComponent>(entity);
+        scene.remove_component::<DirectionalLightComponent>(entity);
+        scene.remove_component::<PointLightComponent>(entity);
+        scene.remove_component::<AmbientLightComponent>(entity);
+        scene.remove_component::<EnvironmentComponent>(entity);
+        scene.remove_component::<UIAnchorComponent>(entity);
+        scene.remove_component::<UIRectComponent>(entity);
+        scene.remove_component::<UIImageComponent>(entity);
+        scene.remove_component::<UIInteractableComponent>(entity);
+        scene.remove_component::<UILayoutComponent>(entity);
+    }
+
     // -- Prefab serialization -------------------------------------------------
 
     /// Serialize an entity (and its children) to a `.ggprefab` YAML file.
