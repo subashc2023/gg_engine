@@ -15,10 +15,12 @@ use crate::scene::{
     AmbientLightComponent, AnimationClip, AnimationControllerComponent, AnimationTransition,
     AudioCategory, AudioListenerComponent, AudioSourceComponent, BoxCollider2DComponent,
     BoxCollider3DComponent, CameraComponent, CapsuleCollider3DComponent, CircleCollider2DComponent,
-    CircleRendererComponent, DirectionalLightComponent, FloatOrdering, IdComponent,
+    CircleRendererComponent, DirectionalLightComponent, EnvironmentComponent, FloatOrdering,
+    IdComponent,
     InstancedSpriteAnimator, MeshPrimitive, MeshRendererComponent, MeshSource,
     ParticleEmitterComponent, PointLightComponent, RelationshipComponent, RigidBody2DComponent,
-    RigidBody2DType, RigidBody3DComponent, RigidBody3DType, Scene, SphereCollider3DComponent,
+    RigidBody2DType, RigidBody3DComponent, RigidBody3DType, Scene, SkeletalAnimationComponent,
+    SphereCollider3DComponent,
     SpriteAnimatorComponent, SpriteRendererComponent, TagComponent, TextComponent,
     TilemapComponent, TransformComponent, TransitionCondition, UIAnchorComponent,
     UIImageComponent, UIInteractableComponent, UILayoutAlignment, UILayoutComponent,
@@ -221,6 +223,12 @@ struct EntityData {
     )]
     mesh_renderer: Option<MeshRendererData>,
     #[serde(
+        rename = "SkeletalAnimationComponent",
+        skip_serializing_if = "Option::is_none",
+        default
+    )]
+    skeletal_animation: Option<SkeletalAnimationData>,
+    #[serde(
         rename = "DirectionalLightComponent",
         skip_serializing_if = "Option::is_none",
         default
@@ -238,6 +246,12 @@ struct EntityData {
         default
     )]
     ambient_light: Option<AmbientLightData>,
+    #[serde(
+        rename = "EnvironmentComponent",
+        skip_serializing_if = "Option::is_none",
+        default
+    )]
+    environment: Option<EnvironmentData>,
     #[serde(
         rename = "UIAnchorComponent",
         skip_serializing_if = "Option::is_none",
@@ -915,6 +929,29 @@ struct MeshRendererData {
     cast_alpha_shadow: bool,
 }
 
+#[derive(Serialize, Deserialize)]
+struct SkeletalAnimationData {
+    /// glTF/GLB mesh asset handle (UUID).
+    #[serde(rename = "MeshAsset")]
+    mesh_asset: u64,
+    /// Playback speed multiplier.
+    #[serde(rename = "Speed", default = "default_anim_speed")]
+    speed: f32,
+    /// Whether playback loops.
+    #[serde(rename = "Looping", default = "default_true")]
+    looping: bool,
+    /// Whether to auto-play on load.
+    #[serde(rename = "Playing", default = "default_true")]
+    playing: bool,
+    /// Name of the clip to play on load (empty = first clip).
+    #[serde(rename = "DefaultClip", default)]
+    default_clip: String,
+}
+
+fn default_anim_speed() -> f32 {
+    1.0
+}
+
 fn default_roughness() -> f32 {
     0.5
 }
@@ -972,6 +1009,20 @@ fn default_light_intensity() -> f32 {
 }
 fn default_point_light_radius() -> f32 {
     10.0
+}
+
+#[derive(Serialize, Deserialize)]
+struct EnvironmentData {
+    #[serde(rename = "EnvironmentMap")]
+    environment_handle: u64,
+    #[serde(rename = "SkyboxExposure", default = "default_light_intensity")]
+    skybox_exposure: f32,
+    #[serde(rename = "IBLIntensity", default = "default_light_intensity")]
+    ibl_intensity: f32,
+    #[serde(rename = "SkyboxRotation", default)]
+    skybox_rotation: f32,
+    #[serde(rename = "ShowSkybox", default = "default_true")]
+    show_skybox: bool,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -1670,6 +1721,18 @@ impl SceneSerializer {
                         cast_alpha_shadow: mc.cast_alpha_shadow,
                     }
                 }),
+            skeletal_animation: scene
+                .get_component::<SkeletalAnimationComponent>(entity)
+                .map(|sac| SkeletalAnimationData {
+                    mesh_asset: sac.mesh_asset.raw(),
+                    speed: sac.speed,
+                    looping: sac.looping,
+                    playing: sac.playing,
+                    default_clip: sac
+                        .current_clip_name()
+                        .unwrap_or("")
+                        .to_string(),
+                }),
             directional_light: scene
                 .get_component::<DirectionalLightComponent>(entity)
                 .map(|dl| DirectionalLightData {
@@ -1692,6 +1755,15 @@ impl SceneSerializer {
                 .map(|al| AmbientLightData {
                     color: al.color.into(),
                     intensity: al.intensity,
+                }),
+            environment: scene
+                .get_component::<EnvironmentComponent>(entity)
+                .map(|ec| EnvironmentData {
+                    environment_handle: ec.environment_handle,
+                    skybox_exposure: ec.skybox_exposure,
+                    ibl_intensity: ec.ibl_intensity,
+                    skybox_rotation: ec.skybox_rotation,
+                    show_skybox: ec.show_skybox,
                 }),
             ui_anchor: scene
                 .get_component::<UIAnchorComponent>(entity)
@@ -1779,12 +1851,12 @@ impl SceneSerializer {
         if let Some(ref td) = entity_data.transform {
             if let Some(mut tc) = scene.get_component_mut::<TransformComponent>(entity) {
                 tc.translation = Vec3::from(td.translation);
-                tc.rotation = glam::Quat::from_xyzw(
+                tc.set_rotation_quat(glam::Quat::from_xyzw(
                     td.rotation[0],
                     td.rotation[1],
                     td.rotation[2],
                     td.rotation[3],
-                );
+                ));
                 tc.scale = Vec3::from(td.scale);
             }
         }
@@ -2206,6 +2278,19 @@ impl SceneSerializer {
             );
         }
 
+        // SkeletalAnimationComponent
+        if let Some(ref sad) = entity_data.skeletal_animation {
+            if sad.mesh_asset != 0 {
+                let mut sac =
+                    SkeletalAnimationComponent::from_asset(Uuid::from_raw(sad.mesh_asset));
+                sac.speed = sad.speed;
+                sac.looping = sad.looping;
+                sac.playing = sad.playing;
+                // default_clip is resolved after asset loads (clip names not available yet).
+                scene.add_component(entity, sac);
+            }
+        }
+
         // DirectionalLightComponent
         if let Some(ref dl) = entity_data.directional_light {
             scene.add_component(
@@ -2239,6 +2324,21 @@ impl SceneSerializer {
                 AmbientLightComponent {
                     color: Vec3::from(al.color),
                     intensity: al.intensity,
+                },
+            );
+        }
+
+        // EnvironmentComponent
+        if let Some(ref ec) = entity_data.environment {
+            scene.add_component(
+                entity,
+                EnvironmentComponent {
+                    environment_handle: ec.environment_handle,
+                    loaded: false,
+                    skybox_exposure: ec.skybox_exposure,
+                    ibl_intensity: ec.ibl_intensity,
+                    skybox_rotation: ec.skybox_rotation,
+                    show_skybox: ec.show_skybox,
                 },
             );
         }

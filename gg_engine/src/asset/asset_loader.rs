@@ -28,6 +28,10 @@ pub(crate) enum LoadRequest {
         handle: Uuid,
         path: PathBuf,
     },
+    SkinnedMesh {
+        handle: Uuid,
+        path: PathBuf,
+    },
     Shutdown,
 }
 
@@ -43,6 +47,10 @@ pub enum LoadResult {
     Mesh {
         handle: Uuid,
         data: Result<crate::renderer::Mesh, String>,
+    },
+    SkinnedMesh {
+        handle: Uuid,
+        data: Result<crate::renderer::GltfSkinData, String>,
     },
 }
 
@@ -64,6 +72,7 @@ pub struct AssetLoader {
     pending_textures: HashSet<Uuid>,
     pending_fonts: HashSet<PathBuf>,
     pending_meshes: HashSet<Uuid>,
+    pending_skinned_meshes: HashSet<Uuid>,
 }
 
 impl AssetLoader {
@@ -73,6 +82,7 @@ impl AssetLoader {
             pending_textures: HashSet::new(),
             pending_fonts: HashSet::new(),
             pending_meshes: HashSet::new(),
+            pending_skinned_meshes: HashSet::new(),
         }
     }
 
@@ -143,6 +153,18 @@ impl AssetLoader {
         true
     }
 
+    /// Request async skinned mesh (glTF with skeleton) loading. Returns false if already pending.
+    pub fn request_skinned_mesh(&mut self, handle: Uuid, path: PathBuf) -> bool {
+        if !self.pending_skinned_meshes.insert(handle) {
+            return false;
+        }
+        let inner = self.ensure_started();
+        let _ = inner
+            .request_tx
+            .send(LoadRequest::SkinnedMesh { handle, path });
+        true
+    }
+
     /// Non-blocking drain of completed results. Clears pending tracking for
     /// completed items. Returns empty vec if workers were never started.
     pub fn poll_results(&mut self) -> Vec<LoadResult> {
@@ -163,6 +185,9 @@ impl AssetLoader {
                 LoadResult::Mesh { handle, .. } => {
                     self.pending_meshes.remove(handle);
                 }
+                LoadResult::SkinnedMesh { handle, .. } => {
+                    self.pending_skinned_meshes.remove(handle);
+                }
             }
             results.push(result);
         }
@@ -181,9 +206,12 @@ impl AssetLoader {
         self.pending_meshes.contains(handle)
     }
 
-    /// Number of pending (in-flight) load requests (textures + fonts + meshes).
+    /// Number of pending (in-flight) load requests (textures + fonts + meshes + skinned meshes).
     pub fn pending_count(&self) -> usize {
-        self.pending_textures.len() + self.pending_fonts.len() + self.pending_meshes.len()
+        self.pending_textures.len()
+            + self.pending_fonts.len()
+            + self.pending_meshes.len()
+            + self.pending_skinned_meshes.len()
     }
 }
 
@@ -248,6 +276,19 @@ fn worker_thread_fn(rx: Arc<Mutex<Receiver<LoadRequest>>>, tx: Sender<LoadResult
                     Err(_) => Err(format!("Panic while loading mesh: {}", path.display())),
                 };
                 let _ = tx.send(LoadResult::Mesh { handle, data });
+            }
+            Ok(LoadRequest::SkinnedMesh { handle, path }) => {
+                let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    crate::renderer::load_gltf_skinned(&path).map_err(|e| e.to_string())
+                }));
+                let data = match result {
+                    Ok(data) => data,
+                    Err(_) => Err(format!(
+                        "Panic while loading skinned mesh: {}",
+                        path.display()
+                    )),
+                };
+                let _ = tx.send(LoadResult::SkinnedMesh { handle, data });
             }
         }
     }

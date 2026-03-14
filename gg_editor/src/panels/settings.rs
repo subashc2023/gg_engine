@@ -4,24 +4,17 @@ use gg_engine::ui_theme::EditorTheme;
 
 use crate::{GpuTimingSnapshot, PostProcessSettings};
 
-const GRID_SIZE_OPTIONS: &[f32] = &[0.1, 0.25, 0.5, 1.0, 2.0, 5.0, 10.0];
-
 /// Bundled state for the Settings panel, reducing parameter count.
 pub(crate) struct SettingsState<'a> {
     pub frame_time_ms: f32,
     pub render_stats: Renderer2DStats,
     pub vsync: &'a mut bool,
-    pub show_grid: &'a mut bool,
-    pub show_xz_grid: &'a mut bool,
-    pub snap_to_grid: &'a mut bool,
-    pub grid_size: &'a mut f32,
     pub scene_warnings: &'a [String],
     pub theme: &'a mut EditorTheme,
     pub reload_shaders_requested: &'a mut bool,
     pub msaa_samples: &'a mut MsaaSamples,
     pub max_msaa_samples: MsaaSamples,
     pub msaa_changed: &'a mut bool,
-    pub show_physics_colliders: &'a mut bool,
     pub pp_settings: &'a mut PostProcessSettings,
     pub gpu_timing: &'a mut GpuTimingSnapshot,
     pub show_msaa_test: &'a mut bool,
@@ -32,17 +25,12 @@ pub(crate) fn settings_ui(ui: &mut egui::Ui, scene: &Scene, state: &mut Settings
         frame_time_ms,
         render_stats,
         vsync,
-        show_grid,
-        show_xz_grid,
-        snap_to_grid,
-        grid_size,
         scene_warnings,
         theme,
         reload_shaders_requested,
         msaa_samples,
         max_msaa_samples,
         msaa_changed,
-        show_physics_colliders,
         pp_settings,
         gpu_timing,
         show_msaa_test,
@@ -55,7 +43,6 @@ pub(crate) fn settings_ui(ui: &mut egui::Ui, scene: &Scene, state: &mut Settings
     let msaa_changed = &mut **msaa_changed;
     let theme = &mut **theme;
     let reload_shaders_requested = &mut **reload_shaders_requested;
-    let grid_size = &mut **grid_size;
     let scene_warnings = *scene_warnings;
     ui.heading("Renderer");
     ui.separator();
@@ -140,27 +127,6 @@ pub(crate) fn settings_ui(ui: &mut egui::Ui, scene: &Scene, state: &mut Settings
         });
 
     ui.add_space(8.0);
-    ui.heading("Grid");
-    ui.separator();
-
-    ui.checkbox(show_grid, "X-Y Grid");
-    ui.checkbox(show_xz_grid, "X-Z Grid");
-    ui.checkbox(snap_to_grid, "Snap to Grid");
-
-    ui.add_space(8.0);
-    ui.heading("Physics");
-    ui.separator();
-
-    ui.checkbox(show_physics_colliders, "Show Colliders")
-        .on_hover_text("Visualize 2D physics colliders and velocity arrows in the viewport.");
-
-    egui::ComboBox::from_label("Grid Size")
-        .selected_text(format!("{}", grid_size))
-        .show_ui(ui, |ui| {
-            for &size in GRID_SIZE_OPTIONS {
-                ui.selectable_value(grid_size, size, format!("{}", size));
-            }
-        });
 
     // Mouse picking debug (kept for future use)
     // ui.add_space(8.0);

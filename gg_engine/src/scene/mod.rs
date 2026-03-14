@@ -32,7 +32,8 @@ pub use components::LuaScriptComponent;
 pub use components::{
     AmbientLightComponent, AudioCategory, AudioListenerComponent, AudioSourceComponent,
     BoxCollider2DComponent, BoxCollider3DComponent, CameraComponent, CapsuleCollider3DComponent,
-    CircleCollider2DComponent, CircleRendererComponent, DirectionalLightComponent, IdComponent,
+    CircleCollider2DComponent, CircleRendererComponent, DirectionalLightComponent,
+    EnvironmentComponent, IdComponent,
     MeshPrimitive, MeshRendererComponent, MeshSource, NativeScriptComponent,
     ParticleEmitterComponent, PointLightComponent, RelationshipComponent, RigidBody2DComponent,
     RigidBody2DType, RigidBody3DComponent, RigidBody3DType, RigidBodyType,
@@ -150,11 +151,13 @@ macro_rules! for_each_cloneable_component {
             DirectionalLightComponent,
             PointLightComponent,
             AmbientLightComponent,
+            EnvironmentComponent,
             UIAnchorComponent,
             UIRectComponent,
             UIImageComponent,
             UIInteractableComponent,
             UILayoutComponent,
+            SkeletalAnimationComponent,
         );
     };
 }
@@ -201,6 +204,7 @@ macro_rules! for_each_addable_component {
             ),
             ($crate::scene::PointLightComponent, "Point Light"),
             ($crate::scene::AmbientLightComponent, "Ambient Light"),
+            ($crate::scene::EnvironmentComponent, "Environment Map"),
             ($crate::scene::UIAnchorComponent, "UI Anchor"),
             ($crate::scene::UIRectComponent, "UI Rect"),
             ($crate::scene::UIImageComponent, "UI Image"),
@@ -775,7 +779,7 @@ mod tests {
             };
         }
         for_each_cloneable_component!(count_types);
-        const EXPECTED_COUNT: usize = 29;
+        const EXPECTED_COUNT: usize = 31;
         assert_eq!(
             MACRO_COUNT, EXPECTED_COUNT,
             "for_each_cloneable_component! has {} types but expected {}. \

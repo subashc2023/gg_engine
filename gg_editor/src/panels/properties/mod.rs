@@ -1,10 +1,12 @@
 mod audio;
 mod camera;
+mod environment;
 mod lighting;
 mod mesh;
 mod particles;
 mod physics;
 mod scripting;
+mod skeletal_animation;
 mod sprite;
 mod text;
 mod tilemap;
@@ -504,6 +506,18 @@ fn draw_components(
                     }
                 }
 
+                // Skeletal Animation — requires asset, not Default-constructible.
+                if !scene.has_component::<SkeletalAnimationComponent>(entity)
+                    && ui.button("Skeletal Animation").clicked()
+                {
+                    undo_system.record(scene, "Add Skeletal Animation");
+                    scene.add_component(
+                        entity,
+                        SkeletalAnimationComponent::from_asset(Uuid::from_raw(0)),
+                    );
+                    *scene_dirty = true;
+                }
+
                 #[cfg(feature = "lua-scripting")]
                 {
                     if !scene.has_component::<LuaScriptComponent>(entity)
@@ -528,7 +542,7 @@ fn draw_components(
         .show(ui, |ui| {
             let (mut translation, mut rotation_deg, mut scale) = {
                 let tc = scene.get_component::<TransformComponent>(entity).unwrap();
-                let euler = tc.euler_angles();
+                let euler = tc.euler_angles_stable();
                 (
                     tc.translation,
                     Vec3::new(
@@ -807,6 +821,21 @@ fn draw_components(
         *scene_dirty = true;
     }
 
+    if skeletal_animation::draw_skeletal_animation_component(
+        ui,
+        scene,
+        entity,
+        &bold_family,
+        asset_manager,
+        assets_root,
+        scene_dirty,
+        undo_system,
+    ) {
+        undo_system.record(scene, "Remove Skeletal Animation");
+        scene.remove_component::<SkeletalAnimationComponent>(entity);
+        *scene_dirty = true;
+    }
+
     if lighting::draw_directional_light_component(
         ui,
         scene,
@@ -843,6 +872,21 @@ fn draw_components(
     ) {
         undo_system.record(scene, "Remove Ambient Light");
         scene.remove_component::<AmbientLightComponent>(entity);
+        *scene_dirty = true;
+    }
+
+    if environment::draw_environment_component(
+        ui,
+        scene,
+        entity,
+        &bold_family,
+        asset_manager,
+        assets_root,
+        scene_dirty,
+        undo_system,
+    ) {
+        undo_system.record(scene, "Remove Environment Map");
+        scene.remove_component::<EnvironmentComponent>(entity);
         *scene_dirty = true;
     }
 

@@ -13,3 +13,5 @@ lua-scripting = ["gg_engine/lua-scripting"]
 
 [dependencies]
 gg_engine = { path = "../gg_engine", default-features = false }
+image.workspace = true
+half.workspace = true

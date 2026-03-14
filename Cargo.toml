@@ -42,7 +42,8 @@ serde_yaml_ng = "0.10"
 serde_json = "1"
 
 # Asset loading
-image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "hdr"] }
+half = "2"
 ttf-parser = "0.25"
 gltf = "1"
 

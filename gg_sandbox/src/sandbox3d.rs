@@ -27,6 +27,9 @@ pub struct Sandbox3D {
     // Material handle for the default material used in lighting.
     material_handle: Option<MaterialHandle>,
 
+    // Material grid: 5 roughness columns x 5 metallic rows = 25 spheres.
+    material_grid: Vec<MaterialHandle>,
+
     // Smoothed camera values (used for rendering).
     orbit_yaw: f32,
     orbit_pitch: f32,
@@ -46,6 +49,12 @@ pub struct Sandbox3D {
     shadow_cascade_vps: Option<[Mat4; 4]>,
     shadow_split_depths: [f32; 3],
     shadow_texel_sizes: [f32; 4],
+
+    // Environment map.
+    env_loaded: bool,
+
+    // Debug visualization mode (0 = normal, 8-12 = component isolation).
+    debug_mode: i32,
 }
 
 impl Sandbox3D {
@@ -66,20 +75,23 @@ impl Sandbox3D {
             fox_playback_time: 0.0,
             fox_speed: 1.0,
             material_handle: None,
-            orbit_yaw: std::f32::consts::PI,
-            orbit_pitch: 0.4,
-            orbit_dist: 5.0,
-            target_yaw: std::f32::consts::PI,
-            target_pitch: 0.4,
-            target_dist: 5.0,
+            material_grid: Vec::new(),
+            orbit_yaw: std::f32::consts::PI * 0.75,
+            orbit_pitch: 0.5,
+            orbit_dist: 8.0,
+            target_yaw: std::f32::consts::PI * 0.75,
+            target_pitch: 0.5,
+            target_dist: 8.0,
             window_width: 1280,
             window_height: 720,
             last_dt: 0.0,
             elapsed: 0.0,
             shadows_enabled: true,
+            env_loaded: false,
             shadow_cascade_vps: None,
             shadow_split_depths: [0.0; 3],
             shadow_texel_sizes: [1.0; 4],
+            debug_mode: 0,
         }
     }
 
@@ -109,6 +121,30 @@ impl Sandbox3D {
         // Create a default material for lit rendering.
         let handle = renderer.material_library().default_handle();
         self.material_handle = Some(handle);
+
+        // Create a 5x5 grid of materials: rows = metallic (0→1), columns = roughness (0→1).
+        let steps = 5;
+        for row in 0..steps {
+            for col in 0..steps {
+                let metallic = row as f32 / (steps - 1) as f32;
+                let roughness = col as f32 / (steps - 1) as f32;
+                let mat_handle = renderer.material_library_mut().create(
+                    format!("M{:.2}_R{:.2}", metallic, roughness),
+                );
+                if let Some(mat) = renderer.material_library_mut().get_mut(&mat_handle) {
+                    mat.metallic = metallic;
+                    mat.roughness = roughness;
+                    // Gold tint for metallic, white for dielectric — to see reflection differences.
+                    mat.albedo_color = Vec4::new(
+                        1.0,
+                        1.0 - metallic * 0.2,
+                        1.0 - metallic * 0.4,
+                        1.0,
+                    );
+                }
+                self.material_grid.push(mat_handle);
+            }
+        }
 
         // Load the Fox.glb skinned mesh.
         let fox_path = std::path::Path::new("test_assets/Fox.glb");
@@ -144,7 +180,7 @@ impl Sandbox3D {
         [0.05, 0.05, 0.08, 1.0]
     }
 
-    pub fn on_event(&mut self, event: &Event, _input: &Input) {
+    pub fn on_event(&mut self, event: &Event, input: &Input) {
         if let Event::Window(WindowEvent::Resize { width, height }) = event {
             if *width > 0 && *height > 0 {
                 self.window_width = *width;
@@ -153,6 +189,35 @@ impl Sandbox3D {
         }
         if let Event::Mouse(MouseEvent::Scrolled { y_offset, .. }) = event {
             self.target_dist = (self.target_dist - *y_offset as f32 * 0.5).clamp(1.0, 20.0);
+        }
+        // Debug mode cycling: press D to advance, Shift+D to go back.
+        if let Event::Key(KeyEvent::Pressed { key_code, repeat: false }) = event {
+            if *key_code == KeyCode::D
+                && !input.is_key_pressed(KeyCode::LeftCtrl)
+                && !input.is_key_pressed(KeyCode::LeftAlt)
+            {
+                if input.is_key_pressed(KeyCode::LeftShift)
+                    || input.is_key_pressed(KeyCode::RightShift)
+                {
+                    self.debug_mode = if self.debug_mode == 0 { 12 } else { self.debug_mode - 1 };
+                } else {
+                    self.debug_mode =
+                        if self.debug_mode >= 12 { 0 } else { self.debug_mode + 1 };
+                }
+                info!(
+                    "Debug mode: {} ({})",
+                    self.debug_mode,
+                    match self.debug_mode {
+                        0 => "Normal",
+                        8 => "IBL Specular only",
+                        9 => "IBL Diffuse only",
+                        10 => "Direct light (no shadow)",
+                        11 => "Shadow factor",
+                        12 => "Raw prefiltered cubemap",
+                        _ => "CSM debug",
+                    }
+                );
+            }
         }
     }
 
@@ -205,9 +270,9 @@ impl Sandbox3D {
 
         let light_dir = Vec3::new(-0.3, -1.0, -0.5).normalize();
 
-        // Scene AABB covering the sandbox geometry.
+        // Scene AABB covering the sandbox geometry (including material grid up to ~6 units high).
         let scene_min = Vec3::new(-5.0, -1.0, -5.0);
-        let scene_max = Vec3::new(5.0, 3.0, 5.0);
+        let scene_max = Vec3::new(5.0, 7.0, 5.0);
 
         // Compute per-cascade VPs fitted to the camera frustum.
         let aspect = self.window_width as f32 / self.window_height.max(1) as f32;
@@ -215,12 +280,13 @@ impl Sandbox3D {
         cam_proj.z_axis.z = 0.1 / (0.1 - 100.0);
         cam_proj.w_axis.z = 0.1 * 100.0 / (100.0 - 0.1);
         cam_proj.y_axis.y *= -1.0;
+        let look_at = Vec3::new(0.0, 2.5, 0.0);
         let eye = Vec3::new(
             self.orbit_dist * self.orbit_pitch.cos() * self.orbit_yaw.sin(),
             self.orbit_dist * self.orbit_pitch.sin(),
             self.orbit_dist * self.orbit_pitch.cos() * self.orbit_yaw.cos(),
-        );
-        let cam_view = Mat4::look_at_lh(eye, Vec3::ZERO, Vec3::Y);
+        ) + look_at;
+        let cam_view = Mat4::look_at_lh(eye, look_at, Vec3::Y);
         let camera_info = gg_engine::renderer::ShadowCameraInfo {
             view_projection: cam_proj * cam_view,
             near: 0.1,
@@ -247,14 +313,8 @@ impl Sandbox3D {
                 Quat::IDENTITY,
                 Vec3::new(0.0, -0.5, 0.0),
             ),
-            // Cube.
-            Mat4::from_translation(Vec3::ZERO),
-            // Sphere.
-            Mat4::from_scale_rotation_translation(
-                Vec3::splat(1.5),
-                Quat::IDENTITY,
-                Vec3::new(2.0, 0.25, 0.0),
-            ),
+            // Cube (behind material grid).
+            Mat4::from_translation(Vec3::new(0.0, 0.0, 4.0)),
             // Cylinder.
             Mat4::from_scale_rotation_translation(
                 Vec3::new(0.8, 1.2, 0.8),
@@ -279,7 +339,6 @@ impl Sandbox3D {
         let mesh_vas: Vec<Option<&VertexArray>> = vec![
             self.plane_va.as_ref(),
             self.cube_va.as_ref(),
-            self.sphere_va.as_ref(),
             self.cylinder_va.as_ref(),
             self.cone_va.as_ref(),
             self.torus_va.as_ref(),
@@ -315,10 +374,41 @@ impl Sandbox3D {
             Vec3::new(-2.0, -0.5, 0.0),
         );
 
+        // Pre-compute material grid sphere transforms for shadow pass.
+        let grid_sphere_models: Vec<Mat4> = {
+            let steps = 5;
+            let spacing = 1.3;
+            let grid_offset = Vec3::new(
+                -(steps as f32 - 1.0) * spacing * 0.5,
+                0.0,
+                0.0,
+            );
+            (0..steps * steps)
+                .map(|idx| {
+                    let row = idx / steps;
+                    let col = idx % steps;
+                    let pos = grid_offset
+                        + Vec3::new(col as f32 * spacing, row as f32 * spacing, 0.0);
+                    Mat4::from_scale_rotation_translation(
+                        Vec3::splat(0.5),
+                        Quat::IDENTITY,
+                        pos,
+                    )
+                })
+                .collect()
+        };
+
         for (cascade, cascade_vp) in cascade_vps.iter().enumerate() {
             renderer.begin_shadow_pass(cascade_vp, cascade, cmd_buf, current_frame, 0, false);
             for (va_opt, model) in mesh_vas.iter().zip(&mesh_models) {
                 if let Some(va) = va_opt {
+                    renderer.submit_shadow(va, model, cmd_buf);
+                }
+            }
+
+            // Shadow pass for material grid spheres.
+            if let Some(va) = &self.sphere_va {
+                for model in &grid_sphere_models {
                     renderer.submit_shadow(va, model, cmd_buf);
                 }
             }
@@ -360,13 +450,15 @@ impl Sandbox3D {
             self.orbit_dist * self.orbit_pitch.sin(),
             self.orbit_dist * self.orbit_pitch.cos() * self.orbit_yaw.cos(),
         );
-        let view = Mat4::look_at_lh(eye, Vec3::ZERO, Vec3::Y);
+        let look_at = Vec3::new(0.0, 2.5, 0.0);
+        let view = Mat4::look_at_lh(eye + look_at, look_at, Vec3::Y);
         renderer.set_view_projection(proj * view);
-        renderer.set_camera_position(eye);
+        renderer.set_camera_position(eye + look_at);
 
         // Set up lighting: directional sun + orbiting point light.
         let point_light_pos = Vec3::new(3.0 * self.elapsed.sin(), 1.5, 3.0 * self.elapsed.cos());
 
+        let ibl_active = renderer.has_environment_map();
         let light_env = LightEnvironment {
             directional: Some((
                 Vec3::new(-0.3, -1.0, -0.5), // direction
@@ -381,15 +473,34 @@ impl Sandbox3D {
             )],
             ambient_color: Vec3::new(0.05, 0.05, 0.08),
             ambient_intensity: 1.0,
-            camera_position: eye,
+            camera_position: eye + look_at,
             shadow_cascade_vps: self.shadow_cascade_vps,
             cascade_split_depths: self.shadow_split_depths,
             shadow_distance: 100.0,
             cascade_texel_sizes: self.shadow_texel_sizes,
+            has_ibl: ibl_active,
+            ibl_intensity: 1.0,
+            max_prefilter_mip: 8,
         };
         renderer.upload_lights(&light_env);
+        renderer.set_shadow_debug_mode(self.debug_mode);
 
         let mat_handle = self.material_handle.as_ref();
+
+        // Load environment map (one-time).
+        if !self.env_loaded {
+            self.env_loaded = true;
+            if let Err(e) = self.try_load_environment(renderer) {
+                warn!("Failed to load environment map: {e}");
+            }
+        }
+
+        // Render skybox (if environment is loaded).
+        if renderer.has_environment_map() {
+            if let Err(e) = renderer.render_skybox(view, proj, 1.0, 0.0, false) {
+                error!("Skybox render failed: {e}");
+            }
+        }
 
         // Bind shared descriptor sets once before all 3D draws.
         renderer.bind_3d_shared_sets(&pipeline);
@@ -404,20 +515,36 @@ impl Sandbox3D {
             renderer.submit_3d(&pipeline, va, &model, mat_handle, -1);
         }
 
-        // Cube.
+        // Cube (placed behind the material grid).
         if let Some(va) = &self.cube_va {
-            let model = Mat4::from_translation(Vec3::ZERO);
+            let model = Mat4::from_translation(Vec3::new(0.0, 0.0, 4.0));
             renderer.submit_3d(&pipeline, va, &model, mat_handle, -1);
         }
 
-        // Sphere.
+        // Material test grid: 5x5 spheres (metallic rows x roughness columns).
+        // Rows (Y) = metallic 0→1, Columns (X) = roughness 0→1.
         if let Some(va) = &self.sphere_va {
-            let model = Mat4::from_scale_rotation_translation(
-                Vec3::splat(1.5),
-                Quat::IDENTITY,
-                Vec3::new(2.0, 0.25, 0.0),
+            let steps = 5;
+            let spacing = 1.3;
+            let grid_offset = Vec3::new(
+                -(steps as f32 - 1.0) * spacing * 0.5,
+                0.0,
+                0.0,
             );
-            renderer.submit_3d(&pipeline, va, &model, mat_handle, -1);
+            for row in 0..steps {
+                for col in 0..steps {
+                    let idx = row * steps + col;
+                    let pos = grid_offset
+                        + Vec3::new(col as f32 * spacing, row as f32 * spacing, 0.0);
+                    let model = Mat4::from_scale_rotation_translation(
+                        Vec3::splat(0.5),
+                        Quat::IDENTITY,
+                        pos,
+                    );
+                    let h = &self.material_grid[idx];
+                    renderer.submit_3d(&pipeline, va, &model, Some(h), -1);
+                }
+            }
         }
 
         // Cylinder.
@@ -505,11 +632,12 @@ impl Sandbox3D {
         } else {
             0.0
         };
+        let look_at = Vec3::new(0.0, 2.5, 0.0);
         let eye = Vec3::new(
             self.orbit_dist * self.orbit_pitch.cos() * self.orbit_yaw.sin(),
             self.orbit_dist * self.orbit_pitch.sin(),
             self.orbit_dist * self.orbit_pitch.cos() * self.orbit_yaw.cos(),
-        );
+        ) + look_at;
 
         gg_engine::egui::Window::new("Sandbox 3D").show(ctx, |ui| {
             ui.label(format!("{:.1} FPS", fps));
@@ -518,7 +646,25 @@ impl Sandbox3D {
             ui.separator();
             ui.label("Directional light (sun) + orbiting point light (warm)");
             ui.label("Blinn-Phong shading with material UBO");
+            ui.separator();
+            ui.label("5x5 Material Grid (spheres):");
+            ui.label("  Rows (bottom→top): metallic 0→1");
+            ui.label("  Columns (left→right): roughness 0→1");
             ui.checkbox(&mut self.shadows_enabled, "Shadows");
+            ui.separator();
+            ui.label(format!(
+                "Debug [D/Shift+D]: {} ({})",
+                self.debug_mode,
+                match self.debug_mode {
+                    0 => "Normal",
+                    8 => "IBL Specular",
+                    9 => "IBL Diffuse",
+                    10 => "Direct light",
+                    11 => "Shadow factor",
+                    12 => "Prefiltered cubemap",
+                    _ => "CSM debug",
+                }
+            ));
             ui.separator();
             ui.label(format!(
                 "Yaw {:.1}\u{00b0}  Pitch {:.1}\u{00b0}  Dist {:.1}",
@@ -567,5 +713,47 @@ impl Sandbox3D {
                 ui.label("Fox.glb not loaded (missing test_assets/Fox.glb)");
             }
         });
+    }
+
+    /// Try to load an HDR environment map.
+    /// Looks in `assets/hdri/` first, then falls back to `test_assets/`.
+    fn try_load_environment(&self, renderer: &mut Renderer) -> Result<(), Box<dyn std::error::Error>> {
+        let path = std::path::Path::new("assets/hdri/environment.hdr");
+        let path = if path.exists() {
+            path
+        } else {
+            let fallback = std::path::Path::new("test_assets/environment.hdr");
+            if !fallback.exists() {
+                info!("No environment map found — skybox disabled");
+                return Ok(());
+            }
+            fallback
+        };
+
+        info!("Loading HDR environment map from {}", path.display());
+
+        // Load HDR using image crate's dynamic image path (supports .hdr format).
+        let img = image::open(path)?;
+        let rgb32f = img.to_rgb32f();
+        let (width, height) = rgb32f.dimensions();
+        let pixels = rgb32f.as_raw();
+
+        // Convert RGB f32 → RGBA f16 for R16G16B16A16_SFLOAT.
+        let pixel_count = (width * height) as usize;
+        let mut rgba_f16 = Vec::with_capacity(pixel_count * 8);
+        for i in 0..pixel_count {
+            for c in 0..3 {
+                // Clamp to f16 max (65504) to prevent Inf, which renders as
+                // black on HDR displays.
+                let h = half::f16::from_f32(pixels[i * 3 + c].min(65504.0));
+                rgba_f16.extend_from_slice(&h.to_le_bytes());
+            }
+            let one = half::f16::from_f32(1.0);
+            rgba_f16.extend_from_slice(&one.to_le_bytes());
+        }
+
+        renderer.load_environment_hdr(&rgba_f16, width, height)?;
+        info!("Environment map loaded: {width}x{height}");
+        Ok(())
     }
 }

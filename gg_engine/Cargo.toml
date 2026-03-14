@@ -39,3 +39,4 @@ parking_lot.workspace = true
 static_assertions.workspace = true
 thiserror.workspace = true
 base64.workspace = true
+half.workspace = true

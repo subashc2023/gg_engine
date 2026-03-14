@@ -78,6 +78,10 @@ pub struct TransformComponent {
     /// Rotation quaternion (normalized).
     pub rotation: glam::Quat,
     pub scale: Vec3,
+    /// Cached Euler angles (radians, XYZ order) from the last `set_euler_angles` call.
+    /// Avoids gimbal-lock jitter when the UI round-trips through Euler decomposition.
+    /// `None` means "recompute from quaternion" (e.g. after gizmo or physics write).
+    euler_hint: Option<Vec3>,
 }
 
 impl TransformComponent {
@@ -93,25 +97,40 @@ impl TransformComponent {
         Mat4::from_scale_rotation_translation(self.scale, self.rotation, self.translation)
     }
 
-    /// Returns Euler angles (XYZ order, radians) for UI display.
+    /// Returns Euler angles (XYZ order, radians) decomposed from the quaternion.
+    /// Prefer [`euler_angles_stable`] for UI display to avoid gimbal-lock jitter.
     pub fn euler_angles(&self) -> Vec3 {
         let (rx, ry, rz) = self.rotation.to_euler(glam::EulerRot::XYZ);
         Vec3::new(rx, ry, rz)
     }
 
-    /// Sets rotation from Euler angles (XYZ order, radians).
+    /// Returns Euler angles using the cached hint if available, falling back to
+    /// quaternion decomposition. Use this for UI display to avoid ±90° snap.
+    pub fn euler_angles_stable(&self) -> Vec3 {
+        self.euler_hint.unwrap_or_else(|| self.euler_angles())
+    }
+
+    /// Sets rotation from Euler angles (XYZ order, radians) and caches the hint.
     pub fn set_euler_angles(&mut self, euler: Vec3) {
         self.rotation = glam::Quat::from_euler(glam::EulerRot::XYZ, euler.x, euler.y, euler.z);
+        self.euler_hint = Some(euler);
+    }
+
+    /// Sets rotation directly from a quaternion, clearing the Euler hint.
+    pub fn set_rotation_quat(&mut self, q: glam::Quat) {
+        self.rotation = q;
+        self.euler_hint = None;
     }
 
     /// Returns the Z-axis rotation in radians (useful for 2D).
     pub fn rotation_z(&self) -> f32 {
-        self.euler_angles().z
+        self.euler_angles_stable().z
     }
 
     /// Sets only the Z-axis rotation, zeroing X/Y (useful for 2D physics write-back).
     pub fn set_rotation_z(&mut self, angle: f32) {
         self.rotation = glam::Quat::from_rotation_z(angle);
+        self.euler_hint = None;
     }
 }
 
@@ -121,6 +140,7 @@ impl Default for TransformComponent {
             translation: Vec3::ZERO,
             rotation: glam::Quat::IDENTITY,
             scale: Vec3::ONE,
+            euler_hint: None,
         }
     }
 }
@@ -1386,6 +1406,44 @@ impl Default for AmbientLightComponent {
 }
 
 // ---------------------------------------------------------------------------
+// Environment Component (Skybox + IBL)
+// ---------------------------------------------------------------------------
+
+/// Environment map component for image-based lighting and skybox rendering.
+///
+/// Attach to an entity (typically the same one holding `AmbientLightComponent`)
+/// to enable HDR skybox and physically-based ambient lighting. Only the first
+/// entity with this component is used as the scene-wide environment.
+#[derive(Clone, Debug)]
+pub struct EnvironmentComponent {
+    /// Asset handle to an HDR environment map (.hdr file).
+    pub environment_handle: u64,
+    /// Whether the environment map has been loaded and preprocessed at runtime.
+    pub loaded: bool,
+    /// Skybox brightness multiplier (default 1.0).
+    pub skybox_exposure: f32,
+    /// IBL ambient intensity multiplier (default 1.0).
+    pub ibl_intensity: f32,
+    /// Y-axis rotation in degrees (default 0.0).
+    pub skybox_rotation: f32,
+    /// Whether to render the skybox background (default true).
+    pub show_skybox: bool,
+}
+
+impl Default for EnvironmentComponent {
+    fn default() -> Self {
+        Self {
+            environment_handle: 0,
+            loaded: false,
+            skybox_exposure: 1.0,
+            ibl_intensity: 1.0,
+            skybox_rotation: 0.0,
+            show_skybox: true,
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // UI Anchor Component
 // ---------------------------------------------------------------------------
 
@@ -1635,6 +1693,9 @@ impl Default for UILayoutComponent {
 /// The skeleton and clips are shared via `Arc` so that duplicate entities
 /// referencing the same glTF asset don't duplicate bone data.
 pub struct SkeletalAnimationComponent {
+    /// Asset handle referencing the glTF/GLB file that contains the skin.
+    /// Used for serialization and asset-managed loading.
+    pub mesh_asset: crate::uuid::Uuid,
     /// Shared skeleton (joint hierarchy + inverse-bind matrices).
     pub skeleton: crate::Ref<crate::renderer::skeleton::Skeleton>,
     /// Shared animation clips extracted from the glTF asset.
@@ -1658,6 +1719,7 @@ pub struct SkeletalAnimationComponent {
 impl Clone for SkeletalAnimationComponent {
     fn clone(&self) -> Self {
         Self {
+            mesh_asset: self.mesh_asset,
             skeleton: self.skeleton.clone(),
             clips: self.clips.clone(),
             current_clip: self.current_clip,
@@ -1675,6 +1737,7 @@ impl SkeletalAnimationComponent {
     /// Create from glTF skin data (skeleton + clips + mesh).
     pub fn from_gltf_skin_data(data: &crate::renderer::GltfSkinData) -> Self {
         Self {
+            mesh_asset: crate::uuid::Uuid::from_raw(0),
             skeleton: crate::Ref::new(data.skeleton.clone()),
             clips: data.clips.clone(),
             current_clip: if data.clips.is_empty() { None } else { Some(0) },
@@ -1685,6 +1748,35 @@ impl SkeletalAnimationComponent {
             skinned_vertex_array: None,
             loaded_skinned_mesh: Some(crate::Ref::new(data.mesh.clone())),
         }
+    }
+
+    /// Create a stub component from an asset handle. The skeleton, clips,
+    /// and mesh data will be populated later by asset resolution.
+    pub fn from_asset(handle: crate::uuid::Uuid) -> Self {
+        use crate::renderer::skeleton::Skeleton;
+        Self {
+            mesh_asset: handle,
+            skeleton: crate::Ref::new(Skeleton {
+                joint_names: Vec::new(),
+                parent_indices: Vec::new(),
+                inverse_bind_matrices: Vec::new(),
+                rest_local_transforms: Vec::new(),
+                bind_space_correction: glam::Mat4::IDENTITY,
+            }),
+            clips: Vec::new(),
+            current_clip: None,
+            playback_time: 0.0,
+            speed: 1.0,
+            looping: true,
+            playing: false,
+            skinned_vertex_array: None,
+            loaded_skinned_mesh: None,
+        }
+    }
+
+    /// Whether the skeleton/clip data has been loaded from the asset.
+    pub fn is_loaded(&self) -> bool {
+        self.skeleton.joint_count() > 0
     }
 
     /// Play a clip by index.

@@ -6,14 +6,18 @@ fn main() {
     let out_dir = PathBuf::from(env::var("OUT_DIR").unwrap());
     let shader_dir = Path::new("src/renderer/shaders");
 
-    println!("cargo:rerun-if-changed={}", shader_dir.display());
-
     let mut glsl_files: Vec<PathBuf> = fs::read_dir(shader_dir)
         .expect("Cannot read shader directory")
         .filter_map(|e| e.ok())
         .map(|e| e.path())
         .filter(|p| p.extension().and_then(|e| e.to_str()) == Some("glsl"))
         .collect();
+
+    // Watch each individual shader file so edits trigger recompilation.
+    // Directory-level watches may not detect file content changes on Windows.
+    for glsl in &glsl_files {
+        println!("cargo:rerun-if-changed={}", glsl.display());
+    }
 
     // Sort for deterministic output ordering.
     glsl_files.sort();

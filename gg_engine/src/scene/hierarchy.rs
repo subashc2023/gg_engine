@@ -441,7 +441,7 @@ impl SceneCore {
         let (scale, rotation, translation) = mat.to_scale_rotation_translation();
         if let Some(mut tc) = self.get_component_mut::<TransformComponent>(entity) {
             tc.translation = translation;
-            tc.rotation = rotation;
+            tc.set_rotation_quat(rotation);
             tc.scale = scale;
         }
     }

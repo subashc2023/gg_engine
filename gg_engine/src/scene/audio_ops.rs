@@ -145,6 +145,16 @@ impl Scene {
             }
         }
 
+        for (tag, sac) in self
+            .world
+            .query::<(&TagComponent, &super::SkeletalAnimationComponent)>()
+            .iter()
+        {
+            if sac.mesh_asset == asset_handle {
+                refs.push((tag.tag.clone(), "SkeletalAnimation"));
+            }
+        }
+
         refs
     }
 

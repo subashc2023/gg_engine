@@ -158,6 +158,46 @@ impl GGEditor {
             {
                 ui.close();
             }
+            if ui
+                .checkbox(&mut self.editor_settings.snap_to_grid, "Snap to Grid")
+                .clicked()
+            {
+                ui.close();
+            }
+            egui::ComboBox::from_label("Grid Size")
+                .selected_text(format!("{}", self.editor_settings.grid_size))
+                .show_ui(ui, |ui| {
+                    for &size in &[0.1_f32, 0.25, 0.5, 1.0, 2.0, 5.0, 10.0] {
+                        ui.selectable_value(
+                            &mut self.editor_settings.grid_size,
+                            size,
+                            format!("{}", size),
+                        );
+                    }
+                });
+            if ui
+                .checkbox(
+                    &mut self.editor_settings.show_camera_bounds,
+                    "Camera Bounds",
+                )
+                .on_hover_text("Show the primary camera's visible area as a rectangle.")
+                .clicked()
+            {
+                ui.close();
+            }
+            ui.separator();
+            if ui
+                .checkbox(
+                    &mut self.editor_settings.show_physics_colliders,
+                    "Show Colliders",
+                )
+                .on_hover_text(
+                    "Visualize 2D physics colliders and velocity arrows in the viewport.",
+                )
+                .clicked()
+            {
+                ui.close();
+            }
             ui.separator();
             ui.menu_button("Wireframe", |ui| {
                 if ui

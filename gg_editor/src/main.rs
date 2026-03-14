@@ -1249,8 +1249,11 @@ impl Application for GGEditor {
             self.scene.resolve_audio_handles(am);
             self.scene.load_fonts_async(am);
             self.scene.resolve_mesh_assets(am);
+            self.scene.resolve_skinned_mesh_assets(am);
+            self.scene.resolve_environment_map(renderer, am);
         }
         self.scene.resolve_meshes(renderer);
+        self.scene.resolve_skinned_meshes(renderer);
 
         // Apply wireframe mode to the renderer.
         let wf_mode = self.ui.wireframe_mode;
@@ -1263,6 +1266,10 @@ impl Application for GGEditor {
                     self.editor_camera.near_clip(),
                     self.editor_camera.far_clip(),
                 );
+                renderer.set_camera_matrices(
+                    *self.editor_camera.view_matrix(),
+                    *self.editor_camera.projection(),
+                );
                 // Apply UI anchors so anchored entities appear at their
                 // runtime positions in the editor viewport.
                 self.scene.apply_ui_anchors();
@@ -1274,6 +1281,10 @@ impl Application for GGEditor {
                 renderer.set_camera_clip_planes(
                     self.editor_camera.near_clip(),
                     self.editor_camera.far_clip(),
+                );
+                renderer.set_camera_matrices(
+                    *self.editor_camera.view_matrix(),
+                    *self.editor_camera.projection(),
                 );
                 self.scene.apply_ui_anchors();
                 self.scene
@@ -1566,13 +1577,8 @@ impl Application for GGEditor {
                 vsync: &mut self.editor_settings.vsync,
                 frame_time_ms: self.frame_time_ms,
                 render_stats: self.render_stats,
-                show_grid: &mut self.editor_settings.show_grid,
-                show_xz_grid: &mut self.editor_settings.show_xz_grid,
-                snap_to_grid: &mut self.editor_settings.snap_to_grid,
-                grid_size: &mut self.editor_settings.grid_size,
                 theme: &mut self.editor_settings.theme,
                 reload_shaders_requested: &mut self.ui.reload_shaders_requested,
-                show_physics_colliders: &mut self.editor_settings.show_physics_colliders,
                 msaa_samples: &mut self.editor_settings.msaa_samples,
                 max_msaa_samples: self.max_msaa_samples,
                 msaa_changed: &mut self.ui.msaa_changed,
@@ -2007,7 +2013,7 @@ impl GGEditor {
 
         // Viewport bounds rectangle — shows the primary camera's visible area
         // so the user can see where UI-anchored elements will appear at runtime.
-        if self.playback.scene_state != SceneState::Play {
+        if self.editor_settings.show_camera_bounds && self.playback.scene_state != SceneState::Play {
             if let Some((center, half_w, half_h)) = self.scene.primary_camera_bounds() {
                 let prev_line_width = renderer.line_width();
                 renderer.set_line_width(1.0);

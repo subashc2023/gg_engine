@@ -6,7 +6,7 @@ use super::{
     asset_type_from_extension, validate_asset_path, AssetHandle, AssetMetadata, AssetRegistry,
     AssetType,
 };
-use crate::renderer::{Font, Mesh, Renderer, Texture2D, TextureSpecification};
+use crate::renderer::{Font, GltfSkinData, Mesh, Renderer, Texture2D, TextureSpecification};
 use crate::uuid::Uuid;
 use crate::Ref;
 
@@ -28,6 +28,8 @@ pub struct EditorAssetManager {
     /// Loaded mesh CPU data keyed by asset handle. Shared via `Ref<Mesh>` so
     /// multiple entities referencing the same glTF file share one copy.
     loaded_meshes: HashMap<AssetHandle, Ref<Mesh>>,
+    /// Loaded skinned mesh data (skeleton + clips + mesh) keyed by asset handle.
+    loaded_skinned_meshes: HashMap<AssetHandle, Ref<GltfSkinData>>,
     /// Lazily-created magenta/black checkerboard texture used for missing assets.
     fallback_texture: Option<Ref<Texture2D>>,
     /// Monotonic counter bumped on each asset access, used for LRU eviction.
@@ -57,6 +59,7 @@ impl EditorAssetManager {
             loader: AssetLoader::new(),
             loaded_fonts: HashMap::new(),
             loaded_meshes: HashMap::new(),
+            loaded_skinned_meshes: HashMap::new(),
             fallback_texture: None,
             access_counter: 0,
             access_times: HashMap::new(),
@@ -425,6 +428,43 @@ impl EditorAssetManager {
         self.loader.request_mesh(*handle, abs_path);
     }
 
+    /// Get loaded skinned mesh data by asset handle.
+    pub fn get_skinned_mesh(&self, handle: &AssetHandle) -> Option<Ref<GltfSkinData>> {
+        self.loaded_skinned_meshes.get(handle).cloned()
+    }
+
+    /// Request async skinned mesh loading for an asset handle.
+    pub fn request_skinned_mesh_load(&mut self, handle: &AssetHandle) {
+        if self.loaded_skinned_meshes.contains_key(handle) {
+            return;
+        }
+
+        let metadata = match self.registry.get(handle) {
+            Some(m) => m.clone(),
+            None => return,
+        };
+
+        if metadata.asset_type != AssetType::Mesh {
+            return;
+        }
+
+        if !validate_asset_path(&metadata.file_path) {
+            log::warn!(
+                "Rejected unsafe skinned mesh asset path: '{}'",
+                metadata.file_path
+            );
+            return;
+        }
+
+        let abs_path = self.asset_directory.join(&metadata.file_path);
+        if !abs_path.exists() {
+            log::warn!("Skinned mesh file not found: {}", abs_path.display());
+            return;
+        }
+
+        self.loader.request_skinned_mesh(*handle, abs_path);
+    }
+
     /// Poll completed async loads and perform GPU uploads.
     ///
     /// Textures are stored in `loaded_assets`; fonts are cached in
@@ -469,6 +509,21 @@ impl EditorAssetManager {
                     }
                     Err(e) => {
                         log::warn!("Async mesh load failed: {e}");
+                    }
+                },
+                LoadResult::SkinnedMesh { handle, data } => match data {
+                    Ok(skin_data) => {
+                        log::info!(
+                            "Loaded skinned mesh ({} verts, {} joints, {} clips)",
+                            skin_data.mesh.vertices.len(),
+                            skin_data.skeleton.joint_count(),
+                            skin_data.clips.len(),
+                        );
+                        self.loaded_skinned_meshes
+                            .insert(handle, Ref::new(skin_data));
+                    }
+                    Err(e) => {
+                        log::warn!("Async skinned mesh load failed: {e}");
                     }
                 },
                 LoadResult::Font { font_key, data } => match data {

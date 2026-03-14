@@ -112,7 +112,7 @@ pub mod prelude {
         AmbientLightComponent, AnimationClip, AnimationControllerComponent, AnimationTransition,
         AudioCategory, AudioListenerComponent, AudioSourceComponent, BoxCollider2DComponent,
         BoxCollider3DComponent, CameraComponent, CapsuleCollider3DComponent,
-        CircleCollider2DComponent, CircleRendererComponent, DirectionalLightComponent, Entity,
+        CircleCollider2DComponent, CircleRendererComponent, DirectionalLightComponent, Entity, EnvironmentComponent,
         FloatOrdering, FullscreenMode, IdComponent, InstancedSpriteAnimator, MeshPrimitive,
         MeshRendererComponent, MeshSource, NativeScript, NativeScriptComponent,
         ParticleEmitterComponent, PointLightComponent, RelationshipComponent, RigidBody2DComponent,

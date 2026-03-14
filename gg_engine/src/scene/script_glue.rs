@@ -834,7 +834,7 @@ fn get_rotation(lua: &Lua, entity_id: u64) -> LuaResult<(f32, f32, f32)> {
         scene
             .get_component::<super::TransformComponent>(entity)
             .map(|tc| {
-                let e = tc.euler_angles();
+                let e = tc.euler_angles_stable();
                 (e.x, e.y, e.z)
             })
             .unwrap_or((0.0, 0.0, 0.0))
@@ -867,7 +867,7 @@ fn set_rotation_quat(
 ) -> LuaResult<()> {
     with_entity_mut(lua, entity_id, (), |scene, entity| {
         if let Some(mut tc) = scene.get_component_mut::<super::TransformComponent>(entity) {
-            tc.rotation = glam::Quat::from_xyzw(x, y, z, w).normalize();
+            tc.set_rotation_quat(glam::Quat::from_xyzw(x, y, z, w).normalize());
         }
     })
 }

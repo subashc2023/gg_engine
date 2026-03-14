@@ -1,6 +1,7 @@
 use super::{
     AmbientLightComponent, AnimationControllerComponent, CircleRendererComponent,
-    DirectionalLightComponent, Entity, IdComponent, InstancedSpriteAnimator, MeshPrimitive,
+    DirectionalLightComponent, Entity, EnvironmentComponent, IdComponent,
+    InstancedSpriteAnimator, MeshPrimitive,
     MeshRendererComponent, MeshSource, ParticleEmitterComponent, PointLightComponent,
     RigidBody3DComponent, RigidBody3DType, Scene, SkeletalAnimationComponent,
     SpriteAnimatorComponent, SpriteRendererComponent, TextComponent, TilemapComponent,
@@ -743,6 +744,44 @@ impl Scene {
         }
     }
 
+    /// Load skinned mesh data from the asset manager for any
+    /// [`SkeletalAnimationComponent`] that has a `mesh_asset` set but
+    /// hasn't loaded its skeleton/clips/mesh yet.
+    pub fn resolve_skinned_mesh_assets(
+        &mut self,
+        asset_manager: &mut crate::asset::EditorAssetManager,
+    ) {
+        let needs: Vec<(hecs::Entity, crate::uuid::Uuid)> = self
+            .world
+            .query::<(hecs::Entity, &SkeletalAnimationComponent)>()
+            .iter()
+            .filter_map(|(handle, sac)| {
+                if sac.mesh_asset.raw() != 0 && !sac.is_loaded() {
+                    Some((handle, sac.mesh_asset))
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        for (handle, mesh_handle) in needs {
+            if let Some(skin_data) = asset_manager.get_skinned_mesh(&mesh_handle) {
+                if let Ok(mut sac) = self.world.get::<&mut SkeletalAnimationComponent>(handle) {
+                    sac.skeleton = crate::Ref::new(skin_data.skeleton.clone());
+                    sac.clips = skin_data.clips.clone();
+                    sac.loaded_skinned_mesh =
+                        Some(crate::Ref::new(skin_data.mesh.clone()));
+                    if !sac.clips.is_empty() && sac.current_clip.is_none() {
+                        sac.current_clip = Some(0);
+                        sac.playing = true;
+                    }
+                }
+            } else {
+                asset_manager.request_skinned_mesh_load(&mesh_handle);
+            }
+        }
+    }
+
     /// Upload vertex arrays for any [`SkeletalAnimationComponent`] that doesn't
     /// have one yet. Called once per frame before rendering.
     pub fn resolve_skinned_meshes(&mut self, renderer: &mut Renderer) {
@@ -797,6 +836,109 @@ impl Scene {
         self.textures_all_resolved = false;
     }
 
+    /// Resolve the scene's [`EnvironmentComponent`] HDR asset handle by loading
+    /// the environment map into the GPU if not already loaded.
+    ///
+    /// `asset_manager` provides the file path for the asset handle.
+    /// Call once per frame (like `resolve_texture_handles_async`).
+    pub fn resolve_environment_map(
+        &mut self,
+        renderer: &mut Renderer,
+        asset_manager: &crate::asset::EditorAssetManager,
+    ) {
+        // Find the first EnvironmentComponent that has a handle but isn't loaded.
+        let needs_load: Option<(hecs::Entity, u64)> = self
+            .world
+            .query::<(hecs::Entity, &EnvironmentComponent)>()
+            .iter()
+            .find_map(|(handle, ec)| {
+                if ec.environment_handle != 0 && !ec.loaded {
+                    Some((handle, ec.environment_handle))
+                } else {
+                    None
+                }
+            });
+
+        if let Some((entity, asset_handle)) = needs_load {
+            let uuid = crate::uuid::Uuid::from_raw(asset_handle);
+            let path = asset_manager.get_metadata(&uuid).map(|m| {
+                asset_manager.asset_directory().join(&m.file_path)
+            });
+            if let Some(path) = path {
+                match renderer.load_environment_hdr_from_file(&path) {
+                    Ok(()) => {
+                        if let Ok(mut ec) =
+                            self.world.get::<&mut EnvironmentComponent>(entity)
+                        {
+                            ec.loaded = true;
+                        }
+                    }
+                    Err(e) => {
+                        log::error!("Failed to load environment map: {e}");
+                        // Mark loaded to prevent retry spam.
+                        if let Ok(mut ec) =
+                            self.world.get::<&mut EnvironmentComponent>(entity)
+                        {
+                            ec.loaded = true;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// Resolve the scene's [`EnvironmentComponent`] from a direct file path.
+    ///
+    /// Used by the player binary (no asset manager — paths resolved from project).
+    pub fn resolve_environment_map_by_path(
+        &mut self,
+        renderer: &mut Renderer,
+        assets_root: &std::path::Path,
+    ) {
+        let needs_load: Option<(hecs::Entity, u64)> = self
+            .world
+            .query::<(hecs::Entity, &EnvironmentComponent)>()
+            .iter()
+            .find_map(|(handle, ec)| {
+                if ec.environment_handle != 0 && !ec.loaded {
+                    Some((handle, ec.environment_handle))
+                } else {
+                    None
+                }
+            });
+
+        if let Some((entity, _asset_handle)) = needs_load {
+            // Try to find the HDR file in assets/hdri/.
+            let hdri_dir = assets_root.join("hdri");
+            if hdri_dir.is_dir() {
+                if let Ok(entries) = std::fs::read_dir(&hdri_dir) {
+                    for entry in entries.flatten() {
+                        let p = entry.path();
+                        if p.extension().and_then(|e| e.to_str()) == Some("hdr") {
+                            match renderer.load_environment_hdr_from_file(&p) {
+                                Ok(()) => {
+                                    if let Ok(mut ec) =
+                                        self.world.get::<&mut EnvironmentComponent>(entity)
+                                    {
+                                        ec.loaded = true;
+                                    }
+                                    return;
+                                }
+                                Err(e) => {
+                                    log::error!("Failed to load environment map: {e}");
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            // Mark loaded to prevent retry.
+            if let Ok(mut ec) = self.world.get::<&mut EnvironmentComponent>(entity) {
+                ec.loaded = true;
+            }
+        }
+    }
+
     // -----------------------------------------------------------------
     // Rendering
     // -----------------------------------------------------------------
@@ -824,6 +966,21 @@ impl Scene {
         // Render 3D meshes first so they appear behind 2D sprites/particles.
         self.render_meshes(renderer);
         self.render_skinned_meshes(renderer);
+
+        // Render skybox after opaque 3D geometry (uses reverse-Z GREATER_OR_EQUAL
+        // depth test — only fills pixels not covered by geometry).
+        if renderer.has_environment_map() {
+            if let Some(ec) = self.world.query::<&EnvironmentComponent>().iter().next() {
+                if ec.loaded && ec.show_skybox {
+                    let view = renderer.camera_view();
+                    let proj = renderer.camera_projection();
+                    let offscreen = renderer.is_offscreen();
+                    if let Err(e) = renderer.render_skybox(view, proj, ec.skybox_exposure, ec.skybox_rotation, offscreen) {
+                        log::error!("Skybox render failed: {e}");
+                    }
+                }
+            }
+        }
 
         let wt_ref = self.transform_cache.read();
         let wt_cache = &*wt_ref;
@@ -1475,6 +1632,19 @@ impl Scene {
         if let Some(al) = self.world.query::<&AmbientLightComponent>().iter().next() {
             env.ambient_color = al.color;
             env.ambient_intensity = al.intensity;
+        }
+
+        // Environment map (IBL) — use the first EnvironmentComponent found.
+        if let Some(ec) = self
+            .world
+            .query::<&EnvironmentComponent>()
+            .iter()
+            .next()
+        {
+            if ec.loaded && ec.environment_handle != 0 {
+                env.has_ibl = true;
+                env.ibl_intensity = ec.ibl_intensity;
+            }
         }
 
         env
@@ -2220,7 +2390,10 @@ impl Scene {
                 // VP = projection * inverse(camera_world_transform)
                 let world = self.get_world_transform(Entity::new(handle));
                 cam_position = world.col(3).truncate();
-                main_camera_vp = Some(*camera.camera.projection() * world.inverse());
+                let view = world.inverse();
+                let proj = *camera.camera.projection();
+                main_camera_vp = Some(proj * view);
+                renderer.set_camera_matrices(view, proj);
                 break;
             }
         }

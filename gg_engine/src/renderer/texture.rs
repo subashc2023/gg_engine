@@ -279,6 +279,11 @@ pub enum ImageFormat {
     Astc6x6Srgb,
     /// ASTC 8×8, sRGB (8×8 block, 16 bytes).
     Astc8x8Srgb,
+    // -- Floating-point formats (HDR / data) --
+    /// 16-bit float RGBA (8 bytes/pixel). Used for HDR cubemaps, IBL textures.
+    Rgba16Float,
+    /// 16-bit float RG (4 bytes/pixel). Used for BRDF integration LUT.
+    Rg16Float,
 }
 
 impl ImageFormat {
@@ -293,18 +298,29 @@ impl ImageFormat {
             ImageFormat::Astc4x4Srgb => vk::Format::ASTC_4X4_SRGB_BLOCK,
             ImageFormat::Astc6x6Srgb => vk::Format::ASTC_6X6_SRGB_BLOCK,
             ImageFormat::Astc8x8Srgb => vk::Format::ASTC_8X8_SRGB_BLOCK,
+            ImageFormat::Rgba16Float => vk::Format::R16G16B16A16_SFLOAT,
+            ImageFormat::Rg16Float => vk::Format::R16G16_SFLOAT,
         }
     }
 
     /// Whether this format uses block compression (BC/ASTC).
     pub fn is_compressed(self) -> bool {
-        !matches!(self, ImageFormat::Rgba8Srgb | ImageFormat::Rgba8Unorm)
+        !matches!(
+            self,
+            ImageFormat::Rgba8Srgb
+                | ImageFormat::Rgba8Unorm
+                | ImageFormat::Rgba16Float
+                | ImageFormat::Rg16Float
+        )
     }
 
     /// Block dimensions (width, height) for compressed formats. Returns (1, 1) for uncompressed.
     pub fn block_dimensions(self) -> (u32, u32) {
         match self {
-            ImageFormat::Rgba8Srgb | ImageFormat::Rgba8Unorm => (1, 1),
+            ImageFormat::Rgba8Srgb
+            | ImageFormat::Rgba8Unorm
+            | ImageFormat::Rgba16Float
+            | ImageFormat::Rg16Float => (1, 1),
             ImageFormat::Bc1Srgb
             | ImageFormat::Bc3Srgb
             | ImageFormat::Bc5Unorm
@@ -319,6 +335,8 @@ impl ImageFormat {
     pub fn block_bytes(self) -> u32 {
         match self {
             ImageFormat::Rgba8Srgb | ImageFormat::Rgba8Unorm => 4,
+            ImageFormat::Rg16Float => 4,
+            ImageFormat::Rgba16Float => 8,
             ImageFormat::Bc1Srgb => 8,
             _ => 16, // BC3, BC5, BC7, all ASTC variants
         }
@@ -933,6 +951,25 @@ impl Drop for Texture2D {
         }
         // GpuAllocation auto-frees memory on drop.
     }
+}
+
+// ---------------------------------------------------------------------------
+// Public-within-renderer wrappers
+// ---------------------------------------------------------------------------
+
+/// Execute a one-shot command buffer (visible to sibling modules).
+pub(super) fn execute_one_shot_pub(
+    device: &ash::Device,
+    command_pool: vk::CommandPool,
+    queue: vk::Queue,
+    record: impl FnOnce(vk::CommandBuffer),
+) -> EngineResult<()> {
+    execute_one_shot(device, command_pool, queue, record)
+}
+
+/// Calculate mip levels (visible to sibling modules).
+pub(super) fn calculate_mip_levels_pub(width: u32, height: u32) -> u32 {
+    calculate_mip_levels(width, height)
 }
 
 // ---------------------------------------------------------------------------

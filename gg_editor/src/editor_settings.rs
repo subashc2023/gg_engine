@@ -93,6 +93,8 @@ pub(crate) struct EditorSettings {
     pub theme: EditorTheme,
     #[serde(default)]
     pub msaa_samples: MsaaSamples,
+    #[serde(default = "default_true")]
+    pub show_camera_bounds: bool,
 }
 
 impl EditorSettings {

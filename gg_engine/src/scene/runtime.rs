@@ -246,14 +246,14 @@ impl Scene {
                         // Slerp rotation.
                         let interp = prev_rot.slerp(cur_rot, alpha);
                         let (x, y, z, w) = (interp.i, interp.j, interp.k, interp.w);
-                        transform.rotation = glam::Quat::from_xyzw(x, y, z, w);
+                        transform.set_rotation_quat(glam::Quat::from_xyzw(x, y, z, w));
                     } else {
                         // First frame — no previous, use current directly.
                         transform.translation.x = cur_pos.x;
                         transform.translation.y = cur_pos.y;
                         transform.translation.z = cur_pos.z;
                         let (x, y, z, w) = (cur_rot.i, cur_rot.j, cur_rot.k, cur_rot.w);
-                        transform.rotation = glam::Quat::from_xyzw(x, y, z, w);
+                        transform.set_rotation_quat(glam::Quat::from_xyzw(x, y, z, w));
                     }
                 }
             }

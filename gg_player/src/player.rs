@@ -462,6 +462,7 @@ impl Application for GGPlayer {
                 self.scene.resolve_texture_handles_async(am);
                 self.scene.load_fonts_async(am);
                 self.scene.resolve_mesh_assets(am);
+                self.scene.resolve_skinned_mesh_assets(am);
             }
             self.loading_started = true;
         }
@@ -478,8 +479,11 @@ impl Application for GGPlayer {
             self.scene.resolve_texture_handles_async(am);
             self.scene.load_fonts_async(am);
             self.scene.resolve_mesh_assets(am);
+            self.scene.resolve_skinned_mesh_assets(am);
+            self.scene.resolve_environment_map(renderer, am);
         }
         self.scene.resolve_meshes(renderer);
+        self.scene.resolve_skinned_meshes(renderer);
 
         // Start runtime once all pending loads are complete.
         if !self.runtime_started {

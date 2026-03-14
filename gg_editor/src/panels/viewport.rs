@@ -587,7 +587,7 @@ pub(crate) fn viewport_ui(
                                     scene.get_component_mut::<TransformComponent>(entity)
                                 {
                                     tc.translation = local_translation;
-                                    tc.rotation = local_quat;
+                                    tc.set_rotation_quat(local_quat);
                                     tc.scale = local_scale;
                                     *scene_dirty = true;
                                 }

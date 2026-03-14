@@ -836,7 +836,7 @@ impl SceneCore {
         for (handle, world_w, world_h, pivot_offset_x, pivot_offset_y) in rect_updates {
             if let Ok(mut tc) = self.world.get::<&mut TransformComponent>(handle) {
                 tc.scale = glam::Vec3::new(world_w, world_h, 1.0);
-                tc.rotation = glam::Quat::IDENTITY;
+                tc.set_rotation_quat(glam::Quat::IDENTITY);
                 tc.translation.x += pivot_offset_x;
                 tc.translation.y += pivot_offset_y;
             }

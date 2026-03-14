@@ -8,6 +8,7 @@ use super::bone_palette::BonePaletteSystem;
 use super::buffer::{IndexBuffer, VertexBuffer};
 use super::camera_system::CameraSystem;
 use super::draw_context::DrawContext;
+use super::environment_map;
 use super::font::{Font, FontCpuData};
 use super::framebuffer::{Framebuffer, FramebufferSpec};
 use super::gpu_allocation::GpuAllocator;
@@ -167,6 +168,9 @@ pub struct Renderer {
     // Camera clip planes for contact shadow depth linearization.
     camera_near: f32,
     camera_far: f32,
+    // Separate view and projection matrices (for skybox rendering in render_scene).
+    camera_view: Mat4,
+    camera_projection: Mat4,
 
     // Format info for framebuffer creation.
     color_format: vk::Format,
@@ -215,6 +219,12 @@ pub struct Renderer {
     skinned_pipeline: Option<Arc<Pipeline>>,
     skinned_offscreen_pipeline: Option<Arc<Pipeline>>,
     skinned_shadow_pipeline: Option<Arc<Pipeline>>,
+
+    // Environment map system for IBL and skybox rendering (lazily initialized).
+    environment: Option<environment_map::EnvironmentMapSystem>,
+    // Skybox pipeline (lazily created from the environment map system).
+    skybox_pipeline: Option<Arc<Pipeline>>,
+    skybox_offscreen_pipeline: Option<Arc<Pipeline>>,
 }
 
 impl Renderer {
@@ -234,7 +244,8 @@ impl Renderer {
         // descriptor set per (frame, viewport) slot. Shadow also needs sampler sets.
         let ubo_slot_count = (super::MAX_FRAMES_IN_FLIGHT * super::MAX_VIEWPORTS) as u32;
         let total_ubo_sets = ubo_slot_count * 4; // camera + material + lighting + shadow camera
-        let total_sampler_descriptors = 100 + ubo_slot_count * 2; // textures + shadow map (2 samplers per set: PCF + PCSS blocker)
+        let total_sampler_descriptors = 100 + ubo_slot_count * 2 // textures + shadow map (2 samplers per set: PCF + PCSS blocker)
+            + ubo_slot_count * 4; // IBL: irradiance + prefiltered + brdf_lut + env_cubemap (4 per lighting slot)
         let bone_palette_sets = super::MAX_FRAMES_IN_FLIGHT as u32; // one SSBO per frame-in-flight
         let total_sets = total_sampler_descriptors + total_ubo_sets + bone_palette_sets;
         let pool_sizes = [
@@ -311,6 +322,8 @@ impl Renderer {
             camera_position: Vec3::ZERO,
             camera_near: 0.1,
             camera_far: 1000.0,
+            camera_view: Mat4::IDENTITY,
+            camera_projection: Mat4::IDENTITY,
             color_format,
             depth_format,
             pipeline_cache,
@@ -329,6 +342,9 @@ impl Renderer {
             skinned_pipeline: None,
             skinned_offscreen_pipeline: None,
             skinned_shadow_pipeline: None,
+            environment: None,
+            skybox_pipeline: None,
+            skybox_offscreen_pipeline: None,
         })
     }
 
@@ -685,9 +701,10 @@ impl Renderer {
         self.mesh3d.offscreen_render_pass = Some(render_pass);
         self.mesh3d.offscreen_color_attachment_count = color_attachment_count;
         self.mesh3d.offscreen_sample_count = samples;
-        // Invalidate cached offscreen mesh3d pipelines (render pass may have changed).
+        // Invalidate cached offscreen pipelines (render pass / samples may have changed).
         self.mesh3d.offscreen_pipeline = None;
         self.mesh3d.wireframe_offscreen_pipeline = None;
+        self.skybox_offscreen_pipeline = None;
 
         if let Some(data) = &mut self.renderer_2d {
             data.create_offscreen_pipeline(
@@ -2311,6 +2328,31 @@ impl Renderer {
         self.camera_position
     }
 
+    /// Store separate view and projection matrices for skybox rendering.
+    ///
+    /// The scene's `render_scene()` needs these to render the skybox from
+    /// the correct camera. Call before `on_update_editor` / `on_update_runtime`.
+    pub fn set_camera_matrices(&mut self, view: Mat4, projection: Mat4) {
+        self.camera_view = view;
+        self.camera_projection = projection;
+    }
+
+    /// Current camera view matrix (set via [`set_camera_matrices`]).
+    pub fn camera_view(&self) -> Mat4 {
+        self.camera_view
+    }
+
+    /// Current camera projection matrix (set via [`set_camera_matrices`]).
+    pub fn camera_projection(&self) -> Mat4 {
+        self.camera_projection
+    }
+
+    /// Whether the renderer is currently targeting an offscreen framebuffer
+    /// (dual-pass mode used by the editor).
+    pub fn is_offscreen(&self) -> bool {
+        self.mesh3d.use_offscreen
+    }
+
     /// Set the shadow cascade debug visualization mode (0 = off, 1-6 = debug views).
     /// Written to `LightGpuData.counts.w` and read by `mesh3d.glsl`.
     pub fn set_shadow_debug_mode(&mut self, mode: i32) {
@@ -2449,6 +2491,367 @@ impl Renderer {
             None,
             Some(texture.descriptor_set()),
         );
+    }
+
+    // -- Environment Map / Skybox / IBL ----------------------------------------
+
+    /// Ensure the environment map system is initialized. Creates fallback cubemaps,
+    /// BRDF LUT, compute pipelines, and skybox mesh on first call.
+    pub fn ensure_environment_map(&mut self) -> EngineResult<()> {
+        if self.environment.is_some() {
+            return Ok(());
+        }
+        let res = super::RendererResources {
+            device: &self.device,
+            graphics_queue: self.graphics_queue,
+            command_pool: self.command_pool,
+            descriptor_pool: self.descriptor_pool,
+            texture_ds_layout: self.texture_descriptor_set_layout,
+            color_format: self.color_format,
+            depth_format: self.depth_format,
+        };
+        let env = environment_map::EnvironmentMapSystem::new(
+            &self.allocator,
+            &self.device,
+            self.command_pool,
+            self.graphics_queue,
+            self.pipeline_cache,
+            &self.lighting,
+            &res,
+        )?;
+        self.environment = Some(env);
+        log::info!(target: "gg_engine", "Environment map system initialized");
+        Ok(())
+    }
+
+    /// Whether the environment map system has a loaded HDR environment.
+    pub fn has_environment_map(&self) -> bool {
+        self.environment
+            .as_ref()
+            .map_or(false, |e| e.has_environment())
+    }
+
+    /// Access the environment map system (if initialized).
+    pub fn environment(&self) -> Option<&environment_map::EnvironmentMapSystem> {
+        self.environment.as_ref()
+    }
+
+    /// Load an HDR equirectangular environment map and run the IBL preprocessing
+    /// chain (equirect→cubemap, irradiance, prefilter, BRDF LUT).
+    ///
+    /// `pixels_rgba_f16` is RGBA half-float data (4 × f16 per pixel).
+    pub fn load_environment_hdr(
+        &mut self,
+        pixels_rgba_f16: &[u8],
+        width: u32,
+        height: u32,
+    ) -> EngineResult<()> {
+        self.ensure_environment_map()?;
+        let env = self.environment.as_mut().unwrap();
+        env.load_hdr(
+            &self.allocator,
+            &self.device,
+            self.command_pool,
+            self.graphics_queue,
+            self.descriptor_pool,
+            self.texture_descriptor_set_layout,
+            pixels_rgba_f16,
+            width,
+            height,
+        )?;
+        // Update lighting descriptor sets with the new IBL textures.
+        env.update_lighting_descriptors(&self.lighting);
+        Ok(())
+    }
+
+    /// Load an HDR environment map from a file path.
+    ///
+    /// Convenience wrapper around [`load_environment_hdr`] that reads the file,
+    /// converts to RGBA f16, and runs the IBL preprocessing chain.
+    pub fn load_environment_hdr_from_file(
+        &mut self,
+        path: &std::path::Path,
+    ) -> EngineResult<()> {
+        let img = image::open(path)
+            .map_err(|e| crate::error::EngineError::Gpu(format!("Failed to open HDR: {e}")))?;
+        let rgb32f = img.to_rgb32f();
+        let (width, height) = rgb32f.dimensions();
+        let pixels = rgb32f.as_raw();
+
+        let pixel_count = (width * height) as usize;
+        let mut rgba_f16 = Vec::with_capacity(pixel_count * 8);
+        for i in 0..pixel_count {
+            for c in 0..3 {
+                let h = half::f16::from_f32(pixels[i * 3 + c].min(65504.0));
+                rgba_f16.extend_from_slice(&h.to_le_bytes());
+            }
+            let one = half::f16::from_f32(1.0);
+            rgba_f16.extend_from_slice(&one.to_le_bytes());
+        }
+
+        self.load_environment_hdr(&rgba_f16, width, height)?;
+        log::info!(target: "gg_engine", "Environment map loaded from {}: {}x{}", path.display(), width, height);
+        Ok(())
+    }
+
+    /// Render the skybox using the loaded environment map.
+    ///
+    /// Must be called within an active render pass (between begin_scene/end_scene).
+    /// Uses reverse-Z depth test (GREATER_OR_EQUAL at depth 0.0) so the skybox
+    /// only fills pixels not covered by opaque geometry.
+    pub fn render_skybox(
+        &mut self,
+        view: glam::Mat4,
+        projection: glam::Mat4,
+        exposure: f32,
+        rotation_y_deg: f32,
+        offscreen: bool,
+    ) -> EngineResult<()> {
+        let env = match self.environment.as_ref() {
+            Some(e) if e.has_environment() => e,
+            _ => return Ok(()),
+        };
+
+        let ctx = self
+            .draw_context
+            .as_ref()
+            .expect("render_skybox called outside begin/end scene");
+
+        // Get or create skybox pipeline.
+        let pipeline = if offscreen {
+            if self.skybox_offscreen_pipeline.is_none() {
+                let p = self.create_skybox_pipeline(offscreen)?;
+                self.skybox_offscreen_pipeline = Some(Arc::new(p));
+            }
+            self.skybox_offscreen_pipeline.as_ref().unwrap()
+        } else {
+            if self.skybox_pipeline.is_none() {
+                let p = self.create_skybox_pipeline(offscreen)?;
+                self.skybox_pipeline = Some(Arc::new(p));
+            }
+            self.skybox_pipeline.as_ref().unwrap()
+        };
+
+        // Build rotation-only VP: strip translation from view matrix.
+        // Also undo Vulkan Y-flip from the projection so the cubemap samples correctly,
+        // then re-apply it. The Y-flip is already baked into `projection`.
+        let view_rotation = glam::Mat4::from_mat3(glam::Mat3::from_mat4(view));
+        let vp_rotation = projection * view_rotation;
+
+        let push = environment_map::SkyboxPushConstants {
+            vp_rotation: vp_rotation.to_cols_array(),
+            exposure,
+            rotation_y: rotation_y_deg.to_radians(),
+        };
+
+        let cmd_buf = ctx.cmd_buf;
+        let device = &self.device;
+
+        // Bind skybox pipeline.
+        unsafe {
+            device.cmd_bind_pipeline(cmd_buf, vk::PipelineBindPoint::GRAPHICS, pipeline.pipeline());
+        }
+
+        // Bind set 0 (camera) — we still need it for the pipeline layout compatibility.
+        let camera_ds = self
+            .camera
+            .descriptor_set(ctx.current_frame, ctx.viewport_index);
+        unsafe {
+            device.cmd_bind_descriptor_sets(
+                cmd_buf,
+                vk::PipelineBindPoint::GRAPHICS,
+                pipeline.layout(),
+                0,
+                &[camera_ds],
+                &[],
+            );
+        }
+
+        // Bind set 1 (lighting, which has the environment cubemap at binding 4).
+        let lighting_ds = self
+            .lighting
+            .descriptor_set(ctx.current_frame, ctx.viewport_index);
+        unsafe {
+            device.cmd_bind_descriptor_sets(
+                cmd_buf,
+                vk::PipelineBindPoint::GRAPHICS,
+                pipeline.layout(),
+                1,
+                &[lighting_ds],
+                &[],
+            );
+        }
+
+        // Push constants.
+        let push_bytes = unsafe {
+            std::slice::from_raw_parts(
+                &push as *const environment_map::SkyboxPushConstants as *const u8,
+                std::mem::size_of::<environment_map::SkyboxPushConstants>(),
+            )
+        };
+        unsafe {
+            device.cmd_push_constants(
+                cmd_buf,
+                pipeline.layout(),
+                vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT,
+                0,
+                push_bytes,
+            );
+        }
+
+        // Draw unit cube (36 vertices, no index buffer).
+        env.skybox_vertex_array().bind(cmd_buf);
+        unsafe {
+            device.cmd_draw(cmd_buf, 36, 1, 0, 0);
+        }
+
+        Ok(())
+    }
+
+    /// Create the skybox graphics pipeline.
+    fn create_skybox_pipeline(&self, offscreen: bool) -> EngineResult<Pipeline> {
+        use super::shader::Shader;
+
+        let (vert_spv, frag_spv) = if offscreen {
+            (
+                super::shaders::SKYBOX_VERT_SPV,
+                super::shaders::SKYBOX_FRAG_SPV,
+            )
+        } else {
+            (
+                super::shaders::SKYBOX_SWAPCHAIN_VERT_SPV,
+                super::shaders::SKYBOX_SWAPCHAIN_FRAG_SPV,
+            )
+        };
+
+        let shader = Shader::new(&self.device, "skybox", vert_spv, frag_spv)?;
+
+        // Skybox pipeline layout: set 0 = camera, set 1 = lighting (for env cubemap).
+        let ds_layouts = [
+            self.camera.ds_layout(),
+            self.lighting.ds_layout(),
+        ];
+        let push_range = vk::PushConstantRange {
+            stage_flags: vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT,
+            offset: 0,
+            size: std::mem::size_of::<environment_map::SkyboxPushConstants>() as u32,
+        };
+        let pipeline_layout_info = vk::PipelineLayoutCreateInfo::default()
+            .set_layouts(&ds_layouts)
+            .push_constant_ranges(std::slice::from_ref(&push_range));
+        let pipeline_layout =
+            unsafe { self.device.create_pipeline_layout(&pipeline_layout_info, None) }.map_err(
+                |e| EngineError::Gpu(format!("Failed to create skybox pipeline layout: {e}")),
+            )?;
+
+        // Vertex input: position only (Float3).
+        let binding_desc = vk::VertexInputBindingDescription {
+            binding: 0,
+            stride: 12, // 3 * f32
+            input_rate: vk::VertexInputRate::VERTEX,
+        };
+        let attr_desc = vk::VertexInputAttributeDescription {
+            location: 0,
+            binding: 0,
+            format: vk::Format::R32G32B32_SFLOAT,
+            offset: 0,
+        };
+
+        let vertex_input = vk::PipelineVertexInputStateCreateInfo::default()
+            .vertex_binding_descriptions(std::slice::from_ref(&binding_desc))
+            .vertex_attribute_descriptions(std::slice::from_ref(&attr_desc));
+        let input_assembly = vk::PipelineInputAssemblyStateCreateInfo::default()
+            .topology(vk::PrimitiveTopology::TRIANGLE_LIST)
+            .primitive_restart_enable(false);
+        let viewport_state = vk::PipelineViewportStateCreateInfo::default()
+            .viewport_count(1)
+            .scissor_count(1);
+        let rasterizer = vk::PipelineRasterizationStateCreateInfo::default()
+            .depth_clamp_enable(false)
+            .rasterizer_discard_enable(false)
+            .polygon_mode(vk::PolygonMode::FILL)
+            .line_width(1.0)
+            .cull_mode(vk::CullModeFlags::FRONT) // We're inside the cube
+            .front_face(vk::FrontFace::COUNTER_CLOCKWISE)
+            .depth_bias_enable(false);
+        let samples = if offscreen {
+            self.mesh3d.offscreen_sample_count
+        } else {
+            vk::SampleCountFlags::TYPE_1
+        };
+        let multisampling = vk::PipelineMultisampleStateCreateInfo::default()
+            .sample_shading_enable(false)
+            .rasterization_samples(samples);
+        // Reverse-Z: skybox at depth 0.0 (far plane). Test GREATER_OR_EQUAL, no write.
+        let depth_stencil = vk::PipelineDepthStencilStateCreateInfo::default()
+            .depth_test_enable(true)
+            .depth_write_enable(false)
+            .depth_compare_op(vk::CompareOp::GREATER_OR_EQUAL)
+            .depth_bounds_test_enable(false)
+            .stencil_test_enable(false);
+
+        let color_attachment_count = if offscreen {
+            self.mesh3d.offscreen_color_attachment_count
+        } else {
+            1u32
+        };
+        let mut blend_attachments = Vec::new();
+        for _ in 0..color_attachment_count {
+            blend_attachments.push(
+                vk::PipelineColorBlendAttachmentState::default()
+                    .color_write_mask(vk::ColorComponentFlags::RGBA)
+                    .blend_enable(false),
+            );
+        }
+        let color_blending = vk::PipelineColorBlendStateCreateInfo::default()
+            .logic_op_enable(false)
+            .attachments(&blend_attachments);
+
+        let dynamic_states = [vk::DynamicState::VIEWPORT, vk::DynamicState::SCISSOR];
+        let dynamic_state =
+            vk::PipelineDynamicStateCreateInfo::default().dynamic_states(&dynamic_states);
+
+        let render_pass = if offscreen {
+            self.mesh3d.offscreen_render_pass.ok_or_else(|| {
+                EngineError::Gpu("No offscreen render pass set for skybox pipeline".to_string())
+            })?
+        } else {
+            self.render_pass
+        };
+
+        let entry_point = c"main";
+        let stages = [
+            vk::PipelineShaderStageCreateInfo::default()
+                .stage(vk::ShaderStageFlags::VERTEX)
+                .module(shader.vert_module())
+                .name(entry_point),
+            vk::PipelineShaderStageCreateInfo::default()
+                .stage(vk::ShaderStageFlags::FRAGMENT)
+                .module(shader.frag_module())
+                .name(entry_point),
+        ];
+
+        let pipeline_info = vk::GraphicsPipelineCreateInfo::default()
+            .stages(&stages)
+            .vertex_input_state(&vertex_input)
+            .input_assembly_state(&input_assembly)
+            .viewport_state(&viewport_state)
+            .rasterization_state(&rasterizer)
+            .multisample_state(&multisampling)
+            .depth_stencil_state(&depth_stencil)
+            .color_blend_state(&color_blending)
+            .dynamic_state(&dynamic_state)
+            .layout(pipeline_layout)
+            .render_pass(render_pass)
+            .subpass(0);
+
+        let vk_pipeline = unsafe {
+            self.device
+                .create_graphics_pipelines(self.pipeline_cache, &[pipeline_info], None)
+        }
+        .map_err(|(_, e)| EngineError::Gpu(format!("Failed to create skybox pipeline: {e}")))?[0];
+
+        Ok(Pipeline::from_raw(vk_pipeline, pipeline_layout, self.device.clone()))
     }
 
     /// Bind the pipeline and shared descriptor sets (0, 1, 3, 4) for 3D mesh
@@ -3241,6 +3644,10 @@ impl Drop for Renderer {
         if let Some(mut bp) = self.bone_palette.take() {
             bp.destroy(&self.device);
         }
+        // Drop environment map system (owns cubemaps, compute pipelines, skybox mesh).
+        drop(self.skybox_pipeline.take());
+        drop(self.skybox_offscreen_pipeline.take());
+        drop(self.environment.take());
         // Drop shadow pipelines before shadow map (pipelines reference render pass).
         drop(self.shadow.pipeline.take());
         drop(self.shadow.pipeline_front.take());

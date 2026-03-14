@@ -102,7 +102,7 @@ layout(push_constant) uniform PushConstants {
 // Bindless texture array (set 1) — shared with 2D renderer.
 layout(set = 1, binding = 0) uniform sampler2D u_textures[4096];
 
-// Lighting UBO (set 3) — scene lights + shadow data.
+// Lighting UBO (set 3) — scene lights + shadow data + IBL.
 layout(set = 3, binding = 0) uniform LightingUBO {
     // Directional light
     vec4 dir_direction;   // xyz = direction, w = unused
@@ -123,6 +123,12 @@ layout(set = 3, binding = 0) uniform LightingUBO {
     vec4 cascade_texel_size;            // world-units-per-texel per cascade (for bias scaling)
     ivec4 shadow_settings;              // x = quality (0-3), yzw = reserved
 } lighting;
+
+// IBL (set 3, bindings 1-4) — image-based lighting textures.
+layout(set = 3, binding = 1) uniform samplerCube u_irradiance_map;
+layout(set = 3, binding = 2) uniform samplerCube u_prefiltered_map;
+layout(set = 3, binding = 3) uniform sampler2D u_brdf_lut;
+layout(set = 3, binding = 4) uniform samplerCube u_env_cubemap;
 
 // Shadow map (set 4):
 layout(set = 4, binding = 0) uniform sampler2DArrayShadow u_shadow_map;
@@ -314,22 +320,75 @@ float calculate_shadow(vec3 world_pos, vec3 normal) {
 }
 
 // ---------------------------------------------------------------------------
-// Blinn-Phong lighting
+// PBR helpers
 // ---------------------------------------------------------------------------
 
-vec3 blinn_phong(vec3 light_dir, vec3 light_color, float light_intensity,
-                 vec3 normal, vec3 view_dir, vec3 albedo) {
-    float ndotl = max(dot(normal, light_dir), 0.0);
-    vec3 diffuse = albedo * light_color * light_intensity * ndotl;
-    vec3 specular = vec3(0.0);
-    if (ndotl > 0.0) {
-        vec3 half_dir = normalize(light_dir + view_dir);
-        float shininess = max(2.0 / (push.u_roughness * push.u_roughness + 0.001) - 2.0, 1.0);
-        float spec = pow(max(dot(normal, half_dir), 0.0), shininess);
-        vec3 spec_color = mix(vec3(0.04), albedo, push.u_metallic);
-        specular = spec_color * light_color * light_intensity * spec;
-    }
-    return diffuse + specular;
+const float PI = 3.14159265359;
+
+vec3 fresnelSchlick(float cosTheta, vec3 F0) {
+    return F0 + (1.0 - F0) * pow(clamp(1.0 - cosTheta, 0.0, 1.0), 5.0);
+}
+
+vec3 fresnelSchlickRoughness(float cosTheta, vec3 F0, float roughness) {
+    return F0 + (max(vec3(1.0 - roughness), F0) - F0) *
+           pow(clamp(1.0 - cosTheta, 0.0, 1.0), 5.0);
+}
+
+float distributionGGX(float NdotH, float roughness) {
+    float a  = roughness * roughness;
+    float a2 = a * a;
+    float NdotH2 = NdotH * NdotH;
+    float denom = NdotH2 * a2 + (1.0 - NdotH2);
+    return a2 / (PI * denom * denom);
+}
+
+/// Height-correlated Smith-GGX visibility function (Heitz 2014).
+float V_SmithGGXCorrelated(float NdotV, float NdotL, float roughness) {
+    float a = roughness * roughness;
+    float a2 = a * a;
+    float GGXV = NdotL * sqrt(NdotV * NdotV * (1.0 - a2) + a2);
+    float GGXL = NdotV * sqrt(NdotL * NdotL * (1.0 - a2) + a2);
+    return 0.5 / (GGXV + GGXL + 1e-5);
+}
+
+// ---------------------------------------------------------------------------
+// Cook-Torrance BRDF — physically-based direct lighting
+// ---------------------------------------------------------------------------
+
+vec3 cook_torrance(vec3 light_dir, vec3 light_color, float light_intensity,
+                   vec3 normal, vec3 view_dir, vec3 albedo,
+                   float roughness, vec3 F0, vec3 energyCompensation) {
+    float NdotL = max(dot(normal, light_dir), 0.0);
+    if (NdotL <= 0.0) return vec3(0.0);
+
+    float NdotV = max(dot(normal, view_dir), 1e-4);
+    vec3  H     = normalize(light_dir + view_dir);
+    float NdotH = max(dot(normal, H), 0.0);
+    float HdotV = max(dot(H, view_dir), 0.0);
+
+    float D = distributionGGX(NdotH, roughness);
+    float V = V_SmithGGXCorrelated(NdotV, NdotL, roughness);
+    vec3  F = fresnelSchlick(HdotV, F0);
+
+    vec3 specular = (D * V) * F * energyCompensation;
+
+    vec3 kD = (1.0 - F) * (1.0 - push.u_metallic);
+    vec3 diffuse = kD * albedo / PI;
+
+    return (diffuse + specular) * light_color * light_intensity * NdotL;
+}
+
+// ---------------------------------------------------------------------------
+// Tonemapping (for non-OFFSCREEN / direct-to-swapchain rendering)
+// ---------------------------------------------------------------------------
+
+vec3 aces_tonemap(vec3 x) {
+    const float a = 2.51;
+    const float b = 0.03;
+    const float c = 2.43;
+    const float d = 0.59;
+    const float e = 0.14;
+    return clamp((x * (a * x + b)) / (x * (c * x + d) + e), 0.0, 1.0);
 }
 
 // ---------------------------------------------------------------------------
@@ -359,13 +418,50 @@ void main() {
     }
 
     vec3 albedo = v_color.rgb * push.u_albedo_color.rgb * tex_color.rgb;
-    vec3 result = albedo * lighting.ambient_color.rgb * lighting.ambient_color.w;
+
+    // Per-pixel PBR setup: F0, roughness, energy compensation.
+    vec3 F0 = mix(vec3(0.04), albedo, push.u_metallic);
+    float NdotV = max(dot(n, view_dir), 1e-4);
+    float roughness = max(push.u_roughness, 0.04);
+    vec2 dfg = texture(u_brdf_lut, vec2(NdotV, push.u_roughness)).rg;
+    vec3 energyCompensation = 1.0 + F0 * (1.0 / max(F0 * dfg.x + dfg.y, 1e-4) - 1.0);
+
+    // Ambient / IBL contribution.
+    int has_ibl = lighting.shadow_settings.y;
+    vec3 result;
+    if (has_ibl > 0) {
+        float ibl_intensity = intBitsToFloat(lighting.shadow_settings.z);
+        int max_mip = lighting.shadow_settings.w;
+
+        vec3 kS = fresnelSchlickRoughness(NdotV, F0, push.u_roughness);
+        vec3 kD = (1.0 - kS) * (1.0 - push.u_metallic);
+
+        vec3 irradiance = texture(u_irradiance_map, n).rgb;
+        vec3 diffuse_ibl = kD * irradiance * albedo;
+
+        vec3 R = reflect(-view_dir, n);
+        float lod = push.u_roughness * float(max_mip);
+        vec3 prefiltered;
+        if (push.u_roughness < 0.1) {
+            vec3 mirror = texture(u_env_cubemap, R).rgb;
+            vec3 filtered = textureLod(u_prefiltered_map, R, lod).rgb;
+            prefiltered = mix(mirror, filtered, push.u_roughness / 0.1);
+        } else {
+            prefiltered = textureLod(u_prefiltered_map, R, lod).rgb;
+        }
+        vec3 specular_ibl = prefiltered * (F0 * dfg.x + dfg.y) * energyCompensation;
+
+        result = (diffuse_ibl + specular_ibl) * ibl_intensity;
+    } else {
+        result = albedo * lighting.ambient_color.rgb * lighting.ambient_color.w;
+    }
 
     if (lighting.counts.y > 0) {
         vec3 light_dir = normalize(-lighting.dir_direction.xyz);
         float intensity = lighting.dir_color.w;
         float shadow = calculate_shadow(v_world_position, n);
-        result += shadow * blinn_phong(light_dir, lighting.dir_color.rgb, intensity, n, view_dir, albedo);
+        result += shadow * cook_torrance(light_dir, lighting.dir_color.rgb, intensity,
+                                         n, view_dir, albedo, roughness, F0, energyCompensation);
     }
 
     int num_points = lighting.counts.x;
@@ -381,16 +477,20 @@ void main() {
             float ratio = dist / radius;
             float atten = max(1.0 - ratio * ratio, 0.0);
             atten = atten * atten;
-            result += blinn_phong(light_dir, light_color, intensity * atten, n, view_dir, albedo);
+            result += cook_torrance(light_dir, light_color, intensity * atten,
+                                    n, view_dir, albedo, roughness, F0, energyCompensation);
         }
     }
 
     result += push.u_emissive_color.rgb * push.u_emissive_strength;
 
-    out_color = vec4(result, v_color.a * push.u_albedo_color.a * tex_color.a);
-
 #ifdef OFFSCREEN
+    // OFFSCREEN: output linear HDR — post-processing pipeline handles tonemapping.
+    out_color = vec4(result, v_color.a * push.u_albedo_color.a * tex_color.a);
     out_entity_id = push.u_entity_id;
     out_normal = vec4(n, 1.0);
+#else
+    // Direct-to-swapchain: apply ACES tonemapping here (no post-process pass).
+    out_color = vec4(aces_tonemap(result), v_color.a * push.u_albedo_color.a * tex_color.a);
 #endif
 }

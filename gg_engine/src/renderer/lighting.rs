@@ -80,6 +80,13 @@ impl LightGpuData {
 
 /// Manages per-frame per-viewport lighting UBO (descriptor set 3).
 ///
+/// Descriptor set 3 layout:
+///   binding 0: UNIFORM_BUFFER  — LightGpuData (lighting UBO)
+///   binding 1: COMBINED_IMAGE_SAMPLER — irradiance cubemap (IBL diffuse)
+///   binding 2: COMBINED_IMAGE_SAMPLER — pre-filtered specular cubemap (IBL specular)
+///   binding 3: COMBINED_IMAGE_SAMPLER — BRDF integration LUT (IBL split-sum)
+///   binding 4: COMBINED_IMAGE_SAMPLER — source environment cubemap (skybox)
+///
 /// Follows the same slot pattern as CameraSystem and MaterialLibrary.
 pub(crate) struct LightingSystem {
     light_ubo: UniformBuffer,
@@ -96,14 +103,41 @@ impl LightingSystem {
         device: &ash::Device,
         descriptor_pool: vk::DescriptorPool,
     ) -> EngineResult<Self> {
-        // Descriptor set layout: binding 0, UNIFORM_BUFFER, vertex + fragment stages.
-        let ubo_binding = vk::DescriptorSetLayoutBinding::default()
-            .binding(0)
-            .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
-            .descriptor_count(1)
-            .stage_flags(vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT);
-        let ubo_layout_info = vk::DescriptorSetLayoutCreateInfo::default()
-            .bindings(std::slice::from_ref(&ubo_binding));
+        // Descriptor set layout: 5 bindings.
+        //   0: Lighting UBO (vertex + fragment)
+        //   1: Irradiance cubemap (fragment)
+        //   2: Pre-filtered specular cubemap (fragment)
+        //   3: BRDF integration LUT (fragment)
+        //   4: Source environment cubemap (fragment, for skybox)
+        let bindings = [
+            vk::DescriptorSetLayoutBinding::default()
+                .binding(0)
+                .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
+                .descriptor_count(1)
+                .stage_flags(vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT),
+            vk::DescriptorSetLayoutBinding::default()
+                .binding(1)
+                .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+                .descriptor_count(1)
+                .stage_flags(vk::ShaderStageFlags::FRAGMENT),
+            vk::DescriptorSetLayoutBinding::default()
+                .binding(2)
+                .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+                .descriptor_count(1)
+                .stage_flags(vk::ShaderStageFlags::FRAGMENT),
+            vk::DescriptorSetLayoutBinding::default()
+                .binding(3)
+                .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+                .descriptor_count(1)
+                .stage_flags(vk::ShaderStageFlags::FRAGMENT),
+            vk::DescriptorSetLayoutBinding::default()
+                .binding(4)
+                .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+                .descriptor_count(1)
+                .stage_flags(vk::ShaderStageFlags::FRAGMENT),
+        ];
+        let ubo_layout_info =
+            vk::DescriptorSetLayoutCreateInfo::default().bindings(&bindings);
         let ds_layout = unsafe { device.create_descriptor_set_layout(&ubo_layout_info, None) }
             .map_err(|e| {
                 EngineError::Gpu(format!(
@@ -127,7 +161,8 @@ impl LightingSystem {
                 ))
             })?;
 
-        // Write each descriptor set pointing to its UBO buffer.
+        // Write each descriptor set pointing to its UBO buffer (binding 0 only).
+        // IBL bindings (1-4) are written later by write_ibl_descriptors().
         for (i, &ds) in descriptor_sets.iter().enumerate() {
             let buffer_info = vk::DescriptorBufferInfo::default()
                 .buffer(light_ubo.buffer(i))
@@ -152,7 +187,7 @@ impl LightingSystem {
         })
     }
 
-    /// The descriptor set layout for pipeline creation (set 3 = lighting UBO).
+    /// The descriptor set layout for pipeline creation (set 3 = lighting + IBL).
     pub fn ds_layout(&self) -> vk::DescriptorSetLayout {
         self.ds_layout
     }
@@ -166,6 +201,71 @@ impl LightingSystem {
     pub fn write_ubo(&self, data: &LightGpuData, current_frame: usize, viewport_index: usize) {
         let slot = UniformBuffer::slot(current_frame, viewport_index);
         self.light_ubo.update(slot, data.as_bytes());
+    }
+
+    /// Write IBL cubemap and BRDF LUT descriptors to bindings 1-4 for ALL slots.
+    ///
+    /// Called once when the environment map changes (or at startup with fallbacks).
+    pub fn write_ibl_descriptors(
+        &self,
+        irradiance_view: vk::ImageView,
+        irradiance_sampler: vk::Sampler,
+        prefiltered_view: vk::ImageView,
+        prefiltered_sampler: vk::Sampler,
+        brdf_lut_view: vk::ImageView,
+        brdf_lut_sampler: vk::Sampler,
+        env_cubemap_view: vk::ImageView,
+        env_cubemap_sampler: vk::Sampler,
+    ) {
+        for &ds in &self.descriptor_sets {
+            let irradiance_info = vk::DescriptorImageInfo::default()
+                .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
+                .image_view(irradiance_view)
+                .sampler(irradiance_sampler);
+            let prefiltered_info = vk::DescriptorImageInfo::default()
+                .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
+                .image_view(prefiltered_view)
+                .sampler(prefiltered_sampler);
+            let brdf_info = vk::DescriptorImageInfo::default()
+                .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
+                .image_view(brdf_lut_view)
+                .sampler(brdf_lut_sampler);
+            let env_info = vk::DescriptorImageInfo::default()
+                .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
+                .image_view(env_cubemap_view)
+                .sampler(env_cubemap_sampler);
+
+            let writes = [
+                vk::WriteDescriptorSet::default()
+                    .dst_set(ds)
+                    .dst_binding(1)
+                    .dst_array_element(0)
+                    .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+                    .image_info(std::slice::from_ref(&irradiance_info)),
+                vk::WriteDescriptorSet::default()
+                    .dst_set(ds)
+                    .dst_binding(2)
+                    .dst_array_element(0)
+                    .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+                    .image_info(std::slice::from_ref(&prefiltered_info)),
+                vk::WriteDescriptorSet::default()
+                    .dst_set(ds)
+                    .dst_binding(3)
+                    .dst_array_element(0)
+                    .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+                    .image_info(std::slice::from_ref(&brdf_info)),
+                vk::WriteDescriptorSet::default()
+                    .dst_set(ds)
+                    .dst_binding(4)
+                    .dst_array_element(0)
+                    .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+                    .image_info(std::slice::from_ref(&env_info)),
+            ];
+
+            unsafe {
+                self.device.update_descriptor_sets(&writes, &[]);
+            }
+        }
     }
 }
 
@@ -199,6 +299,12 @@ pub struct LightEnvironment {
     pub shadow_distance: f32,
     /// World-units-per-texel for each cascade (used for per-cascade bias scaling).
     pub cascade_texel_sizes: [f32; 4],
+    /// Whether IBL environment maps are active.
+    pub has_ibl: bool,
+    /// IBL intensity multiplier.
+    pub ibl_intensity: f32,
+    /// Number of pre-filtered specular mip levels minus one (for roughness LOD).
+    pub max_prefilter_mip: i32,
 }
 
 impl Default for LightEnvironment {
@@ -213,6 +319,9 @@ impl Default for LightEnvironment {
             cascade_split_depths: [0.0; 3],
             shadow_distance: 100.0,
             cascade_texel_sizes: [1.0; 4],
+            has_ibl: false,
+            ibl_intensity: 1.0,
+            max_prefilter_mip: 8,
         }
     }
 }
@@ -266,6 +375,13 @@ impl LightEnvironment {
             data.cascade_split_depth[3] = self.shadow_distance;
             data.cascade_texel_size = self.cascade_texel_sizes;
             data.counts[2] = 1; // has_shadow = true
+        }
+
+        // IBL (packed into shadow_settings.yzw which are reserved).
+        if self.has_ibl {
+            data.shadow_settings[1] = 1; // has_ibl
+            data.shadow_settings[2] = self.ibl_intensity.to_bits() as i32; // intBitsToFloat in shader
+            data.shadow_settings[3] = self.max_prefilter_mip;
         }
 
         data
@@ -324,6 +440,7 @@ mod tests {
             cascade_split_depths: [0.0; 3],
             shadow_distance: 100.0,
             cascade_texel_sizes: [1.0; 4],
+            ..Default::default()
         };
         let gpu = env.to_gpu_data();
         assert_eq!(gpu.counts[0], 1); // 1 point light
