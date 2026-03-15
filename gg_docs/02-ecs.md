@@ -574,6 +574,397 @@ Editor preset buttons: TL (0,0), TC (0.5,0), TR (1,0), CL (0,1), C (0.5,0.5), CR
 
 GUI scale (`Scene::gui_scale()`) multiplies offsets for resolution-independent sizing.
 
+## Render Buffer Pool
+
+**File:** `scene/rendering.rs`
+
+`RenderBufferPool` holds 14 reusable `Vec` buffers used by per-frame rendering and animation hot paths. It is stored on `SceneCore` behind a `Mutex<RenderBufferPool>` and accessed via `self.render_buffers.lock()`.
+
+The pattern is **take-clear-use-return**: each frame the rendering code locks the pool, clears the buffers (retaining their allocations), fills them during rendering/animation work, and releases the lock. This avoids heap allocations in hot paths because the `Vec`s retain their capacity across frames.
+
+The mutex is uncontested (rendering is single-threaded) so lock cost is ~5 ns.
+
+### Buffers
+
+| Buffer | Type | Purpose |
+|--------|------|---------|
+| `sort_keys` | `Vec<RenderSortKey>` | 2D renderable sort keys (sprites, circles, text, tilemaps, UI images) |
+| `sprite_handles` | `Vec<(hecs::Entity, i32, i32)>` | Sprite entity handles + sorting fields for frustum culling input |
+| `circle_keys` | `Vec<RenderSortKey>` | Circle renderable sort keys (kept separate before merge) |
+| `mesh_handles` | `Vec<(hecs::Entity, Mat4)>` | 3D mesh entity handles + world transforms |
+| `skinned_handles` | `Vec<(hecs::Entity, Mat4)>` | Skinned mesh entity handles + world transforms |
+| `skinned_draw_list` | `Vec<(hecs::Entity, Mat4, u32)>` | Skinned mesh draw list (entity + world transform + bone offset) |
+| `shadow_meshes` | `Vec<(hecs::Entity, Mat4, bool)>` | Shadow pass mesh list (entity + world transform + alpha flag) |
+| `shadow_skinned` | `Vec<(hecs::Entity, Mat4)>` | Shadow pass skinned mesh list |
+| `shadow_bounds` | `Vec<Option<Aabb3D>>` | Shadow pass per-mesh bounding volumes |
+| `shadow_skinned_draw` | `Vec<(hecs::Entity, Mat4, u32)>` | Shadow pass skinned draw data |
+| `anim_work` | `Vec<AnimWork>` | Animation work items for extract-process-writeback |
+| `anim_finished` | `Vec<(u64, String, String)>` | Finished animation events (uuid, clip_name, default_clip) |
+| `anim_transitions` | `Vec<(u64, String)>` | Animation controller transitions to apply |
+| `anim_events` | `Vec<(u64, String, String)>` | Animation event callbacks (uuid, event_name, clip_name) |
+
+## Spatial Grid (2D)
+
+**File:** `scene/spatial.rs`, `scene/core.rs`
+
+`SpatialGrid` is a sparse uniform grid for efficient 2D region queries. It divides world space into cells of fixed size using a `HashMap<(i32, i32), Vec<hecs::Entity>>`. Each entity is inserted into every cell its AABB overlaps. Queries return all entities in cells that overlap the query region (may include false positives that the caller can refine with exact tests).
+
+### SceneCore Integration
+
+```rust
+// Rebuild the grid from current entity transforms (uses build_world_transform_cache internally).
+scene.rebuild_spatial_grid(cell_size);
+
+// Query by AABB region:
+let entities = scene.query_entities_in_region(min_vec2, max_vec2);
+
+// Query by radius (AABB pre-filter + distance check):
+let entities = scene.query_entities_in_radius(center_vec2, radius);
+
+// Access the grid directly:
+let grid: Option<&SpatialGrid> = scene.spatial_grid();
+```
+
+`rebuild_spatial_grid()` computes world transforms via `build_world_transform_cache()`, creates `Aabb2D::from_unit_quad_transform()` for each entity, and inserts them into a fresh grid. `query_entities_in_radius()` does a broadphase AABB query on the grid and then filters by squared-distance for exact results.
+
+### SpatialGrid API
+
+| Method | Signature | Description |
+|--------|-----------|-------------|
+| `new` | `(cell_size: f32) -> Self` | Create empty grid (cell_size clamped to >= 0.01) |
+| `insert` | `(entity, &Aabb2D)` | Insert entity into all overlapping cells |
+| `query_region` | `(&Aabb2D) -> Vec<Entity>` | All entities in overlapping cells (may have duplicates) |
+| `query_region_dedup` | `(&Aabb2D) -> Vec<Entity>` | Unique entities in overlapping cells |
+| `cell_count` | `() -> usize` | Number of occupied cells |
+| `entity_count` | `() -> usize` | Number of inserted entities |
+| `cell_size` | `() -> f32` | The cell size in world units |
+
+## Spatial Grid (3D)
+
+**File:** `scene/spatial.rs`, `scene/core.rs`
+
+`SpatialGrid3D` is the 3D counterpart, using cubic cells via `HashMap<(i32, i32, i32), Vec<hecs::Entity>>`. Same sparse hash-map approach, but with three-dimensional cell coordinates.
+
+### SceneCore Integration
+
+```rust
+// Rebuild from current transforms (uses mesh local_bounds when available).
+scene.rebuild_spatial_grid_3d(cell_size);
+
+// Query by AABB region:
+let entities = scene.query_entities_in_region_3d(min_vec3, max_vec3);
+
+// Query by radius (AABB pre-filter + distance check):
+let entities = scene.query_entities_in_radius_3d(center_vec3, radius);
+
+// Access the grid directly:
+let grid: Option<&SpatialGrid3D> = scene.spatial_grid_3d();
+```
+
+`rebuild_spatial_grid_3d()` is mesh-aware: for entities with a `MeshRendererComponent` that has `local_bounds`, it uses `Aabb3D::from_local_bounds()` to compute tighter bounds. Entities without mesh bounds fall back to `Aabb3D::from_unit_cube_transform()`.
+
+### SpatialGrid3D API
+
+| Method | Signature | Description |
+|--------|-----------|-------------|
+| `new` | `(cell_size: f32) -> Self` | Create empty grid (cell_size clamped to >= 0.01) |
+| `insert` | `(entity, &Aabb3D)` | Insert entity into all overlapping cubic cells |
+| `query_region` | `(&Aabb3D) -> Vec<Entity>` | All entities in overlapping cells (may have duplicates) |
+| `query_region_dedup` | `(&Aabb3D) -> Vec<Entity>` | Unique entities in overlapping cells |
+| `cell_count` | `() -> usize` | Number of occupied cells |
+| `entity_count` | `() -> usize` | Number of inserted entities |
+| `cell_size` | `() -> f32` | The cell size in world units |
+
+## Frustum Culling (2D)
+
+**File:** `scene/spatial.rs`
+
+`Frustum2D` performs 2D frustum culling via half-plane tests on the z=0 world plane. It extracts 4 side planes (left, right, bottom, top) from a view-projection matrix using the Gribb/Hartmann method. Since all 2D entities live at z=0, each 3D plane equation `ax + by + cz + d >= 0` reduces to the 2D half-plane `ax + by + d >= 0`.
+
+This is robust for any camera orientation (orthographic, perspective, tilted, orbited) and never degenerates the way ray-plane intersection does.
+
+```rust
+let frustum = Frustum2D::from_view_projection(&vp);
+
+// Test if an entity's AABB is at least partially visible.
+// Returns false if the AABB is fully outside any frustum plane (culled).
+let visible = frustum.contains_aabb(&aabb);
+
+// Compute the AABB of the visible region (useful for spatial grid queries).
+// Intersects adjacent plane boundaries to find the frustum quadrilateral.
+let visible_region: Option<Aabb2D> = frustum.visible_aabb();
+```
+
+The `contains_aabb()` method uses the p-vertex test: for each plane, the corner most in the direction of the plane normal is checked. If that corner is outside, the entire AABB is outside this plane.
+
+### CullingStats
+
+Per-frame frustum culling statistics, stored on `SceneCore` behind a `Mutex` and written by `render_scene()`:
+
+```rust
+struct CullingStats {
+    pub total_cullable: u32,  // Total renderable entities considered
+    pub rendered: u32,        // Entities that passed the frustum test
+    pub culled: u32,          // Entities skipped (off-screen)
+}
+
+let stats = scene.culling_stats();
+```
+
+## Frustum Culling (3D)
+
+**File:** `scene/spatial.rs`
+
+`Frustum3D` extracts all 6 frustum planes (left, right, bottom, top, near, far) from a view-projection matrix using the Gribb/Hartmann method. Uses Vulkan `[0,1]` depth convention: the near plane is `z >= 0` (row2) and the far plane is `w - z >= 0` (row3 - row2). Correct for both standard and reverse-Z projections.
+
+```rust
+let frustum = Frustum3D::from_view_projection(&vp);
+
+// Test AABB (p-vertex test per plane).
+let visible = frustum.contains_aabb(&aabb);
+
+// Test sphere (signed distance per plane, culled if dist < -radius).
+let visible = frustum.contains_sphere(center_vec3, radius);
+```
+
+## 3D Bounding Volumes
+
+**File:** `scene/spatial.rs`
+
+`Aabb3D` is an axis-aligned bounding box in 3D world space. Used by frustum culling, spatial grids, and shadow mapping.
+
+```rust
+struct Aabb3D {
+    pub min: Vec3,
+    pub max: Vec3,
+}
+```
+
+### Construction
+
+| Method | Description |
+|--------|-------------|
+| `new(min, max)` | Direct construction |
+| `from_unit_cube_transform(&Mat4)` | AABB of a unit cube `[-0.5, 0.5]^3` under the given world transform. Uses absolute basis vectors for tight bounds |
+| `from_local_bounds(local_min, local_max, &Mat4)` | AABB of a mesh's local-space min/max after applying a world transform. Computes world-space center and uses absolute basis vectors scaled by local half-extents |
+
+### Query Methods
+
+| Method | Signature | Description |
+|--------|-----------|-------------|
+| `overlaps` | `(&Aabb3D) -> bool` | Test if two AABBs overlap (inclusive on all edges) |
+| `contains_point` | `(Vec3) -> bool` | Test if a point is inside (inclusive) |
+| `is_valid` | `() -> bool` | Both min and max are finite (not NaN or Inf) |
+| `union` | `(&Aabb3D) -> Aabb3D` | Compute the union of two AABBs |
+| `surface_area` | `() -> f32` | Surface area (useful for BVH cost heuristics) |
+
+The 2D counterpart `Aabb2D` provides `from_unit_quad_transform`, `overlaps`, `contains_point`, `is_valid`, and `expand`.
+
+## UI Component System
+
+**Files:** `scene/components.rs`
+
+The UI component system provides screen-space UI elements with interaction support. These components work together with `UIAnchorComponent` for screen-relative positioning.
+
+### UIRectComponent
+
+```rust
+struct UIRectComponent {
+    /// Size in UI points (screen pixels at gui_scale=1).
+    pub size: Vec2,
+    /// Pivot (0,0)=top-left, (0.5,0.5)=center, (1,1)=bottom-right.
+    pub pivot: Vec2,
+    /// If true, blocks mouse events from passing through.
+    pub raycast_target: bool,
+}
+```
+
+When combined with a `UIAnchorComponent`, the entity's scale is automatically adjusted each frame so that it maintains a consistent pixel size on screen regardless of camera zoom / orthographic size. `size` is in UI points (screen pixels at `gui_scale = 1.0`).
+
+Default: `size` (100, 100), `pivot` (0.5, 0.5), `raycast_target` true.
+
+### UIImageComponent
+
+```rust
+struct UIImageComponent {
+    /// Tint color (multiplied with texture).
+    pub color: Vec4,
+    /// Runtime-loaded texture (not serialized).
+    pub texture: Option<Ref<Texture2D>>,
+    /// Asset handle for the texture (serialized).
+    pub texture_handle: Uuid,
+    /// 9-slice border insets in texels [left, right, top, bottom].
+    /// All zero = simple stretch.
+    pub border: [f32; 4],
+    /// Whether to fill the center patch of the 9-slice.
+    pub fill_center: bool,
+    /// Sorting layer for draw ordering.
+    pub sorting_layer: i32,
+    /// Order within the sorting layer.
+    pub order_in_layer: i32,
+}
+```
+
+Renders a colored/textured quad on a UI entity. When `border` is all zeros the image is a simple stretched quad. Non-zero border values define fixed-size corners and stretching edges (9-slice mode, like Unity's Image in Sliced mode).
+
+Default: `color` white, `border` all zeros, `fill_center` true, `sorting_layer` 0.
+
+### UIInteractableComponent
+
+```rust
+struct UIInteractableComponent {
+    pub interactable: bool,
+    pub hover_color: Option<Vec4>,
+    pub press_color: Option<Vec4>,
+    pub disabled_color: Option<Vec4>,
+    pub state: UIInteractionState,  // Runtime-only, not serialized
+}
+```
+
+Adds mouse interaction (hover, press, click) to a UI entity. Requires a `UIRectComponent` with `raycast_target = true` for hit testing. Color overrides are multiplied with the entity's visual color (sprite or UIImage) based on the current interaction state.
+
+`UIInteractionState` enum: `Normal`, `Hovered`, `Pressed`, `Disabled`.
+
+Default: `interactable` true, all colors `None` (no override), state `Normal`.
+
+### UILayoutComponent
+
+```rust
+struct UILayoutComponent {
+    pub direction: UILayoutDirection,
+    pub spacing: f32,
+    pub alignment: UILayoutAlignment,
+    /// Content padding [top, right, bottom, left] in UI points.
+    pub padding: [f32; 4],
+}
+```
+
+Automatically arranges child entities in a vertical or horizontal stack. Requires a `UIRectComponent` (defines the container size) and a `RelationshipComponent` (supplies the list of children). Only children that also have a `UIRectComponent` participate in layout.
+
+`UILayoutDirection` enum: `Vertical` (top-to-bottom), `Horizontal` (left-to-right).
+
+`UILayoutAlignment` enum: `Start`, `Center`, `End` (cross-axis alignment).
+
+Default: `direction` Vertical, `spacing` 0.0, `alignment` Center, `padding` all zeros.
+
+### UIEvent
+
+```rust
+enum UIEvent {
+    HoverEnter(u64),  // Entity UUID
+    HoverExit(u64),
+    Press(u64),
+    Release(u64),
+    Click(u64),
+}
+```
+
+UI interaction events generated by `SceneCore::update_ui_interaction`. The `u64` payload is the UUID of the entity that was interacted with.
+
+## Audio Bus Routing
+
+**Files:** `scene/audio.rs`, `scene/audio_ops.rs`, `scene/core.rs`
+
+The audio system uses per-category kira bus tracks for volume mixing. Each of the 4 categories (SFX, Music, Ambient, Voice) has an independent bus track that is a sub-track of the main mixer.
+
+```text
+Main Mixer (master volume)
++-- SFX Bus       (category volume)
+|   +-- non-spatial sounds
+|   +-- spatial sub-tracks
++-- Music Bus     (category volume)
++-- Ambient Bus   (category volume)
++-- Voice Bus     (category volume)
+```
+
+`AudioCategory` enum: `SFX = 0`, `Music = 1`, `Ambient = 2`, `Voice = 3`. Has `COUNT = 4`, `from_index(usize)`, `label() -> &str`, `from_str_loose(&str)` (case-insensitive, for Lua).
+
+Volume and mute state are stored on `SceneCore` (which is `Send + Sync`):
+- `master_volume: f32` (default 1.0) -- applied via kira's main track
+- `category_volumes: [f32; 4]` (default all 1.0) -- applied via per-category bus tracks
+- `category_muted: [bool; 4]` (default all false) -- kira track pause/resume
+
+### Scene API
+
+| Method | Description |
+|--------|-------------|
+| `set_master_volume(f32)` | Set global master volume (0.0--1.0). Affects all playing sounds in real time |
+| `get_master_volume() -> f32` | Get current master volume |
+| `set_category_volume(category, f32)` | Set volume for a category (0.0--1.0). Affects all playing sounds routed to that bus |
+| `get_category_volume(category) -> f32` | Get current category volume |
+| `mute_category(category)` | Mute a category (pauses the bus track) |
+| `unmute_category(category)` | Unmute a category (resumes the bus track) |
+| `is_category_muted(category) -> bool` | Check if a category is muted |
+
+Non-spatial sounds play on their category's bus track. Spatial tracks are created as children of their category bus. Volume changes affect all currently-playing sounds in real time.
+
+## Voice Pooling
+
+**Files:** `scene/audio.rs`, `scene/audio_ops.rs`, `scene/core.rs`
+
+Voice pooling limits the number of simultaneous sounds to prevent audio overload. Settings are stored on `SceneCore` (Send+Sync) and synced to `AudioEngine` on start and via setter methods.
+
+### Limits
+
+| Setting | Default | Description |
+|---------|---------|-------------|
+| `max_voices` | 32 | Global maximum simultaneous sounds |
+| `max_voices_per_entity` | 4 | Maximum simultaneous sounds per entity |
+
+### Priority-Based Stealing
+
+When the voice limit is reached, the system performs priority-based voice stealing to make room for new sounds. The stealing order is: lowest priority first, then quietest, then oldest.
+
+Each playing sound is tracked via a `VoiceEntry`:
+
+```rust
+struct VoiceEntry {
+    handle: SoundHandle,
+    priority: u8,          // 0-255, higher = more important
+    volume_linear: f32,    // Linear volume at play time
+    birth: u64,            // Monotonic counter (lower = older)
+}
+```
+
+Priority is set per-entity via `AudioSourceComponent::priority` (default 128, range 0--255). Higher-priority sounds are harder to steal.
+
+### Scene API
+
+| Method | Description |
+|--------|-------------|
+| `set_max_voices(usize)` | Set global voice limit (clamped to >= 1) |
+| `get_max_voices() -> usize` | Get current global voice limit |
+| `set_max_voices_per_entity(usize)` | Set per-entity voice limit (clamped to >= 1) |
+| `get_max_voices_per_entity() -> usize` | Get current per-entity voice limit |
+
+## World Transform Cache
+
+**File:** `scene/hierarchy.rs`, `scene/core.rs`
+
+`build_world_transform_cache()` pre-computes world transforms for all entities and stores them in a persistent `RwLock<HashMap<hecs::Entity, Mat4>>` on `SceneCore`. Called before rendering (`render_scene`) and spatial grid rebuilds.
+
+### Snapshot-Based Dirty Detection
+
+The cache uses snapshot-based change detection to avoid recomputation when nothing has changed:
+
+1. **Snapshot storage:** `transform_snapshots: RwLock<HashMap<hecs::Entity, (Mat4, Option<u64>)>>` stores each entity's local transform matrix (`TransformComponent::get_transform()`) and parent UUID at the time the cache was last built.
+
+2. **Change detection:** On each call, the system compares every entity's current local transform and parent UUID against the snapshot. If the entity count matches and no entity has changed, the cache is returned as-is.
+
+3. **Rebuild trigger:** If any entity's local transform differs, any parent UUID changed, or the entity count differs (entity added/removed), a full rebuild is performed.
+
+4. **Zero allocations on non-dirty frames:** When nothing changed, `build_world_transform_cache()` returns immediately after the comparison pass. The `RwLock` cache is borrowed in-place by callers via `self.transform_cache.read()`.
+
+### Parallel Rebuild
+
+For scenes above `PAR_THRESHOLD` (64 entities), root subtrees are processed in parallel via rayon. The implementation uses an Extract-Process-Writeback pattern:
+
+- **Extract:** Copies component data (local transforms, parent UUIDs, children lists) into owned `Vec`s with a flat children buffer (one allocation instead of N `Vec`s).
+- **Process:** Each root entity's subtree is computed in parallel using `par_iter`.
+- **Writeback:** Results merged into the shared cache.
+
+For scenes below the threshold, a sequential recursive walk computes transforms directly.
+
 ## Native Scripting
 
 **File:** `scene/native_script.rs`

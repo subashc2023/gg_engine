@@ -163,11 +163,74 @@ All functions are registered under the global `Engine` table. Scripts call them 
 |----------|-----------|---------|-------|
 | `is_key_down` | `(key_name)` | `bool` | `true` while the key is held |
 | `is_key_pressed` | `(key_name)` | `bool` | `true` only on the first frame the key is pressed |
+| `is_key_released` | `(key_name)` | `bool` | `true` only on the first frame the key is released |
 | `is_mouse_button_down` | `(button_name)` | `bool` | `true` while the button is held |
 | `is_mouse_button_pressed` | `(button_name)` | `bool` | `true` only on the first frame the button is pressed |
 | `get_mouse_position` | `()` | `(x, y)` f64 | Screen-space mouse position |
+| `get_mouse_delta` | `()` | `(dx, dy)` f64 | Raw mouse motion delta this frame |
+| `get_scroll_delta` | `()` | `(dx, dy)` f64 | Scroll wheel delta this frame |
 
 All input functions return `false` / `(0, 0)` during `on_create` and `on_destroy` (input pointer is null).
+
+### Gamepad
+
+| Function | Signature | Returns | Notes |
+|----------|-----------|---------|-------|
+| `is_gamepad_button_down` | `(gamepad_id, button_name)` | `bool` | `true` while the button is held |
+| `is_gamepad_button_pressed` | `(gamepad_id, button_name)` | `bool` | `true` on the first frame the button is pressed |
+| `is_gamepad_button_released` | `(gamepad_id, button_name)` | `bool` | `true` on the first frame the button is released |
+| `get_gamepad_axis` | `(gamepad_id, axis_name)` | `f32` | Analog axis value, dead-zone filtered (see `set_dead_zone`) |
+| `is_gamepad_connected` | `(gamepad_id)` | `bool` | `true` if the gamepad is connected |
+| `set_dead_zone` | `(axis_name, value)` | — | Set global dead zone for a gamepad axis (0.0–0.99). Default 0.15 for sticks, 0.0 for triggers |
+| `get_dead_zone` | `(axis_name)` | `f32` | Get global dead zone for a gamepad axis |
+
+`gamepad_id` is a zero-based integer identifying the gamepad (0 = first gamepad, etc.).
+
+**Button names** (case-sensitive):
+
+| Name(s) | Button |
+|----------|--------|
+| `"South"` / `"A"` / `"Cross"` | Face button bottom |
+| `"East"` / `"B"` / `"Circle"` | Face button right |
+| `"West"` / `"X"` / `"Square"` | Face button left |
+| `"North"` / `"Y"` / `"Triangle"` | Face button top |
+| `"LeftBumper"` / `"L1"` | Left shoulder button |
+| `"RightBumper"` / `"R1"` | Right shoulder button |
+| `"LeftTrigger"` / `"L2"` | Left trigger button |
+| `"RightTrigger"` / `"R2"` | Right trigger button |
+| `"Select"` / `"Back"` / `"Share"` | Select / Back / Share button |
+| `"Start"` / `"Options"` | Start / Options button |
+| `"Guide"` / `"Home"` / `"PS"` | Guide / Home button |
+| `"LeftStick"` / `"L3"` | Left stick click |
+| `"RightStick"` / `"R3"` | Right stick click |
+| `"DPadUp"` | D-pad up |
+| `"DPadDown"` | D-pad down |
+| `"DPadLeft"` | D-pad left |
+| `"DPadRight"` | D-pad right |
+
+**Axis names** (case-sensitive):
+
+| Name | Axis |
+|------|------|
+| `"LeftStickX"` | Left stick horizontal |
+| `"LeftStickY"` | Left stick vertical |
+| `"RightStickX"` | Right stick horizontal |
+| `"RightStickY"` | Right stick vertical |
+| `"LeftTrigger"` | Left trigger analog |
+| `"RightTrigger"` | Right trigger analog |
+
+Unknown button or axis names log a warning and return `false` / `0.0`.
+
+### Input Actions
+
+| Function | Signature | Returns | Notes |
+|----------|-----------|---------|-------|
+| `is_action_pressed` | `(action_name)` | `bool` | `true` while the action is active |
+| `is_action_just_pressed` | `(action_name)` | `bool` | `true` on the first frame the action becomes active |
+| `is_action_just_released` | `(action_name)` | `bool` | `true` on the first frame the action becomes inactive |
+| `get_action_value` | `(action_name)` | `f32` | Continuous axis value (e.g. -1.0..1.0 for analog input) |
+
+Input actions are defined in the `.ggproject` file via the editor's Project panel. Actions map logical names to physical keys/buttons, decoupling game logic from specific input bindings.
 
 ### Entity Queries
 
@@ -227,14 +290,90 @@ These functions access entity environments directly from the Lua-side registry t
 | `set_interval` | `(ms, callback)` | `timer_id` (integer) | Repeating timer, fires `callback()` every `ms` milliseconds |
 | `clear_timer` | `(timer_id)` | — | Cancel a timer by ID |
 
+### Coroutines
+
+| Function | Signature | Returns | Notes |
+|----------|-----------|---------|-------|
+| `start_coroutine` | `(fn)` | — | Start a coroutine that runs `fn`. The function can yield to pause |
+| `wait` | `(seconds)` | — | Pause the coroutine for `seconds` (call inside a coroutine only) |
+| `wait_frame` | `()` | — | Pause the coroutine until the next frame (call inside a coroutine only) |
+| `stop_all_coroutines` | `()` | — | Cancel all coroutines for the calling entity |
+
+`Engine.wait()` and `Engine.wait_frame()` are Lua-side wrappers that call `coroutine.yield()`. You can also use `coroutine.yield()` directly to pause until the next frame. Coroutines are resumed each frame after `on_update`, timers, and before the event bus. Dead or errored coroutines are automatically cleaned up.
+
+```lua
+function on_create()
+    Engine.start_coroutine(function()
+        Engine.log("Starting countdown...")
+        Engine.wait(1.0)       -- pause 1 second
+        Engine.log("1...")
+        Engine.wait(1.0)
+        Engine.log("2...")
+        Engine.wait(1.0)
+        Engine.log("Go!")
+    end)
+end
+```
+
+### Event Bus
+
+| Function | Signature | Returns | Notes |
+|----------|-----------|---------|-------|
+| `emit` | `(event_name, data?)` | — | Broadcast an event to all listeners. `data` is an optional value (typically a table) |
+| `on` | `(event_name, callback)` | — | Register a listener for an event. Tied to the calling entity. One listener per entity per event (last wins) |
+| `off` | `(event_name)` | — | Unregister the calling entity's listener for an event |
+
+Events are dispatched after `on_update` + timers + coroutines (same frame). Cascading emits (events that trigger new emits) are handled via a drain loop with a 100-round safety limit. Listeners are automatically cleaned up when their entity is destroyed.
+
+```lua
+-- listener.lua
+function on_create()
+    Engine.on("player_died", function(data)
+        Engine.log("Player died at position: " .. data.x .. ", " .. data.y)
+    end)
+end
+
+-- player.lua
+function on_update(dt)
+    if health <= 0 then
+        local x, y, z = Engine.get_translation(entity_id)
+        Engine.emit("player_died", { x = x, y = y })
+    end
+end
+```
+
 ### Audio
 
 | Function | Signature | Returns | Notes |
 |----------|-----------|---------|-------|
 | `play_sound` | `(entity_id)` | — | Plays the entity's `AudioSourceComponent` |
 | `stop_sound` | `(entity_id)` | — | Stops audio playback |
+| `pause_sound` | `(entity_id)` | — | Pause audio playback (can be resumed) |
+| `resume_sound` | `(entity_id)` | — | Resume previously paused audio |
 | `set_volume` | `(entity_id, volume)` | — | `volume` is `f32` (0.0 = silent, 1.0 = full) |
 | `set_panning` | `(entity_id, panning)` | — | `panning` is `f32` (-1.0 = left, 0.0 = center, 1.0 = right) |
+| `fade_in` | `(entity_id, duration_secs)` | — | Play (or resume) with fade from silence over `duration_secs` |
+| `fade_out` | `(entity_id, duration_secs)` | — | Fade to silence and stop over `duration_secs` |
+| `fade_to` | `(entity_id, volume, duration_secs)` | — | Fade to target `volume` over `duration_secs` |
+| `set_master_volume` | `(volume)` | — | Set global master volume (0.0–1.0) |
+| `get_master_volume` | `()` | `f32` | Get global master volume |
+| `set_category_volume` | `(category, volume)` | — | Set volume for a category. Category: `"sfx"`, `"music"`, `"ambient"`, `"voice"` (case-insensitive) |
+| `get_category_volume` | `(category)` | `f32` | Get volume for a category |
+| `mute_bus` | `(category)` | — | Mute a sound category bus. Category: `"sfx"`, `"music"`, `"ambient"`, `"voice"` (case-insensitive) |
+| `unmute_bus` | `(category)` | — | Unmute a sound category bus |
+| `is_bus_muted` | `(category)` | `bool` | Check if a sound category bus is muted |
+| `set_hrtf` | `(entity_id, enabled)` | — | Enable/disable HRTF binaural processing on an entity's `AudioSourceComponent` |
+| `get_hrtf` | `(entity_id)` | `bool` | Get whether HRTF is enabled on an entity's audio source |
+
+### Voice Management
+
+| Function | Signature | Returns | Notes |
+|----------|-----------|---------|-------|
+| `set_max_voices` | `(count)` | — | Set global voice limit (default 32). When exceeded, lowest-priority voice is stolen |
+| `get_max_voices` | `()` | `int` | Get global voice limit |
+| `set_max_voices_per_entity` | `(count)` | — | Set per-entity voice limit (default 4) |
+| `get_max_voices_per_entity` | `()` | `int` | Get per-entity voice limit |
+| `get_active_voice_count` | `()` | `int` | Get current number of active voices across all entities |
 
 ### Cursor & Window
 
@@ -252,6 +391,38 @@ These functions access entity environments directly from the Lua-side registry t
 | `set_ui_anchor` | `(entity_id, ax, ay, ox, oy)` | — | Adds/updates UIAnchorComponent. Anchor 0-1, offset in world units |
 | `get_ui_anchor` | `(entity_id)` | `(ax, ay, ox, oy)` or `nil` | Returns anchor and offset values |
 
+### Component Manipulation
+
+| Function | Signature | Returns | Notes |
+|----------|-----------|---------|-------|
+| `add_component` | `(entity_id, name, ...)` | `bool` | Add a component to an entity at runtime. Returns `true` on success. Extra args depend on component type |
+| `remove_component` | `(entity_id, name)` | `bool` | Remove a component from an entity at runtime. Returns `true` if removed |
+
+**Supported component names for `add_component`:**
+
+| Name | Extra Arguments | Notes |
+|------|-----------------|-------|
+| `"SpriteRenderer"` | — | Default white sprite |
+| `"CircleRenderer"` | — | Default white circle |
+| `"Text"` | `text_string` | Creates text component with given string |
+| `"AudioSource"` | — | Default audio source |
+| `"AudioListener"` | — | Default audio listener |
+| `"ParticleEmitter"` | — | Default particle emitter |
+| `"UIAnchor"` | `ax, ay, ox, oy` | Creates UI anchor with anchor and offset values |
+| `"UIRect"` | `width, height` | Creates UI rect with size (default 100x100) |
+| `"UIImage"` | — | Default UI image |
+| `"UIInteractable"` | — | Default UI interactable |
+| `"UILayout"` | — | Default UI layout |
+| `"Camera"` | — | Default camera |
+| `"RigidBody2D"` | — | Default dynamic body |
+| `"BoxCollider2D"` | — | Default 1x1 box collider |
+| `"CircleCollider2D"` | — | Default radius 0.5 circle collider |
+| `"SpriteAnimator"` | — | Default sprite animator |
+
+**Supported component names for `remove_component`:** `"SpriteRenderer"`, `"CircleRenderer"`, `"Text"`, `"AudioSource"`, `"AudioListener"`, `"ParticleEmitter"`, `"UIAnchor"`, `"UIRect"`, `"UIImage"`, `"UIInteractable"`, `"UILayout"`, `"Camera"`, `"SpriteAnimator"`, `"RigidBody2D"`, `"BoxCollider2D"`, `"CircleCollider2D"`.
+
+If the entity already has the component, `add_component` updates it (for types that accept extra args) or is a no-op. Unknown component names log a warning and return `false`.
+
 ### Runtime Settings
 
 | Function | Signature | Returns | Notes |
@@ -266,6 +437,49 @@ These functions access entity environments directly from the Lua-side registry t
 | `set_gui_scale` | `(factor)` | — | Set GUI scale (affects UI anchors) |
 | `quit` | `()` | — | Request application exit |
 | `load_scene` | `(path)` | — | Request scene transition (deferred) |
+
+### Save/Load
+
+| Function | Signature | Returns | Notes |
+|----------|-----------|---------|-------|
+| `save_data` | `(slot_name, table)` | `bool` | Serialize a Lua table to `<project>/saves/<slot>.json`. Returns `true` on success. Uses atomic write |
+| `load_data` | `(slot_name)` | table or `nil` | Load a Lua table from `<project>/saves/<slot>.json`. Returns `nil` if not found or parse error |
+| `delete_save` | `(slot_name)` | `bool` | Delete a save file. Returns `true` if deleted, `false` if not found |
+| `save_exists` | `(slot_name)` | `bool` | Check if a save file exists |
+| `list_saves` | `()` | table | Returns a 1-indexed array of all save slot name strings |
+
+Slot names are sanitized against path traversal — `..`, `/`, and `\` are rejected. Empty slot names are also rejected. The save directory is configured by the editor/player from the project directory.
+
+```lua
+-- Save game state
+Engine.save_data("checkpoint_1", {
+    level = 7,
+    player_name = "Hero",
+    items = {"axe", "bow"},
+    position = { x = 10.5, y = 3.2 },
+})
+
+-- Load game state
+local data = Engine.load_data("checkpoint_1")
+if data then
+    Engine.log("Loaded level " .. data.level)
+end
+
+-- Check and list saves
+if Engine.save_exists("checkpoint_1") then
+    Engine.log("Save exists!")
+end
+local all_saves = Engine.list_saves()  -- e.g. {"checkpoint_1", "autosave"}
+```
+
+### Loading Screen
+
+| Function | Signature | Returns | Notes |
+|----------|-----------|---------|-------|
+| `set_loading_screen_color` | `(r, g, b)` | — | Set the background color shown during scene transitions. RGB values 0.0–1.0. Default is black |
+| `get_loading_screen_color` | `()` | `(r, g, b)` | Get current loading screen color |
+
+Set before calling `load_scene()` for the color to take effect on the next transition. The color is propagated across scene transitions and `Scene::copy()`.
 
 ### Tilemap
 
@@ -293,11 +507,28 @@ Tile IDs support flip flags in the high bits. Combine via bitwise OR: `Engine.se
 
 ### Math Utilities
 
-| Function | Signature | Returns |
-|----------|-----------|---------|
-| `vector_dot` | `(x1, y1, z1, x2, y2, z2)` | `f32` |
-| `vector_cross` | `(x1, y1, z1, x2, y2, z2)` | `(x, y, z)` |
-| `vector_normalize` | `(x, y, z)` | `(x, y, z)` |
+| Function | Signature | Returns | Notes |
+|----------|-----------|---------|-------|
+| `vector_dot` | `(x1, y1, z1, x2, y2, z2)` | `f32` | Dot product of two 3D vectors |
+| `vector_cross` | `(x1, y1, z1, x2, y2, z2)` | `(x, y, z)` | Cross product of two 3D vectors |
+| `vector_normalize` | `(x, y, z)` | `(x, y, z)` | Normalize a 3D vector to unit length |
+| `vector_length` | `(x, y, z)` | `f32` | Length (magnitude) of a 3D vector |
+| `distance` | `(x1, y1, z1, x2, y2, z2)` | `f32` | Euclidean distance between two 3D points |
+| `distance_2d` | `(x1, y1, x2, y2)` | `f32` | Euclidean distance between two 2D points |
+| `lerp` | `(a, b, t)` | `f32` | Linear interpolation between two scalars |
+| `lerp_vec3` | `(x1, y1, z1, x2, y2, z2, t)` | `(x, y, z)` | Component-wise lerp of two 3D vectors |
+| `slerp` | `(x1, y1, z1, w1, x2, y2, z2, w2, t)` | `(x, y, z, w)` | Spherical interpolation between two quaternions |
+| `clamp` | `(value, min, max)` | `f32` | Clamp a value to the range [min, max] |
+| `move_toward` | `(current, target, max_delta)` | `f32` | Move scalar toward target by at most `max_delta` |
+| `move_toward_vec3` | `(x1, y1, z1, x2, y2, z2, max_delta)` | `(x, y, z)` | Move 3D point toward target by at most `max_delta` distance |
+
+### Utility
+
+| Function | Signature | Returns | Notes |
+|----------|-----------|---------|-------|
+| `log` | `(...)` | — | Variadic logging to the engine console at Info level. All arguments are converted to strings and concatenated with tabs |
+| `get_time` | `()` | `f64` | Scene elapsed time in seconds (monotonic) |
+| `delta_time` | `()` | `f64` | Frame delta time in seconds |
 
 ### Debug
 
@@ -307,9 +538,36 @@ Tile IDs support flip flags in the high bits. Combine via bitwise OR: `Engine.se
 | `native_log` | `(text, number)` | Logs text + number |
 | `native_log_vector` | `(x, y, z)` | Logs 3 floats as Vec3 |
 
+## Module System
+
+Scripts can import shared modules using the standard Lua `require()` function:
+
+```lua
+local utils = require("utils.math")
+local result = utils.add(1, 2)
+```
+
+Module names use dot-separated paths: `require("utils.math")` loads `<script_module_path>/utils/math.lua`. The search path is set from the project's `ScriptModulePath` setting.
+
+**Key behaviors:**
+
+- **Cached**: Each module file is loaded and executed at most once. Subsequent `require()` calls return the cached result
+- **Sandboxed**: Modules execute in their own environment. A module returns a value (typically a table of functions) that becomes the cached result
+- **No path traversal**: Module names containing `..`, leading `/` or `\` are rejected with an error
+- **Path validation**: The resolved file path must be within the search directory — attempts to escape are blocked
+- **Return value**: If a module returns `nil`/nothing, `true` is cached as a sentinel so the file is not re-executed
+
+```lua
+-- utils/math.lua (module file)
+local M = {}
+function M.add(a, b) return a + b end
+function M.clamp(val, lo, hi) return math.max(lo, math.min(hi, val)) end
+return M
+```
+
 ## Key Name Reference
 
-Accepted names for `Engine.is_key_down()` and `Engine.is_key_pressed()` (case-sensitive):
+Accepted names for `Engine.is_key_down()`, `Engine.is_key_pressed()`, and `Engine.is_key_released()` (case-sensitive):
 
 | Category | Names |
 |----------|-------|

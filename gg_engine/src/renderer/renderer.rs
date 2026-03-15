@@ -36,7 +36,6 @@ use super::VulkanContext;
 
 use crate::error::{EngineError, EngineResult};
 use crate::profiling::ProfileTimer;
-use crate::scene::{CircleRendererComponent, SpriteRendererComponent, TextComponent};
 
 // ---------------------------------------------------------------------------
 // WireframeMode — editor wireframe visualization
@@ -1868,27 +1867,25 @@ impl Renderer {
         );
     }
 
-    /// Draw a sprite (entity with a [`SpriteRendererComponent`]) using a
-    /// pre-built transform matrix. Writes the entity ID to the picking
-    /// attachment so it can be read back for mouse picking.
+    /// Draw a sprite using a pre-built transform matrix. Writes the entity ID
+    /// to the picking attachment so it can be read back for mouse picking.
     ///
-    /// If the sprite has a texture, it is sampled and multiplied by the
-    /// sprite's color (acting as a tint). The `tiling_factor` controls
-    /// texture coordinate scaling. If no texture is set, the white default
-    /// texture is used (flat-colored quad).
-    pub fn draw_sprite(&self, transform: &Mat4, sprite: &SpriteRendererComponent, entity_id: i32) {
-        let tex_index = sprite
-            .texture
-            .as_ref()
+    /// If a texture is provided, it is sampled and multiplied by the color
+    /// (acting as a tint). The `tiling_factor` controls texture coordinate
+    /// scaling. If no texture is given, the white default texture is used
+    /// (flat-colored quad).
+    pub fn draw_sprite(
+        &self,
+        transform: &Mat4,
+        texture: Option<&Texture2D>,
+        color: Vec4,
+        tiling_factor: f32,
+        entity_id: i32,
+    ) {
+        let tex_index = texture
             .map(|t| t.bindless_index() as f32)
             .unwrap_or(0.0); // 0 = white texture
-        self.push_sprite_instance(
-            transform,
-            sprite.color,
-            tex_index,
-            sprite.tiling_factor,
-            entity_id,
-        );
+        self.push_sprite_instance(transform, color, tex_index, tiling_factor, entity_id);
     }
 
     // -- Axis-aligned quads (no rotation) ------------------------------------
@@ -2002,22 +1999,6 @@ impl Renderer {
         self.push_circle_to_batch(transform, color, thickness, fade, entity_id);
     }
 
-    /// Draw a [`CircleRendererComponent`] using a pre-built transform matrix.
-    /// Writes the entity ID to the picking attachment.
-    pub fn draw_circle_component(
-        &self,
-        transform: &Mat4,
-        circle: &CircleRendererComponent,
-        entity_id: i32,
-    ) {
-        self.push_circle_to_batch(
-            transform,
-            circle.color,
-            circle.thickness,
-            circle.fade,
-            entity_id,
-        );
-    }
 
     // -- Line drawing ----------------------------------------------------------
 
@@ -2307,21 +2288,6 @@ impl Renderer {
         }
     }
 
-    /// Draw a [`TextComponent`] using a pre-built transform matrix.
-    pub fn draw_text_component(&self, transform: &Mat4, text: &TextComponent, entity_id: i32) {
-        if let Some(font) = &text.font {
-            self.draw_text_string(
-                &text.text,
-                transform,
-                font,
-                text.font_size,
-                text.color,
-                text.line_spacing,
-                text.kerning,
-                entity_id,
-            );
-        }
-    }
 
     // -- GPU synchronization ---------------------------------------------------
 

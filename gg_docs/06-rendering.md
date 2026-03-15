@@ -684,3 +684,207 @@ Shadow quality is stored on `Renderer` (`shadow_quality: i32`), default 3 (Ultra
 - `shadow.glsl` — vertex-only depth pass, push constant model matrix
 - `shadow_alpha.glsl` — depth pass with alpha testing for transparent/masked geometry
 - `mesh3d.glsl` — reads shadow map at descriptor set 4, applies quality-tiered PCF
+
+## Post-Processing
+
+**File:** `renderer/postprocess.rs`
+
+`PostProcessPipeline` provides bloom, tone mapping, color grading, and contact shadows. Created lazily when the scene framebuffer is available. Operates on the offscreen framebuffer's color output and writes to an internal R16G16B16A16_SFLOAT output image registered as an egui user texture for viewport display.
+
+### Bloom
+
+4-level mip chain (each half the previous resolution):
+
+1. **Downsample** — 4-tap bilinear sampling with brightness threshold (first pass only). `bloom_downsample.glsl`
+2. **Upsample** — 3x3 tent filter with additive blending. `bloom_upsample.glsl`
+
+Settings: `bloom_enabled`, `bloom_threshold`, `bloom_intensity`, `bloom_filter_radius`.
+
+### Tone Mapping & Color Grading
+
+Final composite pass (`postprocess_composite.glsl`) applies:
+
+- **Tone mapping**: `TonemappingMode` enum — `None` (pass-through), `ACES` (filmic), `Reinhard`
+- **Color grading**: `exposure`, `contrast`, `saturation`
+
+All intermediate images use R16G16B16A16_SFLOAT to preserve HDR range through the chain.
+
+### Contact Shadows
+
+**Files:** `renderer/postprocess.rs`, `contact_shadows.glsl`, `bilateral_blur.glsl`
+
+Screen-space ray march from the depth buffer toward the directional light, producing a per-pixel shadow factor. This catches small-scale contact occlusion that cascaded shadow maps miss at their resolution limit.
+
+**Pipeline:**
+
+1. **Contact shadow pass** — fullscreen triangle rendering via `contact_shadows.glsl`. Reconstructs world-space position from depth, marches a ray toward the light in clip space (perspective-correct), and tests for occlusion against the depth buffer using NDC-space comparisons with ULP-scaled epsilon and thickness thresholds
+2. **Bilateral blur** — two-pass edge-preserving blur (horizontal then vertical) via `bilateral_blur.glsl`. Respects depth discontinuities to avoid shadow bleeding across edges. Skipped in debug modes
+3. **Composite** — the blurred shadow factor is sampled in `postprocess_composite.glsl` and multiplied into the final color (`apply_shadow` push constant flag)
+
+**Settings on `PostProcessPipeline`:**
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `contact_shadows_enabled` | `bool` | `false` | Master toggle |
+| `contact_shadows_max_distance` | `f32` | `0.5` | World-space ray march length |
+| `contact_shadows_thickness` | `f32` | `0.15` | World-space occluder thickness for depth comparison |
+| `contact_shadows_intensity` | `f32` | `0.6` | Shadow strength (0 = no shadow, 1 = full black) |
+| `contact_shadows_step_count` | `i32` | `24` | Number of ray march steps |
+| `contact_shadows_debug` | `i32` | `0` | Debug visualization mode (0=normal, 1=linear depth, 2=raw shadow, 3=precision) |
+
+**Push constants** (`ContactShadowPushConstants`, 176 bytes): inverse VP matrix, VP matrix, light direction, max_distance, thickness, intensity, step_count, near/far planes, debug_mode.
+
+**Activation conditions** (`contact_shadows_active()`): enabled flag set, directional light present (`cs_has_light`), contact shadow pipeline and intermediate images allocated, depth and normal descriptor sets available.
+
+**Shader details** (`contact_shadows.glsl`):
+- Fullscreen triangle vertex shader (no vertex buffer)
+- Fragment shader inputs: depth texture (set 0) and normal texture (set 1)
+- Interleaved gradient noise (Jimenez 2014) for per-pixel jitter to break up stairstepping
+- Linearizes reverse-Z depth for world-space reconstruction
+- Normal-aware fade: attenuates shadows on surfaces facing away from the light
+- Precision fade: smoothly disables shadows where float32 depth precision is insufficient (based on ULP headroom analysis)
+- Sky pixels (NDC depth <= 0.0001) and 2D sprites (normal alpha < 0.5) are fully lit early-out
+
+## Compressed Textures
+
+**File:** `renderer/texture.rs`
+
+### ImageFormat
+
+`ImageFormat` enumerates all supported pixel formats, including block-compressed variants:
+
+| Variant | Vulkan Format | Block | Bytes/Block | Description |
+|---------|--------------|-------|-------------|-------------|
+| `Rgba8Srgb` | R8G8B8A8_SRGB | 1x1 | 4 | Standard color textures (default) |
+| `Rgba8Unorm` | R8G8B8A8_UNORM | 1x1 | 4 | Data textures, MSDF atlases |
+| `Bc1Srgb` | BC1_RGBA_SRGB_BLOCK | 4x4 | 8 | RGB + 1-bit alpha (DXT1) |
+| `Bc3Srgb` | BC3_SRGB_BLOCK | 4x4 | 16 | RGB + full alpha (DXT5) |
+| `Bc5Unorm` | BC5_UNORM_BLOCK | 4x4 | 16 | Two-channel (normal maps) |
+| `Bc7Srgb` | BC7_SRGB_BLOCK | 4x4 | 16 | High quality RGBA |
+| `Astc4x4Srgb` | ASTC_4X4_SRGB_BLOCK | 4x4 | 16 | ASTC 4x4 |
+| `Astc6x6Srgb` | ASTC_6X6_SRGB_BLOCK | 6x6 | 16 | ASTC 6x6 |
+| `Astc8x8Srgb` | ASTC_8X8_SRGB_BLOCK | 8x8 | 16 | ASTC 8x8 |
+| `Rgba16Float` | R16G16B16A16_SFLOAT | 1x1 | 8 | HDR cubemaps, IBL textures |
+| `Rg16Float` | R16G16_SFLOAT | 1x1 | 4 | BRDF integration LUT |
+
+### Helper Methods
+
+| Method | Return | Description |
+|--------|--------|-------------|
+| `is_compressed()` | `bool` | `true` for BC and ASTC formats |
+| `block_dimensions()` | `(u32, u32)` | Block width/height (1x1 for uncompressed) |
+| `block_bytes()` | `u32` | Bytes per block (or per pixel for uncompressed) |
+| `data_size(width, height)` | `u64` | Expected data size in bytes, accounting for block alignment via `div_ceil` |
+
+### Texture2D::from_compressed()
+
+```rust
+pub(crate) fn from_compressed(
+    res: &RendererResources<'_>,
+    allocator: &Arc<Mutex<GpuAllocator>>,
+    width: u32,
+    height: u32,
+    data: &[u8],
+    format: ImageFormat,
+    spec: &TextureSpecification,
+) -> EngineResult<Self>
+```
+
+Uploads pre-compressed texture data to the GPU. Key behaviors:
+
+- **Validates format**: returns an error if `format.is_compressed()` is `false`
+- **Validates data size**: compares `data.len()` against `format.data_size(width, height)` and rejects mismatches
+- **No mipmap generation**: compressed formats cannot be blitted, so images are created with `mip_levels = 1`. Pre-computed mipmaps must be included in the source data
+- **No TRANSFER_SRC**: image usage is `TRANSFER_DST | SAMPLED` only (no blit source capability needed)
+- **Device-local memory**: allocated via `GpuAllocator` with `GpuOnly` location, staging buffer upload
+
+Currently `pub(crate)` (reserved for future compressed texture loading from asset pipeline).
+
+### Runtime Format Support Check
+
+```rust
+// On VulkanContext:
+pub fn is_format_supported(
+    &self,
+    instance: &ash::Instance,
+    format: vk::Format,
+    features: vk::FormatFeatureFlags,
+) -> bool
+```
+
+Queries `vkGetPhysicalDeviceFormatProperties` for the physical device and checks whether the requested `features` are present in `optimal_tiling_features`. Use this to verify compressed format support before attempting to create textures (e.g., ASTC may not be supported on desktop GPUs).
+
+## GPU Profiling
+
+**File:** `renderer/gpu_profiling.rs`
+
+`GpuProfiler` measures GPU-side timing using Vulkan timestamp queries. It records sequential timestamp markers at key points in the frame's command buffer and reports the time between consecutive markers with 1-frame latency.
+
+### Architecture
+
+- **Query pools**: one `vk::QueryPool` per frame-in-flight (`MAX_FRAMES_IN_FLIGHT = 2`), each with capacity for `MAX_TIMESTAMPS = 16` sequential markers
+- **Pipeline stage**: all timestamps recorded at `BOTTOM_OF_PIPE` to capture full GPU work
+- **Timestamp period**: `VulkanContext::timestamp_period_ns()` provides the device-specific nanosecond-per-tick conversion factor
+- **1-frame latency**: results are read back from the previous use of each frame slot (after `wait_for_fences`), so displayed timing is always one frame behind
+
+### GpuProfiler Struct
+
+```rust
+pub struct GpuProfiler {
+    query_pools: [vk::QueryPool; MAX_FRAMES_IN_FLIGHT],
+    timestamp_period_ns: f32,
+    query_counts: [u32; MAX_FRAMES_IN_FLIGHT],
+    query_names: [Vec<&'static str>; MAX_FRAMES_IN_FLIGHT],
+    results: Vec<GpuTimingResult>,
+    total_frame_ms: f32,
+    enabled: bool,
+}
+```
+
+### API
+
+| Method | Description |
+|--------|-------------|
+| `new(device, timestamp_period_ns)` | Creates query pools (one per frame-in-flight) |
+| `set_enabled(bool)` | Enable/disable profiling. Clears results when disabled |
+| `is_enabled()` | Query enabled state |
+| `begin_frame(cmd_buf, current_frame)` | Reads back results from previous frame slot (`get_query_pool_results` with `TYPE_64 \| WAIT`), resets query pool via `cmd_reset_query_pool` |
+| `timestamp(cmd_buf, current_frame, name)` | Records a timestamp marker. The `name` labels the region between this marker and the next |
+| `results()` | Returns `&[GpuTimingResult]` — timing between consecutive markers |
+| `total_frame_ms()` | Total GPU frame time (first marker to last) |
+
+### GpuTimingResult
+
+```rust
+pub struct GpuTimingResult {
+    pub name: &'static str,
+    pub time_ms: f32,
+}
+```
+
+Time deltas are computed from consecutive 64-bit timestamps: `delta_ticks * timestamp_period_ns / 1,000,000`.
+
+### Frame Markers
+
+The engine records timestamps at these points in `application.rs` (after `begin_frame`):
+
+```
+Particles → Shadows → Scene → PostProcess → Egui → End
+```
+
+Each result measures the GPU time for the section whose name appears at the *start* of the region. For example, "Particles" measures the GPU time between the Particles marker and the Shadows marker.
+
+### Renderer Integration
+
+- `Renderer` holds an `Option<GpuProfiler>`, initialized via `init_gpu_profiler(timestamp_period_ns)`
+- Accessed via `renderer.gpu_profiler()` / `renderer.gpu_profiler_mut()`
+- Query pools are destroyed on drop (via `Drop` impl)
+- Created lazily — not allocated if GPU profiling is never enabled
+
+### Editor Integration
+
+The editor Settings panel provides a "GPU Timestamps" checkbox (`GpuTimingSnapshot` struct). When enabled:
+
+1. `gpu_timing.enabled` is synced to the profiler each frame via `profiler.set_enabled()`
+2. Results are copied from the profiler into `GpuTimingSnapshot` for UI display
+3. The panel shows total GPU frame time and per-section breakdown (e.g., "Shadows: 0.142 ms")

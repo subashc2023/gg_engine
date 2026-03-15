@@ -315,6 +315,7 @@ Built with `egui::TopBottomPanel::top` + `egui::MenuBar::new().ui()`.
 | Save | Ctrl+S | Save to current path (or Save As if no path set) |
 | Save As... | Ctrl+Shift+S | Save to new path via native dialog |
 | Open Project... | -- | Open `.ggproject` file via native dialog |
+| Build Project... | Ctrl+Shift+B | Open build modal (enabled only when a project is loaded) |
 
 #### Edit Menu
 
@@ -330,7 +331,12 @@ Built with `egui::TopBottomPanel::top` + `egui::MenuBar::new().ui()`.
 
 - **Show Physics Colliders** -- toggle collider visualization overlay
 - **Game Viewport** -- toggle the game camera preview panel
-- **Reset Layout** -- restore the default dock panel layout
+- **Post-Processing** -- toggle bloom, tone mapping, and color grading on the editor viewport
+- **Camera Bookmarks** -- submenu for recalling/clearing camera bookmark slots (see [Camera Bookmarks](#camera-bookmarks))
+- **Layouts** -- submenu for saving/loading/deleting dock layout presets (see [Layout Presets](#layout-presets))
+  - **Save Current Layout...** -- opens a naming dialog to save the current layout
+  - Saved layouts listed with load (click name) and delete ("X") buttons
+  - **Reset to Default** -- restore the default dock panel layout
 
 #### Script Menu
 
@@ -375,29 +381,102 @@ When a project is loaded, Ctrl+N opens a modal dialog:
 
 **File:** `gg_editor/src/undo.rs`
 
-Snapshot-based undo/redo using YAML scene serialization.
+Snapshot-based undo/redo using JSON scene serialization (~5-10x faster than YAML).
+
+### Snapshot Types
+
+`UndoSnapshot` enum:
+
+| Variant | Data | When Used |
+|---------|------|-----------|
+| `FullScene(String)` | Entire scene serialized as JSON | Structural changes: create/delete entity, reparent, reorder, multi-entity ops |
+| `Entity { uuid, json }` | Single entity serialized as JSON | Property edits on one entity (much smaller and faster) |
+
+Each entry is wrapped in `UndoEntry { description: String, snapshot: UndoSnapshot }` with a human-readable description.
+
+### Undo Actions
+
+`UndoAction` enum returned by `undo()`/`redo()`:
+
+| Variant | Effect |
+|---------|--------|
+| `SceneRestored(Scene)` | Entire scene was replaced -- caller swaps to the returned scene |
+| `EntityRestored(uuid)` | Single entity was updated in-place -- caller refreshes handles |
 
 ### Design
 
-- Each undo entry is a complete YAML string snapshot of the scene state
-- Uses `VecDeque<String>` for the undo stack and `Vec<String>` for the redo stack
+- Uses `VecDeque<UndoEntry>` for both undo and redo stacks
 - **100-entry limit** per stack (oldest entries dropped from the front)
 - Redo stack is **cleared on any new edit**
+
+### Three Recording Patterns
+
+#### 1. Discrete: `record(scene, desc)`
+
+Full-scene JSON snapshot for one-shot structural operations (create entity, delete entity, add/remove component). Captures the current state and pushes it to the undo stack immediately. Clears any pre-frame snapshot to prevent double-recording.
+
+#### 2. Gesture: `begin_edit(scene, desc)` / `end_edit()`
+
+Coalesced continuous edits (drag values, gizmo transforms, tilemap painting, text input). Captures a full-scene "before" snapshot when the gesture starts. No-op if already inside a gesture. `end_edit()` pushes the "before" snapshot to the undo stack. `cancel_edit()` discards without pushing (used when stopping play mode).
+
+#### 3. Pre-frame Entity: `capture_pre_frame_entity()` + `push_pre_frame()` or `begin_edit_from_pre_frame()`
+
+Captures a single entity's state as JSON before any modifications in the current frame. This avoids serializing the entire scene for property edits, providing ~100x speedup on large scenes.
+
+- `capture_pre_frame_entity(scene, entity)` -- serializes the selected entity once per frame before any property widgets run
+- `push_pre_frame(desc)` -- pushes the pre-captured snapshot as a discrete undo entry (for checkbox toggles, combobox selections)
+- `begin_edit_from_pre_frame(desc)` -- starts a continuous gesture using the pre-captured snapshot (for drag values, text input)
 
 ### API
 
 | Method | Description |
 |--------|-------------|
-| `begin_edit(scene)` | Capture a "before" snapshot for a continuous gesture (drag, gizmo, text edit). No-op if already inside a gesture. |
+| `record(scene, desc)` | Capture and push a full-scene snapshot immediately |
+| `begin_edit(scene, desc)` | Capture a full-scene "before" snapshot for a continuous gesture. No-op if already inside a gesture |
 | `end_edit()` | End the gesture, push the "before" snapshot to the undo stack |
-| `record(scene)` | Capture and push an immediate snapshot (discrete edits like add/remove component) |
-| `undo(current_scene)` | Pop undo stack, push current state to redo, return restored scene |
-| `redo(current_scene)` | Pop redo stack, push current state to undo, return restored scene |
-| `clear()` | Clear both stacks and any pending gesture |
+| `cancel_edit()` | Cancel an in-progress gesture without pushing to the stack |
+| `capture_pre_frame_entity(scene, entity)` | Pre-capture a single entity's JSON for potential undo recording |
+| `capture_pre_frame(scene)` | Pre-capture the full scene for potential undo recording |
+| `push_pre_frame(desc)` | Push the pre-captured snapshot as a discrete undo entry |
+| `begin_edit_from_pre_frame(desc)` | Start a continuous gesture using the pre-captured snapshot |
+| `undo(current_scene)` | Pop undo stack, push current state to redo, return `UndoAction` |
+| `redo(current_scene)` | Pop redo stack, push current state to undo, return `UndoAction` |
+| `clear()` | Clear both stacks, pending gesture, and pre-frame snapshot |
+| `undo_description()` / `redo_description()` | Peek at the description of the next operation |
 
-### Gesture Coalescing
+### Entity Restore
 
-Continuous edits (drag values, gizmo transforms) are bracketed with `begin_edit()` / `end_edit()` so they produce a single undo step. The Properties panel detects drag interactions each frame: if `dragged_id` is `Some` and no edit is in progress, it calls `begin_edit`; when the drag ends, it calls `end_edit`.
+`SceneSerializer::restore_entity_from_json(scene, uuid, json)` handles in-place entity restoration:
+
+1. Finds the entity by UUID
+2. Calls `strip_serializable_components()` to remove all optional component types (preserves `IdComponent`, `TagComponent`, `TransformComponent`, `RelationshipComponent`)
+3. Re-applies all components from the JSON snapshot via `apply_entity_data()`
+4. Restores relationship (parent/children) if present in the snapshot
+
+### Properties Panel Integration
+
+The Properties panel (`panels/properties/mod.rs`) uses the pre-frame pattern for efficient undo:
+
+1. At the start of each frame, if no gesture is in progress, calls `capture_pre_frame_entity()` for the selected entity
+2. Temporarily resets `scene_dirty` to `false` to detect whether any property changed this frame
+3. Tracks whether any text field has keyboard focus (`text_field_focused`)
+4. After all property widgets run, detects the type of change:
+   - If a drag or text focus started: `begin_edit_from_pre_frame("Modify properties")`
+   - If a drag or text focus ended: `end_edit()`
+   - If a discrete change occurred (checkbox, combobox): `push_pre_frame("Change properties")`
+
+### Animation Timeline Undo
+
+The animation timeline (`panels/animation_timeline.rs`) records undo for all clip operations:
+- Discrete: add/remove/duplicate clip, toggle looping, set clip frame, set default clip
+- Gesture: change clip FPS, drag clip boundaries, rename clip
+
+### Edit Menu
+
+The Edit menu displays contextual labels:
+- "Undo: {description}" when undo is available (e.g., "Undo: Move entity")
+- "Redo: {description}" when redo is available
+- Grayed out when the respective stack is empty
 
 ### Keyboard Shortcuts
 
@@ -673,6 +752,10 @@ Persisted as `editor_settings.yaml` in the platform-specific config directory:
 | `window_state` | `WindowState` | Window width, height, position (x, y), maximized flag |
 | `dock_layout` | `Option<DockState<Tab>>` | Dock panel layout (restored on startup) |
 | `theme` | `EditorTheme` | UI color theme |
+| `msaa_samples` | `MsaaSamples` | MSAA sample count |
+| `show_camera_bounds` | `bool` | Camera bounds visualization (default: true) |
+| `camera_bookmarks` | `[Option<CameraState>; 10]` | Camera bookmark slots (see [Camera Bookmarks](#camera-bookmarks)) |
+| `saved_layouts` | `Vec<NamedLayout>` | Saved dock layout presets (see [Layout Presets](#layout-presets)) |
 
 ### Window State Persistence
 
@@ -693,6 +776,164 @@ The editor supports `.ggproject` files for managing game projects:
 - Project added to recent projects list on load
 
 See `gg_engine/src/project.rs` for the `Project` and `ProjectConfig` types.
+
+## Build System
+
+**File:** `gg_editor/src/build.rs`
+
+The editor can produce distributable builds of a game project.
+
+### Triggering a Build
+
+- **File > Build Project...** (Ctrl+Shift+B)
+- Only enabled when a project is loaded
+- If the current scene has unsaved changes, it is saved automatically before the modal opens
+
+### Build Modal (`BuildModal`)
+
+A centered modal dialog with configuration form:
+
+- **Output Directory**: text field + "Browse..." folder picker
+- **Build Name**: text field (used as the executable name, defaults to the project name)
+- **Strip unused assets**: checkbox (default: on) -- only includes assets referenced by scenes and scripts
+- **Build** button (enabled when output directory and build name are non-empty)
+- **Cancel** button or Escape to close
+- Background dimmed with semi-transparent overlay
+
+### Build Execution (`execute_build`)
+
+1. Creates the output directory
+2. **Player binary discovery** (`find_player_binary`):
+   - Searches `target/dist/`, `target/release/`, `target/debug/` (in that order) for the `gg_player` binary
+   - Falls back to the directory next to the editor executable (for distributed builds)
+   - Platform-appropriate name: `gg_player.exe` on Windows, `gg_player` elsewhere
+   - Error if not found (suggests `cargo build --release -p gg_player`)
+3. Copies the player binary to the output directory, renamed to `{build_name}{.exe}`
+4. Copies the `.ggproject` file to the output directory
+5. Copies the assets directory (behavior depends on strip setting)
+
+### Asset Stripping
+
+When "Strip unused assets" is enabled, the build calls `cook_assets()` (`gg_engine/src/asset/cooking.rs`):
+
+- Scans all scene (`.ggscene`) and prefab (`.ggprefab`) YAML files for external references:
+  - **Handle-based**: `TextureHandle`, `AudioHandle`, `AlbedoTexture`, `NormalTexture`, `MeshAsset`, `EnvironmentMap` (u64 values)
+  - **Path-based**: `ScriptPath`, `FontPath` (string values)
+- Follows Lua `require()` chains transitively (resolves module paths via the script module search path)
+- Follows `Engine.load_scene()` calls transitively (discovers additional scene files)
+- Fixpoint loop until no new references are found
+- Produces a `BuildManifest` containing:
+  - `entries: Vec<ManifestEntry>` -- files to include (relative path, size, category)
+  - `excluded: Vec<ManifestEntry>` -- files that exist on disk but are not referenced
+  - `warnings: Vec<String>` -- issues found during analysis
+  - `total_included_bytes` / `total_excluded_bytes` -- size totals
+
+`FileCategory` classifies files: Scene, Texture, Audio, Mesh, Material, Prefab, Script, Font, Registry, Other.
+
+Only the manifest entries are copied to the destination assets directory (`copy_from_manifest`).
+
+### Without Stripping
+
+When "Strip unused assets" is off, the entire assets directory is copied recursively (`copy_dir_recursive`). Autosave files (containing `.autosave.` in the name) are skipped. No manifest is generated.
+
+### Result Dialog
+
+After the build completes, the modal displays:
+
+**On success:**
+- Green "Build successful!" label with total size
+- Output path
+- If asset stripping was used:
+  - **Asset Summary** grid showing size breakdown by category (sorted largest first)
+  - Files included/excluded counts with space saved
+  - Warnings (if any, shown in yellow)
+- **Open Folder** button (platform-native: `explorer` on Windows, `open` on macOS, `xdg-open` on Linux)
+- **Close** button
+
+**On error:**
+- Red "Build failed:" label with error message
+- **Close** button
+
+## Camera Bookmarks
+
+10 slots for saving and recalling editor camera positions.
+
+### Keyboard Shortcuts
+
+- **Ctrl+0 through Ctrl+9** -- save the current camera state to the corresponding slot
+- **0 through 9** (without modifiers) -- recall the camera state from the corresponding slot
+- Only active when: no text field has keyboard focus, the camera is not in fly mode, and the editor is not in Play mode
+
+### Stored Data
+
+Each bookmark stores a `CameraState`:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `focal_point` | `[f32; 3]` | Camera orbit center |
+| `distance` | `f32` | Distance from focal point |
+| `yaw` | `f32` | Horizontal rotation |
+| `pitch` | `f32` | Vertical rotation |
+
+### View Menu Integration
+
+**View > Camera Bookmarks** submenu:
+
+- Lists all 10 slots (0-9) with their state:
+  - Occupied slots shown as "Slot N" (clickable to recall)
+  - Empty slots shown as "Slot N (empty)" (grayed out)
+  - "X" button next to occupied slots to clear the bookmark
+  - Hover tooltip shows the recall and save keyboard shortcuts
+- **Save Current View...** button at the bottom -- saves to the first empty slot, or slot 0 if all are occupied
+
+### Feedback
+
+A transient status overlay appears at the bottom center of the screen:
+- "Camera bookmark N saved" (2.0 second duration)
+- "Camera bookmark N recalled" (1.5 second duration)
+
+The overlay fades out based on remaining time.
+
+### Persistence
+
+Camera bookmarks are stored as `camera_bookmarks: [Option<CameraState>; 10]` in `editor_settings.yaml`. Saved immediately on save/clear operations.
+
+## Layout Presets
+
+Up to 20 named dock layout presets for saving and restoring panel arrangements.
+
+### View Menu Integration
+
+**View > Layouts** submenu:
+
+- **Save Current Layout...** -- opens a naming dialog (`Save Layout` modal window)
+  - Text field for layout name (auto-focused, Enter to confirm)
+  - Save / Cancel buttons
+  - If a layout with the same name exists, it is overwritten
+- **Saved layouts** -- listed with:
+  - Click the name to load the layout
+  - "X" button to delete the layout
+- **Reset to Default** -- restores the built-in default dock layout
+
+### Data Model
+
+```
+NamedLayout {
+    name: String,
+    dock_state: egui_dock::DockState<Tab>,
+}
+```
+
+`MAX_SAVED_LAYOUTS = 20` -- oldest entries are truncated if the limit is exceeded.
+
+### Feedback
+
+Loading a layout shows a transient status overlay: "Layout '{name}' loaded" (2.0 second duration).
+Saving a layout shows: "Layout '{name}' saved" (2.0 second duration).
+
+### Persistence
+
+Saved layouts are stored as `saved_layouts: Vec<NamedLayout>` in `editor_settings.yaml`. Changes are persisted immediately via `EditorSettings::save_layout()` and `EditorSettings::delete_layout()`.
 
 ## Default Dock Layout
 

@@ -1685,10 +1685,10 @@ impl Scene {
                                     handle.id() as i32,
                                 );
                             } else {
-                                renderer.draw_sprite(&world_transform, &sprite, handle.id() as i32);
+                                renderer.draw_sprite(&world_transform, sprite.texture.as_deref(), sprite.color, sprite.tiling_factor, handle.id() as i32);
                             }
                         } else {
-                            renderer.draw_sprite(&world_transform, &sprite, handle.id() as i32);
+                            renderer.draw_sprite(&world_transform, sprite.texture.as_deref(), sprite.color, sprite.tiling_factor, handle.id() as i32);
                         }
                     }
                 }
@@ -1697,7 +1697,7 @@ impl Scene {
                     let Ok(circle) = self.world.get::<&CircleRendererComponent>(handle) else {
                         continue;
                     };
-                    renderer.draw_circle_component(&world_transform, &circle, handle.id() as i32);
+                    renderer.draw_circle(&world_transform, circle.color, circle.thickness, circle.fade, handle.id() as i32);
                 }
                 2 => {
                     // Text — apply GUI scale to font size for UI-anchored entities.
@@ -1775,7 +1775,18 @@ impl Scene {
                             );
                         }
                     } else {
-                        renderer.draw_text_component(&world_transform, &text, handle.id() as i32);
+                        if let Some(font) = &text.font {
+                            renderer.draw_text_string(
+                                &text.text,
+                                &world_transform,
+                                font,
+                                text.font_size,
+                                text.color,
+                                text.line_spacing,
+                                text.kerning,
+                                handle.id() as i32,
+                            );
+                        }
                     }
                 }
                 3 => {
