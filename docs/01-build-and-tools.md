@@ -224,7 +224,7 @@ Shaders can be recompiled at runtime without restarting the application. In the 
 renderer.reload_shaders(shader_dir)?;
 ```
 
-The hot-reload system (`renderer/shader_compiler.rs`) replicates the `build.rs` logic but returns `Result` for graceful error handling. All shaders are compiled first — if any fail, old pipelines remain intact. See `gg_docs/06-rendering.md` for implementation details.
+The hot-reload system (`renderer/shader_compiler.rs`) replicates the `build.rs` logic but returns `Result` for graceful error handling. All shaders are compiled first — if any fail, old pipelines remain intact. See `docs/06-rendering.md` for implementation details.
 
 ### Shader Files
 

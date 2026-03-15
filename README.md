@@ -2,7 +2,7 @@
 
 A 2D/3D game engine written in Rust with a Vulkan rendering backend. Build scenes in a visual editor, script gameplay in Lua, and ship standalone builds.
 
-![GGEngine Demo](gg_docs/public/demo3d.png)
+![GGEngine Demo](docs/public/demo3d.png)
 
 ---
 
@@ -180,7 +180,7 @@ The `fields` table is editable per-entity in the Properties panel -- override va
 | **Math** | `distance`, `distance_2d`, `lerp`, `lerp_vec3`, `slerp`, `clamp`, `move_toward`, `move_toward_vec3`, `vector_length`, `vector_dot`, `vector_cross`, `vector_normalize` |
 | **Cross-Entity** | `get_script_field`, `set_script_field` |
 
-See [`gg_docs/07-scripting.md`](gg_docs/07-scripting.md) for the complete API reference with signatures and key name tables.
+See [`docs/07-scripting.md`](docs/07-scripting.md) for the complete API reference with signatures and key name tables.
 
 ---
 
@@ -240,31 +240,31 @@ GGEngine/
 ├── gg_player/src/         # Standalone game runtime
 ├── gg_sandbox/src/        # Testing sandbox
 ├── gg_tools/src/          # Profile analyzer
-└── gg_docs/               # Full documentation (14 topic files)
+└── docs/               # Full documentation (14 topic files)
 ```
 
 ---
 
 ## Documentation
 
-The [`gg_docs/`](gg_docs/) directory contains detailed documentation for every subsystem:
+The [`docs/`](docs/) directory contains detailed documentation for every subsystem:
 
 | Document | Covers |
 |----------|--------|
-| [`01-build-and-tools.md`](gg_docs/01-build-and-tools.md) | Build profiles, dependencies, profiling, shader compilation |
-| [`02-ecs.md`](gg_docs/02-ecs.md) | Scene, entities, components, hierarchy, queries |
-| [`03-editor.md`](gg_docs/03-editor.md) | Editor panels, undo, auto-save, play/stop, gizmos, tilemap painting |
-| [`04-engine-core.md`](gg_docs/04-engine-core.md) | Application trait, lifecycle, layers, input, events, egui integration |
-| [`05-physics.md`](gg_docs/05-physics.md) | rapier2d/3d integration, fixed timestep, collisions, collision layers, joints |
-| [`06-rendering.md`](gg_docs/06-rendering.md) | Vulkan renderer, batching, bindless textures, MSDF text, GPU particles |
-| [`07-scripting.md`](gg_docs/07-scripting.md) | Lua API reference, script lifecycle, field overrides, error handling |
-| [`08-serialization.md`](gg_docs/08-serialization.md) | YAML scene format, intermediate structs, UUID system |
-| [`09-assets.md`](gg_docs/09-assets.md) | Asset handles, registry, async loading, LRU cache |
-| [`10-audio.md`](gg_docs/10-audio.md) | kira integration, spatial audio, streaming, Lua audio API |
-| [`11-player-and-project.md`](gg_docs/11-player-and-project.md) | Project system, .ggproject format, standalone player |
-| [`12-jobs-system.md`](gg_docs/12-jobs-system.md) | Multi-threaded ECS, EPW pattern, parallelized systems |
-| [`13-3d-rendering.md`](gg_docs/13-3d-rendering.md) | 3D meshes, materials, lighting, IBL/environment maps, shadows, skeletal animation, post-processing |
-| [`14-input-actions.md`](gg_docs/14-input-actions.md) | Data-driven input action mapping, bindings, dead zones, Lua API |
+| [`01-build-and-tools.md`](docs/01-build-and-tools.md) | Build profiles, dependencies, profiling, shader compilation |
+| [`02-ecs.md`](docs/02-ecs.md) | Scene, entities, components, hierarchy, queries |
+| [`03-editor.md`](docs/03-editor.md) | Editor panels, undo, auto-save, play/stop, gizmos, tilemap painting |
+| [`04-engine-core.md`](docs/04-engine-core.md) | Application trait, lifecycle, layers, input, events, egui integration |
+| [`05-physics.md`](docs/05-physics.md) | rapier2d/3d integration, fixed timestep, collisions, collision layers, joints |
+| [`06-rendering.md`](docs/06-rendering.md) | Vulkan renderer, batching, bindless textures, MSDF text, GPU particles |
+| [`07-scripting.md`](docs/07-scripting.md) | Lua API reference, script lifecycle, field overrides, error handling |
+| [`08-serialization.md`](docs/08-serialization.md) | YAML scene format, intermediate structs, UUID system |
+| [`09-assets.md`](docs/09-assets.md) | Asset handles, registry, async loading, LRU cache |
+| [`10-audio.md`](docs/10-audio.md) | kira integration, spatial audio, streaming, Lua audio API |
+| [`11-player-and-project.md`](docs/11-player-and-project.md) | Project system, .ggproject format, standalone player |
+| [`12-jobs-system.md`](docs/12-jobs-system.md) | Multi-threaded ECS, EPW pattern, parallelized systems |
+| [`13-3d-rendering.md`](docs/13-3d-rendering.md) | 3D meshes, materials, lighting, IBL/environment maps, shadows, skeletal animation, post-processing |
+| [`14-input-actions.md`](docs/14-input-actions.md) | Data-driven input action mapping, bindings, dead zones, Lua API |
 
 ---
 
