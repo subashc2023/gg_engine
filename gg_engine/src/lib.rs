@@ -1,12 +1,12 @@
 mod application;
-pub mod asset;
+pub use gg_assets as asset;
 pub mod cursor;
 pub mod jobs;
 mod layer;
 mod orthographic_camera_controller;
 pub mod project;
 pub use gg_renderer as renderer;
-pub mod scene;
+pub use gg_scene as scene;
 pub mod ui_theme;
 
 // Re-export gg_core modules so `crate::events`, `crate::input`, etc. still resolve.
@@ -22,6 +22,9 @@ pub use gg_core::uuid;
 
 // Re-export gg_core type aliases and items at crate root.
 pub use gg_core::{profile_scope, Ref, Scope};
+
+// Re-export #[macro_export] macros from sub-crates.
+pub use gg_scene::for_each_addable_component;
 
 pub use application::{run, Application, WindowConfig};
 pub use ash;
@@ -41,7 +44,6 @@ pub use gg_core::{
     Timestep, Uuid,
 };
 pub use glam;
-pub use hecs;
 pub use layer::{Layer, LayerStack};
 pub use log;
 #[cfg(feature = "lua-scripting")]

@@ -1,0 +1,19 @@
+[package]
+name = "gg_assets"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+rust-version.workspace = true
+publish.workspace = true
+
+[features]
+default = ["profiling"]
+profiling = ["gg_core/profiling"]
+
+[dependencies]
+gg_core = { path = "../gg_core" }
+gg_renderer = { path = "../gg_renderer" }
+log.workspace = true
+serde.workspace = true
+serde_yaml_ng.workspace = true
+serde_json.workspace = true

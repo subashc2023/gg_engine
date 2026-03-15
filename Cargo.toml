@@ -2,6 +2,8 @@
 members = [
     "gg_core",
     "gg_renderer",
+    "gg_assets",
+    "gg_scene",
     "gg_engine",
     "gg_editor",
     "gg_player",

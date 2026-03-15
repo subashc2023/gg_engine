@@ -1,7 +1,9 @@
+pub mod cursor;
 pub mod error;
 pub mod events;
 pub mod input;
 pub mod input_action;
+pub mod jobs;
 pub mod logging;
 pub mod platform_utils;
 pub mod profiling;

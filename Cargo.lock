@@ -1258,12 +1258,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "gg_assets"
+version = "0.1.0"
+dependencies = [
+ "gg_core",
+ "gg_renderer",
+ "log",
+ "serde",
+ "serde_json",
+ "serde_yaml_ng",
+]
+
+[[package]]
 name = "gg_core"
 version = "0.1.0"
 dependencies = [
  "log",
  "mlua",
  "rand",
+ "rayon",
  "rfd",
  "serde",
  "serde_json",
@@ -1289,29 +1302,21 @@ version = "0.1.0"
 dependencies = [
  "ash",
  "ash-window",
- "base64 0.22.1",
  "egui",
  "egui-ash-renderer",
  "egui-winit",
+ "gg_assets",
  "gg_core",
  "gg_renderer",
+ "gg_scene",
  "gilrs",
  "glam 0.29.3",
- "hecs",
  "image",
- "kira",
  "log",
  "mlua",
- "parking_lot",
- "rand",
- "rapier2d",
- "rapier3d",
  "raw-window-handle",
- "rayon",
  "serde",
- "serde_json",
  "serde_yaml_ng",
- "static_assertions",
  "thiserror 2.0.18",
  "winit",
 ]
@@ -1354,6 +1359,31 @@ dependencies = [
  "gg_engine",
  "half",
  "image",
+]
+
+[[package]]
+name = "gg_scene"
+version = "0.1.0"
+dependencies = [
+ "ash",
+ "base64 0.22.1",
+ "gg_assets",
+ "gg_core",
+ "gg_renderer",
+ "glam 0.29.3",
+ "hecs",
+ "kira",
+ "log",
+ "mlua",
+ "parking_lot",
+ "rand",
+ "rapier2d",
+ "rapier3d",
+ "rayon",
+ "serde",
+ "serde_json",
+ "serde_yaml_ng",
+ "static_assertions",
 ]
 
 [[package]]

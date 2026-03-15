@@ -1,0 +1,35 @@
+[package]
+name = "gg_scene"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+rust-version.workspace = true
+publish.workspace = true
+
+[features]
+default = ["profiling", "lua-scripting", "gamepad", "physics-3d"]
+profiling = ["gg_core/profiling", "gg_renderer/profiling"]
+lua-scripting = ["mlua", "gg_core/lua-scripting"]
+gamepad = ["gg_core/gamepad"]
+physics-3d = ["rapier3d"]
+
+[dependencies]
+gg_core = { path = "../gg_core" }
+gg_renderer = { path = "../gg_renderer" }
+gg_assets = { path = "../gg_assets" }
+ash.workspace = true
+log.workspace = true
+glam.workspace = true
+hecs.workspace = true
+serde.workspace = true
+serde_yaml_ng.workspace = true
+serde_json.workspace = true
+rand.workspace = true
+rapier2d.workspace = true
+rapier3d = { workspace = true, optional = true }
+mlua = { workspace = true, optional = true }
+kira.workspace = true
+rayon.workspace = true
+parking_lot.workspace = true
+static_assertions.workspace = true
+base64.workspace = true
