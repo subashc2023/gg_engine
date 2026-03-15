@@ -37,7 +37,7 @@ pub struct Input {
 }
 
 impl Input {
-    pub(crate) fn new() -> Self {
+    pub fn new() -> Self {
         Self {
             keys_pressed: HashSet::new(),
             keys_prev: HashSet::new(),
@@ -168,7 +168,7 @@ impl Input {
 
     /// Get the raw (unfiltered) axis value. Used by the action system which
     /// applies its own per-binding dead zones.
-    pub(crate) fn gamepad_axis_raw(&self, gamepad: GamepadId, axis: GamepadAxis) -> f32 {
+    pub fn gamepad_axis_raw(&self, gamepad: GamepadId, axis: GamepadAxis) -> f32 {
         self.gamepad_axes
             .get(&gamepad)
             .and_then(|a| a.get(&axis))
@@ -211,44 +211,44 @@ impl Input {
 
     // -- Mutation (engine-internal) -------------------------------------------
 
-    pub(crate) fn press_key(&mut self, key: KeyCode) {
+    pub fn press_key(&mut self, key: KeyCode) {
         self.keys_pressed.insert(key);
     }
 
-    pub(crate) fn release_key(&mut self, key: KeyCode) {
+    pub fn release_key(&mut self, key: KeyCode) {
         self.keys_pressed.remove(&key);
     }
 
-    pub(crate) fn press_mouse_button(&mut self, button: MouseButton) {
+    pub fn press_mouse_button(&mut self, button: MouseButton) {
         self.mouse_buttons_pressed.insert(button);
     }
 
-    pub(crate) fn release_mouse_button(&mut self, button: MouseButton) {
+    pub fn release_mouse_button(&mut self, button: MouseButton) {
         self.mouse_buttons_pressed.remove(&button);
     }
 
-    pub(crate) fn set_mouse_position(&mut self, x: f64, y: f64) {
+    pub fn set_mouse_position(&mut self, x: f64, y: f64) {
         self.mouse_x = x;
         self.mouse_y = y;
     }
 
-    pub(crate) fn accumulate_mouse_delta(&mut self, dx: f64, dy: f64) {
+    pub fn accumulate_mouse_delta(&mut self, dx: f64, dy: f64) {
         self.mouse_delta_x += dx;
         self.mouse_delta_y += dy;
     }
 
-    pub(crate) fn accumulate_scroll_delta(&mut self, dx: f64, dy: f64) {
+    pub fn accumulate_scroll_delta(&mut self, dx: f64, dy: f64) {
         self.scroll_delta_x += dx;
         self.scroll_delta_y += dy;
     }
 
     #[cfg_attr(not(feature = "gamepad"), allow(dead_code))]
-    pub(crate) fn gamepad_connect(&mut self, gamepad: GamepadId) {
+    pub fn gamepad_connect(&mut self, gamepad: GamepadId) {
         self.connected_gamepads.insert(gamepad);
     }
 
     #[cfg_attr(not(feature = "gamepad"), allow(dead_code))]
-    pub(crate) fn gamepad_disconnect(&mut self, gamepad: GamepadId) {
+    pub fn gamepad_disconnect(&mut self, gamepad: GamepadId) {
         self.connected_gamepads.remove(&gamepad);
         self.gamepad_buttons.remove(&gamepad);
         self.gamepad_buttons_prev.remove(&gamepad);
@@ -256,7 +256,7 @@ impl Input {
     }
 
     #[cfg_attr(not(feature = "gamepad"), allow(dead_code))]
-    pub(crate) fn press_gamepad_button(&mut self, gamepad: GamepadId, button: GamepadButton) {
+    pub fn press_gamepad_button(&mut self, gamepad: GamepadId, button: GamepadButton) {
         self.gamepad_buttons
             .entry(gamepad)
             .or_default()
@@ -264,14 +264,14 @@ impl Input {
     }
 
     #[cfg_attr(not(feature = "gamepad"), allow(dead_code))]
-    pub(crate) fn release_gamepad_button(&mut self, gamepad: GamepadId, button: GamepadButton) {
+    pub fn release_gamepad_button(&mut self, gamepad: GamepadId, button: GamepadButton) {
         if let Some(buttons) = self.gamepad_buttons.get_mut(&gamepad) {
             buttons.remove(&button);
         }
     }
 
     #[cfg_attr(not(feature = "gamepad"), allow(dead_code))]
-    pub(crate) fn set_gamepad_axis(&mut self, gamepad: GamepadId, axis: GamepadAxis, value: f32) {
+    pub fn set_gamepad_axis(&mut self, gamepad: GamepadId, axis: GamepadAxis, value: f32) {
         self.gamepad_axes
             .entry(gamepad)
             .or_default()
@@ -291,7 +291,7 @@ impl Input {
     }
 
     /// Set all global dead zones at once.
-    pub(crate) fn set_global_dead_zones(&mut self, dead_zones: [f32; GamepadAxis::COUNT]) {
+    pub fn set_global_dead_zones(&mut self, dead_zones: [f32; GamepadAxis::COUNT]) {
         self.global_dead_zones = dead_zones;
     }
 
@@ -303,23 +303,23 @@ impl Input {
     // -- Input action mapping ---------------------------------------------------
 
     /// Set the input action map. Called once after project load.
-    pub(crate) fn set_action_map(&mut self, map: InputActionMap) {
+    pub fn set_action_map(&mut self, map: InputActionMap) {
         self.action_map = Some(map);
     }
 
     /// Returns `true` if an action map has been set.
-    pub(crate) fn has_action_map(&self) -> bool {
+    pub fn has_action_map(&self) -> bool {
         self.action_map.is_some()
     }
 
     /// Returns the number of actions in the current action map, or 0 if none.
-    pub(crate) fn action_count(&self) -> usize {
+    pub fn action_count(&self) -> usize {
         self.action_map.as_ref().map_or(0, |m| m.actions.len())
     }
 
     /// Evaluate all action bindings against current raw input.
     /// Called each frame before `on_update`.
-    pub(crate) fn update_actions(&mut self) {
+    pub fn update_actions(&mut self) {
         if let Some(ref map) = self.action_map {
             // Temporarily move action_state out to avoid split borrow:
             // update() needs &Input for raw queries while mutating state.
@@ -333,7 +333,7 @@ impl Input {
     /// Clear all pressed state (call on window focus loss to avoid stuck keys).
     /// Clears both current and previous frame sets to prevent spurious
     /// "just released" events on the next frame.
-    pub(crate) fn clear_all(&mut self) {
+    pub fn clear_all(&mut self) {
         self.keys_pressed.clear();
         self.keys_prev.clear();
         self.mouse_buttons_pressed.clear();
@@ -343,7 +343,7 @@ impl Input {
 
     /// Snapshot current state so next frame can detect transitions.
     /// Call at the end of each frame, after all updates and rendering.
-    pub(crate) fn end_frame(&mut self) {
+    pub fn end_frame(&mut self) {
         self.keys_prev.clone_from(&self.keys_pressed);
         self.mouse_buttons_prev
             .clone_from(&self.mouse_buttons_pressed);

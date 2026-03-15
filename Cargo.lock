@@ -1258,6 +1258,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "gg_core"
+version = "0.1.0"
+dependencies = [
+ "log",
+ "mlua",
+ "rand",
+ "rfd",
+ "serde",
+ "serde_json",
+ "serde_yaml_ng",
+ "thiserror 2.0.18",
+]
+
+[[package]]
 name = "gg_editor"
 version = "0.1.0"
 dependencies = [
@@ -1279,6 +1293,7 @@ dependencies = [
  "egui",
  "egui-ash-renderer",
  "egui-winit",
+ "gg_core",
  "gilrs",
  "glam 0.29.3",
  "gltf",
@@ -1295,7 +1310,6 @@ dependencies = [
  "rapier3d",
  "raw-window-handle",
  "rayon",
- "rfd",
  "serde",
  "serde_json",
  "serde_yaml_ng",

@@ -1,5 +1,6 @@
 [workspace]
 members = [
+    "gg_core",
     "gg_engine",
     "gg_editor",
     "gg_player",

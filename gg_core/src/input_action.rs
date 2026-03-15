@@ -272,7 +272,7 @@ fn evaluate_button_binding(binding: &InputBinding, input: &Input) -> bool {
 
 /// Apply dead zone remapping: values within the dead zone become 0,
 /// values outside are remapped to 0.0..1.0 so there's no sudden jump.
-pub(crate) fn apply_dead_zone(value: f32, dead_zone: f32) -> f32 {
+pub fn apply_dead_zone(value: f32, dead_zone: f32) -> f32 {
     if value.abs() < dead_zone {
         0.0
     } else {

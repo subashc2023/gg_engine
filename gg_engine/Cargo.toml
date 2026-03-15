@@ -8,12 +8,13 @@ publish.workspace = true
 
 [features]
 default = ["profiling", "lua-scripting", "gamepad", "physics-3d"]
-profiling = []
-lua-scripting = ["mlua"]
-gamepad = ["gilrs"]
+profiling = ["gg_core/profiling"]
+lua-scripting = ["mlua", "gg_core/lua-scripting"]
+gamepad = ["gilrs", "gg_core/gamepad"]
 physics-3d = ["rapier3d"]
 
 [dependencies]
+gg_core = { path = "../gg_core" }
 log.workspace = true
 winit.workspace = true
 ash.workspace = true
@@ -28,7 +29,6 @@ hecs.workspace = true
 serde.workspace = true
 serde_yaml_ng.workspace = true
 serde_json.workspace = true
-rfd.workspace = true
 rand.workspace = true
 rapier2d.workspace = true
 rapier3d = { workspace = true, optional = true }
