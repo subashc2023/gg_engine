@@ -26,6 +26,7 @@ impl Scene {
             looping: bool,
             streaming: bool,
             category: AudioCategory,
+            priority: u8,
             spatial: bool,
             hrtf: bool,
             min_distance: f32,
@@ -46,6 +47,7 @@ impl Scene {
                 looping: asc.looping,
                 streaming: asc.streaming,
                 category: asc.category,
+                priority: asc.priority,
                 spatial: asc.spatial,
                 hrtf: asc.hrtf,
                 min_distance: asc.min_distance,
@@ -54,9 +56,18 @@ impl Scene {
             })
             .collect();
 
+        // Copy voice limits and volumes out before borrowing engine mutably.
+        let max_v = self.core.max_voices;
+        let max_vpe = self.core.max_voices_per_entity;
+        let master_vol = self.core.master_volume;
+
         if let Some(ref mut engine) = self.audio_engine {
+            // Sync voice limits from SceneCore state.
+            engine.set_max_voices(max_v);
+            engine.set_max_voices_per_entity(max_vpe);
+
             // Sync bus volumes from SceneCore state.
-            engine.set_master_volume(self.core.master_volume);
+            engine.set_master_volume(master_vol);
             for i in 0..AudioCategory::COUNT {
                 if let Some(cat) = AudioCategory::from_index(i) {
                     engine.set_bus_volume(cat, self.core.category_volumes[i]);
@@ -87,6 +98,7 @@ impl Scene {
                     info.looping,
                     info.streaming,
                     info.category,
+                    info.priority,
                 );
             }
         }
@@ -236,6 +248,7 @@ impl Scene {
                 asc.min_distance,
                 asc.max_distance,
                 asc.category,
+                asc.priority,
             );
             drop(asc);
             let pos = self
@@ -244,12 +257,12 @@ impl Scene {
                 .unwrap_or(glam::Vec3::ZERO);
             (data, pos)
         };
-        let ((uuid, path, volume, pitch, looping, streaming, spatial, hrtf, min_d, max_d, category), pos) = info;
+        let ((uuid, path, volume, pitch, looping, streaming, spatial, hrtf, min_d, max_d, category, priority), pos) = info;
         if let Some(ref mut engine) = self.audio_engine {
             if spatial {
                 engine.ensure_spatial_track(uuid, pos, min_d, max_d, hrtf, category);
             }
-            engine.play_sound(uuid, &path, volume, pitch, looping, streaming, category);
+            engine.play_sound(uuid, &path, volume, pitch, looping, streaming, category, priority);
         }
     }
 
@@ -319,7 +332,7 @@ impl Scene {
     /// If the entity has paused sounds, resumes them with a fade.
     /// If no sounds are active, plays the entity's audio with a fade from silence.
     pub fn fade_in_entity_sound(&mut self, entity: Entity, duration_secs: f32) {
-        let (uuid, entity_vol, category, maybe_play) = {
+        let (uuid, entity_vol, category, priority, maybe_play) = {
             let id = match self.get_component::<IdComponent>(entity) {
                 Some(id) => id.id.raw(),
                 None => return,
@@ -330,11 +343,12 @@ impl Scene {
             };
             let vol = asc.volume;
             let cat = asc.category;
+            let pri = asc.priority;
             let play_info = asc
                 .resolved_path
                 .as_ref()
                 .map(|p| (p.clone(), asc.pitch, asc.looping, asc.streaming));
-            (id, vol, cat, play_info)
+            (id, vol, cat, pri, play_info)
         };
 
         let target_db = super::audio::linear_to_db(entity_vol);
@@ -355,6 +369,7 @@ impl Scene {
                         streaming,
                         duration_secs,
                         category,
+                        priority,
                     );
                 }
             }
@@ -443,6 +458,46 @@ impl Scene {
     /// Check if a sound category is muted.
     pub fn is_category_muted(&self, category: AudioCategory) -> bool {
         self.category_muted[category as usize]
+    }
+
+    // -----------------------------------------------------------------
+    // Voice management
+    // -----------------------------------------------------------------
+
+    /// Set the global maximum number of simultaneous voices.
+    pub fn set_max_voices(&mut self, max: usize) {
+        let clamped = max.max(1);
+        self.max_voices = clamped;
+        if let Some(ref mut engine) = self.audio_engine {
+            engine.set_max_voices(clamped);
+        }
+    }
+
+    /// Get the global maximum number of simultaneous voices.
+    pub fn get_max_voices(&self) -> usize {
+        self.max_voices
+    }
+
+    /// Set the per-entity maximum number of simultaneous voices.
+    pub fn set_max_voices_per_entity(&mut self, max: usize) {
+        let clamped = max.max(1);
+        self.max_voices_per_entity = clamped;
+        if let Some(ref mut engine) = self.audio_engine {
+            engine.set_max_voices_per_entity(clamped);
+        }
+    }
+
+    /// Get the per-entity maximum number of simultaneous voices.
+    pub fn get_max_voices_per_entity(&self) -> usize {
+        self.max_voices_per_entity
+    }
+
+    /// Get the current number of active voices.
+    pub fn get_active_voice_count(&self) -> usize {
+        match &self.audio_engine {
+            Some(engine) => engine.total_voice_count(),
+            None => 0,
+        }
     }
 
     // -----------------------------------------------------------------

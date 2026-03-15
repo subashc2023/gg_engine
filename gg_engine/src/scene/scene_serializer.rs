@@ -898,6 +898,20 @@ struct AudioSourceData {
         skip_serializing_if = "is_default_audio_category"
     )]
     category: String,
+    #[serde(
+        rename = "Priority",
+        default = "default_audio_priority",
+        skip_serializing_if = "is_default_audio_priority"
+    )]
+    priority: u8,
+}
+
+fn default_audio_priority() -> u8 {
+    128
+}
+
+fn is_default_audio_priority(v: &u8) -> bool {
+    *v == 128
 }
 
 fn default_max_distance() -> f32 {
@@ -1914,6 +1928,7 @@ impl SceneSerializer {
                     AudioCategory::SFX => String::new(),
                     other => other.label().to_string(),
                 },
+                priority: asc.priority,
             });
 
         let audio_listener_data = scene
@@ -2547,6 +2562,7 @@ impl SceneSerializer {
                     min_distance: asd.min_distance,
                     max_distance: asd.max_distance,
                     category: AudioCategory::from_str_loose(&asd.category).unwrap_or_default(),
+                    priority: asd.priority,
                     resolved_path: None,
                 },
             );
@@ -2936,6 +2952,7 @@ mod tests {
             min_distance: 2.0,
             max_distance: 30.0,
             category: crate::scene::AudioCategory::Music,
+            priority: 200,
             resolved_path: None,
         };
         scene.add_component(e, audio);
@@ -2960,6 +2977,7 @@ mod tests {
         assert!((ac.min_distance - 2.0).abs() < 0.001);
         assert!((ac.max_distance - 30.0).abs() < 0.001);
         assert_eq!(ac.category, crate::scene::AudioCategory::Music);
+        assert_eq!(ac.priority, 200);
         assert!(ac.resolved_path.is_none());
     }
 

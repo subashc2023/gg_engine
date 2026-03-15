@@ -377,6 +377,28 @@ pub fn register_all(lua: &Lua) -> LuaResult<()> {
     engine.set("set_hrtf", lua.create_function(lua_set_hrtf)?)?;
     engine.set("get_hrtf", lua.create_function(lua_get_hrtf)?)?;
 
+    // Voice management
+    engine.set(
+        "set_max_voices",
+        lua.create_function(lua_set_max_voices)?,
+    )?;
+    engine.set(
+        "get_max_voices",
+        lua.create_function(lua_get_max_voices)?,
+    )?;
+    engine.set(
+        "set_max_voices_per_entity",
+        lua.create_function(lua_set_max_voices_per_entity)?,
+    )?;
+    engine.set(
+        "get_max_voices_per_entity",
+        lua.create_function(lua_get_max_voices_per_entity)?,
+    )?;
+    engine.set(
+        "get_active_voice_count",
+        lua.create_function(lua_get_active_voice_count)?,
+    )?;
+
     // Tilemap
     engine.set("set_tile", lua.create_function(lua_set_tile)?)?;
     engine.set("get_tile", lua.create_function(lua_get_tile)?)?;
@@ -1846,6 +1868,35 @@ fn lua_is_bus_muted(lua: &Lua, cat_str: String) -> LuaResult<bool> {
             false
         }
     })
+}
+
+/// `Engine.set_max_voices(count)` — set global voice limit.
+fn lua_set_max_voices(lua: &Lua, count: usize) -> LuaResult<()> {
+    with_scene_mut(lua, (), |scene| {
+        scene.set_max_voices(count);
+    })
+}
+
+/// `Engine.get_max_voices()` — get global voice limit.
+fn lua_get_max_voices(lua: &Lua, _: ()) -> LuaResult<usize> {
+    with_scene_mut(lua, 32, |scene| scene.get_max_voices())
+}
+
+/// `Engine.set_max_voices_per_entity(count)` — set per-entity voice limit.
+fn lua_set_max_voices_per_entity(lua: &Lua, count: usize) -> LuaResult<()> {
+    with_scene_mut(lua, (), |scene| {
+        scene.set_max_voices_per_entity(count);
+    })
+}
+
+/// `Engine.get_max_voices_per_entity()` — get per-entity voice limit.
+fn lua_get_max_voices_per_entity(lua: &Lua, _: ()) -> LuaResult<usize> {
+    with_scene_mut(lua, 4, |scene| scene.get_max_voices_per_entity())
+}
+
+/// `Engine.get_active_voice_count()` — get current number of active voices.
+fn lua_get_active_voice_count(lua: &Lua, _: ()) -> LuaResult<usize> {
+    with_scene_mut(lua, 0, |scene| scene.get_active_voice_count())
 }
 
 /// `Engine.set_hrtf(entity_id, enabled)` — enable/disable HRTF on an entity's audio source.
@@ -4502,6 +4553,11 @@ mod tests {
         assert!(engine.get::<LuaFunction>("mute_bus").is_ok());
         assert!(engine.get::<LuaFunction>("unmute_bus").is_ok());
         assert!(engine.get::<LuaFunction>("is_bus_muted").is_ok());
+        assert!(engine.get::<LuaFunction>("set_max_voices").is_ok());
+        assert!(engine.get::<LuaFunction>("get_max_voices").is_ok());
+        assert!(engine.get::<LuaFunction>("set_max_voices_per_entity").is_ok());
+        assert!(engine.get::<LuaFunction>("get_max_voices_per_entity").is_ok());
+        assert!(engine.get::<LuaFunction>("get_active_voice_count").is_ok());
         assert!(engine.get::<LuaFunction>("set_hrtf").is_ok());
         assert!(engine.get::<LuaFunction>("get_hrtf").is_ok());
         // Physics
@@ -5166,6 +5222,26 @@ mod tests {
         lua.load("result = Engine.is_bus_muted('ambient')")
             .exec()
             .expect("is_bus_muted should not error without context");
+    }
+
+    #[test]
+    fn voice_management_no_context_no_error() {
+        let lua = setup();
+        lua.load("Engine.set_max_voices(64)")
+            .exec()
+            .expect("set_max_voices should not error without context");
+        lua.load("result = Engine.get_max_voices()")
+            .exec()
+            .expect("get_max_voices should not error without context");
+        lua.load("Engine.set_max_voices_per_entity(8)")
+            .exec()
+            .expect("set_max_voices_per_entity should not error without context");
+        lua.load("result = Engine.get_max_voices_per_entity()")
+            .exec()
+            .expect("get_max_voices_per_entity should not error without context");
+        lua.load("result = Engine.get_active_voice_count()")
+            .exec()
+            .expect("get_active_voice_count should not error without context");
     }
 
     #[test]

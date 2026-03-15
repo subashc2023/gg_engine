@@ -407,6 +407,8 @@ impl Scene {
         new_scene.core.master_volume = source.core.master_volume;
         new_scene.core.category_volumes = source.core.category_volumes;
         new_scene.core.category_muted = source.core.category_muted;
+        new_scene.core.max_voices = source.core.max_voices;
+        new_scene.core.max_voices_per_entity = source.core.max_voices_per_entity;
 
         // Copy runtime settings state.
         *new_scene.core.fullscreen_mode.lock() = source.core.fullscreen_mode();

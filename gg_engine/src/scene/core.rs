@@ -92,6 +92,10 @@ pub struct SceneCore {
     pub(super) category_volumes: [f32; AudioCategory::COUNT],
     /// Per-category mute state, indexed by [`AudioCategory`].
     pub(super) category_muted: [bool; AudioCategory::COUNT],
+    /// Global voice limit (max simultaneous sounds).
+    pub(super) max_voices: usize,
+    /// Per-entity voice limit (max simultaneous sounds per entity).
+    pub(super) max_voices_per_entity: usize,
 
     // Shadow mapping caching
     /// Stashed cascade VP matrices + split depths + shadow_distance + texel_sizes
@@ -180,6 +184,8 @@ impl SceneCore {
             master_volume: 1.0,
             category_volumes: [1.0; AudioCategory::COUNT],
             category_muted: [false; AudioCategory::COUNT],
+            max_voices: 32,
+            max_voices_per_entity: 4,
             shadow_cascade_cache: RwLock::new(None),
             cursor_mode: CursorMode::Normal,
             requested_window_size: Mutex::new(None),

@@ -230,6 +230,38 @@ pub(crate) fn settings_ui(ui: &mut egui::Ui, scene: &mut Scene, state: &mut Sett
         });
     }
 
+    // Voice management controls.
+    ui.add_space(4.0);
+    let active_voices = scene.get_active_voice_count();
+    let mut max_voices = scene.get_max_voices() as u32;
+    let mut max_per_entity = scene.get_max_voices_per_entity() as u32;
+    ui.label(
+        egui::RichText::new(format!(
+            "Active voices: {}/{}",
+            active_voices, max_voices
+        ))
+        .small()
+        .weak(),
+    );
+    ui.horizontal(|ui| {
+        ui.label("Max Voices");
+        if ui
+            .add(egui::DragValue::new(&mut max_voices).range(1..=256).speed(1))
+            .changed()
+        {
+            scene.set_max_voices(max_voices as usize);
+        }
+    });
+    ui.horizontal(|ui| {
+        ui.label("Max Per Entity");
+        if ui
+            .add(egui::DragValue::new(&mut max_per_entity).range(1..=32).speed(1))
+            .changed()
+        {
+            scene.set_max_voices_per_entity(max_per_entity as usize);
+        }
+    });
+
     // -- Post-Processing --
     ui.add_space(8.0);
     ui.heading("Post-Processing");

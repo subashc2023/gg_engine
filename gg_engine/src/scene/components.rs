@@ -1002,6 +1002,10 @@ pub struct AudioSourceComponent {
     pub max_distance: f32,
     /// Sound category for volume mixing (SFX, Music, Ambient, Voice).
     pub category: AudioCategory,
+    /// Voice priority (0–255, default 128). Higher = more important.
+    /// When the global voice limit is reached, lower-priority sounds are
+    /// stolen first to make room for new, higher-priority sounds.
+    pub priority: u8,
     /// Runtime-only: resolved file path from asset manager. Not serialized.
     pub(crate) resolved_path: Option<String>,
 }
@@ -1020,6 +1024,7 @@ impl Default for AudioSourceComponent {
             min_distance: 1.0,
             max_distance: 50.0,
             category: AudioCategory::default(),
+            priority: 128,
             resolved_path: None,
         }
     }

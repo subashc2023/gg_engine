@@ -65,6 +65,12 @@ impl SoundHandle {
 /// Maximum number of cached static sound data entries before LRU eviction kicks in.
 const SOUND_CACHE_MAX: usize = 128;
 
+/// Default global voice limit.
+const DEFAULT_MAX_VOICES: usize = 32;
+
+/// Default per-entity voice limit.
+const DEFAULT_MAX_VOICES_PER_ENTITY: usize = 4;
+
 /// Convert linear amplitude (0.0–1.0) to decibels for kira.
 /// Returns -80 dB for silence (volume <= 0).
 pub(crate) fn linear_to_db(volume: f32) -> f32 {
@@ -86,6 +92,21 @@ fn fade_tween(duration_secs: f32) -> Tween {
             ..Default::default()
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// Voice entry (sound handle + metadata for voice stealing)
+// ---------------------------------------------------------------------------
+
+/// A single playing sound with metadata for priority-based voice stealing.
+struct VoiceEntry {
+    handle: SoundHandle,
+    /// Voice priority (0–255). Higher = more important, harder to steal.
+    priority: u8,
+    /// Linear volume at play time (for steal comparison).
+    volume_linear: f32,
+    /// Monotonic birth counter (lower = older).
+    birth: u64,
 }
 
 // ---------------------------------------------------------------------------
@@ -127,9 +148,9 @@ pub(crate) struct SpatialTrackState {
 /// sounds in real time (no longer just pre-play multiplication).
 pub(crate) struct AudioEngine {
     manager: AudioManager,
-    /// Active sound handles keyed by entity UUID. Each entity can have
-    /// multiple concurrent sounds.
-    active_sounds: HashMap<u64, Vec<SoundHandle>>,
+    /// Active voices keyed by entity UUID. Each entity can have
+    /// multiple concurrent voices.
+    active_sounds: HashMap<u64, Vec<VoiceEntry>>,
     /// Cached sound data keyed by file path (avoids re-loading from disk).
     /// Only used for static (non-streaming) sounds.
     sound_cache: HashMap<String, StaticSoundData>,
@@ -150,6 +171,14 @@ pub(crate) struct AudioEngine {
     listener: Option<ListenerHandle>,
     /// Per-entity spatial track state. Created for entities with `spatial: true`.
     spatial_tracks: HashMap<u64, SpatialTrackState>,
+
+    // --- Voice management ---
+    /// Maximum simultaneous voices globally.
+    max_voices: usize,
+    /// Maximum simultaneous voices per entity.
+    max_voices_per_entity: usize,
+    /// Monotonic counter for voice age tracking.
+    next_birth: u64,
 }
 
 impl AudioEngine {
@@ -194,6 +223,9 @@ impl AudioEngine {
                     bus_tracks,
                     listener,
                     spatial_tracks: HashMap::new(),
+                    max_voices: DEFAULT_MAX_VOICES,
+                    max_voices_per_entity: DEFAULT_MAX_VOICES_PER_ENTITY,
+                    next_birth: 0,
                 })
             }
             Err(e) => {
@@ -324,6 +356,11 @@ impl AudioEngine {
     ///
     /// `entity_volume` is the entity's own linear volume (0.0–1.0).
     /// Category and master volume are applied by the bus track hierarchy.
+    ///
+    /// If the global or per-entity voice limit is reached, the lowest-priority
+    /// (then quietest, then oldest) voice is stolen to make room.
+    /// A new sound can only steal from voices with equal or lower priority.
+    #[allow(clippy::too_many_arguments)]
     pub fn play_sound(
         &mut self,
         entity_uuid: u64,
@@ -333,16 +370,44 @@ impl AudioEngine {
         looping: bool,
         streaming: bool,
         category: AudioCategory,
+        priority: u8,
     ) {
-        // Prune finished sounds for this entity.
-        if let Some(handles) = self.active_sounds.get_mut(&entity_uuid) {
-            handles.retain(|h| h.state() != PlaybackState::Stopped);
+        // Prune finished sounds globally.
+        self.prune_stopped();
+
+        // Enforce per-entity voice limit.
+        if let Some(voices) = self.active_sounds.get_mut(&entity_uuid) {
+            while voices.len() >= self.max_voices_per_entity {
+                if !Self::steal_voice_from(voices, priority) {
+                    // Cannot steal — all voices are higher priority. Drop the request.
+                    log::debug!(
+                        "Voice limit per-entity ({}) reached for entity {}; \
+                         cannot steal (priority {}).",
+                        self.max_voices_per_entity,
+                        entity_uuid,
+                        priority,
+                    );
+                    return;
+                }
+            }
+        }
+
+        // Enforce global voice limit.
+        while self.total_voice_count() >= self.max_voices {
+            if !self.steal_global_voice(priority) {
+                log::debug!(
+                    "Global voice limit ({}) reached; cannot steal (priority {}).",
+                    self.max_voices,
+                    priority,
+                );
+                return;
+            }
         }
 
         if streaming {
-            self.play_streaming(entity_uuid, path, entity_volume, pitch, looping, category);
+            self.play_streaming(entity_uuid, path, entity_volume, pitch, looping, category, priority);
         } else {
-            self.play_static(entity_uuid, path, entity_volume, pitch, looping, category);
+            self.play_static(entity_uuid, path, entity_volume, pitch, looping, category, priority);
         }
     }
 
@@ -358,22 +423,24 @@ impl AudioEngine {
         streaming: bool,
         fade_secs: f32,
         category: AudioCategory,
+        priority: u8,
     ) {
         // Play at silence.
-        self.play_sound(entity_uuid, path, 0.0, pitch, looping, streaming, category);
+        self.play_sound(entity_uuid, path, 0.0, pitch, looping, streaming, category, priority);
 
         // Immediately tween to target volume.
-        if let Some(handles) = self.active_sounds.get_mut(&entity_uuid) {
+        if let Some(voices) = self.active_sounds.get_mut(&entity_uuid) {
             let tween = fade_tween(fade_secs);
             let target = Decibels(linear_to_db(entity_volume));
-            for handle in handles.iter_mut() {
-                if handle.state() == PlaybackState::Playing {
-                    handle.set_volume(target, tween);
+            for voice in voices.iter_mut() {
+                if voice.handle.state() == PlaybackState::Playing {
+                    voice.handle.set_volume(target, tween);
                 }
             }
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn play_static(
         &mut self,
         entity_uuid: u64,
@@ -382,6 +449,7 @@ impl AudioEngine {
         pitch: f32,
         looping: bool,
         category: AudioCategory,
+        priority: u8,
     ) {
         // Load or retrieve cached sound data.
         let sound_data = if let Some(data) = self.sound_cache.get(path) {
@@ -434,10 +502,17 @@ impl AudioEngine {
 
         match result {
             Ok(handle) => {
+                let birth = self.next_birth;
+                self.next_birth += 1;
                 self.active_sounds
                     .entry(entity_uuid)
                     .or_default()
-                    .push(SoundHandle::Static(handle));
+                    .push(VoiceEntry {
+                        handle: SoundHandle::Static(handle),
+                        priority,
+                        volume_linear: volume,
+                        birth,
+                    });
             }
             Err(e) => {
                 log::error!("Failed to play sound for entity {}: {}", entity_uuid, e);
@@ -445,6 +520,7 @@ impl AudioEngine {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn play_streaming(
         &mut self,
         entity_uuid: u64,
@@ -453,6 +529,7 @@ impl AudioEngine {
         pitch: f32,
         looping: bool,
         category: AudioCategory,
+        priority: u8,
     ) {
         let sound_data = match StreamingSoundData::from_file(path) {
             Ok(data) => data,
@@ -480,10 +557,17 @@ impl AudioEngine {
 
         match result {
             Ok(handle) => {
+                let birth = self.next_birth;
+                self.next_birth += 1;
                 self.active_sounds
                     .entry(entity_uuid)
                     .or_default()
-                    .push(SoundHandle::Streaming(handle));
+                    .push(VoiceEntry {
+                        handle: SoundHandle::Streaming(handle),
+                        priority,
+                        volume_linear: volume,
+                        birth,
+                    });
             }
             Err(e) => {
                 log::error!(
@@ -497,10 +581,10 @@ impl AudioEngine {
 
     /// Pause all sounds for the given entity (can be resumed).
     pub fn pause_sound(&mut self, entity_uuid: u64) {
-        if let Some(handles) = self.active_sounds.get_mut(&entity_uuid) {
-            for handle in handles.iter_mut() {
-                if handle.state() == PlaybackState::Playing {
-                    handle.pause(Tween::default());
+        if let Some(voices) = self.active_sounds.get_mut(&entity_uuid) {
+            for voice in voices.iter_mut() {
+                if voice.handle.state() == PlaybackState::Playing {
+                    voice.handle.pause(Tween::default());
                 }
             }
         }
@@ -508,10 +592,10 @@ impl AudioEngine {
 
     /// Resume all paused sounds for the given entity.
     pub fn resume_sound(&mut self, entity_uuid: u64) {
-        if let Some(handles) = self.active_sounds.get_mut(&entity_uuid) {
-            for handle in handles.iter_mut() {
-                if handle.state() == PlaybackState::Paused {
-                    handle.resume(Tween::default());
+        if let Some(voices) = self.active_sounds.get_mut(&entity_uuid) {
+            for voice in voices.iter_mut() {
+                if voice.handle.state() == PlaybackState::Paused {
+                    voice.handle.resume(Tween::default());
                 }
             }
         }
@@ -526,18 +610,18 @@ impl AudioEngine {
         duration_secs: f32,
     ) -> bool {
         let tween = fade_tween(duration_secs);
-        if let Some(handles) = self.active_sounds.get_mut(&entity_uuid) {
-            let has_active = handles
+        if let Some(voices) = self.active_sounds.get_mut(&entity_uuid) {
+            let has_active = voices
                 .iter()
-                .any(|h| matches!(h.state(), PlaybackState::Playing | PlaybackState::Paused));
+                .any(|v| matches!(v.handle.state(), PlaybackState::Playing | PlaybackState::Paused));
             if has_active {
-                for handle in handles.iter_mut() {
-                    if handle.state() == PlaybackState::Paused {
+                for voice in voices.iter_mut() {
+                    if voice.handle.state() == PlaybackState::Paused {
                         // Set to silence first, then resume with fade.
-                        handle.set_volume(Decibels(-80.0), Tween::default());
-                        handle.resume(Tween::default());
+                        voice.handle.set_volume(Decibels(-80.0), Tween::default());
+                        voice.handle.resume(Tween::default());
                     }
-                    handle.set_volume(Decibels(target_volume_db), tween);
+                    voice.handle.set_volume(Decibels(target_volume_db), tween);
                 }
                 return true;
             }
@@ -548,21 +632,21 @@ impl AudioEngine {
     /// Fade out and stop all sounds on an entity.
     pub fn fade_out_stop(&mut self, entity_uuid: u64, duration_secs: f32) {
         self.suppress_callback.insert(entity_uuid);
-        if let Some(handles) = self.active_sounds.get_mut(&entity_uuid) {
+        if let Some(voices) = self.active_sounds.get_mut(&entity_uuid) {
             let tween = fade_tween(duration_secs);
-            for handle in handles.iter_mut() {
-                handle.stop(tween);
+            for voice in voices.iter_mut() {
+                voice.handle.stop(tween);
             }
         }
     }
 
     /// Fade volume to a specific level over time.
     pub fn fade_to(&mut self, entity_uuid: u64, target_volume_db: f32, duration_secs: f32) {
-        if let Some(handles) = self.active_sounds.get_mut(&entity_uuid) {
+        if let Some(voices) = self.active_sounds.get_mut(&entity_uuid) {
             let tween = fade_tween(duration_secs);
             let target = Decibels(target_volume_db);
-            for handle in handles.iter_mut() {
-                handle.set_volume(target, tween);
+            for voice in voices.iter_mut() {
+                voice.handle.set_volume(target, tween);
             }
         }
     }
@@ -570,9 +654,9 @@ impl AudioEngine {
     /// Stop all sounds for the given entity.
     pub fn stop_sound(&mut self, entity_uuid: u64) {
         self.suppress_callback.insert(entity_uuid);
-        if let Some(handles) = self.active_sounds.remove(&entity_uuid) {
-            for mut handle in handles {
-                handle.stop(Tween::default());
+        if let Some(voices) = self.active_sounds.remove(&entity_uuid) {
+            for mut voice in voices {
+                voice.handle.stop(Tween::default());
             }
         }
         // Also remove the spatial track so it's recreated fresh next play.
@@ -582,10 +666,10 @@ impl AudioEngine {
     /// Set volume for all active sounds on an entity.
     /// Volume is in decibels (0.0 = unity gain, -60.0 = near-silent).
     pub fn set_volume(&mut self, entity_uuid: u64, volume_db: f32) {
-        if let Some(handles) = self.active_sounds.get_mut(&entity_uuid) {
+        if let Some(voices) = self.active_sounds.get_mut(&entity_uuid) {
             let db = Decibels(volume_db);
-            for handle in handles.iter_mut() {
-                handle.set_volume(db, Tween::default());
+            for voice in voices.iter_mut() {
+                voice.handle.set_volume(db, Tween::default());
             }
         }
     }
@@ -593,19 +677,19 @@ impl AudioEngine {
     /// Set panning for all active sounds on an entity.
     /// Panning: -1.0 = hard left, 0.0 = center, 1.0 = hard right.
     pub fn set_panning(&mut self, entity_uuid: u64, panning: f32) {
-        if let Some(handles) = self.active_sounds.get_mut(&entity_uuid) {
+        if let Some(voices) = self.active_sounds.get_mut(&entity_uuid) {
             let p = Panning(panning.clamp(-1.0, 1.0));
-            for handle in handles.iter_mut() {
-                handle.set_panning(p, Tween::default());
+            for voice in voices.iter_mut() {
+                voice.handle.set_panning(p, Tween::default());
             }
         }
     }
 
     /// Stop all active sounds.
     pub fn stop_all(&mut self) {
-        for (_, handles) in self.active_sounds.drain() {
-            for mut handle in handles {
-                handle.stop(Tween::default());
+        for (_, voices) in self.active_sounds.drain() {
+            for mut voice in voices {
+                voice.handle.stop(Tween::default());
             }
         }
         self.spatial_tracks.clear();
@@ -647,9 +731,9 @@ impl AudioEngine {
     /// Call once per frame to detect sound completion for callbacks.
     pub fn drain_completed(&mut self) -> Vec<u64> {
         let mut completed = Vec::new();
-        self.active_sounds.retain(|uuid, handles| {
-            handles.retain(|h| h.state() != PlaybackState::Stopped);
-            if handles.is_empty() {
+        self.active_sounds.retain(|uuid, voices| {
+            voices.retain(|v| v.handle.state() != PlaybackState::Stopped);
+            if voices.is_empty() {
                 if !self.suppress_callback.remove(uuid) {
                     completed.push(*uuid);
                 }
@@ -665,5 +749,111 @@ impl AudioEngine {
         let active = &self.active_sounds;
         self.spatial_tracks.retain(|uuid, _| active.contains_key(uuid));
         completed
+    }
+
+    // ------------------------------------------------------------------
+    // Voice management
+    // ------------------------------------------------------------------
+
+    /// Total number of currently active voices across all entities.
+    pub fn total_voice_count(&self) -> usize {
+        self.active_sounds.values().map(|v| v.len()).sum()
+    }
+
+    /// Set the global maximum number of simultaneous voices.
+    pub fn set_max_voices(&mut self, max: usize) {
+        self.max_voices = max.max(1);
+    }
+
+    /// Get the global maximum number of simultaneous voices.
+    #[allow(dead_code)]
+    pub fn max_voices(&self) -> usize {
+        self.max_voices
+    }
+
+    /// Set the per-entity maximum number of simultaneous voices.
+    pub fn set_max_voices_per_entity(&mut self, max: usize) {
+        self.max_voices_per_entity = max.max(1);
+    }
+
+    /// Get the per-entity maximum number of simultaneous voices.
+    #[allow(dead_code)]
+    pub fn max_voices_per_entity(&self) -> usize {
+        self.max_voices_per_entity
+    }
+
+    /// Prune stopped sounds from all entities.
+    fn prune_stopped(&mut self) {
+        self.active_sounds.retain(|_, voices| {
+            voices.retain(|v| v.handle.state() != PlaybackState::Stopped);
+            !voices.is_empty()
+        });
+    }
+
+    /// Steal the least-important voice from a single entity's voice list.
+    /// Returns true if a voice was stolen, false if all voices have higher priority.
+    ///
+    /// Stealing order: lowest priority → lowest volume → oldest birth.
+    fn steal_voice_from(voices: &mut Vec<VoiceEntry>, new_priority: u8) -> bool {
+        if voices.is_empty() {
+            return false;
+        }
+        // Find the "weakest" stealable voice (priority <= new_priority).
+        let victim = voices
+            .iter()
+            .enumerate()
+            .filter(|(_, v)| v.priority <= new_priority)
+            .min_by(|(_, a), (_, b)| {
+                a.priority
+                    .cmp(&b.priority)
+                    .then(a.volume_linear.partial_cmp(&b.volume_linear).unwrap_or(std::cmp::Ordering::Equal))
+                    .then(a.birth.cmp(&b.birth))
+            })
+            .map(|(i, _)| i);
+
+        if let Some(idx) = victim {
+            let mut entry = voices.swap_remove(idx);
+            entry.handle.stop(Tween::default());
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Steal the least-important voice globally (across all entities).
+    /// Returns true if a voice was stolen, false if all voices have higher priority.
+    fn steal_global_voice(&mut self, new_priority: u8) -> bool {
+        // Find (entity_uuid, index) of the weakest stealable voice globally.
+        let mut best: Option<(u64, usize, u8, f32, u64)> = None; // (uuid, idx, priority, volume, birth)
+        for (&uuid, voices) in &self.active_sounds {
+            for (i, v) in voices.iter().enumerate() {
+                if v.priority > new_priority {
+                    continue;
+                }
+                let dominated = match &best {
+                    None => true,
+                    Some((_, _, bp, bv, bb)) => {
+                        (v.priority, v.volume_linear.to_bits(), v.birth)
+                            < (*bp, bv.to_bits(), *bb)
+                    }
+                };
+                if dominated {
+                    best = Some((uuid, i, v.priority, v.volume_linear, v.birth));
+                }
+            }
+        }
+
+        if let Some((uuid, idx, ..)) = best {
+            if let Some(voices) = self.active_sounds.get_mut(&uuid) {
+                let mut entry = voices.swap_remove(idx);
+                entry.handle.stop(Tween::default());
+                if voices.is_empty() {
+                    self.active_sounds.remove(&uuid);
+                }
+            }
+            true
+        } else {
+            false
+        }
     }
 }

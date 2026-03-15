@@ -34,6 +34,7 @@ pub(crate) fn draw_audio_source_component(
                 mut min_distance,
                 mut max_distance,
                 category,
+                mut priority,
             ) = {
                 let ac = scene.get_component::<AudioSourceComponent>(entity).unwrap();
                 (
@@ -48,6 +49,7 @@ pub(crate) fn draw_audio_source_component(
                     ac.min_distance,
                     ac.max_distance,
                     ac.category,
+                    ac.priority,
                 )
             };
 
@@ -133,6 +135,29 @@ pub(crate) fn draw_audio_source_component(
                             }
                         }
                     });
+            });
+
+            // Priority drag.
+            ui.horizontal(|ui| {
+                ui.label("Priority");
+                if ui
+                    .add(
+                        egui::DragValue::new(&mut priority)
+                            .range(0..=255)
+                            .speed(1),
+                    )
+                    .on_hover_text(
+                        "Voice priority (0–255). Higher = more important.\n\
+                         When the voice limit is reached, lower-priority\n\
+                         sounds are stopped first to make room.",
+                    )
+                    .changed()
+                {
+                    if let Some(mut ac) = scene.get_component_mut::<AudioSourceComponent>(entity) {
+                        ac.priority = priority;
+                    }
+                    *scene_dirty = true;
+                }
             });
 
             // Looping checkbox.
