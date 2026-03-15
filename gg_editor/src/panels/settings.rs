@@ -20,7 +20,7 @@ pub(crate) struct SettingsState<'a> {
     pub show_msaa_test: &'a mut bool,
 }
 
-pub(crate) fn settings_ui(ui: &mut egui::Ui, scene: &Scene, state: &mut SettingsState<'_>) {
+pub(crate) fn settings_ui(ui: &mut egui::Ui, scene: &mut Scene, state: &mut SettingsState<'_>) {
     let SettingsState {
         frame_time_ms,
         render_stats,
@@ -181,6 +181,53 @@ pub(crate) fn settings_ui(ui: &mut egui::Ui, scene: &Scene, state: &mut Settings
                 .color(egui::Color32::from_rgb(0xFF, 0x44, 0x44))
                 .strong(),
         );
+    }
+
+    // -- Audio Mixer --
+    ui.add_space(8.0);
+    ui.heading("Audio Mixer");
+    ui.separator();
+
+    // Master volume.
+    let mut master = scene.get_master_volume();
+    ui.horizontal(|ui| {
+        ui.label("Master");
+        if ui
+            .add(egui::Slider::new(&mut master, 0.0..=1.0))
+            .changed()
+        {
+            scene.set_master_volume(master);
+        }
+    });
+
+    // Per-category volume + mute.
+    for i in 0..AudioCategory::COUNT {
+        let cat = AudioCategory::from_index(i).unwrap();
+        let mut vol = scene.get_category_volume(cat);
+        let muted = scene.is_category_muted(cat);
+        let mut active = !muted;
+        ui.horizontal(|ui| {
+            if ui
+                .checkbox(&mut active, "")
+                .on_hover_text(if muted { "Unmute" } else { "Mute" })
+                .changed()
+            {
+                if active {
+                    scene.unmute_category(cat);
+                } else {
+                    scene.mute_category(cat);
+                }
+            }
+            ui.label(cat.label());
+            ui.add_enabled_ui(active, |ui| {
+                if ui
+                    .add(egui::Slider::new(&mut vol, 0.0..=1.0))
+                    .changed()
+                {
+                    scene.set_category_volume(cat, vol);
+                }
+            });
+        });
     }
 
     // -- Post-Processing --

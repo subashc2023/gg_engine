@@ -367,6 +367,13 @@ pub fn register_all(lua: &Lua) -> LuaResult<()> {
         lua.create_function(lua_get_category_volume)?,
     )?;
 
+    engine.set("mute_bus", lua.create_function(lua_mute_bus)?)?;
+    engine.set("unmute_bus", lua.create_function(lua_unmute_bus)?)?;
+    engine.set(
+        "is_bus_muted",
+        lua.create_function(lua_is_bus_muted)?,
+    )?;
+
     engine.set("set_hrtf", lua.create_function(lua_set_hrtf)?)?;
     engine.set("get_hrtf", lua.create_function(lua_get_hrtf)?)?;
 
@@ -1800,6 +1807,43 @@ fn lua_get_category_volume(lua: &Lua, cat_str: String) -> LuaResult<f32> {
         } else {
             log::warn!("Unknown audio category '{cat_str}'. Use: sfx, music, ambient, voice.");
             1.0
+        }
+    })
+}
+
+/// `Engine.mute_bus(category)` — mute a sound category bus.
+/// Category: "sfx", "music", "ambient", "voice" (case-insensitive).
+fn lua_mute_bus(lua: &Lua, cat_str: String) -> LuaResult<()> {
+    with_scene_mut(lua, (), |scene| {
+        if let Some(cat) = super::AudioCategory::from_str_loose(&cat_str) {
+            scene.mute_category(cat);
+        } else {
+            log::warn!("Unknown audio category '{cat_str}'. Use: sfx, music, ambient, voice.");
+        }
+    })
+}
+
+/// `Engine.unmute_bus(category)` — unmute a sound category bus.
+/// Category: "sfx", "music", "ambient", "voice" (case-insensitive).
+fn lua_unmute_bus(lua: &Lua, cat_str: String) -> LuaResult<()> {
+    with_scene_mut(lua, (), |scene| {
+        if let Some(cat) = super::AudioCategory::from_str_loose(&cat_str) {
+            scene.unmute_category(cat);
+        } else {
+            log::warn!("Unknown audio category '{cat_str}'. Use: sfx, music, ambient, voice.");
+        }
+    })
+}
+
+/// `Engine.is_bus_muted(category)` — check if a sound category bus is muted.
+/// Category: "sfx", "music", "ambient", "voice" (case-insensitive).
+fn lua_is_bus_muted(lua: &Lua, cat_str: String) -> LuaResult<bool> {
+    with_scene_mut(lua, false, |scene| {
+        if let Some(cat) = super::AudioCategory::from_str_loose(&cat_str) {
+            scene.is_category_muted(cat)
+        } else {
+            log::warn!("Unknown audio category '{cat_str}'. Use: sfx, music, ambient, voice.");
+            false
         }
     })
 }
@@ -4455,6 +4499,9 @@ mod tests {
         assert!(engine.get::<LuaFunction>("get_master_volume").is_ok());
         assert!(engine.get::<LuaFunction>("set_category_volume").is_ok());
         assert!(engine.get::<LuaFunction>("get_category_volume").is_ok());
+        assert!(engine.get::<LuaFunction>("mute_bus").is_ok());
+        assert!(engine.get::<LuaFunction>("unmute_bus").is_ok());
+        assert!(engine.get::<LuaFunction>("is_bus_muted").is_ok());
         assert!(engine.get::<LuaFunction>("set_hrtf").is_ok());
         assert!(engine.get::<LuaFunction>("get_hrtf").is_ok());
         // Physics
@@ -5105,6 +5152,20 @@ mod tests {
         lua.load("result = Engine.get_category_volume('sfx')")
             .exec()
             .expect("get_category_volume should not error without context");
+    }
+
+    #[test]
+    fn bus_mute_no_context_no_error() {
+        let lua = setup();
+        lua.load("Engine.mute_bus('music')")
+            .exec()
+            .expect("mute_bus should not error without context");
+        lua.load("Engine.unmute_bus('sfx')")
+            .exec()
+            .expect("unmute_bus should not error without context");
+        lua.load("result = Engine.is_bus_muted('ambient')")
+            .exec()
+            .expect("is_bus_muted should not error without context");
     }
 
     #[test]

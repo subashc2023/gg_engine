@@ -6,10 +6,11 @@ use kira::listener::ListenerHandle;
 use kira::sound::static_sound::{StaticSoundData, StaticSoundHandle, StaticSoundSettings};
 use kira::sound::streaming::{StreamingSoundData, StreamingSoundHandle};
 use kira::sound::{FromFileError, PlaybackState};
-use kira::track::{SpatialTrackBuilder, SpatialTrackDistances};
+use kira::track::{SpatialTrackBuilder, SpatialTrackDistances, TrackBuilder, TrackHandle};
 use kira::{AudioManager, AudioManagerSettings, Decibels, DefaultBackend, Panning, Tween};
 
 use super::hrtf::{BinauralEffectBuilder, BinauralHandle, BinauralParams};
+use super::AudioCategory;
 
 /// Unified handle for both static and streaming sounds.
 enum SoundHandle {
@@ -102,12 +103,28 @@ pub(crate) struct SpatialTrackState {
 // AudioEngine
 // ---------------------------------------------------------------------------
 
-/// Wrapper around kira's AudioManager, providing entity-keyed playback.
+/// Wrapper around kira's AudioManager, providing entity-keyed playback
+/// with per-category bus routing.
 ///
 /// Supports multiple simultaneous sounds per entity (e.g. footsteps + breathing),
 /// streaming playback for music tracks, and spatial panning/attenuation.
 /// For HRTF-enabled sources, per-entity spatial tracks with binaural effects
 /// are created automatically.
+///
+/// # Audio bus hierarchy
+///
+/// ```text
+/// Main Mixer (master volume)
+/// ├── SFX Bus       (category volume)
+/// │   ├── non-spatial sounds
+/// │   └── spatial sub-tracks
+/// ├── Music Bus     (category volume)
+/// ├── Ambient Bus   (category volume)
+/// └── Voice Bus     (category volume)
+/// ```
+///
+/// Volume changes on the master or category buses affect all currently-playing
+/// sounds in real time (no longer just pre-play multiplication).
 pub(crate) struct AudioEngine {
     manager: AudioManager,
     /// Active sound handles keyed by entity UUID. Each entity can have
@@ -121,6 +138,12 @@ pub(crate) struct AudioEngine {
     /// UUIDs for which the sound completion callback should be suppressed
     /// (stop was user-initiated via stop/fade_out, not natural completion).
     suppress_callback: HashSet<u64>,
+
+    // --- Audio bus routing ---
+    /// Per-category bus tracks. Non-spatial sounds play on their category's bus;
+    /// spatial tracks are created as children of their category bus.
+    /// Indexed by [`AudioCategory`] discriminant.
+    bus_tracks: [Option<TrackHandle>; AudioCategory::COUNT],
 
     // --- Spatial audio ---
     /// kira listener handle (one per scene). Position/orientation updated per-frame.
@@ -143,12 +166,32 @@ impl AudioEngine {
                         None
                     }
                 };
+
+                // Create per-category bus tracks as sub-tracks of the main mixer.
+                let mut bus_tracks: [Option<TrackHandle>; AudioCategory::COUNT] =
+                    Default::default();
+                for (slot, i) in bus_tracks.iter_mut().zip(0..AudioCategory::COUNT) {
+                    match manager.add_sub_track(TrackBuilder::new()) {
+                        Ok(track) => *slot = Some(track),
+                        Err(e) => {
+                            log::error!(
+                                "Failed to create audio bus for category {}: {}",
+                                AudioCategory::from_index(i)
+                                    .map(|c| c.label())
+                                    .unwrap_or("?"),
+                                e,
+                            );
+                        }
+                    }
+                }
+
                 Some(Self {
                     manager,
                     active_sounds: HashMap::new(),
                     sound_cache: HashMap::new(),
                     cache_order: Vec::new(),
                     suppress_callback: HashSet::new(),
+                    bus_tracks,
                     listener,
                     spatial_tracks: HashMap::new(),
                 })
@@ -178,6 +221,9 @@ impl AudioEngine {
 
     /// Ensure a spatial track exists for the given entity. Creates one if needed.
     ///
+    /// The spatial track is created as a child of the entity's category bus so
+    /// that category and master volume changes affect it in real time.
+    ///
     /// All spatial tracks are created with a `BinauralEffect` so that HRTF can
     /// be toggled at runtime via `BinauralParams::set_enabled()` without
     /// recreating the track (which would interrupt playback).
@@ -188,6 +234,7 @@ impl AudioEngine {
         min_distance: f32,
         max_distance: f32,
         hrtf: bool,
+        category: AudioCategory,
     ) {
         if let Some(st) = self.spatial_tracks.get(&entity_uuid) {
             // Toggle the binaural effect on/off to match current hrtf flag.
@@ -219,7 +266,17 @@ impl AudioEngine {
             .spatialization_strength(0.0);
         builder.add_effect(effect_builder);
 
-        match self.manager.add_spatial_sub_track(listener_id, position, builder) {
+        // Create the spatial track as a child of the category bus (so bus
+        // volume/mute propagates), falling back to the main mixer if the bus
+        // isn't available.
+        let result = if let Some(ref mut bus) = self.bus_tracks[category as usize] {
+            bus.add_spatial_sub_track(listener_id, position, builder)
+        } else {
+            self.manager
+                .add_spatial_sub_track(listener_id, position, builder)
+        };
+
+        match result {
             Ok(track) => {
                 let state = SpatialTrackState {
                     track,
@@ -265,15 +322,17 @@ impl AudioEngine {
     /// Play a sound for the given entity. Multiple sounds can overlap.
     /// Finished sounds are automatically pruned.
     ///
-    /// `effective_volume` is the combined linear volume (entity * category * master).
+    /// `entity_volume` is the entity's own linear volume (0.0–1.0).
+    /// Category and master volume are applied by the bus track hierarchy.
     pub fn play_sound(
         &mut self,
         entity_uuid: u64,
         path: &str,
-        effective_volume: f32,
+        entity_volume: f32,
         pitch: f32,
         looping: bool,
         streaming: bool,
+        category: AudioCategory,
     ) {
         // Prune finished sounds for this entity.
         if let Some(handles) = self.active_sounds.get_mut(&entity_uuid) {
@@ -281,31 +340,32 @@ impl AudioEngine {
         }
 
         if streaming {
-            self.play_streaming(entity_uuid, path, effective_volume, pitch, looping);
+            self.play_streaming(entity_uuid, path, entity_volume, pitch, looping, category);
         } else {
-            self.play_static(entity_uuid, path, effective_volume, pitch, looping);
+            self.play_static(entity_uuid, path, entity_volume, pitch, looping, category);
         }
     }
 
-    /// Play a sound with a fade-in from silence to the effective volume.
+    /// Play a sound with a fade-in from silence to the entity volume.
     #[allow(clippy::too_many_arguments)]
     pub fn play_sound_fade(
         &mut self,
         entity_uuid: u64,
         path: &str,
-        effective_volume: f32,
+        entity_volume: f32,
         pitch: f32,
         looping: bool,
         streaming: bool,
         fade_secs: f32,
+        category: AudioCategory,
     ) {
         // Play at silence.
-        self.play_sound(entity_uuid, path, 0.0, pitch, looping, streaming);
+        self.play_sound(entity_uuid, path, 0.0, pitch, looping, streaming, category);
 
         // Immediately tween to target volume.
         if let Some(handles) = self.active_sounds.get_mut(&entity_uuid) {
             let tween = fade_tween(fade_secs);
-            let target = Decibels(linear_to_db(effective_volume));
+            let target = Decibels(linear_to_db(entity_volume));
             for handle in handles.iter_mut() {
                 if handle.state() == PlaybackState::Playing {
                     handle.set_volume(target, tween);
@@ -321,6 +381,7 @@ impl AudioEngine {
         volume: f32,
         pitch: f32,
         looping: bool,
+        category: AudioCategory,
     ) {
         // Load or retrieve cached sound data.
         let sound_data = if let Some(data) = self.sound_cache.get(path) {
@@ -360,34 +421,26 @@ impl AudioEngine {
             settings = settings.loop_region(..);
         }
 
-        // Route to spatial track if one exists, otherwise play on main track.
-        if let Some(st) = self.spatial_tracks.get_mut(&entity_uuid) {
-            match st.track.play(sound_data.with_settings(settings)) {
-                Ok(handle) => {
-                    self.active_sounds
-                        .entry(entity_uuid)
-                        .or_default()
-                        .push(SoundHandle::Static(handle));
-                }
-                Err(e) => {
-                    log::error!(
-                        "Failed to play sound on spatial track for entity {}: {}",
-                        entity_uuid,
-                        e
-                    );
-                }
-            }
+        let prepared = sound_data.with_settings(settings);
+
+        // Route to spatial track if one exists, then bus track, then main mixer.
+        let result = if let Some(st) = self.spatial_tracks.get_mut(&entity_uuid) {
+            st.track.play(prepared)
+        } else if let Some(ref mut bus) = self.bus_tracks[category as usize] {
+            bus.play(prepared)
         } else {
-            match self.manager.play(sound_data.with_settings(settings)) {
-                Ok(handle) => {
-                    self.active_sounds
-                        .entry(entity_uuid)
-                        .or_default()
-                        .push(SoundHandle::Static(handle));
-                }
-                Err(e) => {
-                    log::error!("Failed to play sound for entity {}: {}", entity_uuid, e);
-                }
+            self.manager.play(prepared)
+        };
+
+        match result {
+            Ok(handle) => {
+                self.active_sounds
+                    .entry(entity_uuid)
+                    .or_default()
+                    .push(SoundHandle::Static(handle));
+            }
+            Err(e) => {
+                log::error!("Failed to play sound for entity {}: {}", entity_uuid, e);
             }
         }
     }
@@ -399,6 +452,7 @@ impl AudioEngine {
         volume: f32,
         pitch: f32,
         looping: bool,
+        category: AudioCategory,
     ) {
         let sound_data = match StreamingSoundData::from_file(path) {
             Ok(data) => data,
@@ -415,38 +469,28 @@ impl AudioEngine {
             data = data.loop_region(..);
         }
 
-        // Route to spatial track if one exists.
-        if let Some(st) = self.spatial_tracks.get_mut(&entity_uuid) {
-            match st.track.play(data) {
-                Ok(handle) => {
-                    self.active_sounds
-                        .entry(entity_uuid)
-                        .or_default()
-                        .push(SoundHandle::Streaming(handle));
-                }
-                Err(e) => {
-                    log::error!(
-                        "Failed to play streaming on spatial track for entity {}: {}",
-                        entity_uuid,
-                        e
-                    );
-                }
-            }
+        // Route to spatial track if one exists, then bus track, then main mixer.
+        let result = if let Some(st) = self.spatial_tracks.get_mut(&entity_uuid) {
+            st.track.play(data)
+        } else if let Some(ref mut bus) = self.bus_tracks[category as usize] {
+            bus.play(data)
         } else {
-            match self.manager.play(data) {
-                Ok(handle) => {
-                    self.active_sounds
-                        .entry(entity_uuid)
-                        .or_default()
-                        .push(SoundHandle::Streaming(handle));
-                }
-                Err(e) => {
-                    log::error!(
-                        "Failed to play streaming sound for entity {}: {}",
-                        entity_uuid,
-                        e
-                    );
-                }
+            self.manager.play(data)
+        };
+
+        match result {
+            Ok(handle) => {
+                self.active_sounds
+                    .entry(entity_uuid)
+                    .or_default()
+                    .push(SoundHandle::Streaming(handle));
+            }
+            Err(e) => {
+                log::error!(
+                    "Failed to play streaming sound for entity {}: {}",
+                    entity_uuid,
+                    e
+                );
             }
         }
     }
@@ -565,6 +609,38 @@ impl AudioEngine {
             }
         }
         self.spatial_tracks.clear();
+    }
+
+    // ------------------------------------------------------------------
+    // Bus / mixer control
+    // ------------------------------------------------------------------
+
+    /// Set the master volume on kira's main track. Affects all playing sounds.
+    pub fn set_master_volume(&mut self, volume_linear: f32) {
+        self.manager
+            .main_track()
+            .set_volume(Decibels(linear_to_db(volume_linear)), Tween::default());
+    }
+
+    /// Set volume for a category bus. Affects all sounds routed to this bus.
+    pub fn set_bus_volume(&mut self, category: AudioCategory, volume_linear: f32) {
+        if let Some(ref mut bus) = self.bus_tracks[category as usize] {
+            bus.set_volume(Decibels(linear_to_db(volume_linear)), Tween::default());
+        }
+    }
+
+    /// Mute a category bus (pauses the track, silencing all routed sounds).
+    pub fn mute_bus(&mut self, category: AudioCategory) {
+        if let Some(ref mut bus) = self.bus_tracks[category as usize] {
+            bus.pause(Tween::default());
+        }
+    }
+
+    /// Unmute a category bus (resumes the track).
+    pub fn unmute_bus(&mut self, category: AudioCategory) {
+        if let Some(ref mut bus) = self.bus_tracks[category as usize] {
+            bus.resume(Tween::default());
+        }
     }
 
     /// Drain entity UUIDs whose sounds have all finished (naturally, not explicitly stopped).

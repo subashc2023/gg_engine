@@ -85,10 +85,13 @@ pub struct SceneCore {
     pub(super) textures_all_resolved: bool,
 
     // Audio volume management
-    /// Global master volume (0.0–1.0). Multiplied into all sound playback.
+    /// Global master volume (0.0–1.0). Applied via kira's main track.
     pub(super) master_volume: f32,
     /// Per-category volume multipliers (0.0–1.0), indexed by [`AudioCategory`].
+    /// Applied via per-category kira bus tracks.
     pub(super) category_volumes: [f32; AudioCategory::COUNT],
+    /// Per-category mute state, indexed by [`AudioCategory`].
+    pub(super) category_muted: [bool; AudioCategory::COUNT],
 
     // Shadow mapping caching
     /// Stashed cascade VP matrices + split depths + shadow_distance + texel_sizes
@@ -176,6 +179,7 @@ impl SceneCore {
             textures_all_resolved: false,
             master_volume: 1.0,
             category_volumes: [1.0; AudioCategory::COUNT],
+            category_muted: [false; AudioCategory::COUNT],
             shadow_cascade_cache: RwLock::new(None),
             cursor_mode: CursorMode::Normal,
             requested_window_size: Mutex::new(None),

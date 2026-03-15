@@ -26,6 +26,7 @@ impl Scene {
             looping: bool,
             streaming: bool,
             category: AudioCategory,
+            spatial: bool,
             hrtf: bool,
             min_distance: f32,
             max_distance: f32,
@@ -45,7 +46,8 @@ impl Scene {
                 looping: asc.looping,
                 streaming: asc.streaming,
                 category: asc.category,
-                hrtf: asc.spatial && asc.hrtf,
+                spatial: asc.spatial,
+                hrtf: asc.hrtf,
                 min_distance: asc.min_distance,
                 max_distance: asc.max_distance,
                 position: tf.translation,
@@ -53,18 +55,38 @@ impl Scene {
             .collect();
 
         if let Some(ref mut engine) = self.audio_engine {
+            // Sync bus volumes from SceneCore state.
+            engine.set_master_volume(self.core.master_volume);
+            for i in 0..AudioCategory::COUNT {
+                if let Some(cat) = AudioCategory::from_index(i) {
+                    engine.set_bus_volume(cat, self.core.category_volumes[i]);
+                    if self.core.category_muted[i] {
+                        engine.mute_bus(cat);
+                    }
+                }
+            }
+
             for info in &auto_play {
                 // Ensure spatial track for spatial sources.
-                if info.hrtf {
+                if info.hrtf || info.spatial {
                     engine.ensure_spatial_track(
-                        info.uuid, info.position, info.min_distance, info.max_distance, true,
+                        info.uuid,
+                        info.position,
+                        info.min_distance,
+                        info.max_distance,
+                        info.hrtf,
+                        info.category,
                     );
                 }
-                let effective = info.volume
-                    * self.core.category_volumes[info.category as usize]
-                    * self.core.master_volume;
+                // Entity volume only — bus handles category × master.
                 engine.play_sound(
-                    info.uuid, &info.path, effective, info.pitch, info.looping, info.streaming,
+                    info.uuid,
+                    &info.path,
+                    info.volume,
+                    info.pitch,
+                    info.looping,
+                    info.streaming,
+                    info.category,
                 );
             }
         }
@@ -186,15 +208,10 @@ impl Scene {
     // Playback control
     // -----------------------------------------------------------------
 
-    /// Compute effective volume combining entity, category, and master volumes.
-    fn effective_volume(&self, entity_volume: f32, category: AudioCategory) -> f32 {
-        entity_volume * self.category_volumes[category as usize] * self.master_volume
-    }
-
     /// Play audio for an entity (used by Lua scripts).
     pub fn play_entity_sound(&mut self, entity: Entity) {
         // Extract all needed data before mutable borrow of audio_engine.
-        let (uuid, path, effective_vol, pitch, looping, streaming, spatial, hrtf, min_d, max_d, pos) = {
+        let info = {
             let id = match self.get_component::<IdComponent>(entity) {
                 Some(id) => id.id.raw(),
                 None => return,
@@ -207,23 +224,32 @@ impl Scene {
                 Some(p) => p.clone(),
                 None => return,
             };
-            let vol = self.effective_volume(asc.volume, asc.category);
             let data = (
-                id, path, vol, asc.pitch, asc.looping, asc.streaming,
-                asc.spatial, asc.hrtf, asc.min_distance, asc.max_distance,
+                id,
+                path,
+                asc.volume,
+                asc.pitch,
+                asc.looping,
+                asc.streaming,
+                asc.spatial,
+                asc.hrtf,
+                asc.min_distance,
+                asc.max_distance,
+                asc.category,
             );
             drop(asc);
             let pos = self
                 .get_component::<TransformComponent>(entity)
                 .map(|t| t.translation)
                 .unwrap_or(glam::Vec3::ZERO);
-            (data.0, data.1, data.2, data.3, data.4, data.5, data.6, data.7, data.8, data.9, pos)
+            (data, pos)
         };
+        let ((uuid, path, volume, pitch, looping, streaming, spatial, hrtf, min_d, max_d, category), pos) = info;
         if let Some(ref mut engine) = self.audio_engine {
             if spatial {
-                engine.ensure_spatial_track(uuid, pos, min_d, max_d, hrtf);
+                engine.ensure_spatial_track(uuid, pos, min_d, max_d, hrtf, category);
             }
-            engine.play_sound(uuid, &path, effective_vol, pitch, looping, streaming);
+            engine.play_sound(uuid, &path, volume, pitch, looping, streaming, category);
         }
     }
 
@@ -293,7 +319,7 @@ impl Scene {
     /// If the entity has paused sounds, resumes them with a fade.
     /// If no sounds are active, plays the entity's audio with a fade from silence.
     pub fn fade_in_entity_sound(&mut self, entity: Entity, duration_secs: f32) {
-        let (uuid, effective_vol, maybe_play) = {
+        let (uuid, entity_vol, category, maybe_play) = {
             let id = match self.get_component::<IdComponent>(entity) {
                 Some(id) => id.id.raw(),
                 None => return,
@@ -302,15 +328,16 @@ impl Scene {
                 Some(a) => a,
                 None => return,
             };
-            let vol = self.effective_volume(asc.volume, asc.category);
+            let vol = asc.volume;
+            let cat = asc.category;
             let play_info = asc
                 .resolved_path
                 .as_ref()
                 .map(|p| (p.clone(), asc.pitch, asc.looping, asc.streaming));
-            (id, vol, play_info)
+            (id, vol, cat, play_info)
         };
 
-        let target_db = super::audio::linear_to_db(effective_vol);
+        let target_db = super::audio::linear_to_db(entity_vol);
 
         if let Some(ref mut engine) = self.audio_engine {
             // Try to fade in existing sounds first.
@@ -322,11 +349,12 @@ impl Scene {
                     engine.play_sound_fade(
                         uuid,
                         &path,
-                        effective_vol,
+                        entity_vol,
                         pitch,
                         looping,
                         streaming,
                         duration_secs,
+                        category,
                     );
                 }
             }
@@ -363,12 +391,17 @@ impl Scene {
     }
 
     // -----------------------------------------------------------------
-    // Master / category volume
+    // Master / category volume / bus mute
     // -----------------------------------------------------------------
 
     /// Set the global master volume (0.0–1.0).
+    /// Immediately affects all playing sounds via the kira main track.
     pub fn set_master_volume(&mut self, volume: f32) {
-        self.master_volume = volume.clamp(0.0, 1.0);
+        let v = volume.clamp(0.0, 1.0);
+        self.master_volume = v;
+        if let Some(ref mut engine) = self.audio_engine {
+            engine.set_master_volume(v);
+        }
     }
 
     /// Get the global master volume.
@@ -377,13 +410,39 @@ impl Scene {
     }
 
     /// Set volume for a sound category (0.0–1.0).
+    /// Immediately affects all playing sounds routed to this category's bus.
     pub fn set_category_volume(&mut self, category: AudioCategory, volume: f32) {
-        self.category_volumes[category as usize] = volume.clamp(0.0, 1.0);
+        let v = volume.clamp(0.0, 1.0);
+        self.category_volumes[category as usize] = v;
+        if let Some(ref mut engine) = self.audio_engine {
+            engine.set_bus_volume(category, v);
+        }
     }
 
     /// Get volume for a sound category.
     pub fn get_category_volume(&self, category: AudioCategory) -> f32 {
         self.category_volumes[category as usize]
+    }
+
+    /// Mute a sound category (pauses the bus track, silencing all routed sounds).
+    pub fn mute_category(&mut self, category: AudioCategory) {
+        self.category_muted[category as usize] = true;
+        if let Some(ref mut engine) = self.audio_engine {
+            engine.mute_bus(category);
+        }
+    }
+
+    /// Unmute a sound category (resumes the bus track).
+    pub fn unmute_category(&mut self, category: AudioCategory) {
+        self.category_muted[category as usize] = false;
+        if let Some(ref mut engine) = self.audio_engine {
+            engine.unmute_bus(category);
+        }
+    }
+
+    /// Check if a sound category is muted.
+    pub fn is_category_muted(&self, category: AudioCategory) -> bool {
+        self.category_muted[category as usize]
     }
 
     // -----------------------------------------------------------------
@@ -478,6 +537,7 @@ impl Scene {
             hrtf: bool,
             min_distance: f32,
             max_distance: f32,
+            category: AudioCategory,
         }
 
         let updates: Vec<SpatialUpdate> = self
@@ -491,6 +551,7 @@ impl Scene {
                 hrtf: asc.hrtf,
                 min_distance: asc.min_distance,
                 max_distance: asc.max_distance,
+                category: asc.category,
             })
             .collect();
 
@@ -498,52 +559,28 @@ impl Scene {
             let listener_inv_rot = listener_rot.inverse();
 
             for update in &updates {
-                if update.hrtf {
-                    // ----- HRTF path -----
-                    // Ensure spatial track exists.
-                    engine.ensure_spatial_track(
-                        update.uuid,
-                        update.position,
-                        update.min_distance,
-                        update.max_distance,
-                        true,
-                    );
-                    // Update track position (kira handles distance attenuation).
-                    engine.update_spatial_position(update.uuid, update.position);
+                // Ensure spatial track exists (as child of category bus).
+                engine.ensure_spatial_track(
+                    update.uuid,
+                    update.position,
+                    update.min_distance,
+                    update.max_distance,
+                    update.hrtf,
+                    update.category,
+                );
+                // Update track position (kira handles distance attenuation).
+                engine.update_spatial_position(update.uuid, update.position);
 
-                    // Compute listener-relative direction for the binaural effect.
-                    let relative_pos =
-                        listener_inv_rot * (update.position - listener_pos);
-                    let (azimuth, elevation) =
-                        super::hrtf::direction_to_azimuth_elevation(relative_pos);
+                // Compute listener-relative direction for the binaural effect.
+                let relative_pos =
+                    listener_inv_rot * (update.position - listener_pos);
+                let (azimuth, elevation) =
+                    super::hrtf::direction_to_azimuth_elevation(relative_pos);
 
-                    if let Some(params) = engine.get_binaural_params(update.uuid) {
-                        params.set_direction(azimuth, elevation);
-                    }
-                } else {
-                    // ----- Non-HRTF spatial path -----
-                    // Ensure spatial track exists (binaural effect disabled).
-                    engine.ensure_spatial_track(
-                        update.uuid,
-                        update.position,
-                        update.min_distance,
-                        update.max_distance,
-                        false,
-                    );
-                    engine.update_spatial_position(update.uuid, update.position);
-
-                    // Still update direction so the fallback stereo panning
-                    // in the disabled binaural effect knows the azimuth.
-                    let relative_pos =
-                        listener_inv_rot * (update.position - listener_pos);
-                    let (azimuth, elevation) =
-                        super::hrtf::direction_to_azimuth_elevation(relative_pos);
-                    if let Some(params) = engine.get_binaural_params(update.uuid) {
-                        params.set_direction(azimuth, elevation);
-                    }
+                if let Some(params) = engine.get_binaural_params(update.uuid) {
+                    params.set_direction(azimuth, elevation);
                 }
             }
-
         }
     }
 
