@@ -5,7 +5,7 @@ use gg_engine::prelude::*;
 use gg_engine::WireframeMode;
 
 use super::panels::Tab;
-use super::{panels, EditorMode, GGEditor, SceneState};
+use super::{editor_settings, panels, EditorMode, GGEditor, SceneState};
 
 impl GGEditor {
     /// Returns true if it's safe to discard the current scene (either not dirty,
@@ -243,6 +243,54 @@ impl GGEditor {
                 ui.close();
             }
             ui.separator();
+            ui.menu_button("Camera Bookmarks", |ui| {
+                for slot in 0..editor_settings::MAX_CAMERA_BOOKMARKS {
+                    let has_bookmark = self.editor_settings.camera_bookmarks[slot].is_some();
+                    let label = if has_bookmark {
+                        format!("Slot {}", slot)
+                    } else {
+                        format!("Slot {} (empty)", slot)
+                    };
+                    ui.horizontal(|ui| {
+                        if ui
+                            .add_enabled(has_bookmark, egui::Button::new(&label))
+                            .on_hover_text(format!(
+                                "Recall: {}    Save: Ctrl+{}",
+                                slot, slot
+                            ))
+                            .clicked()
+                        {
+                            self.recall_camera_bookmark(slot);
+                            ui.close();
+                        }
+                        if has_bookmark
+                            && ui
+                                .small_button("X")
+                                .on_hover_text("Clear bookmark")
+                                .clicked()
+                        {
+                            self.editor_settings.camera_bookmarks[slot] = None;
+                            self.editor_settings.save();
+                            ui.close();
+                        }
+                    });
+                }
+                ui.separator();
+                if ui
+                    .button("Save Current View...")
+                    .on_hover_text("Ctrl+0–9 to save to a slot")
+                    .clicked()
+                {
+                    // Save to first empty slot, or slot 0 if all occupied.
+                    let slot = self.editor_settings.camera_bookmarks
+                        .iter()
+                        .position(|b| b.is_none())
+                        .unwrap_or(0);
+                    self.save_camera_bookmark(slot);
+                    ui.close();
+                }
+            });
+            ui.separator();
             if ui.button("Reset Layout").clicked() {
                 self.ui.dock_state = Self::default_dock_layout();
                 ui.close();
@@ -479,6 +527,12 @@ impl GGEditor {
                         ui.end_row();
                         ui.label("F");
                         ui.label("Focus Selected");
+                        ui.end_row();
+                        ui.label("Ctrl+0–9");
+                        ui.label("Save Camera Bookmark");
+                        ui.end_row();
+                        ui.label("0–9");
+                        ui.label("Recall Camera Bookmark");
                         ui.end_row();
                     });
             });

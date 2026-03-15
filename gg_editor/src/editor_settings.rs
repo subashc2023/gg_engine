@@ -44,6 +44,9 @@ impl Default for CameraState {
     }
 }
 
+/// Maximum number of camera bookmark slots (0–9).
+pub(crate) const MAX_CAMERA_BOOKMARKS: usize = 10;
+
 /// Persisted window size and position.
 #[derive(Serialize, Deserialize, Clone)]
 pub(crate) struct WindowState {
@@ -94,6 +97,9 @@ pub(crate) struct EditorSettings {
     pub msaa_samples: MsaaSamples,
     #[serde(default = "default_true")]
     pub show_camera_bounds: bool,
+    /// Camera bookmark slots (Ctrl+0–9 to save, 0–9 to recall).
+    #[serde(default)]
+    pub camera_bookmarks: [Option<CameraState>; MAX_CAMERA_BOOKMARKS],
 }
 
 impl EditorSettings {

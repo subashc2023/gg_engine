@@ -251,6 +251,9 @@ struct UiState {
     show_msaa_test: bool,
     /// When `Some`, the build project modal is open.
     build_modal: Option<build::BuildModal>,
+    /// Transient status message shown briefly in the viewport (e.g. bookmark saved).
+    /// Tuple of (message, remaining_seconds).
+    status_message: Option<(String, f32)>,
 }
 
 // ---------------------------------------------------------------------------
@@ -473,6 +476,7 @@ impl Application for GGEditor {
                 pp_output_egui_tex_id: None,
                 show_msaa_test: false,
                 build_modal: None,
+                status_message: None,
             },
             viewport: ViewportInfo {
                 scene_fb: None,
@@ -940,6 +944,36 @@ impl Application for GGEditor {
                     }
                 }
 
+                // Camera bookmarks — Ctrl+0–9 to save, 0–9 to recall.
+                KeyCode::Num0 | KeyCode::Num1 | KeyCode::Num2 | KeyCode::Num3
+                | KeyCode::Num4 | KeyCode::Num5 | KeyCode::Num6 | KeyCode::Num7
+                | KeyCode::Num8 | KeyCode::Num9
+                    if !self.ui.egui_wants_keyboard
+                        && !self.editor_camera.is_flying()
+                        && self.playback.scene_state != SceneState::Play =>
+                {
+                    let slot = match key_code {
+                        KeyCode::Num0 => 0,
+                        KeyCode::Num1 => 1,
+                        KeyCode::Num2 => 2,
+                        KeyCode::Num3 => 3,
+                        KeyCode::Num4 => 4,
+                        KeyCode::Num5 => 5,
+                        KeyCode::Num6 => 6,
+                        KeyCode::Num7 => 7,
+                        KeyCode::Num8 => 8,
+                        KeyCode::Num9 => 9,
+                        _ => unreachable!(),
+                    };
+                    if ctrl {
+                        // Save bookmark.
+                        self.save_camera_bookmark(slot);
+                    } else if !shift {
+                        // Recall bookmark.
+                        self.recall_camera_bookmark(slot);
+                    }
+                }
+
                 // Play/Stop toggle (F5) — mirrors toolbar play button.
                 KeyCode::F5 if !ctrl && !shift && !self.ui.egui_wants_keyboard => {
                     match self.playback.scene_state {
@@ -990,6 +1024,14 @@ impl Application for GGEditor {
         profile_scope!("GGEditor::on_update");
         // Exponential moving average for stable frame time display.
         self.frame_time_ms = self.frame_time_ms * 0.95 + dt.millis() * 0.05;
+
+        // Tick down status message timer.
+        if let Some((_, ref mut t)) = self.ui.status_message {
+            *t -= dt.seconds();
+            if *t <= 0.0 {
+                self.ui.status_message = None;
+            }
+        }
 
         if self.editor_mode == EditorMode::Hub {
             return;
@@ -1718,6 +1760,30 @@ impl Application for GGEditor {
         // Keyboard shortcuts help dialog.
         self.shortcuts_dialog_ui(ctx);
 
+        // Transient status message overlay (e.g. "Camera bookmark 1 saved").
+        if let Some((ref msg, t)) = self.ui.status_message {
+            let alpha = t.min(1.0).clamp(0.0, 1.0);
+            egui::Area::new(egui::Id::new("status_msg"))
+                .anchor(egui::Align2::CENTER_BOTTOM, [0.0, -40.0])
+                .order(egui::Order::Foreground)
+                .show(ctx, |ui| {
+                    egui::Frame::popup(ui.style())
+                        .fill(ui.style().visuals.window_fill().gamma_multiply(alpha))
+                        .show(ui, |ui| {
+                            ui.label(
+                                egui::RichText::new(msg)
+                                    .color(
+                                        ui.style()
+                                            .visuals
+                                            .text_color()
+                                            .gamma_multiply(alpha),
+                                    )
+                                    .size(14.0),
+                            );
+                        });
+                });
+        }
+
         // DnD ghost overlay — painted on a tooltip layer so it floats above
         // all panels and follows the cursor.
         render_dnd_ghost(ctx);
@@ -1877,6 +1943,27 @@ impl GGEditor {
             let z = j as f32 * grid_size;
             let color = if j == 0 { axis_color_x } else { grid_color };
             renderer.draw_line(Vec3::new(lo_x, 0.0, z), Vec3::new(hi_x, 0.0, z), color, -1);
+        }
+    }
+
+    fn save_camera_bookmark(&mut self, slot: usize) {
+        let bookmark = editor_settings::CameraState {
+            focal_point: self.editor_camera.focal_point().into(),
+            distance: self.editor_camera.distance(),
+            yaw: self.editor_camera.yaw(),
+            pitch: self.editor_camera.pitch(),
+        };
+        self.editor_settings.camera_bookmarks[slot] = Some(bookmark);
+        self.editor_settings.save();
+        self.ui.status_message = Some((format!("Camera bookmark {} saved", slot), 2.0));
+    }
+
+    fn recall_camera_bookmark(&mut self, slot: usize) {
+        if let Some(ref bookmark) = self.editor_settings.camera_bookmarks[slot] {
+            let fp = Vec3::from(bookmark.focal_point);
+            self.editor_camera
+                .restore_state(fp, bookmark.distance, bookmark.yaw, bookmark.pitch);
+            self.ui.status_message = Some((format!("Camera bookmark {} recalled", slot), 1.5));
         }
     }
 
