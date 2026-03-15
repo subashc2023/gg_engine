@@ -2982,12 +2982,11 @@ mod tests {
     }
 
     #[test]
-    fn demo_scene_deserializes() {
-        let yaml = include_str!("../../assets/scenes/lua_camera_follow.ggscene");
+    fn showcase_2d_scene_deserializes() {
+        let yaml = include_str!("../../assets/scenes/showcase_2d.ggscene");
         let mut scene = Scene::new();
         SceneSerializer::deserialize_from_string(&mut scene, yaml)
-            .expect("Failed to deserialize demo scene");
-        assert_eq!(scene.entity_count(), 7);
+            .expect("Failed to deserialize showcase_2d scene");
 
         let entities = scene.each_entity_with_tag();
         let names: Vec<&str> = entities.iter().map(|(_, name)| name.as_str()).collect();
@@ -3003,18 +3002,22 @@ mod tests {
         // Verify physics components.
         assert!(scene.has_component::<RigidBody2DComponent>(*player));
         assert!(scene.has_component::<BoxCollider2DComponent>(*player));
+
+        // Verify new features: CircleCollider2D, Kinematic body, sensor.
+        assert!(names.contains(&"Bouncy Ball"));
+        assert!(names.contains(&"Kinematic Platform"));
+        assert!(names.contains(&"Sensor Zone"));
     }
 
     #[test]
-    fn tilemap_test_scene_deserializes() {
-        let yaml = include_str!("../../assets/scenes/tilemap_test.ggscene");
+    fn showcase_2d_tilemap_deserializes() {
+        let yaml = include_str!("../../assets/scenes/showcase_2d.ggscene");
         let mut scene = Scene::new();
         SceneSerializer::deserialize_from_string(&mut scene, yaml)
-            .expect("Failed to deserialize tilemap_test scene");
-        assert_eq!(scene.entity_count(), 2);
+            .expect("Failed to deserialize showcase_2d scene for tilemap");
 
         let entities = scene.each_entity_with_tag();
-        let (tm_ent, _) = entities.iter().find(|(_, n)| n == "Empty Entity").unwrap();
+        let (tm_ent, _) = entities.iter().find(|(_, n)| n == "Tilemap").unwrap();
         let tm = scene
             .get_component::<crate::TilemapComponent>(*tm_ent)
             .unwrap();
@@ -3025,35 +3028,26 @@ mod tests {
     }
 
     #[test]
-    fn audio_test_scene_deserializes() {
-        let yaml = include_str!("../../assets/scenes/audio_test.ggscene");
+    fn showcase_3d_audio_deserializes() {
+        let yaml = include_str!("../../assets/scenes/showcase_3d.ggscene");
         let mut scene = Scene::new();
         SceneSerializer::deserialize_from_string(&mut scene, yaml)
-            .expect("Failed to deserialize audio_test scene");
-        assert_eq!(scene.entity_count(), 12);
+            .expect("Failed to deserialize showcase_3d scene");
 
         let entities = scene.each_entity_with_tag();
 
-        // Verify Lua-controlled audio entity.
-        let (audio_ent, _) = entities.iter().find(|(_, n)| n == "Audio Player").unwrap();
+        // Verify HRTF orbiting audio entity.
+        let (orbit_ent, _) = entities.iter().find(|(_, n)| n == "Orbiting Source").unwrap();
         let ac = scene
-            .get_component::<crate::AudioSourceComponent>(*audio_ent)
+            .get_component::<crate::AudioSourceComponent>(*orbit_ent)
             .unwrap();
         assert_eq!(ac.audio_handle.raw(), 1001);
         assert!(!ac.play_on_start);
         assert!(ac.looping);
+        assert!(ac.spatial);
+        assert!(ac.hrtf);
 
-        // Verify auto-play entity.
-        let (auto_ent, _) = entities.iter().find(|(_, n)| n == "Auto Player").unwrap();
-        let ac2 = scene
-            .get_component::<crate::AudioSourceComponent>(*auto_ent)
-            .unwrap();
-        assert!(ac2.play_on_start);
-        assert!(!ac2.looping);
-        assert!((ac2.pitch - 1.5).abs() < 0.001);
-        assert!((ac2.volume - 0.3).abs() < 0.001);
-
-        // Verify spatial audio entity.
+        // Verify spatial (non-HRTF) audio entity.
         let (spatial_ent, _) = entities
             .iter()
             .find(|(_, n)| n == "Spatial Source")
@@ -3064,9 +3058,6 @@ mod tests {
         assert!(ac3.spatial);
         assert!(ac3.play_on_start);
         assert!(ac3.looping);
-        assert!((ac3.min_distance - 2.0).abs() < 0.001);
-        assert!((ac3.max_distance - 15.0).abs() < 0.001);
-        assert!((ac3.pitch - 0.8).abs() < 0.001);
 
         // Verify streaming audio entity.
         let (stream_ent, _) = entities
@@ -3079,7 +3070,6 @@ mod tests {
         assert!(ac4.streaming);
         assert!(ac4.play_on_start);
         assert!(ac4.looping);
-        assert!((ac4.volume - 0.5).abs() < 0.001);
 
         // Verify audio listener on camera.
         let (cam_ent, _) = entities.iter().find(|(_, n)| n == "Camera").unwrap();
@@ -3332,14 +3322,15 @@ Entities:
     }
 
     #[test]
-    fn ui_test_scene_deserializes() {
-        let yaml = include_str!("../../assets/scenes/ui_test.ggscene");
+    fn showcase_ui_scene_deserializes() {
+        let yaml = include_str!("../../assets/scenes/showcase_ui.ggscene");
         let mut scene = Scene::new();
         SceneSerializer::deserialize_from_string(&mut scene, yaml)
-            .expect("Failed to deserialize ui_test scene");
-        // Camera, GameManager, Title, AccentBar, Panel,
-        // PlayBtnBg, ResetBtnBg, QuitBtnBg, ClickCounter, StatusText = 10
-        assert_eq!(scene.entity_count(), 10);
+            .expect("Failed to deserialize showcase_ui scene");
+        // Camera, GameManager, GameSession, Title, AccentBar, Panel,
+        // PlayBtnBg, ResetBtnBg, QuitBtnBg, ClickCounter, StatusText,
+        // TopLeftLabel, TopRightLabel, BottomRightLabel = 14
+        assert_eq!(scene.entity_count(), 14);
 
         let entities = scene.each_entity_with_tag();
         let names: Vec<&str> = entities.iter().map(|(_, name)| name.as_str()).collect();

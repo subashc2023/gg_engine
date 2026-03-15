@@ -1,0 +1,796 @@
+Version: 2
+Scene: 2D Showcase
+Entities:
+# ══ INFRASTRUCTURE ═══════════════════════════════════════════════════
+
+# ── Camera (Orthographic, primary) ───────────────────────────────────
+- Entity: 100
+  TagComponent:
+    Tag: Camera
+  TransformComponent:
+    Translation: [0.0, 0.0, 0.0]
+    Rotation: [0.0, 0.0, 0.0, 1.0]
+    Scale: [1.0, 1.0, 1.0]
+  CameraComponent:
+    Camera:
+      ProjectionType: 1
+      PerspectiveFOV: 0.7853982
+      PerspectiveNear: 0.01
+      PerspectiveFar: 1000.0
+      OrthographicSize: 12.0
+      OrthographicNear: -1.0
+      OrthographicFar: 1.0
+    Primary: true
+    FixedAspectRatio: false
+  LuaScriptComponent:
+    ScriptPath: assets/scripts/camera_follow.lua
+
+# ── Action Test Controller ───────────────────────────────────────────
+- Entity: 150
+  TagComponent:
+    Tag: Action Test Controller
+  TransformComponent:
+    Translation: [5.0, 3.0, 0.0]
+    Rotation: [0.0, 0.0, 0.0, 1.0]
+    Scale: [0.5, 0.5, 1.0]
+  SpriteRendererComponent:
+    Color: [0.9, 0.6, 0.1, 1.0]
+    TilingFactor: 1.0
+  LuaScriptComponent:
+    ScriptPath: assets/scripts/action_test.lua
+
+# ── GameSession ──────────────────────────────────────────────────────
+- Entity: 900
+  TagComponent:
+    Tag: GameSession
+  TransformComponent:
+    Translation: [0.0, 0.0, 0.0]
+    Rotation: [0.0, 0.0, 0.0, 1.0]
+    Scale: [1.0, 1.0, 1.0]
+  LuaScriptComponent:
+    ScriptPath: assets/scripts/game_session.lua
+
+# ══ 2D PHYSICS ═══════════════════════════════════════════════════════
+
+# ── Player (Dynamic, green sprite) ──────────────────────────────────
+- Entity: 200
+  TagComponent:
+    Tag: Player
+  TransformComponent:
+    Translation: [0.0, 0.0, 0.0]
+    Rotation: [0.0, 0.0, 0.0, 1.0]
+    Scale: [1.0, 1.0, 1.0]
+  SpriteRendererComponent:
+    Color: [0.2, 0.8, 0.3, 1.0]
+    TilingFactor: 1.0
+  RigidBody2DComponent:
+    BodyType: Dynamic
+    FixedRotation: true
+  BoxCollider2DComponent:
+    Offset: [0.0, 0.0]
+    Size: [0.5, 0.5]
+    Density: 1.0
+    Friction: 0.0
+    Restitution: 0.0
+    RestitutionThreshold: 0.5
+  LuaScriptComponent:
+    ScriptPath: assets/scripts/physics_player.lua
+
+# ── Ground (Static, long platform) ──────────────────────────────────
+- Entity: 210
+  TagComponent:
+    Tag: Ground
+  TransformComponent:
+    Translation: [0.0, -4.0, 0.0]
+    Rotation: [0.0, 0.0, 0.0, 1.0]
+    Scale: [60.0, 0.5, 1.0]
+  SpriteRendererComponent:
+    Color: [0.35, 0.35, 0.35, 1.0]
+    TilingFactor: 1.0
+  RigidBody2DComponent:
+    BodyType: Static
+    FixedRotation: false
+  BoxCollider2DComponent:
+    Offset: [0.0, 0.0]
+    Size: [0.5, 0.5]
+    Density: 1.0
+    Friction: 0.5
+    Restitution: 0.0
+    RestitutionThreshold: 0.5
+
+# ── Wall Left (Static) ──────────────────────────────────────────────
+- Entity: 211
+  TagComponent:
+    Tag: Wall Left
+  TransformComponent:
+    Translation: [-12.0, -1.5, 0.0]
+    Rotation: [0.0, 0.0, 0.0, 1.0]
+    Scale: [0.5, 5.0, 1.0]
+  SpriteRendererComponent:
+    Color: [0.5, 0.3, 0.3, 1.0]
+    TilingFactor: 1.0
+  RigidBody2DComponent:
+    BodyType: Static
+    FixedRotation: false
+  BoxCollider2DComponent:
+    Offset: [0.0, 0.0]
+    Size: [0.5, 0.5]
+    Density: 1.0
+    Friction: 0.5
+    Restitution: 0.0
+    RestitutionThreshold: 0.5
+
+# ── Wall Right (Static) ─────────────────────────────────────────────
+- Entity: 212
+  TagComponent:
+    Tag: Wall Right
+  TransformComponent:
+    Translation: [12.0, -1.5, 0.0]
+    Rotation: [0.0, 0.0, 0.0, 1.0]
+    Scale: [0.5, 5.0, 1.0]
+  SpriteRendererComponent:
+    Color: [0.3, 0.5, 0.3, 1.0]
+    TilingFactor: 1.0
+  RigidBody2DComponent:
+    BodyType: Static
+    FixedRotation: false
+  BoxCollider2DComponent:
+    Offset: [0.0, 0.0]
+    Size: [0.5, 0.5]
+    Density: 1.0
+    Friction: 0.5
+    Restitution: 0.0
+    RestitutionThreshold: 0.5
+
+# ── Platform (Static, floating) ─────────────────────────────────────
+- Entity: 213
+  TagComponent:
+    Tag: Platform
+  TransformComponent:
+    Translation: [5.0, -1.0, 0.0]
+    Rotation: [0.0, 0.0, 0.0, 1.0]
+    Scale: [4.0, 0.5, 1.0]
+  SpriteRendererComponent:
+    Color: [0.5, 0.5, 0.5, 1.0]
+    TilingFactor: 1.0
+  RigidBody2DComponent:
+    BodyType: Static
+    FixedRotation: false
+  BoxCollider2DComponent:
+    Offset: [0.0, 0.0]
+    Size: [0.5, 0.5]
+    Density: 1.0
+    Friction: 0.5
+    Restitution: 0.0
+    RestitutionThreshold: 0.5
+
+# ── Kinematic Platform ──────────────────────────────────────────────
+- Entity: 214
+  TagComponent:
+    Tag: Kinematic Platform
+  TransformComponent:
+    Translation: [-5.0, -1.0, 0.0]
+    Rotation: [0.0, 0.0, 0.0, 1.0]
+    Scale: [3.0, 0.4, 1.0]
+  SpriteRendererComponent:
+    Color: [0.6, 0.4, 0.8, 1.0]
+    TilingFactor: 1.0
+  RigidBody2DComponent:
+    BodyType: Kinematic
+    FixedRotation: false
+  BoxCollider2DComponent:
+    Offset: [0.0, 0.0]
+    Size: [0.5, 0.5]
+    Density: 1.0
+    Friction: 0.5
+    Restitution: 0.0
+    RestitutionThreshold: 0.5
+
+# ── Bouncy Ball (Dynamic, CircleCollider2D) ─────────────────────────
+- Entity: 215
+  TagComponent:
+    Tag: Bouncy Ball
+  TransformComponent:
+    Translation: [3.0, 3.0, 0.0]
+    Rotation: [0.0, 0.0, 0.0, 1.0]
+    Scale: [0.8, 0.8, 1.0]
+  CircleRendererComponent:
+    Color: [1.0, 0.4, 0.2, 1.0]
+    Thickness: 1.0
+    Fade: 0.005
+  RigidBody2DComponent:
+    BodyType: Dynamic
+    FixedRotation: false
+  CircleCollider2DComponent:
+    Offset: [0.0, 0.0]
+    Radius: 0.5
+    Density: 1.0
+    Friction: 0.3
+    Restitution: 0.8
+    RestitutionThreshold: 0.5
+
+# ── Sensor Zone (Static, sensor trigger) ────────────────────────────
+- Entity: 216
+  TagComponent:
+    Tag: Sensor Zone
+  TransformComponent:
+    Translation: [8.0, -2.5, 0.0]
+    Rotation: [0.0, 0.0, 0.0, 1.0]
+    Scale: [2.0, 2.0, 1.0]
+  SpriteRendererComponent:
+    Color: [0.2, 0.8, 0.9, 0.3]
+    TilingFactor: 1.0
+  RigidBody2DComponent:
+    BodyType: Static
+    FixedRotation: false
+  BoxCollider2DComponent:
+    Offset: [0.0, 0.0]
+    Size: [0.5, 0.5]
+    Density: 1.0
+    Friction: 0.0
+    Restitution: 0.0
+    RestitutionThreshold: 0.5
+    IsSensor: true
+
+# ══ CIRCLE RENDERERS ═════════════════════════════════════════════════
+
+# ── Thick Circle ─────────────────────────────────────────────────────
+- Entity: 300
+  TagComponent:
+    Tag: Thick Circle
+  TransformComponent:
+    Translation: [-8.0, 5.0, 0.0]
+    Rotation: [0.0, 0.0, 0.0, 1.0]
+    Scale: [1.5, 1.5, 1.0]
+  CircleRendererComponent:
+    Color: [1.0, 0.3, 0.3, 1.0]
+    Thickness: 1.0
+    Fade: 0.005
+
+# ── Ring Circle ──────────────────────────────────────────────────────
+- Entity: 301
+  TagComponent:
+    Tag: Ring Circle
+  TransformComponent:
+    Translation: [-5.5, 5.0, 0.0]
+    Rotation: [0.0, 0.0, 0.0, 1.0]
+    Scale: [1.5, 1.5, 1.0]
+  CircleRendererComponent:
+    Color: [0.3, 1.0, 0.3, 1.0]
+    Thickness: 0.2
+    Fade: 0.01
+
+# ── Soft Circle ──────────────────────────────────────────────────────
+- Entity: 302
+  TagComponent:
+    Tag: Soft Circle
+  TransformComponent:
+    Translation: [-3.0, 5.0, 0.0]
+    Rotation: [0.0, 0.0, 0.0, 1.0]
+    Scale: [1.5, 1.5, 1.0]
+  CircleRendererComponent:
+    Color: [0.3, 0.3, 1.0, 1.0]
+    Thickness: 0.5
+    Fade: 0.1
+
+# ══ TEXT RENDERING ═══════════════════════════════════════════════════
+
+# ── Title Text ───────────────────────────────────────────────────────
+- Entity: 400
+  TagComponent:
+    Tag: Title Text
+  TransformComponent:
+    Translation: [-10.0, 8.0, 0.0]
+    Rotation: [0.0, 0.0, 0.0, 1.0]
+    Scale: [1.0, 1.0, 1.0]
+  TextComponent:
+    Text: 2D Feature Showcase
+    FontPath: assets/fonts/JetBrainsMono-Regular.ttf
+    FontSize: 0.8
+    Color: [1.0, 1.0, 1.0, 1.0]
+    LineSpacing: 1.0
+    Kerning: 0.0
+
+# ── Multiline Text ──────────────────────────────────────────────────
+- Entity: 401
+  TagComponent:
+    Tag: Multiline Text
+  TransformComponent:
+    Translation: [4.0, 8.0, 0.0]
+    Rotation: [0.0, 0.0, 0.0, 1.0]
+    Scale: [1.0, 1.0, 1.0]
+  TextComponent:
+    Text: |-
+      Line 1
+      Line 2
+      Line 3
+    FontPath: assets/fonts/JetBrainsMono-Regular.ttf
+    FontSize: 0.5
+    Color: [0.3, 0.8, 1.0, 1.0]
+    LineSpacing: 1.0
+    Kerning: 0.0
+
+# ── Large Gold Text ──────────────────────────────────────────────────
+- Entity: 402
+  TagComponent:
+    Tag: Large Gold Text
+  TransformComponent:
+    Translation: [-10.0, 6.5, 0.0]
+    Rotation: [0.0, 0.0, 0.0, 1.0]
+    Scale: [1.0, 1.0, 1.0]
+  TextComponent:
+    Text: MSDF Text
+    FontPath: assets/fonts/JetBrainsMono-Regular.ttf
+    FontSize: 1.5
+    Color: [1.0, 0.8, 0.2, 1.0]
+    LineSpacing: 1.0
+    Kerning: 0.0
+
+# ── Tight Kerning ───────────────────────────────────────────────────
+- Entity: 403
+  TagComponent:
+    Tag: Tight Kerning
+  TransformComponent:
+    Translation: [4.0, 6.5, 0.0]
+    Rotation: [0.0, 0.0, 0.0, 1.0]
+    Scale: [1.0, 1.0, 1.0]
+  TextComponent:
+    Text: AVAWAY
+    FontPath: assets/fonts/JetBrainsMono-Regular.ttf
+    FontSize: 0.7
+    Color: [0.2, 1.0, 0.4, 1.0]
+    LineSpacing: 1.0
+    Kerning: -0.03
+
+# ── Special Characters ──────────────────────────────────────────────
+- Entity: 404
+  TagComponent:
+    Tag: Special Characters
+  TransformComponent:
+    Translation: [-10.0, 5.5, 0.0]
+    Rotation: [0.0, 0.0, 0.0, 1.0]
+    Scale: [1.0, 1.0, 1.0]
+  TextComponent:
+    Text: "Caf\xE9 na\xEFve r\xE9sum\xE9 $100 @#!"
+    FontPath: assets/fonts/JetBrainsMono-Regular.ttf
+    FontSize: 0.4
+    Color: [0.7, 0.7, 0.7, 1.0]
+    LineSpacing: 1.0
+    Kerning: 0.0
+
+# ══ TILEMAP ══════════════════════════════════════════════════════════
+
+# ── Tilemap ──────────────────────────────────────────────────────────
+- Entity: 500
+  TagComponent:
+    Tag: Tilemap
+  TransformComponent:
+    Translation: [-18.0, -8.0, 0.0]
+    Rotation: [0.0, 0.0, 0.0, 1.0]
+    Scale: [1.0, 1.0, 1.0]
+  TilemapComponent:
+    Width: 16
+    Height: 10
+    TileSize: [1.0, 1.0]
+    TextureHandle: 2841034490373146
+    TilesetColumns: 32
+    CellSize: [16.0, 16.0]
+    Spacing: [1.0, 1.0]
+    TilesB64: AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAACAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABwAAAAAAAAAAAAAABwAAAAgAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAcAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAIAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAACAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAcAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAgAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHAAAAAAAAAAAAAAAIAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAACAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABwAAAAAAAAAAAAAABwAAAAcAAAAAAAAAAAAAAAgAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAcAAAAAAAAAAAAAAAAAAAAHAAAABwAAAAAAAAAIAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAcAAAAAAAAACAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA==
+    SortingLayer: -1
+    OrderInLayer: 0
+
+# ══ GPU PARTICLES ════════════════════════════════════════════════════
+
+# ── Fire Emitter ─────────────────────────────────────────────────────
+- Entity: 600
+  TagComponent:
+    Tag: Fire Emitter
+  TransformComponent:
+    Translation: [15.0, -3.0, 0.0]
+    Rotation: [0.0, 0.0, 0.0, 1.0]
+    Scale: [1.0, 1.0, 1.0]
+  SpriteRendererComponent:
+    Color: [0.9, 0.3, 0.1, 1.0]
+    TilingFactor: 1.0
+  ParticleEmitterComponent:
+    EmitRate: 15
+    MaxParticles: 100000
+    Playing: true
+    Velocity: [0.0, 2.0]
+    VelocityVariation: [1.5, 1.0]
+    ColorBegin: [1.0, 0.4, 0.1, 1.0]
+    ColorEnd: [0.9, 0.1, 0.0, 0.0]
+    SizeBegin: 0.15
+    SizeEnd: 0.0
+    SizeVariation: 0.05
+    Lifetime: 2.0
+
+# ── Fountain Emitter ────────────────────────────────────────────────
+- Entity: 601
+  TagComponent:
+    Tag: Fountain Emitter
+  TransformComponent:
+    Translation: [18.0, -3.0, 0.0]
+    Rotation: [0.0, 0.0, 0.0, 1.0]
+    Scale: [1.0, 1.0, 1.0]
+  SpriteRendererComponent:
+    Color: [0.2, 0.5, 0.9, 1.0]
+    TilingFactor: 1.0
+  ParticleEmitterComponent:
+    EmitRate: 10
+    MaxParticles: 100000
+    Playing: true
+    Velocity: [0.0, 5.0]
+    VelocityVariation: [2.0, 1.0]
+    ColorBegin: [0.3, 0.6, 1.0, 1.0]
+    ColorEnd: [0.1, 0.2, 0.8, 0.0]
+    SizeBegin: 0.08
+    SizeEnd: 0.02
+    SizeVariation: 0.03
+    Lifetime: 3.0
+
+# ── Sparkle Emitter ─────────────────────────────────────────────────
+- Entity: 602
+  TagComponent:
+    Tag: Sparkle Emitter
+  TransformComponent:
+    Translation: [21.0, -1.0, 0.0]
+    Rotation: [0.0, 0.0, 0.0, 1.0]
+    Scale: [1.0, 1.0, 1.0]
+  SpriteRendererComponent:
+    Color: [0.4, 0.9, 0.2, 1.0]
+    TilingFactor: 1.0
+  ParticleEmitterComponent:
+    EmitRate: 8
+    MaxParticles: 100000
+    Playing: true
+    Velocity: [0.0, 0.5]
+    VelocityVariation: [4.0, 4.0]
+    ColorBegin: [0.5, 1.0, 0.2, 1.0]
+    ColorEnd: [1.0, 0.9, 0.1, 0.0]
+    SizeBegin: 0.12
+    SizeEnd: 0.0
+    SizeVariation: 0.08
+    Lifetime: 5.0
+
+# ══ FRUSTUM CULLING GRID (5x5, offset +30 on X) ═════════════════════
+
+- Entity: 700
+  TagComponent:
+    Tag: Quad_0_0
+  TransformComponent:
+    Translation: [24.0, -6.0, 0.0]
+    Rotation: [0.0, 0.0, 0.0, 1.0]
+    Scale: [2.0, 2.0, 1.0]
+  SpriteRendererComponent:
+    Color: [0.15, 0.15, 0.3, 1.0]
+    TilingFactor: 1.0
+
+- Entity: 701
+  TagComponent:
+    Tag: Quad_1_0
+  TransformComponent:
+    Translation: [27.0, -6.0, 0.0]
+    Rotation: [0.0, 0.0, 0.0, 1.0]
+    Scale: [2.0, 2.0, 1.0]
+  SpriteRendererComponent:
+    Color: [0.15, 0.15, 0.8, 1.0]
+    TilingFactor: 1.0
+
+- Entity: 702
+  TagComponent:
+    Tag: Quad_2_0
+  TransformComponent:
+    Translation: [30.0, -6.0, 0.0]
+    Rotation: [0.0, 0.0, 0.0, 1.0]
+    Scale: [2.0, 2.0, 1.0]
+  SpriteRendererComponent:
+    Color: [0.15, 0.15, 0.3, 1.0]
+    TilingFactor: 1.0
+
+- Entity: 703
+  TagComponent:
+    Tag: Quad_3_0
+  TransformComponent:
+    Translation: [33.0, -6.0, 0.0]
+    Rotation: [0.0, 0.0, 0.0, 1.0]
+    Scale: [2.0, 2.0, 1.0]
+  SpriteRendererComponent:
+    Color: [0.15, 0.15, 0.8, 1.0]
+    TilingFactor: 1.0
+
+- Entity: 704
+  TagComponent:
+    Tag: Quad_4_0
+  TransformComponent:
+    Translation: [36.0, -6.0, 0.0]
+    Rotation: [0.0, 0.0, 0.0, 1.0]
+    Scale: [2.0, 2.0, 1.0]
+  SpriteRendererComponent:
+    Color: [0.15, 0.15, 0.3, 1.0]
+    TilingFactor: 1.0
+
+- Entity: 705
+  TagComponent:
+    Tag: Quad_0_1
+  TransformComponent:
+    Translation: [24.0, -3.0, 0.0]
+    Rotation: [0.0, 0.0, 0.0, 1.0]
+    Scale: [2.0, 2.0, 1.0]
+  SpriteRendererComponent:
+    Color: [0.15, 0.15, 0.8, 1.0]
+    TilingFactor: 1.0
+
+- Entity: 706
+  TagComponent:
+    Tag: Quad_1_1
+  TransformComponent:
+    Translation: [27.0, -3.0, 0.0]
+    Rotation: [0.0, 0.0, 0.0, 1.0]
+    Scale: [2.0, 2.0, 1.0]
+  SpriteRendererComponent:
+    Color: [0.15, 0.15, 0.3, 1.0]
+    TilingFactor: 1.0
+
+- Entity: 707
+  TagComponent:
+    Tag: Quad_2_1
+  TransformComponent:
+    Translation: [30.0, -3.0, 0.0]
+    Rotation: [0.0, 0.0, 0.0, 1.0]
+    Scale: [2.0, 2.0, 1.0]
+  SpriteRendererComponent:
+    Color: [0.15, 0.15, 0.8, 1.0]
+    TilingFactor: 1.0
+
+- Entity: 708
+  TagComponent:
+    Tag: Quad_3_1
+  TransformComponent:
+    Translation: [33.0, -3.0, 0.0]
+    Rotation: [0.0, 0.0, 0.0, 1.0]
+    Scale: [2.0, 2.0, 1.0]
+  SpriteRendererComponent:
+    Color: [0.15, 0.15, 0.3, 1.0]
+    TilingFactor: 1.0
+
+- Entity: 709
+  TagComponent:
+    Tag: Quad_4_1
+  TransformComponent:
+    Translation: [36.0, -3.0, 0.0]
+    Rotation: [0.0, 0.0, 0.0, 1.0]
+    Scale: [2.0, 2.0, 1.0]
+  SpriteRendererComponent:
+    Color: [0.15, 0.15, 0.8, 1.0]
+    TilingFactor: 1.0
+
+- Entity: 710
+  TagComponent:
+    Tag: Quad_0_2
+  TransformComponent:
+    Translation: [24.0, 0.0, 0.0]
+    Rotation: [0.0, 0.0, 0.0, 1.0]
+    Scale: [2.0, 2.0, 1.0]
+  SpriteRendererComponent:
+    Color: [0.15, 0.15, 0.3, 1.0]
+    TilingFactor: 1.0
+
+- Entity: 711
+  TagComponent:
+    Tag: Quad_1_2
+  TransformComponent:
+    Translation: [27.0, 0.0, 0.0]
+    Rotation: [0.0, 0.0, 0.0, 1.0]
+    Scale: [2.0, 2.0, 1.0]
+  SpriteRendererComponent:
+    Color: [0.15, 0.15, 0.8, 1.0]
+    TilingFactor: 1.0
+
+- Entity: 712
+  TagComponent:
+    Tag: Quad_2_2
+  TransformComponent:
+    Translation: [30.0, 0.0, 0.0]
+    Rotation: [0.0, 0.0, 0.0, 1.0]
+    Scale: [2.0, 2.0, 1.0]
+  SpriteRendererComponent:
+    Color: [0.15, 0.15, 0.3, 1.0]
+    TilingFactor: 1.0
+
+- Entity: 713
+  TagComponent:
+    Tag: Quad_3_2
+  TransformComponent:
+    Translation: [33.0, 0.0, 0.0]
+    Rotation: [0.0, 0.0, 0.0, 1.0]
+    Scale: [2.0, 2.0, 1.0]
+  SpriteRendererComponent:
+    Color: [0.15, 0.15, 0.8, 1.0]
+    TilingFactor: 1.0
+
+- Entity: 714
+  TagComponent:
+    Tag: Quad_4_2
+  TransformComponent:
+    Translation: [36.0, 0.0, 0.0]
+    Rotation: [0.0, 0.0, 0.0, 1.0]
+    Scale: [2.0, 2.0, 1.0]
+  SpriteRendererComponent:
+    Color: [0.15, 0.15, 0.3, 1.0]
+    TilingFactor: 1.0
+
+- Entity: 715
+  TagComponent:
+    Tag: Quad_0_3
+  TransformComponent:
+    Translation: [24.0, 3.0, 0.0]
+    Rotation: [0.0, 0.0, 0.0, 1.0]
+    Scale: [2.0, 2.0, 1.0]
+  SpriteRendererComponent:
+    Color: [0.15, 0.15, 0.8, 1.0]
+    TilingFactor: 1.0
+
+- Entity: 716
+  TagComponent:
+    Tag: Quad_1_3
+  TransformComponent:
+    Translation: [27.0, 3.0, 0.0]
+    Rotation: [0.0, 0.0, 0.0, 1.0]
+    Scale: [2.0, 2.0, 1.0]
+  SpriteRendererComponent:
+    Color: [0.15, 0.15, 0.3, 1.0]
+    TilingFactor: 1.0
+
+- Entity: 717
+  TagComponent:
+    Tag: Quad_2_3
+  TransformComponent:
+    Translation: [30.0, 3.0, 0.0]
+    Rotation: [0.0, 0.0, 0.0, 1.0]
+    Scale: [2.0, 2.0, 1.0]
+  SpriteRendererComponent:
+    Color: [0.15, 0.15, 0.8, 1.0]
+    TilingFactor: 1.0
+
+- Entity: 718
+  TagComponent:
+    Tag: Quad_3_3
+  TransformComponent:
+    Translation: [33.0, 3.0, 0.0]
+    Rotation: [0.0, 0.0, 0.0, 1.0]
+    Scale: [2.0, 2.0, 1.0]
+  SpriteRendererComponent:
+    Color: [0.15, 0.15, 0.3, 1.0]
+    TilingFactor: 1.0
+
+- Entity: 719
+  TagComponent:
+    Tag: Quad_4_3
+  TransformComponent:
+    Translation: [36.0, 3.0, 0.0]
+    Rotation: [0.0, 0.0, 0.0, 1.0]
+    Scale: [2.0, 2.0, 1.0]
+  SpriteRendererComponent:
+    Color: [0.15, 0.15, 0.8, 1.0]
+    TilingFactor: 1.0
+
+- Entity: 720
+  TagComponent:
+    Tag: Quad_0_4
+  TransformComponent:
+    Translation: [24.0, 6.0, 0.0]
+    Rotation: [0.0, 0.0, 0.0, 1.0]
+    Scale: [2.0, 2.0, 1.0]
+  SpriteRendererComponent:
+    Color: [0.15, 0.15, 0.3, 1.0]
+    TilingFactor: 1.0
+
+- Entity: 721
+  TagComponent:
+    Tag: Quad_1_4
+  TransformComponent:
+    Translation: [27.0, 6.0, 0.0]
+    Rotation: [0.0, 0.0, 0.0, 1.0]
+    Scale: [2.0, 2.0, 1.0]
+  SpriteRendererComponent:
+    Color: [0.15, 0.15, 0.8, 1.0]
+    TilingFactor: 1.0
+
+- Entity: 722
+  TagComponent:
+    Tag: Quad_2_4
+  TransformComponent:
+    Translation: [30.0, 6.0, 0.0]
+    Rotation: [0.0, 0.0, 0.0, 1.0]
+    Scale: [2.0, 2.0, 1.0]
+  SpriteRendererComponent:
+    Color: [0.15, 0.15, 0.3, 1.0]
+    TilingFactor: 1.0
+
+- Entity: 723
+  TagComponent:
+    Tag: Quad_3_4
+  TransformComponent:
+    Translation: [33.0, 6.0, 0.0]
+    Rotation: [0.0, 0.0, 0.0, 1.0]
+    Scale: [2.0, 2.0, 1.0]
+  SpriteRendererComponent:
+    Color: [0.15, 0.15, 0.8, 1.0]
+    TilingFactor: 1.0
+
+- Entity: 724
+  TagComponent:
+    Tag: Quad_4_4
+  TransformComponent:
+    Translation: [36.0, 6.0, 0.0]
+    Rotation: [0.0, 0.0, 0.0, 1.0]
+    Scale: [2.0, 2.0, 1.0]
+  SpriteRendererComponent:
+    Color: [0.15, 0.15, 0.3, 1.0]
+    TilingFactor: 1.0
+
+# ══ PARTICLE & CIRCLE LABELS ════════════════════════════════════════
+
+# ── Fire Label ───────────────────────────────────────────────────────
+- Entity: 800
+  TagComponent:
+    Tag: Fire Label
+  TransformComponent:
+    Translation: [14.0, -4.5, 0.0]
+    Rotation: [0.0, 0.0, 0.0, 1.0]
+    Scale: [1.0, 1.0, 1.0]
+  TextComponent:
+    Text: Fire
+    FontPath: assets/fonts/JetBrainsMono-Regular.ttf
+    FontSize: 0.3
+    Color: [1.0, 0.5, 0.2, 1.0]
+    LineSpacing: 1.0
+    Kerning: 0.0
+
+# ── Fountain Label ──────────────────────────────────────────────────
+- Entity: 801
+  TagComponent:
+    Tag: Fountain Label
+  TransformComponent:
+    Translation: [17.0, -4.5, 0.0]
+    Rotation: [0.0, 0.0, 0.0, 1.0]
+    Scale: [1.0, 1.0, 1.0]
+  TextComponent:
+    Text: Fountain
+    FontPath: assets/fonts/JetBrainsMono-Regular.ttf
+    FontSize: 0.3
+    Color: [0.4, 0.7, 1.0, 1.0]
+    LineSpacing: 1.0
+    Kerning: 0.0
+
+# ── Sparkle Label ───────────────────────────────────────────────────
+- Entity: 802
+  TagComponent:
+    Tag: Sparkle Label
+  TransformComponent:
+    Translation: [20.0, -2.5, 0.0]
+    Rotation: [0.0, 0.0, 0.0, 1.0]
+    Scale: [1.0, 1.0, 1.0]
+  TextComponent:
+    Text: Sparkle
+    FontPath: assets/fonts/JetBrainsMono-Regular.ttf
+    FontSize: 0.3
+    Color: [0.6, 1.0, 0.3, 1.0]
+    LineSpacing: 1.0
+    Kerning: 0.0
+
+# ══ BACKGROUND ═══════════════════════════════════════════════════════
+
+- Entity: 999
+  TagComponent:
+    Tag: Background
+  TransformComponent:
+    Translation: [0.0, 0.0, 0.9]
+    Rotation: [0.0, 0.0, 0.0, 1.0]
+    Scale: [80.0, 40.0, 1.0]
+  SpriteRendererComponent:
+    Color: [0.1, 0.1, 0.14, 1.0]
+    TilingFactor: 1.0
+    SortingLayer: -1

@@ -95,9 +95,17 @@ impl BinauralEffect {
     ///
     /// Returns `(delay_left_samples, delay_right_samples)`.
     fn compute_itd(&self, azimuth: f32) -> (f32, f32) {
-        // Woodworth model: ITD = (r/c) × (|θ| + sin(|θ|))
+        // Woodworth model: ITD = (r/c) × (θ + sin(θ)), valid for |θ| ≤ π/2.
+        // Mirror the rear hemisphere so ITD decreases back to 0 at ±π (behind),
+        // matching the physical reality that both ears are equidistant from a
+        // source directly behind the head.
         let abs_az = azimuth.abs().min(std::f32::consts::PI);
-        let itd_seconds = (HEAD_RADIUS / SPEED_OF_SOUND) * (abs_az + abs_az.sin());
+        let effective_az = if abs_az > std::f32::consts::FRAC_PI_2 {
+            std::f32::consts::PI - abs_az
+        } else {
+            abs_az
+        };
+        let itd_seconds = (HEAD_RADIUS / SPEED_OF_SOUND) * (effective_az + effective_az.sin());
         let delay_samples = itd_seconds * self.sample_rate;
 
         if azimuth >= 0.0 {
@@ -178,7 +186,9 @@ impl Effect for BinauralEffect {
         if !self.params.enabled.load(Ordering::Relaxed) {
             // Simple stereo panning fallback (constant-power).
             // Since kira spatialization_strength is 0, we handle panning here.
-            let pan = (azimuth / std::f32::consts::FRAC_PI_2).clamp(-1.0, 1.0);
+            // Use sin(azimuth) so panning is 0 both in front (0) and behind (±π),
+            // avoiding the hard L/R switch when crossing directly behind.
+            let pan = azimuth.sin().clamp(-1.0, 1.0);
             let angle = (pan + 1.0) * std::f32::consts::FRAC_PI_4; // 0..π/2
             let gain_l = angle.cos();
             let gain_r = angle.sin();

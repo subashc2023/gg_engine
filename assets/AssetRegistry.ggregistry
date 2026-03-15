@@ -20,6 +20,12 @@ Assets:
 - Handle: 2002
   FilePath: textures/color_grid.png
   Type: Texture2D
+- Handle: 6002
+  FilePath: meshes/pistol.glb
+  Type: Mesh
+- Handle: 6003
+  FilePath: meshes/suzanne_low.gltf
+  Type: Mesh
 - Handle: 2841034490373146
   FilePath: textures/tileset_legacy.png
   Type: Texture2D

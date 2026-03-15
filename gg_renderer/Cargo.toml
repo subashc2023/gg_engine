@@ -27,5 +27,6 @@ gltf.workspace = true
 gpu-allocator.workspace = true
 half.workspace = true
 parking_lot.workspace = true
+rayon.workspace = true
 serde.workspace = true
 serde_json.workspace = true

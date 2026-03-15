@@ -1,0 +1,1108 @@
+Version: 2
+Scene: 3D Showcase
+Entities:
+# =======================================================================
+# INFRASTRUCTURE — Camera, Lights, Environment
+# =======================================================================
+
+# ── Camera (perspective, primary, with AudioListener) ─────────────────
+- Entity: 100
+  TagComponent:
+    Tag: Camera
+  TransformComponent:
+    Translation: [0.0, 3.0, -10.0]
+    Rotation: [-0.14943813, 0.0, 0.0, 0.98877108]
+    Scale: [1.0, 1.0, 1.0]
+  CameraComponent:
+    Camera:
+      ProjectionType: 0
+      PerspectiveFOV: 0.7853982
+      PerspectiveNear: 0.1
+      PerspectiveFar: 200.0
+      OrthographicSize: 10.0
+      OrthographicNear: -1.0
+      OrthographicFar: 1.0
+    Primary: true
+    FixedAspectRatio: false
+  AudioListenerComponent:
+    Active: true
+
+# ── Controller (Lua FPS camera + audio controls) ─────────────────────
+- Entity: 101
+  TagComponent:
+    Tag: Controller
+  TransformComponent:
+    Translation: [0.0, 0.0, 0.0]
+    Rotation: [0.0, 0.0, 0.0, 1.0]
+    Scale: [1.0, 1.0, 1.0]
+  LuaScriptComponent:
+    ScriptPath: assets/scripts/hrtf_test.lua
+
+# ── Sun Light (directional, shadows) ─────────────────────────────────
+- Entity: 102
+  TagComponent:
+    Tag: Sun Light
+  TransformComponent:
+    Translation: [0.0, 10.0, 0.0]
+    Rotation: [-0.52277327, 0.1980011, 0.29368648, 0.77540433]
+    Scale: [1.0, 1.0, 1.0]
+  DirectionalLightComponent:
+    Direction: null
+    Color: [1.0, 0.98, 0.95]
+    Intensity: 0.8
+    CastShadows: true
+
+# ── Environment (Ambient + IBL) ──────────────────────────────────────
+- Entity: 103
+  TagComponent:
+    Tag: Environment
+  TransformComponent:
+    Translation: [0.0, 0.0, 0.0]
+    Rotation: [0.0, 0.0, 0.0, 1.0]
+    Scale: [1.0, 1.0, 1.0]
+  AmbientLightComponent:
+    Color: [0.05, 0.05, 0.08]
+    Intensity: 1.0
+  EnvironmentComponent:
+    EnvironmentMap: 5001
+    SkyboxExposure: 1.0
+    IBLIntensity: 1.0
+    SkyboxRotation: 0.0
+    ShowSkybox: true
+
+# ── Point Light Warm ─────────────────────────────────────────────────
+- Entity: 104
+  TagComponent:
+    Tag: Point Light Warm
+  TransformComponent:
+    Translation: [3.0, 2.0, -3.0]
+    Rotation: [0.0, 0.0, 0.0, 1.0]
+    Scale: [1.0, 1.0, 1.0]
+  PointLightComponent:
+    Color: [1.0, 0.4, 0.1]
+    Intensity: 3.0
+    Radius: 8.0
+
+# ── Point Light Cool ─────────────────────────────────────────────────
+- Entity: 105
+  TagComponent:
+    Tag: Point Light Cool
+  TransformComponent:
+    Translation: [-3.0, 2.0, 3.0]
+    Rotation: [0.0, 0.0, 0.0, 1.0]
+    Scale: [1.0, 1.0, 1.0]
+  PointLightComponent:
+    Color: [0.1, 0.4, 1.0]
+    Intensity: 3.0
+    Radius: 8.0
+
+# ── Point Light Green ────────────────────────────────────────────────
+- Entity: 106
+  TagComponent:
+    Tag: Point Light Green
+  TransformComponent:
+    Translation: [5.0, 3.0, 5.0]
+    Rotation: [0.0, 0.0, 0.0, 1.0]
+    Scale: [1.0, 1.0, 1.0]
+  PointLightComponent:
+    Color: [0.2, 1.0, 0.3]
+    Intensity: 2.0
+    Radius: 6.0
+
+# ── Point Light Purple ───────────────────────────────────────────────
+- Entity: 107
+  TagComponent:
+    Tag: Point Light Purple
+  TransformComponent:
+    Translation: [-5.0, 3.0, -5.0]
+    Rotation: [0.0, 0.0, 0.0, 1.0]
+    Scale: [1.0, 1.0, 1.0]
+  PointLightComponent:
+    Color: [0.8, 0.2, 1.0]
+    Intensity: 2.0
+    Radius: 6.0
+
+# ── GameSession ──────────────────────────────────────────────────────
+- Entity: 108
+  TagComponent:
+    Tag: GameSession
+  TransformComponent:
+    Translation: [0.0, 0.0, 0.0]
+    Rotation: [0.0, 0.0, 0.0, 1.0]
+    Scale: [1.0, 1.0, 1.0]
+  LuaScriptComponent:
+    ScriptPath: assets/scripts/game_session.lua
+
+# =======================================================================
+# GROUND
+# =======================================================================
+
+- Entity: 500
+  TagComponent:
+    Tag: Ground
+  TransformComponent:
+    Translation: [0.0, -0.5, 0.0]
+    Rotation: [0.0, 0.0, 0.0, 1.0]
+    Scale: [20.0, 1.0, 20.0]
+  MeshRendererComponent:
+    Primitive: Plane
+    Color: [0.4, 0.4, 0.4, 1.0]
+    Metallic: 0.0
+    Roughness: 0.8
+    EmissiveColor: [0.0, 0.0, 0.0]
+    EmissiveStrength: 1.0
+
+# =======================================================================
+# PBR MATERIAL GRID — 5x5 spheres (rows = metallic 0->1, cols = roughness 0->1)
+# Row 0 (M=0.0), Row 1 (M=0.25), Row 2 (M=0.5), Row 3 (M=0.75), Row 4 (M=1.0)
+# Col 0 (R=0.0), Col 1 (R=0.25), Col 2 (R=0.5), Col 3 (R=0.75), Col 4 (R=1.0)
+# Spacing: 1.3 units, centered at X=0, Z=0
+# =======================================================================
+
+# Row 0 (M=0.0) — dielectric
+- Entity: 1000
+  TagComponent:
+    Tag: Sphere M0.0 R0.0
+  TransformComponent:
+    Translation: [-2.6, 0.0, 0.0]
+    Rotation: [0.0, 0.0, 0.0, 1.0]
+    Scale: [0.5, 0.5, 0.5]
+  MeshRendererComponent:
+    Primitive: Sphere
+    Color: [1.0, 1.0, 1.0, 1.0]
+    Metallic: 0.0
+    Roughness: 0.0
+    EmissiveColor: [0.0, 0.0, 0.0]
+    EmissiveStrength: 1.0
+
+- Entity: 1001
+  TagComponent:
+    Tag: Sphere M0.0 R0.25
+  TransformComponent:
+    Translation: [-1.3, 0.0, 0.0]
+    Rotation: [0.0, 0.0, 0.0, 1.0]
+    Scale: [0.5, 0.5, 0.5]
+  MeshRendererComponent:
+    Primitive: Sphere
+    Color: [1.0, 1.0, 1.0, 1.0]
+    Metallic: 0.0
+    Roughness: 0.25
+    EmissiveColor: [0.0, 0.0, 0.0]
+    EmissiveStrength: 1.0
+
+- Entity: 1002
+  TagComponent:
+    Tag: Sphere M0.0 R0.5
+  TransformComponent:
+    Translation: [0.0, 0.0, 0.0]
+    Rotation: [0.0, 0.0, 0.0, 1.0]
+    Scale: [0.5, 0.5, 0.5]
+  MeshRendererComponent:
+    Primitive: Sphere
+    Color: [1.0, 1.0, 1.0, 1.0]
+    Metallic: 0.0
+    Roughness: 0.5
+    EmissiveColor: [0.0, 0.0, 0.0]
+    EmissiveStrength: 1.0
+
+- Entity: 1003
+  TagComponent:
+    Tag: Sphere M0.0 R0.75
+  TransformComponent:
+    Translation: [1.3, 0.0, 0.0]
+    Rotation: [0.0, 0.0, 0.0, 1.0]
+    Scale: [0.5, 0.5, 0.5]
+  MeshRendererComponent:
+    Primitive: Sphere
+    Color: [1.0, 1.0, 1.0, 1.0]
+    Metallic: 0.0
+    Roughness: 0.75
+    EmissiveColor: [0.0, 0.0, 0.0]
+    EmissiveStrength: 1.0
+
+- Entity: 1004
+  TagComponent:
+    Tag: Sphere M0.0 R1.0
+  TransformComponent:
+    Translation: [2.6, 0.0, 0.0]
+    Rotation: [0.0, 0.0, 0.0, 1.0]
+    Scale: [0.5, 0.5, 0.5]
+  MeshRendererComponent:
+    Primitive: Sphere
+    Color: [1.0, 1.0, 1.0, 1.0]
+    Metallic: 0.0
+    Roughness: 1.0
+    EmissiveColor: [0.0, 0.0, 0.0]
+    EmissiveStrength: 1.0
+
+# Row 1 (M=0.25)
+- Entity: 1010
+  TagComponent:
+    Tag: Sphere M0.25 R0.0
+  TransformComponent:
+    Translation: [-2.6, 1.3, 0.0]
+    Rotation: [0.0, 0.0, 0.0, 1.0]
+    Scale: [0.5, 0.5, 0.5]
+  MeshRendererComponent:
+    Primitive: Sphere
+    Color: [1.0, 0.95, 0.9, 1.0]
+    Metallic: 0.25
+    Roughness: 0.0
+    EmissiveColor: [0.0, 0.0, 0.0]
+    EmissiveStrength: 1.0
+
+- Entity: 1011
+  TagComponent:
+    Tag: Sphere M0.25 R0.25
+  TransformComponent:
+    Translation: [-1.3, 1.3, 0.0]
+    Rotation: [0.0, 0.0, 0.0, 1.0]
+    Scale: [0.5, 0.5, 0.5]
+  MeshRendererComponent:
+    Primitive: Sphere
+    Color: [1.0, 0.95, 0.9, 1.0]
+    Metallic: 0.25
+    Roughness: 0.25
+    EmissiveColor: [0.0, 0.0, 0.0]
+    EmissiveStrength: 1.0
+
+- Entity: 1012
+  TagComponent:
+    Tag: Sphere M0.25 R0.5
+  TransformComponent:
+    Translation: [0.0, 1.3, 0.0]
+    Rotation: [0.0, 0.0, 0.0, 1.0]
+    Scale: [0.5, 0.5, 0.5]
+  MeshRendererComponent:
+    Primitive: Sphere
+    Color: [1.0, 0.95, 0.9, 1.0]
+    Metallic: 0.25
+    Roughness: 0.5
+    EmissiveColor: [0.0, 0.0, 0.0]
+    EmissiveStrength: 1.0
+
+- Entity: 1013
+  TagComponent:
+    Tag: Sphere M0.25 R0.75
+  TransformComponent:
+    Translation: [1.3, 1.3, 0.0]
+    Rotation: [0.0, 0.0, 0.0, 1.0]
+    Scale: [0.5, 0.5, 0.5]
+  MeshRendererComponent:
+    Primitive: Sphere
+    Color: [1.0, 0.95, 0.9, 1.0]
+    Metallic: 0.25
+    Roughness: 0.75
+    EmissiveColor: [0.0, 0.0, 0.0]
+    EmissiveStrength: 1.0
+
+- Entity: 1014
+  TagComponent:
+    Tag: Sphere M0.25 R1.0
+  TransformComponent:
+    Translation: [2.6, 1.3, 0.0]
+    Rotation: [0.0, 0.0, 0.0, 1.0]
+    Scale: [0.5, 0.5, 0.5]
+  MeshRendererComponent:
+    Primitive: Sphere
+    Color: [1.0, 0.95, 0.9, 1.0]
+    Metallic: 0.25
+    Roughness: 1.0
+    EmissiveColor: [0.0, 0.0, 0.0]
+    EmissiveStrength: 1.0
+
+# Row 2 (M=0.5)
+- Entity: 1020
+  TagComponent:
+    Tag: Sphere M0.5 R0.0
+  TransformComponent:
+    Translation: [-2.6, 2.6, 0.0]
+    Rotation: [0.0, 0.0, 0.0, 1.0]
+    Scale: [0.5, 0.5, 0.5]
+  MeshRendererComponent:
+    Primitive: Sphere
+    Color: [1.0, 0.9, 0.8, 1.0]
+    Metallic: 0.5
+    Roughness: 0.0
+    EmissiveColor: [0.0, 0.0, 0.0]
+    EmissiveStrength: 1.0
+
+- Entity: 1021
+  TagComponent:
+    Tag: Sphere M0.5 R0.25
+  TransformComponent:
+    Translation: [-1.3, 2.6, 0.0]
+    Rotation: [0.0, 0.0, 0.0, 1.0]
+    Scale: [0.5, 0.5, 0.5]
+  MeshRendererComponent:
+    Primitive: Sphere
+    Color: [1.0, 0.9, 0.8, 1.0]
+    Metallic: 0.5
+    Roughness: 0.25
+    EmissiveColor: [0.0, 0.0, 0.0]
+    EmissiveStrength: 1.0
+
+- Entity: 1022
+  TagComponent:
+    Tag: Sphere M0.5 R0.5
+  TransformComponent:
+    Translation: [0.0, 2.6, 0.0]
+    Rotation: [0.0, 0.0, 0.0, 1.0]
+    Scale: [0.5, 0.5, 0.5]
+  MeshRendererComponent:
+    Primitive: Sphere
+    Color: [1.0, 0.9, 0.8, 1.0]
+    Metallic: 0.5
+    Roughness: 0.5
+    EmissiveColor: [0.0, 0.0, 0.0]
+    EmissiveStrength: 1.0
+
+- Entity: 1023
+  TagComponent:
+    Tag: Sphere M0.5 R0.75
+  TransformComponent:
+    Translation: [1.3, 2.6, 0.0]
+    Rotation: [0.0, 0.0, 0.0, 1.0]
+    Scale: [0.5, 0.5, 0.5]
+  MeshRendererComponent:
+    Primitive: Sphere
+    Color: [1.0, 0.9, 0.8, 1.0]
+    Metallic: 0.5
+    Roughness: 0.75
+    EmissiveColor: [0.0, 0.0, 0.0]
+    EmissiveStrength: 1.0
+
+- Entity: 1024
+  TagComponent:
+    Tag: Sphere M0.5 R1.0
+  TransformComponent:
+    Translation: [2.6, 2.6, 0.0]
+    Rotation: [0.0, 0.0, 0.0, 1.0]
+    Scale: [0.5, 0.5, 0.5]
+  MeshRendererComponent:
+    Primitive: Sphere
+    Color: [1.0, 0.9, 0.8, 1.0]
+    Metallic: 0.5
+    Roughness: 1.0
+    EmissiveColor: [0.0, 0.0, 0.0]
+    EmissiveStrength: 1.0
+
+# Row 3 (M=0.75)
+- Entity: 1030
+  TagComponent:
+    Tag: Sphere M0.75 R0.0
+  TransformComponent:
+    Translation: [-2.6, 3.9, 0.0]
+    Rotation: [0.0, 0.0, 0.0, 1.0]
+    Scale: [0.5, 0.5, 0.5]
+  MeshRendererComponent:
+    Primitive: Sphere
+    Color: [1.0, 0.85, 0.7, 1.0]
+    Metallic: 0.75
+    Roughness: 0.0
+    EmissiveColor: [0.0, 0.0, 0.0]
+    EmissiveStrength: 1.0
+
+- Entity: 1031
+  TagComponent:
+    Tag: Sphere M0.75 R0.25
+  TransformComponent:
+    Translation: [-1.3, 3.9, 0.0]
+    Rotation: [0.0, 0.0, 0.0, 1.0]
+    Scale: [0.5, 0.5, 0.5]
+  MeshRendererComponent:
+    Primitive: Sphere
+    Color: [1.0, 0.85, 0.7, 1.0]
+    Metallic: 0.75
+    Roughness: 0.25
+    EmissiveColor: [0.0, 0.0, 0.0]
+    EmissiveStrength: 1.0
+
+- Entity: 1032
+  TagComponent:
+    Tag: Sphere M0.75 R0.5
+  TransformComponent:
+    Translation: [0.0, 3.9, 0.0]
+    Rotation: [0.0, 0.0, 0.0, 1.0]
+    Scale: [0.5, 0.5, 0.5]
+  MeshRendererComponent:
+    Primitive: Sphere
+    Color: [1.0, 0.85, 0.7, 1.0]
+    Metallic: 0.75
+    Roughness: 0.5
+    EmissiveColor: [0.0, 0.0, 0.0]
+    EmissiveStrength: 1.0
+
+- Entity: 1033
+  TagComponent:
+    Tag: Sphere M0.75 R0.75
+  TransformComponent:
+    Translation: [1.3, 3.9, 0.0]
+    Rotation: [0.0, 0.0, 0.0, 1.0]
+    Scale: [0.5, 0.5, 0.5]
+  MeshRendererComponent:
+    Primitive: Sphere
+    Color: [1.0, 0.85, 0.7, 1.0]
+    Metallic: 0.75
+    Roughness: 0.75
+    EmissiveColor: [0.0, 0.0, 0.0]
+    EmissiveStrength: 1.0
+
+- Entity: 1034
+  TagComponent:
+    Tag: Sphere M0.75 R1.0
+  TransformComponent:
+    Translation: [2.6, 3.9, 0.0]
+    Rotation: [0.0, 0.0, 0.0, 1.0]
+    Scale: [0.5, 0.5, 0.5]
+  MeshRendererComponent:
+    Primitive: Sphere
+    Color: [1.0, 0.85, 0.7, 1.0]
+    Metallic: 0.75
+    Roughness: 1.0
+    EmissiveColor: [0.0, 0.0, 0.0]
+    EmissiveStrength: 1.0
+
+# Row 4 (M=1.0) — fully metallic, gold tint
+- Entity: 1040
+  TagComponent:
+    Tag: Sphere M1.0 R0.0
+  TransformComponent:
+    Translation: [-2.6, 5.2, 0.0]
+    Rotation: [0.0, 0.0, 0.0, 1.0]
+    Scale: [0.5, 0.5, 0.5]
+  MeshRendererComponent:
+    Primitive: Sphere
+    Color: [1.0, 0.8, 0.6, 1.0]
+    Metallic: 1.0
+    Roughness: 0.0
+    EmissiveColor: [0.0, 0.0, 0.0]
+    EmissiveStrength: 1.0
+
+- Entity: 1041
+  TagComponent:
+    Tag: Sphere M1.0 R0.25
+  TransformComponent:
+    Translation: [-1.3, 5.2, 0.0]
+    Rotation: [0.0, 0.0, 0.0, 1.0]
+    Scale: [0.5, 0.5, 0.5]
+  MeshRendererComponent:
+    Primitive: Sphere
+    Color: [1.0, 0.8, 0.6, 1.0]
+    Metallic: 1.0
+    Roughness: 0.25
+    EmissiveColor: [0.0, 0.0, 0.0]
+    EmissiveStrength: 1.0
+
+- Entity: 1042
+  TagComponent:
+    Tag: Sphere M1.0 R0.5
+  TransformComponent:
+    Translation: [0.0, 5.2, 0.0]
+    Rotation: [0.0, 0.0, 0.0, 1.0]
+    Scale: [0.5, 0.5, 0.5]
+  MeshRendererComponent:
+    Primitive: Sphere
+    Color: [1.0, 0.8, 0.6, 1.0]
+    Metallic: 1.0
+    Roughness: 0.5
+    EmissiveColor: [0.0, 0.0, 0.0]
+    EmissiveStrength: 1.0
+
+- Entity: 1043
+  TagComponent:
+    Tag: Sphere M1.0 R0.75
+  TransformComponent:
+    Translation: [1.3, 5.2, 0.0]
+    Rotation: [0.0, 0.0, 0.0, 1.0]
+    Scale: [0.5, 0.5, 0.5]
+  MeshRendererComponent:
+    Primitive: Sphere
+    Color: [1.0, 0.8, 0.6, 1.0]
+    Metallic: 1.0
+    Roughness: 0.75
+    EmissiveColor: [0.0, 0.0, 0.0]
+    EmissiveStrength: 1.0
+
+- Entity: 1044
+  TagComponent:
+    Tag: Sphere M1.0 R1.0
+  TransformComponent:
+    Translation: [2.6, 5.2, 0.0]
+    Rotation: [0.0, 0.0, 0.0, 1.0]
+    Scale: [0.5, 0.5, 0.5]
+  MeshRendererComponent:
+    Primitive: Sphere
+    Color: [1.0, 0.8, 0.6, 1.0]
+    Metallic: 1.0
+    Roughness: 1.0
+    EmissiveColor: [0.0, 0.0, 0.0]
+    EmissiveStrength: 1.0
+
+# =======================================================================
+# MESH PRIMITIVES (behind the PBR grid at Z=6)
+# =======================================================================
+
+- Entity: 2000
+  TagComponent:
+    Tag: Cube
+  TransformComponent:
+    Translation: [-4.0, 0.5, 6.0]
+    Rotation: [0.0, 0.0, 0.0, 1.0]
+    Scale: [1.0, 1.0, 1.0]
+  MeshRendererComponent:
+    Primitive: Cube
+    Color: [0.8, 0.2, 0.2, 1.0]
+    Metallic: 0.0
+    Roughness: 0.3
+    EmissiveColor: [0.0, 0.0, 0.0]
+    EmissiveStrength: 1.0
+
+- Entity: 2001
+  TagComponent:
+    Tag: Cylinder
+  TransformComponent:
+    Translation: [-2.0, 0.1, 6.0]
+    Rotation: [0.0, 0.0, 0.0, 1.0]
+    Scale: [0.8, 1.2, 0.8]
+  MeshRendererComponent:
+    Primitive: Cylinder
+    Color: [0.2, 0.8, 0.3, 1.0]
+    Metallic: 0.3
+    Roughness: 0.4
+    EmissiveColor: [0.0, 0.0, 0.0]
+    EmissiveStrength: 1.0
+
+- Entity: 2002
+  TagComponent:
+    Tag: Cone
+  TransformComponent:
+    Translation: [0.0, 0.0, 6.0]
+    Rotation: [0.0, 0.0, 0.0, 1.0]
+    Scale: [1.0, 1.0, 1.0]
+  MeshRendererComponent:
+    Primitive: Cone
+    Color: [0.2, 0.4, 0.9, 1.0]
+    Metallic: 0.0
+    Roughness: 0.5
+    EmissiveColor: [0.0, 0.0, 0.0]
+    EmissiveStrength: 1.0
+
+- Entity: 2003
+  TagComponent:
+    Tag: Torus
+  TransformComponent:
+    Translation: [2.0, 0.3, 6.0]
+    Rotation: [0.0, 0.0, 0.0, 1.0]
+    Scale: [1.5, 1.5, 1.5]
+  MeshRendererComponent:
+    Primitive: Torus
+    Color: [0.9, 0.7, 0.2, 1.0]
+    Metallic: 0.8
+    Roughness: 0.2
+    EmissiveColor: [0.0, 0.0, 0.0]
+    EmissiveStrength: 1.0
+
+- Entity: 2004
+  TagComponent:
+    Tag: Capsule
+  TransformComponent:
+    Translation: [4.0, 0.5, 6.0]
+    Rotation: [0.0, 0.0, 0.0, 1.0]
+    Scale: [1.0, 1.5, 1.0]
+  MeshRendererComponent:
+    Primitive: Capsule
+    Color: [0.7, 0.3, 0.8, 1.0]
+    Metallic: 0.5
+    Roughness: 0.15
+    EmissiveColor: [0.0, 0.0, 0.0]
+    EmissiveStrength: 1.0
+
+# =======================================================================
+# MATERIAL REFERENCE SPHERES (in front of grid at Z=-6)
+# =======================================================================
+
+- Entity: 2010
+  TagComponent:
+    Tag: Chrome Sphere
+  TransformComponent:
+    Translation: [-4.0, 1.0, -6.0]
+    Rotation: [0.0, 0.0, 0.0, 1.0]
+    Scale: [1.0, 1.0, 1.0]
+  MeshRendererComponent:
+    Primitive: Sphere
+    Color: [0.95, 0.95, 0.95, 1.0]
+    Metallic: 1.0
+    Roughness: 0.02
+    EmissiveColor: [0.0, 0.0, 0.0]
+    EmissiveStrength: 1.0
+
+- Entity: 2011
+  TagComponent:
+    Tag: Gold Sphere
+  TransformComponent:
+    Translation: [-2.0, 1.0, -6.0]
+    Rotation: [0.0, 0.0, 0.0, 1.0]
+    Scale: [1.0, 1.0, 1.0]
+  MeshRendererComponent:
+    Primitive: Sphere
+    Color: [1.0, 0.76, 0.33, 1.0]
+    Metallic: 1.0
+    Roughness: 0.3
+    EmissiveColor: [0.0, 0.0, 0.0]
+    EmissiveStrength: 1.0
+
+- Entity: 2012
+  TagComponent:
+    Tag: Copper Sphere
+  TransformComponent:
+    Translation: [0.0, 1.0, -6.0]
+    Rotation: [0.0, 0.0, 0.0, 1.0]
+    Scale: [1.0, 1.0, 1.0]
+  MeshRendererComponent:
+    Primitive: Sphere
+    Color: [0.95, 0.64, 0.54, 1.0]
+    Metallic: 1.0
+    Roughness: 0.4
+    EmissiveColor: [0.0, 0.0, 0.0]
+    EmissiveStrength: 1.0
+
+- Entity: 2013
+  TagComponent:
+    Tag: Plastic Sphere
+  TransformComponent:
+    Translation: [2.0, 1.0, -6.0]
+    Rotation: [0.0, 0.0, 0.0, 1.0]
+    Scale: [1.0, 1.0, 1.0]
+  MeshRendererComponent:
+    Primitive: Sphere
+    Color: [0.8, 0.1, 0.1, 1.0]
+    Metallic: 0.0
+    Roughness: 0.1
+    EmissiveColor: [0.0, 0.0, 0.0]
+    EmissiveStrength: 1.0
+
+- Entity: 2014
+  TagComponent:
+    Tag: Rubber Sphere
+  TransformComponent:
+    Translation: [4.0, 1.0, -6.0]
+    Rotation: [0.0, 0.0, 0.0, 1.0]
+    Scale: [1.0, 1.0, 1.0]
+  MeshRendererComponent:
+    Primitive: Sphere
+    Color: [0.15, 0.15, 0.15, 1.0]
+    Metallic: 0.0
+    Roughness: 0.95
+    EmissiveColor: [0.0, 0.0, 0.0]
+    EmissiveStrength: 1.0
+
+# =======================================================================
+# EMISSIVE MATERIAL TEST
+# =======================================================================
+
+- Entity: 2020
+  TagComponent:
+    Tag: Emissive Sphere
+  TransformComponent:
+    Translation: [0.0, 1.0, -9.0]
+    Rotation: [0.0, 0.0, 0.0, 1.0]
+    Scale: [1.0, 1.0, 1.0]
+  MeshRendererComponent:
+    Primitive: Sphere
+    Color: [0.1, 0.1, 0.1, 1.0]
+    Metallic: 0.0
+    Roughness: 0.5
+    EmissiveColor: [1.0, 0.3, 0.0]
+    EmissiveStrength: 5.0
+
+- Entity: 2021
+  TagComponent:
+    Tag: Emissive Cube
+  TransformComponent:
+    Translation: [2.5, 0.5, -9.0]
+    Rotation: [0.0, 0.0, 0.0, 1.0]
+    Scale: [1.0, 1.0, 1.0]
+  MeshRendererComponent:
+    Primitive: Cube
+    Color: [0.1, 0.1, 0.1, 1.0]
+    Metallic: 0.0
+    Roughness: 0.5
+    EmissiveColor: [0.0, 0.5, 1.0]
+    EmissiveStrength: 3.0
+
+- Entity: 2022
+  TagComponent:
+    Tag: Emissive Torus
+  TransformComponent:
+    Translation: [-2.5, 0.3, -9.0]
+    Rotation: [0.0, 0.0, 0.0, 1.0]
+    Scale: [1.2, 1.2, 1.2]
+  MeshRendererComponent:
+    Primitive: Torus
+    Color: [0.1, 0.1, 0.1, 1.0]
+    Metallic: 0.0
+    Roughness: 0.5
+    EmissiveColor: [0.0, 1.0, 0.3]
+    EmissiveStrength: 4.0
+
+# =======================================================================
+# 3D PHYSICS (RigidBody3D, BoxCollider3D, SphereCollider3D, CapsuleCollider3D)
+# =======================================================================
+
+# ── Physics Cube (Dynamic) ───────────────────────────────────────────
+- Entity: 300
+  TagComponent:
+    Tag: Physics Cube
+  TransformComponent:
+    Translation: [8.0, 3.0, 0.0]
+    Rotation: [0.0, 0.0, 0.0, 1.0]
+    Scale: [1.0, 1.0, 1.0]
+  MeshRendererComponent:
+    Primitive: Cube
+    Color: [0.8, 0.4, 0.2, 1.0]
+    Metallic: 0.0
+    Roughness: 0.5
+    EmissiveColor: [0.0, 0.0, 0.0]
+    EmissiveStrength: 1.0
+  RigidBody3DComponent:
+    BodyType: Dynamic
+    LockRotationX: false
+    LockRotationY: false
+    LockRotationZ: false
+    GravityScale: 1.0
+    LinearDamping: 0.0
+    AngularDamping: 0.0
+  BoxCollider3DComponent:
+    Offset: [0.0, 0.0, 0.0]
+    Size: [0.5, 0.5, 0.5]
+    Density: 1.0
+    Friction: 0.5
+    Restitution: 0.0
+    CollisionLayer: 4294967295
+    CollisionMask: 4294967295
+    IsSensor: false
+
+# ── Physics Sphere (Dynamic) ────────────────────────────────────────
+- Entity: 301
+  TagComponent:
+    Tag: Physics Sphere
+  TransformComponent:
+    Translation: [8.5, 5.0, 0.5]
+    Rotation: [0.0, 0.0, 0.0, 1.0]
+    Scale: [1.0, 1.0, 1.0]
+  MeshRendererComponent:
+    Primitive: Sphere
+    Color: [0.2, 0.5, 0.9, 1.0]
+    Metallic: 0.0
+    Roughness: 0.5
+    EmissiveColor: [0.0, 0.0, 0.0]
+    EmissiveStrength: 1.0
+  RigidBody3DComponent:
+    BodyType: Dynamic
+    LockRotationX: false
+    LockRotationY: false
+    LockRotationZ: false
+    GravityScale: 1.0
+    LinearDamping: 0.0
+    AngularDamping: 0.0
+  SphereCollider3DComponent:
+    Offset: [0.0, 0.0, 0.0]
+    Radius: 0.5
+    Density: 1.0
+    Friction: 0.5
+    Restitution: 0.3
+    CollisionLayer: 4294967295
+    CollisionMask: 4294967295
+    IsSensor: false
+
+# ── Physics Capsule (Dynamic) ───────────────────────────────────────
+- Entity: 302
+  TagComponent:
+    Tag: Physics Capsule
+  TransformComponent:
+    Translation: [9.0, 4.0, -1.0]
+    Rotation: [0.0, 0.0, 0.0, 1.0]
+    Scale: [1.0, 1.0, 1.0]
+  MeshRendererComponent:
+    Primitive: Capsule
+    Color: [0.9, 0.6, 0.2, 1.0]
+    Metallic: 0.0
+    Roughness: 0.4
+    EmissiveColor: [0.0, 0.0, 0.0]
+    EmissiveStrength: 1.0
+  RigidBody3DComponent:
+    BodyType: Dynamic
+    LockRotationX: false
+    LockRotationY: false
+    LockRotationZ: false
+    GravityScale: 1.0
+    LinearDamping: 0.0
+    AngularDamping: 0.0
+  CapsuleCollider3DComponent:
+    Offset: [0.0, 0.0, 0.0]
+    HalfHeight: 0.5
+    Radius: 0.3
+    Density: 1.0
+    Friction: 0.5
+    Restitution: 0.1
+    CollisionLayer: 4294967295
+    CollisionMask: 4294967295
+    IsSensor: false
+
+# ── Physics Platform (Static) ───────────────────────────────────────
+- Entity: 303
+  TagComponent:
+    Tag: Physics Platform
+  TransformComponent:
+    Translation: [8.5, -0.5, 0.0]
+    Rotation: [0.0, 0.0, 0.0, 1.0]
+    Scale: [6.0, 1.0, 6.0]
+  MeshRendererComponent:
+    Primitive: Plane
+    Color: [0.3, 0.3, 0.35, 1.0]
+    Metallic: 0.0
+    Roughness: 0.7
+    EmissiveColor: [0.0, 0.0, 0.0]
+    EmissiveStrength: 1.0
+  RigidBody3DComponent:
+    BodyType: Static
+    LockRotationX: false
+    LockRotationY: false
+    LockRotationZ: false
+    GravityScale: 1.0
+    LinearDamping: 0.0
+    AngularDamping: 0.0
+  BoxCollider3DComponent:
+    Offset: [0.0, -0.025, 0.0]
+    Size: [0.5, 0.025, 0.5]
+    Density: 1.0
+    Friction: 0.5
+    Restitution: 0.0
+    CollisionLayer: 4294967295
+    CollisionMask: 4294967295
+    IsSensor: false
+
+# ── Sensor Zone (Static, IsSensor=true) ──────────────────────────────
+- Entity: 304
+  TagComponent:
+    Tag: Sensor Zone
+  TransformComponent:
+    Translation: [8.5, 0.5, 3.0]
+    Rotation: [0.0, 0.0, 0.0, 1.0]
+    Scale: [2.0, 2.0, 2.0]
+  MeshRendererComponent:
+    Primitive: Cube
+    Color: [0.2, 0.9, 0.4, 0.3]
+    Metallic: 0.0
+    Roughness: 0.5
+    EmissiveColor: [0.0, 0.0, 0.0]
+    EmissiveStrength: 1.0
+  RigidBody3DComponent:
+    BodyType: Static
+    LockRotationX: false
+    LockRotationY: false
+    LockRotationZ: false
+    GravityScale: 1.0
+    LinearDamping: 0.0
+    AngularDamping: 0.0
+  BoxCollider3DComponent:
+    Offset: [0.0, 0.0, 0.0]
+    Size: [0.5, 0.5, 0.5]
+    Density: 1.0
+    Friction: 0.0
+    Restitution: 0.0
+    CollisionLayer: 4294967295
+    CollisionMask: 4294967295
+    IsSensor: true
+
+# =======================================================================
+# AUDIO SOURCES (spatial, HRTF, streaming)
+# =======================================================================
+
+# ── Orbiting HRTF Source (green sphere) ──────────────────────────────
+- Entity: 200
+  TagComponent:
+    Tag: Orbiting Source
+  TransformComponent:
+    Translation: [0.0, 1.0, -8.0]
+    Rotation: [0.0, 0.0, 0.0, 1.0]
+    Scale: [0.5, 0.5, 0.5]
+  MeshRendererComponent:
+    Primitive: Sphere
+    Color: [0.2, 0.9, 0.3, 1.0]
+    Metallic: 0.0
+    Roughness: 0.8
+    EmissiveColor: [0.1, 0.5, 0.15]
+    EmissiveStrength: 2.0
+  AudioSourceComponent:
+    AudioHandle: 1001
+    Volume: 0.8
+    Pitch: 0.8
+    Looping: true
+    PlayOnStart: false
+    Spatial: true
+    HRTF: true
+    MinDistance: 2.0
+    MaxDistance: 30.0
+
+# ── Static HRTF Source (orange sphere) ───────────────────────────────
+- Entity: 201
+  TagComponent:
+    Tag: Static Source
+  TransformComponent:
+    Translation: [5.0, 1.0, 5.0]
+    Rotation: [0.0, 0.0, 0.0, 1.0]
+    Scale: [0.4, 0.4, 0.4]
+  MeshRendererComponent:
+    Primitive: Sphere
+    Color: [0.9, 0.5, 0.1, 1.0]
+    Metallic: 0.0
+    Roughness: 0.8
+    EmissiveColor: [0.5, 0.25, 0.05]
+    EmissiveStrength: 2.0
+  AudioSourceComponent:
+    AudioHandle: 1001
+    Volume: 0.5
+    Pitch: 1.5
+    Looping: true
+    PlayOnStart: false
+    Spatial: true
+    HRTF: true
+    MinDistance: 2.0
+    MaxDistance: 30.0
+
+# ── Non-HRTF Spatial Source (blue sphere) ────────────────────────────
+- Entity: 202
+  TagComponent:
+    Tag: Spatial Source
+  TransformComponent:
+    Translation: [-5.0, 1.0, -5.0]
+    Rotation: [0.0, 0.0, 0.0, 1.0]
+    Scale: [0.4, 0.4, 0.4]
+  MeshRendererComponent:
+    Primitive: Sphere
+    Color: [0.2, 0.4, 0.9, 1.0]
+    Metallic: 0.0
+    Roughness: 0.8
+    EmissiveColor: [0.1, 0.2, 0.5]
+    EmissiveStrength: 2.0
+  AudioSourceComponent:
+    AudioHandle: 1001
+    Volume: 0.6
+    Pitch: 1.0
+    Looping: true
+    PlayOnStart: true
+    Spatial: true
+    MinDistance: 2.0
+    MaxDistance: 15.0
+
+# ── Streaming Source (purple sphere) ─────────────────────────────────
+- Entity: 203
+  TagComponent:
+    Tag: Streaming Source
+  TransformComponent:
+    Translation: [-5.0, 1.0, 5.0]
+    Rotation: [0.0, 0.0, 0.0, 1.0]
+    Scale: [0.4, 0.4, 0.4]
+  MeshRendererComponent:
+    Primitive: Sphere
+    Color: [0.8, 0.2, 0.8, 1.0]
+    Metallic: 0.0
+    Roughness: 0.8
+    EmissiveColor: [0.4, 0.1, 0.4]
+    EmissiveStrength: 2.0
+  AudioSourceComponent:
+    AudioHandle: 1001
+    Volume: 0.5
+    Pitch: 1.0
+    Looping: true
+    PlayOnStart: true
+    Spatial: true
+    Streaming: true
+    MinDistance: 2.0
+    MaxDistance: 15.0
+
+# =======================================================================
+# LANDMARKS (directional pillars for spatial audio reference)
+# =======================================================================
+
+- Entity: 400
+  TagComponent:
+    Tag: Pillar N
+  TransformComponent:
+    Translation: [0.0, 1.5, -12.0]
+    Rotation: [0.0, 0.0, 0.0, 1.0]
+    Scale: [0.3, 3.0, 0.3]
+  MeshRendererComponent:
+    Primitive: Cube
+    Color: [0.7, 0.7, 0.7, 1.0]
+    Metallic: 0.0
+    Roughness: 0.5
+    EmissiveColor: [0.0, 0.0, 0.0]
+    EmissiveStrength: 1.0
+
+- Entity: 401
+  TagComponent:
+    Tag: Pillar S
+  TransformComponent:
+    Translation: [0.0, 1.5, 12.0]
+    Rotation: [0.0, 0.0, 0.0, 1.0]
+    Scale: [0.3, 3.0, 0.3]
+  MeshRendererComponent:
+    Primitive: Cube
+    Color: [0.5, 0.5, 0.5, 1.0]
+    Metallic: 0.0
+    Roughness: 0.5
+    EmissiveColor: [0.0, 0.0, 0.0]
+    EmissiveStrength: 1.0
+
+- Entity: 402
+  TagComponent:
+    Tag: Pillar E
+  TransformComponent:
+    Translation: [12.0, 1.5, 0.0]
+    Rotation: [0.0, 0.0, 0.0, 1.0]
+    Scale: [0.3, 3.0, 0.3]
+  MeshRendererComponent:
+    Primitive: Cube
+    Color: [0.6, 0.3, 0.3, 1.0]
+    Metallic: 0.0
+    Roughness: 0.5
+    EmissiveColor: [0.0, 0.0, 0.0]
+    EmissiveStrength: 1.0
+
+- Entity: 403
+  TagComponent:
+    Tag: Pillar W
+  TransformComponent:
+    Translation: [-12.0, 1.5, 0.0]
+    Rotation: [0.0, 0.0, 0.0, 1.0]
+    Scale: [0.3, 3.0, 0.3]
+  MeshRendererComponent:
+    Primitive: Cube
+    Color: [0.3, 0.3, 0.6, 1.0]
+    Metallic: 0.0
+    Roughness: 0.5
+    EmissiveColor: [0.0, 0.0, 0.0]
+    EmissiveStrength: 1.0
+
+# =======================================================================
+# GLTF MESH (Fox)
+# =======================================================================
+
+- Entity: 3000
+  TagComponent:
+    Tag: Fox
+  TransformComponent:
+    Translation: [5.0, -0.5, 0.0]
+    Rotation: [0.0, -0.38268343, 0.0, 0.92387953]
+    Scale: [0.02, 0.02, 0.02]
+  MeshRendererComponent:
+    Primitive: Cube
+    Color: [1.0, 0.8, 0.5, 1.0]
+    Metallic: 0.0
+    Roughness: 0.6
+    MeshAsset: 6001
+    EmissiveColor: [0.0, 0.0, 0.0]
+    EmissiveStrength: 1.0

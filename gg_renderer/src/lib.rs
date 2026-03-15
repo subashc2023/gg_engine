@@ -6,6 +6,7 @@ pub mod cubemap;
 mod draw_context;
 mod editor_camera;
 pub mod environment_map;
+pub mod ibl_cache;
 mod font;
 mod framebuffer;
 pub mod gpu_allocation;

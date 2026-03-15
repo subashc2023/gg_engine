@@ -11,6 +11,7 @@ struct PlayerConfig {
     width: u32,
     height: u32,
     vsync: bool,
+    profile: bool,
 }
 
 impl Default for PlayerConfig {
@@ -20,6 +21,7 @@ impl Default for PlayerConfig {
             width: 1280,
             height: 720,
             vsync: false, // Mailbox (no vsync) by default
+            profile: false,
         }
     }
 }
@@ -72,6 +74,9 @@ fn parse_args() -> PlayerConfig {
             "--no-vsync" => {
                 config.vsync = false;
             }
+            "--profile" => {
+                config.profile = true;
+            }
             "--help" | "-h" => {
                 print_usage();
                 std::process::exit(0);
@@ -107,6 +112,7 @@ fn print_usage() {
          \x20 --height N      Window height (default: 720)\n\
          \x20 --vsync         Enable VSync  (Fifo present mode)\n\
          \x20 --no-vsync      Disable VSync (Mailbox present mode, default)\n\
+         \x20 --profile       Run 2000 frames, print GPU timing summary, exit\n\
          \x20 --help, -h      Show this help message"
     );
 }
@@ -136,6 +142,11 @@ pub struct GGPlayer {
     input_actions: InputActionMap,
     /// Global gamepad dead zones (from project config + Lua overrides).
     dead_zones: [f32; GamepadAxis::COUNT],
+    /// When >0, counts down frames of runtime profiling, then exits.
+    profile_frames: i32,
+    profile_active: bool,
+    gpu_timing_samples: Vec<(String, f32)>,
+    gpu_frame_times: Vec<f32>,
 }
 
 impl GGPlayer {
@@ -199,6 +210,51 @@ impl GGPlayer {
         self.runtime_started = false;
 
         info!("GGPlayer: scene '{}' queued for loading", path);
+    }
+}
+
+impl GGPlayer {
+    fn print_gpu_timing_summary(&self) {
+        if self.gpu_frame_times.is_empty() {
+            info!("No GPU timing data collected");
+            return;
+        }
+        let n = self.gpu_frame_times.len();
+        let avg: f32 = self.gpu_frame_times.iter().sum::<f32>() / n as f32;
+        let mut sorted = self.gpu_frame_times.clone();
+        sorted.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        let p50 = sorted[n / 2];
+        let p95 = sorted[(n as f32 * 0.95) as usize];
+        let p99 = sorted[(n as f32 * 0.99) as usize];
+        let max = sorted[n - 1];
+
+        info!("=== GPU Timing Summary ({n} frames) ===");
+        info!(
+            "  Total GPU frame: avg={avg:.3}ms  P50={p50:.3}ms  P95={p95:.3}ms  P99={p99:.3}ms  max={max:.3}ms"
+        );
+
+        // Aggregate per-scope.
+        let mut scope_data: std::collections::HashMap<String, Vec<f32>> =
+            std::collections::HashMap::new();
+        for (name, time) in &self.gpu_timing_samples {
+            scope_data
+                .entry(name.clone())
+                .or_default()
+                .push(*time);
+        }
+        let mut scopes: Vec<_> = scope_data.into_iter().collect();
+        scopes.sort_by(|a, b| {
+            b.1.iter().sum::<f32>().partial_cmp(&a.1.iter().sum::<f32>()).unwrap()
+        });
+        for (name, times) in &scopes {
+            let count = times.len();
+            let avg = times.iter().sum::<f32>() / count as f32;
+            let mut s = times.clone();
+            s.sort_by(|a, b| a.partial_cmp(b).unwrap());
+            let p50 = s[count / 2];
+            let max = s[count - 1];
+            info!("  {name:20}: avg={avg:.3}ms  P50={p50:.3}ms  max={max:.3}ms  ({count} samples)");
+        }
     }
 }
 
@@ -314,11 +370,20 @@ impl Application for GGPlayer {
             splash_texture: None,
             input_actions,
             dead_zones,
+            profile_frames: if config.profile { 2000 } else { -1 },
+            profile_active: false,
+            gpu_timing_samples: Vec::new(),
+            gpu_frame_times: Vec::new(),
         }
     }
 
     fn on_attach(&mut self, renderer: &mut Renderer) {
         self.splash_texture = renderer.create_texture_from_memory(SPLASH_PNG);
+        if self.profile_frames > 0 {
+            if let Some(profiler) = renderer.gpu_profiler_mut() {
+                profiler.set_enabled(true);
+            }
+        }
     }
 
     fn window_config(&self) -> WindowConfig {
@@ -357,7 +422,7 @@ impl Application for GGPlayer {
     }
 
     fn should_exit(&self) -> bool {
-        self.quit_requested
+        self.quit_requested || self.profile_frames == 0
     }
 
     fn cursor_mode(&self) -> CursorMode {
@@ -401,6 +466,13 @@ impl Application for GGPlayer {
         profile_scope!("GGPlayer::on_update");
         if !self.runtime_started {
             return;
+        }
+
+        // Start profiling session once runtime is up.
+        if self.profile_frames > 0 && !self.profile_active {
+            gg_engine::profiling::begin_session("Runtime", "gg_profile_runtime.json");
+            self.profile_active = true;
+            info!("Profiling: capturing {} frames", self.profile_frames);
         }
 
         self.scene.on_update_all_physics(dt, Some(input));
@@ -463,6 +535,17 @@ impl Application for GGPlayer {
         // Scene loading (deferred — must be last so current frame finishes).
         if let Some(path) = self.scene.take_requested_load_scene() {
             self.load_new_scene(&path);
+        }
+
+        // Profile frame countdown.
+        if self.profile_frames > 0 {
+            self.profile_frames -= 1;
+            if self.profile_frames == 0 && self.profile_active {
+                gg_engine::profiling::end_session();
+                self.profile_active = false;
+                info!("Profiling complete — wrote gg_profile_runtime.json");
+                self.print_gpu_timing_summary();
+            }
         }
     }
 
@@ -555,6 +638,20 @@ impl Application for GGPlayer {
         } else {
             // Show splash screen while assets are loading.
             self.render_splash(renderer);
+        }
+
+        // Collect GPU timing results each frame.
+        if self.profile_active {
+            if let Some(profiler) = renderer.gpu_profiler() {
+                let total = profiler.total_frame_ms();
+                if total > 0.0 {
+                    self.gpu_frame_times.push(total);
+                    for result in profiler.results() {
+                        self.gpu_timing_samples
+                            .push((result.name.to_string(), result.time_ms));
+                    }
+                }
+            }
         }
     }
 }

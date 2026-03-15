@@ -26,6 +26,7 @@ use super::renderer_2d::{
 };
 use super::renderer_api::{RendererAPI, VulkanRendererAPI};
 use super::shader::Shader;
+use super::ibl_cache;
 use super::shadow_map::{self, ShadowMapSystem};
 use super::sub_texture::SubTexture2D;
 use super::texture::TextureCpuData;
@@ -147,6 +148,24 @@ impl ShadowState {
 /// `DrawContext`. Provides `begin_scene` / `end_scene` / `submit` for
 /// structured draw call recording, and factory methods for creating
 /// rendering resources.
+/// Result from the async environment loading background thread.
+enum AsyncEnvResult {
+    /// Cache hit: pre-processed IBL data loaded from disk.
+    Cached {
+        path: std::path::PathBuf,
+        data: Box<ibl_cache::CachedIblData>,
+    },
+    /// Cache miss: raw RGBA f16 pixels ready for GPU processing.
+    Fresh {
+        path: std::path::PathBuf,
+        rgba_f16: Vec<u8>,
+        width: u32,
+        height: u32,
+    },
+    /// Loading failed.
+    Error(String),
+}
+
 pub struct Renderer {
     api: RendererAPI,
     draw_context: Option<DrawContext>,
@@ -235,6 +254,8 @@ pub struct Renderer {
     // Skybox pipeline (lazily created from the environment map system).
     skybox_pipeline: Option<Arc<Pipeline>>,
     skybox_offscreen_pipeline: Option<Arc<Pipeline>>,
+    // Async environment loading state.
+    pending_env_load: Option<Arc<Mutex<Option<AsyncEnvResult>>>>,
 
     // Shader hot-reload: source hash cache to skip recompiling unchanged shaders.
     shader_source_hashes: HashMap<String, u64>,
@@ -360,6 +381,7 @@ impl Renderer {
             environment: None,
             skybox_pipeline: None,
             skybox_offscreen_pipeline: None,
+            pending_env_load: None,
             shader_source_hashes: HashMap::new(),
             shader_overrides: HashMap::new(),
         })
@@ -2608,25 +2630,327 @@ impl Renderer {
     /// Convenience wrapper around [`load_environment_hdr`] that reads the file,
     /// converts to RGBA f16, and runs the IBL preprocessing chain.
     pub fn load_environment_hdr_from_file(&mut self, path: &std::path::Path) -> EngineResult<()> {
+        let img = {
+            let _t = gg_core::profiling::ProfileTimer::new("HDR::image_decode");
+            image::open(path)
+                .map_err(|e| gg_core::EngineError::Gpu(format!("Failed to open HDR: {e}")))?
+        };
+        let rgb32f = {
+            let _t = gg_core::profiling::ProfileTimer::new("HDR::to_rgb32f");
+            img.to_rgb32f()
+        };
+        let (width, height) = rgb32f.dimensions();
+        let pixels = rgb32f.as_raw();
+
+        let rgba_f16 = {
+            let _t = gg_core::profiling::ProfileTimer::new("HDR::rgb32f_to_rgba16f");
+            // Parallel conversion: split into chunks processed on the thread pool.
+            // Each pixel produces 8 bytes (4 × f16).
+            const CHUNK_PIXELS: usize = 64 * 1024;
+            let chunks: Vec<&[f32]> = pixels.chunks(CHUNK_PIXELS * 3).collect();
+            let results: Vec<Vec<u8>> = gg_core::jobs::pool().install(|| {
+                use rayon::prelude::*;
+                chunks
+                    .par_iter()
+                    .map(|chunk| {
+                        let n = chunk.len() / 3;
+                        let mut buf = Vec::with_capacity(n * 8);
+                        let one_bytes = half::f16::from_f32(1.0).to_le_bytes();
+                        for i in 0..n {
+                            for c in 0..3 {
+                                let h = half::f16::from_f32(chunk[i * 3 + c].min(65504.0));
+                                buf.extend_from_slice(&h.to_le_bytes());
+                            }
+                            buf.extend_from_slice(&one_bytes);
+                        }
+                        buf
+                    })
+                    .collect()
+            });
+            let total_bytes: usize = results.iter().map(|r| r.len()).sum();
+            let mut combined = Vec::with_capacity(total_bytes);
+            for r in results {
+                combined.extend_from_slice(&r);
+            }
+            combined
+        };
+
+        {
+            let _t = gg_core::profiling::ProfileTimer::new("HDR::gpu_upload_and_ibl");
+            self.load_environment_hdr(&rgba_f16, width, height)?;
+        }
+
+        // Save IBL cache for next time.
+        if let Some(env) = self.environment.as_ref() {
+            if let Err(e) = env.save_ibl_cache(
+                &self.allocator,
+                &self.device,
+                self.command_pool,
+                self.graphics_queue,
+                path,
+            ) {
+                log::warn!(target: "gg_engine", "Failed to save IBL cache: {e}");
+            }
+        }
+
+        log::info!(target: "gg_engine", "Environment map loaded from {}: {}x{}", path.display(), width, height);
+        Ok(())
+    }
+
+    /// Load an HDR environment map, using IBL cache if available.
+    ///
+    /// On cache hit: uploads pre-processed irradiance + prefiltered cubemaps
+    /// directly (skipping compute), then runs equirect→cube for the skybox.
+    /// On cache miss: full pipeline + saves cache for next time.
+    pub fn load_environment_hdr_cached(
+        &mut self,
+        path: &std::path::Path,
+    ) -> EngineResult<()> {
+        // Try loading from cache first.
+        if let Some(cached) = ibl_cache::load_cache(path)? {
+            let _t = gg_core::profiling::ProfileTimer::new("HDR::load_cached");
+            self.ensure_environment_map()?;
+
+            // Upload cached irradiance + prefiltered from disk.
+            {
+                let env = self.environment.as_mut().unwrap();
+                env.load_from_cache(
+                    &self.allocator,
+                    &self.device,
+                    self.command_pool,
+                    self.graphics_queue,
+                    &cached,
+                )?;
+            }
+
+            // Still need equirect→cube for the skybox source cubemap.
+            self.load_env_cubemap_from_file(path)?;
+
+            let env = self.environment.as_ref().unwrap();
+            env.update_lighting_descriptors(&self.lighting);
+            log::info!(target: "gg_engine", "Environment loaded from cache: {}", path.display());
+            return Ok(());
+        }
+
+        // Cache miss: full pipeline (which saves cache afterward).
+        self.load_environment_hdr_from_file(path)
+    }
+
+    /// Load just the environment cubemap (equirect→cube) for skybox, without
+    /// recomputing irradiance/prefilter. Used on cache hits.
+    fn load_env_cubemap_from_file(&mut self, path: &std::path::Path) -> EngineResult<()> {
+        let _t = gg_core::profiling::ProfileTimer::new("HDR::load_env_cubemap");
         let img = image::open(path)
             .map_err(|e| gg_core::EngineError::Gpu(format!("Failed to open HDR: {e}")))?;
         let rgb32f = img.to_rgb32f();
         let (width, height) = rgb32f.dimensions();
         let pixels = rgb32f.as_raw();
 
-        let pixel_count = (width * height) as usize;
-        let mut rgba_f16 = Vec::with_capacity(pixel_count * 8);
-        for i in 0..pixel_count {
-            for c in 0..3 {
-                let h = half::f16::from_f32(pixels[i * 3 + c].min(65504.0));
-                rgba_f16.extend_from_slice(&h.to_le_bytes());
-            }
-            let one = half::f16::from_f32(1.0);
-            rgba_f16.extend_from_slice(&one.to_le_bytes());
+        // Convert to RGBA f16 (parallel).
+        const CHUNK_PIXELS: usize = 64 * 1024;
+        let chunks: Vec<&[f32]> = pixels.chunks(CHUNK_PIXELS * 3).collect();
+        let results: Vec<Vec<u8>> = gg_core::jobs::pool().install(|| {
+            use rayon::prelude::*;
+            chunks.par_iter().map(|chunk| {
+                let n = chunk.len() / 3;
+                let mut buf = Vec::with_capacity(n * 8);
+                let one_bytes = half::f16::from_f32(1.0).to_le_bytes();
+                for i in 0..n {
+                    for c in 0..3 {
+                        let h = half::f16::from_f32(chunk[i * 3 + c].min(65504.0));
+                        buf.extend_from_slice(&h.to_le_bytes());
+                    }
+                    buf.extend_from_slice(&one_bytes);
+                }
+                buf
+            }).collect()
+        });
+        let mut rgba_f16 = Vec::with_capacity(results.iter().map(|r| r.len()).sum());
+        for r in results {
+            rgba_f16.extend_from_slice(&r);
         }
 
-        self.load_environment_hdr(&rgba_f16, width, height)?;
-        log::info!(target: "gg_engine", "Environment map loaded from {}: {}x{}", path.display(), width, height);
+        // Upload equirect and run equirect→cube (but NOT irradiance/prefilter).
+        let env = self.environment.as_mut().unwrap();
+        env.load_env_cubemap_only(
+            &self.allocator,
+            &self.device,
+            self.command_pool,
+            self.graphics_queue,
+            &rgba_f16,
+            width,
+            height,
+        )
+    }
+
+    /// Start loading an HDR environment map asynchronously.
+    ///
+    /// The background thread handles file I/O, image decoding, f16 conversion,
+    /// and cache checking. Call [`poll_environment_load`] each frame to check
+    /// for completion and finish the GPU upload.
+    pub fn load_environment_async(&mut self, path: std::path::PathBuf) {
+        // Cancel any in-progress load.
+        self.pending_env_load = None;
+
+        let result: Arc<Mutex<Option<AsyncEnvResult>>> = Arc::new(Mutex::new(None));
+        let result_clone = Arc::clone(&result);
+
+        std::thread::Builder::new()
+            .name("env-loader".into())
+            .spawn(move || {
+                let outcome = Self::async_env_load_worker(&path);
+                if let Ok(mut guard) = result_clone.lock() {
+                    *guard = Some(outcome);
+                }
+            })
+            .expect("Failed to spawn env loader thread");
+
+        self.pending_env_load = Some(result);
+    }
+
+    /// Poll for completion of an async environment load. Returns `true` if
+    /// the environment was loaded this frame (or if there's nothing pending).
+    pub fn poll_environment_load(&mut self) -> bool {
+        let result_arc = match self.pending_env_load.take() {
+            Some(r) => r,
+            None => return false,
+        };
+
+        let ready = {
+            let guard = result_arc.lock().unwrap();
+            guard.is_some()
+        };
+
+        if !ready {
+            // Not done yet, put it back.
+            self.pending_env_load = Some(result_arc);
+            return false;
+        }
+
+        let result = result_arc.lock().unwrap().take().unwrap();
+        match result {
+            AsyncEnvResult::Cached { path, data } => {
+                if let Err(e) = self.finish_cached_load(&path, &data) {
+                    log::error!(target: "gg_engine", "Async env load (cached) failed: {e}");
+                }
+            }
+            AsyncEnvResult::Fresh { path, rgba_f16, width, height } => {
+                if let Err(e) = self.finish_fresh_load(&path, &rgba_f16, width, height) {
+                    log::error!(target: "gg_engine", "Async env load (fresh) failed: {e}");
+                }
+            }
+            AsyncEnvResult::Error(e) => {
+                log::error!(target: "gg_engine", "Async env load failed: {e}");
+            }
+        }
+        true
+    }
+
+    /// Whether an async environment load is in progress.
+    pub fn is_environment_loading(&self) -> bool {
+        self.pending_env_load.is_some()
+    }
+
+    fn async_env_load_worker(path: &std::path::Path) -> AsyncEnvResult {
+        let _t = gg_core::profiling::ProfileTimer::new("HDR::async_worker");
+
+        // Try cache first.
+        match ibl_cache::load_cache(path) {
+            Ok(Some(cached)) => {
+                return AsyncEnvResult::Cached {
+                    path: path.to_path_buf(),
+                    data: Box::new(cached),
+                };
+            }
+            Ok(None) => {} // cache miss
+            Err(e) => log::warn!(target: "gg_engine", "IBL cache check failed: {e}"),
+        }
+
+        // Cache miss: decode HDR and convert to f16.
+        let img = match image::open(path) {
+            Ok(i) => i,
+            Err(e) => return AsyncEnvResult::Error(format!("Failed to open HDR: {e}")),
+        };
+        let rgb32f = img.to_rgb32f();
+        let (width, height) = rgb32f.dimensions();
+        let pixels = rgb32f.as_raw();
+
+        const CHUNK_PIXELS: usize = 64 * 1024;
+        let chunks: Vec<&[f32]> = pixels.chunks(CHUNK_PIXELS * 3).collect();
+        let results: Vec<Vec<u8>> = gg_core::jobs::pool().install(|| {
+            use rayon::prelude::*;
+            chunks.par_iter().map(|chunk| {
+                let n = chunk.len() / 3;
+                let mut buf = Vec::with_capacity(n * 8);
+                let one_bytes = half::f16::from_f32(1.0).to_le_bytes();
+                for i in 0..n {
+                    for c in 0..3 {
+                        let h = half::f16::from_f32(chunk[i * 3 + c].min(65504.0));
+                        buf.extend_from_slice(&h.to_le_bytes());
+                    }
+                    buf.extend_from_slice(&one_bytes);
+                }
+                buf
+            }).collect()
+        });
+        let mut rgba_f16 = Vec::with_capacity(results.iter().map(|r| r.len()).sum());
+        for r in results {
+            rgba_f16.extend_from_slice(&r);
+        }
+
+        AsyncEnvResult::Fresh {
+            path: path.to_path_buf(),
+            rgba_f16,
+            width,
+            height,
+        }
+    }
+
+    fn finish_cached_load(
+        &mut self,
+        path: &std::path::Path,
+        data: &ibl_cache::CachedIblData,
+    ) -> EngineResult<()> {
+        let _t = gg_core::profiling::ProfileTimer::new("HDR::finish_cached");
+        self.ensure_environment_map()?;
+        let env = self.environment.as_mut().unwrap();
+        env.load_from_cache(
+            &self.allocator,
+            &self.device,
+            self.command_pool,
+            self.graphics_queue,
+            data,
+        )?;
+        // Load env cubemap for skybox.
+        self.load_env_cubemap_from_file(path)?;
+        let env = self.environment.as_ref().unwrap();
+        env.update_lighting_descriptors(&self.lighting);
+        log::info!(target: "gg_engine", "Async environment loaded from cache");
+        Ok(())
+    }
+
+    fn finish_fresh_load(
+        &mut self,
+        path: &std::path::Path,
+        rgba_f16: &[u8],
+        width: u32,
+        height: u32,
+    ) -> EngineResult<()> {
+        let _t = gg_core::profiling::ProfileTimer::new("HDR::finish_fresh");
+        self.load_environment_hdr(rgba_f16, width, height)?;
+        // Save cache.
+        if let Some(env) = self.environment.as_ref() {
+            if let Err(e) = env.save_ibl_cache(
+                &self.allocator,
+                &self.device,
+                self.command_pool,
+                self.graphics_queue,
+                path,
+            ) {
+                log::warn!(target: "gg_engine", "Failed to save IBL cache: {e}");
+            }
+        }
+        log::info!(target: "gg_engine", "Async environment loaded (fresh) from {}", path.display());
         Ok(())
     }
 

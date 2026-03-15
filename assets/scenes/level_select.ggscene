@@ -165,7 +165,7 @@ Entities:
     - 1.0
     - 1.0
   TextComponent:
-    Text: Physics Playground
+    Text: 2D Showcase
     FontPath: assets/fonts/JetBrainsMono-Regular.ttf
     FontSize: 0.40
     Color:
@@ -200,7 +200,7 @@ Entities:
     - 1.0
     - 1.0
   TextComponent:
-    Text: PBR Showcase
+    Text: 3D Showcase
     FontPath: assets/fonts/JetBrainsMono-Regular.ttf
     FontSize: 0.40
     Color:
@@ -235,7 +235,7 @@ Entities:
     - 1.0
     - 1.0
   TextComponent:
-    Text: Particle Demo
+    Text: UI Showcase
     FontPath: assets/fonts/JetBrainsMono-Regular.ttf
     FontSize: 0.40
     Color:
@@ -252,76 +252,6 @@ Entities:
     Offset:
     - 1.5
     - -4.4
-
-- Entity: 2023
-  TagComponent:
-    Tag: Level4Btn
-  TransformComponent:
-    Translation:
-    - 0.0
-    - 0.0
-    - 0.0
-    Rotation:
-    - 0.0
-    - 0.0
-    - 0.0
-    Scale:
-    - 1.0
-    - 1.0
-    - 1.0
-  TextComponent:
-    Text: Audio Test
-    FontPath: assets/fonts/JetBrainsMono-Regular.ttf
-    FontSize: 0.40
-    Color:
-    - 0.7
-    - 0.7
-    - 0.7
-    - 1.0
-    LineSpacing: 1.0
-    Kerning: 0.0
-  UIAnchorComponent:
-    Anchor:
-    - 0.0
-    - 0.0
-    Offset:
-    - 1.5
-    - -5.2
-
-- Entity: 2024
-  TagComponent:
-    Tag: Level5Btn
-  TransformComponent:
-    Translation:
-    - 0.0
-    - 0.0
-    - 0.0
-    Rotation:
-    - 0.0
-    - 0.0
-    - 0.0
-    Scale:
-    - 1.0
-    - 1.0
-    - 1.0
-  TextComponent:
-    Text: Input Actions
-    FontPath: assets/fonts/JetBrainsMono-Regular.ttf
-    FontSize: 0.40
-    Color:
-    - 0.7
-    - 0.7
-    - 0.7
-    - 1.0
-    LineSpacing: 1.0
-    Kerning: 0.0
-  UIAnchorComponent:
-    Anchor:
-    - 0.0
-    - 0.0
-    Offset:
-    - 1.5
-    - -6.0
 
 # ══════════════════════════════════════════════════════════════
 # Back Button
@@ -360,7 +290,7 @@ Entities:
     - 0.0
     Offset:
     - 1.5
-    - -7.4
+    - -5.8
 
 # ── Selection indicator ───────────────────────────────────────
 - Entity: 2070
@@ -391,5 +321,5 @@ Entities:
     - 0.0
     - 0.0
     Offset:
-    - 0.8
-    - -3.0
+    - 0.95
+    - -2.6

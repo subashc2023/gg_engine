@@ -1439,7 +1439,8 @@ impl Application for GGEditor {
                 if let Ok(pos) = window.outer_position() {
                     self.editor_settings.window_state.position = Some((pos.x, pos.y));
                 }
-                let size = window.inner_size();
+                let size: gg_engine::winit::dpi::LogicalSize<u32> =
+                    window.inner_size().to_logical(window.scale_factor());
                 if size.width > 0 && size.height > 0 {
                     self.editor_settings.window_state.width = size.width;
                     self.editor_settings.window_state.height = size.height;

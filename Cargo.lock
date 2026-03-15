@@ -1346,6 +1346,7 @@ dependencies = [
  "log",
  "parking_lot",
  "raw-window-handle",
+ "rayon",
  "serde",
  "serde_json",
  "ttf-parser",
@@ -1357,8 +1358,6 @@ name = "gg_sandbox"
 version = "0.1.0"
 dependencies = [
  "gg_engine",
- "half",
- "image",
 ]
 
 [[package]]

@@ -15,5 +15,3 @@ physics-3d = ["gg_engine/physics-3d"]
 
 [dependencies]
 gg_engine = { path = "../gg_engine", default-features = false }
-image.workspace = true
-half.workspace = true

@@ -381,8 +381,20 @@ impl<T: Application> ApplicationHandler for EngineRunner<T> {
             return;
         }
 
-        let size =
-            winit::dpi::LogicalSize::new(self.window_config.width, self.window_config.height);
+        // Clamp saved window size to fit within the primary monitor so the
+        // window never spawns larger than the screen.
+        let mut width = self.window_config.width;
+        let mut height = self.window_config.height;
+        if let Some(monitor) = event_loop.primary_monitor().or_else(|| event_loop.available_monitors().next()) {
+            let mon_size = monitor.size();
+            let scale = monitor.scale_factor();
+            let max_w = (mon_size.width as f64 / scale) as u32;
+            let max_h = (mon_size.height as f64 / scale) as u32;
+            width = width.min(max_w);
+            height = height.min(max_h);
+        }
+
+        let size = winit::dpi::LogicalSize::new(width, height);
         let mut attrs = WindowAttributes::default()
             .with_title(&self.window_config.title)
             .with_inner_size(size)

@@ -6,6 +6,7 @@ use super::buffer::create_staging_buffer;
 use super::compute::{create_compute_pipeline, ComputePipeline, ComputeShader};
 use super::cubemap::Cubemap;
 use super::gpu_allocation::{GpuAllocator, MemoryLocation};
+use super::ibl_cache::{self, CachedIblData};
 use super::lighting::LightingSystem;
 use super::texture::{ImageFormat, Texture2D, TextureSpecification};
 use super::vertex_array::VertexArray;
@@ -912,6 +913,7 @@ impl EnvironmentMapSystem {
     /// Half-float precision (65536 levels vs 256 for RGBA8) eliminates visible
     /// quantization banding on metallic surfaces.
     fn generate_brdf_lut_rg16f(size: u32) -> Vec<u8> {
+        let _timer = gg_core::profiling::ProfileTimer::new("BRDF_LUT::generate");
         const SAMPLE_COUNT: u32 = 1024;
         const PI: f32 = std::f32::consts::PI;
 
@@ -929,72 +931,67 @@ impl EnvironmentMapSystem {
             n_dot_v / (n_dot_v * (1.0 - k) + k)
         }
 
-        // RG16F = 4 bytes per pixel (2 × f16).
-        let mut data = vec![0u8; (size * size * 4) as usize];
+        /// Compute one row of the BRDF LUT (all x values for a given y/roughness).
+        fn compute_row(y: u32, size: u32) -> Vec<u8> {
+            let roughness = ((y as f32 + 0.5) / size as f32).max(0.001);
+            let alpha = roughness * roughness;
+            let mut row = Vec::with_capacity((size * 4) as usize);
 
-        for y in 0..size {
             for x in 0..size {
                 let n_dot_v = ((x as f32 + 0.5) / size as f32).max(0.001);
-                let roughness = ((y as f32 + 0.5) / size as f32).max(0.001);
-
-                // View vector in tangent space (N = (0,0,1)).
                 let v = [
-                    (1.0 - n_dot_v * n_dot_v).sqrt(), // sin(theta)
+                    (1.0 - n_dot_v * n_dot_v).sqrt(),
                     0.0f32,
-                    n_dot_v, // cos(theta)
+                    n_dot_v,
                 ];
-
-                let mut a = 0.0f32; // F0 scale
-                let mut b = 0.0f32; // F0 bias
-
-                let alpha = roughness * roughness;
+                let mut a = 0.0f32;
+                let mut b = 0.0f32;
 
                 for i in 0..SAMPLE_COUNT {
-                    // Hammersley sequence.
                     let xi_x = i as f32 / SAMPLE_COUNT as f32;
                     let xi_y = radical_inverse_vdc(i);
-
-                    // Importance sample GGX (N = (0,0,1), so tangent frame is identity).
                     let phi = 2.0 * PI * xi_x;
-                    let cos_theta = ((1.0 - xi_y) / (1.0 + (alpha * alpha - 1.0) * xi_y)).sqrt();
+                    let cos_theta =
+                        ((1.0 - xi_y) / (1.0 + (alpha * alpha - 1.0) * xi_y)).sqrt();
                     let sin_theta = (1.0 - cos_theta * cos_theta).sqrt();
                     let h = [phi.cos() * sin_theta, phi.sin() * sin_theta, cos_theta];
-
-                    // Reflect V around H to get L.
                     let v_dot_h = (v[0] * h[0] + v[1] * h[1] + v[2] * h[2]).max(0.0);
                     let l = [
                         2.0 * v_dot_h * h[0] - v[0],
                         2.0 * v_dot_h * h[1] - v[1],
                         2.0 * v_dot_h * h[2] - v[2],
                     ];
-
                     let n_dot_l = l[2].max(0.0);
                     let n_dot_h = h[2].max(0.0);
-
                     if n_dot_l > 0.0 {
-                        // Smith G term.
                         let g = geometry_schlick_ggx(n_dot_v, roughness)
                             * geometry_schlick_ggx(n_dot_l, roughness);
                         let g_vis = (g * v_dot_h) / (n_dot_h * n_dot_v).max(0.001);
                         let fc = (1.0 - v_dot_h).powi(5);
-
                         a += (1.0 - fc) * g_vis;
                         b += fc * g_vis;
                     }
                 }
-
                 a /= SAMPLE_COUNT as f32;
                 b /= SAMPLE_COUNT as f32;
 
-                // Store as RG16F (half-float pair, 4 bytes total).
-                let r_f16 = half::f16::from_f32(a.clamp(0.0, 1.0));
-                let g_f16 = half::f16::from_f32(b.clamp(0.0, 1.0));
-                let idx = ((y * size + x) * 4) as usize;
-                data[idx..idx + 2].copy_from_slice(&r_f16.to_le_bytes());
-                data[idx + 2..idx + 4].copy_from_slice(&g_f16.to_le_bytes());
+                row.extend_from_slice(&half::f16::from_f32(a.clamp(0.0, 1.0)).to_le_bytes());
+                row.extend_from_slice(&half::f16::from_f32(b.clamp(0.0, 1.0)).to_le_bytes());
             }
+            row
         }
 
+        // Parallel: each row is independent, process on thread pool.
+        let rows: Vec<Vec<u8>> = gg_core::jobs::pool().install(|| {
+            use rayon::prelude::*;
+            (0..size).into_par_iter().map(|y| compute_row(y, size)).collect()
+        });
+
+        // Flatten rows into contiguous buffer.
+        let mut data = Vec::with_capacity((size * size * 4) as usize);
+        for row in rows {
+            data.extend_from_slice(&row);
+        }
         data
     }
 
@@ -1252,6 +1249,519 @@ impl EnvironmentMapSystem {
                 &[barrier_last],
             );
         }
+    }
+
+    // -------------------------------------------------------------------
+    // Equirect → cube only (for cache-hit path: skybox needs env cubemap)
+    // -------------------------------------------------------------------
+
+    /// Upload an equirectangular HDR image and run only the equirect→cube
+    /// conversion + mipmap generation, without irradiance/prefilter compute.
+    /// Used on cache hits where irradiance/prefilter come from disk.
+    pub fn load_env_cubemap_only(
+        &mut self,
+        allocator: &Arc<Mutex<GpuAllocator>>,
+        device: &ash::Device,
+        command_pool: vk::CommandPool,
+        queue: vk::Queue,
+        pixels_rgba_f16: &[u8],
+        width: u32,
+        height: u32,
+    ) -> EngineResult<()> {
+        // 1. Upload equirectangular HDR as a temporary 2D texture.
+        let (staging_buf, staging_alloc) =
+            create_staging_buffer(allocator, device, pixels_rgba_f16)?;
+        let equirect_image = Self::create_hdr_image(allocator, device, width, height)?;
+
+        super::texture::execute_one_shot_pub(device, command_pool, queue, |cmd_buf| {
+            Self::transition_image(
+                device, cmd_buf, equirect_image.0,
+                vk::ImageLayout::UNDEFINED, vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+                1, 1,
+                vk::AccessFlags::empty(), vk::AccessFlags::TRANSFER_WRITE,
+                vk::PipelineStageFlags::TOP_OF_PIPE, vk::PipelineStageFlags::TRANSFER,
+            );
+            let region = vk::BufferImageCopy {
+                buffer_offset: 0,
+                buffer_row_length: 0,
+                buffer_image_height: 0,
+                image_subresource: vk::ImageSubresourceLayers {
+                    aspect_mask: vk::ImageAspectFlags::COLOR,
+                    mip_level: 0,
+                    base_array_layer: 0,
+                    layer_count: 1,
+                },
+                image_offset: vk::Offset3D::default(),
+                image_extent: vk::Extent3D { width, height, depth: 1 },
+            };
+            unsafe {
+                device.cmd_copy_buffer_to_image(
+                    cmd_buf, staging_buf, equirect_image.0,
+                    vk::ImageLayout::TRANSFER_DST_OPTIMAL, &[region],
+                );
+            }
+            Self::transition_image(
+                device, cmd_buf, equirect_image.0,
+                vk::ImageLayout::TRANSFER_DST_OPTIMAL, vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
+                1, 1,
+                vk::AccessFlags::TRANSFER_WRITE, vk::AccessFlags::SHADER_READ,
+                vk::PipelineStageFlags::TRANSFER, vk::PipelineStageFlags::COMPUTE_SHADER,
+            );
+        })?;
+
+        // Create equirect image view + sampler.
+        let equirect_view = unsafe {
+            device.create_image_view(
+                &vk::ImageViewCreateInfo::default()
+                    .image(equirect_image.0)
+                    .view_type(vk::ImageViewType::TYPE_2D)
+                    .format(vk::Format::R16G16B16A16_SFLOAT)
+                    .subresource_range(vk::ImageSubresourceRange {
+                        aspect_mask: vk::ImageAspectFlags::COLOR,
+                        base_mip_level: 0, level_count: 1,
+                        base_array_layer: 0, layer_count: 1,
+                    }),
+                None,
+            )
+        }.map_err(|e| EngineError::Gpu(format!("equirect view: {e}")))?;
+
+        let equirect_sampler = unsafe {
+            device.create_sampler(
+                &vk::SamplerCreateInfo::default()
+                    .mag_filter(vk::Filter::LINEAR)
+                    .min_filter(vk::Filter::LINEAR)
+                    .address_mode_u(vk::SamplerAddressMode::REPEAT)
+                    .address_mode_v(vk::SamplerAddressMode::CLAMP_TO_EDGE)
+                    .address_mode_w(vk::SamplerAddressMode::CLAMP_TO_EDGE),
+                None,
+            )
+        }.map_err(|e| EngineError::Gpu(format!("equirect sampler: {e}")))?;
+
+        // 2. Run equirect→cube + mipmap generation only.
+        super::texture::execute_one_shot_pub(device, command_pool, queue, |cmd_buf| {
+            Cubemap::transition_all_layers(
+                device, cmd_buf, self.env_cubemap.image(),
+                vk::ImageLayout::UNDEFINED, vk::ImageLayout::GENERAL,
+                self.env_cubemap.mip_levels(),
+                vk::AccessFlags::empty(), vk::AccessFlags::SHADER_WRITE,
+                vk::PipelineStageFlags::TOP_OF_PIPE, vk::PipelineStageFlags::COMPUTE_SHADER,
+            );
+
+            for face in 0..6u32 {
+                let ds = Self::alloc_and_write_sampler2d_storage_ds(
+                    device, self.compute_ds_pool, self.compute_sampler2d_ds_layout,
+                    equirect_view, equirect_sampler,
+                    self.env_cubemap.face_mip_view(face, 0),
+                );
+                unsafe {
+                    device.cmd_bind_pipeline(cmd_buf, vk::PipelineBindPoint::COMPUTE,
+                        self.equirect_to_cube_pipeline.pipeline());
+                    device.cmd_bind_descriptor_sets(cmd_buf, vk::PipelineBindPoint::COMPUTE,
+                        self.equirect_to_cube_pipeline.layout(), 0, &[ds], &[]);
+                }
+                let push = EquirectToCubePush { face: face as i32, face_size: ENV_CUBEMAP_SIZE as i32 };
+                let push_bytes = unsafe {
+                    std::slice::from_raw_parts(&push as *const _ as *const u8, std::mem::size_of_val(&push))
+                };
+                unsafe {
+                    device.cmd_push_constants(cmd_buf, self.equirect_to_cube_pipeline.layout(),
+                        vk::ShaderStageFlags::COMPUTE, 0, push_bytes);
+                    let groups = ENV_CUBEMAP_SIZE.div_ceil(16);
+                    device.cmd_dispatch(cmd_buf, groups, groups, 1);
+                }
+            }
+
+            // Transition for mipmap generation.
+            Cubemap::transition_all_layers(
+                device, cmd_buf, self.env_cubemap.image(),
+                vk::ImageLayout::GENERAL, vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+                self.env_cubemap.mip_levels(),
+                vk::AccessFlags::SHADER_WRITE, vk::AccessFlags::TRANSFER_WRITE,
+                vk::PipelineStageFlags::COMPUTE_SHADER, vk::PipelineStageFlags::TRANSFER,
+            );
+            Self::generate_cubemap_mipmaps(device, cmd_buf, &self.env_cubemap);
+        })?;
+
+        // Cleanup.
+        unsafe {
+            device.destroy_image_view(equirect_view, None);
+            device.destroy_sampler(equirect_sampler, None);
+            device.destroy_image(equirect_image.0, None);
+            device.destroy_buffer(staging_buf, None);
+        }
+        drop(equirect_image.1);
+        drop(staging_alloc);
+
+        Ok(())
+    }
+
+    // -------------------------------------------------------------------
+    // IBL cache: readback from GPU + upload from cache
+    // -------------------------------------------------------------------
+
+    /// Read back irradiance + prefiltered cubemap data from GPU and save to
+    /// a `.ggenv` cache file next to the source HDR.
+    pub fn save_ibl_cache(
+        &self,
+        allocator: &Arc<Mutex<GpuAllocator>>,
+        device: &ash::Device,
+        command_pool: vk::CommandPool,
+        queue: vk::Queue,
+        source_path: &std::path::Path,
+    ) -> EngineResult<()> {
+        let _timer = gg_core::profiling::ProfileTimer::new("IBL::save_cache");
+
+        let irradiance_faces = self.readback_cubemap(
+            allocator,
+            device,
+            command_pool,
+            queue,
+            &self.irradiance_map,
+        )?;
+        let prefilter_faces = self.readback_cubemap_all_mips(
+            allocator,
+            device,
+            command_pool,
+            queue,
+            &self.prefiltered_map,
+        )?;
+
+        ibl_cache::save_cache(
+            source_path,
+            IRRADIANCE_SIZE,
+            PREFILTER_SIZE,
+            PREFILTER_MIP_LEVELS,
+            &irradiance_faces,
+            &prefilter_faces,
+        )
+    }
+
+    /// Load IBL data from a cache file and upload directly to GPU cubemaps,
+    /// skipping the compute preprocessing chain entirely.
+    pub fn load_from_cache(
+        &mut self,
+        allocator: &Arc<Mutex<GpuAllocator>>,
+        device: &ash::Device,
+        command_pool: vk::CommandPool,
+        queue: vk::Queue,
+        cached: &CachedIblData,
+    ) -> EngineResult<()> {
+        let _timer = gg_core::profiling::ProfileTimer::new("IBL::upload_from_cache");
+
+        // Upload irradiance cubemap (single mip, 6 faces).
+        self.upload_to_cubemap(
+            allocator,
+            device,
+            command_pool,
+            queue,
+            &self.irradiance_map,
+            &[&cached.irradiance_faces],
+        )?;
+
+        // Upload prefiltered cubemap (multiple mips, 6 faces each).
+        let prefilter_refs: Vec<&Vec<Vec<u8>>> = cached.prefilter_faces.iter().collect();
+        self.upload_to_cubemap(
+            allocator,
+            device,
+            command_pool,
+            queue,
+            &self.prefiltered_map,
+            &prefilter_refs,
+        )?;
+
+        self.has_environment = true;
+        Ok(())
+    }
+
+    /// Read back a single-mip cubemap (6 faces) from GPU to CPU buffers.
+    fn readback_cubemap(
+        &self,
+        allocator: &Arc<Mutex<GpuAllocator>>,
+        device: &ash::Device,
+        command_pool: vk::CommandPool,
+        queue: vk::Queue,
+        cubemap: &Cubemap,
+    ) -> EngineResult<Vec<Vec<u8>>> {
+        self.readback_cubemap_mip(allocator, device, command_pool, queue, cubemap, 0)
+    }
+
+    /// Read back all mips of a cubemap. Returns `[mip][face]` data.
+    fn readback_cubemap_all_mips(
+        &self,
+        allocator: &Arc<Mutex<GpuAllocator>>,
+        device: &ash::Device,
+        command_pool: vk::CommandPool,
+        queue: vk::Queue,
+        cubemap: &Cubemap,
+    ) -> EngineResult<Vec<Vec<Vec<u8>>>> {
+        let mut all_mips = Vec::with_capacity(cubemap.mip_levels() as usize);
+        for mip in 0..cubemap.mip_levels() {
+            let faces = self.readback_cubemap_mip(
+                allocator,
+                device,
+                command_pool,
+                queue,
+                cubemap,
+                mip,
+            )?;
+            all_mips.push(faces);
+        }
+        Ok(all_mips)
+    }
+
+    /// Read back a single mip level of a cubemap (6 faces).
+    fn readback_cubemap_mip(
+        &self,
+        allocator: &Arc<Mutex<GpuAllocator>>,
+        device: &ash::Device,
+        command_pool: vk::CommandPool,
+        queue: vk::Queue,
+        cubemap: &Cubemap,
+        mip: u32,
+    ) -> EngineResult<Vec<Vec<u8>>> {
+        let mip_size = cubemap.mip_width(mip) as usize;
+        let face_bytes = mip_size * mip_size * 8; // R16G16B16A16_SFLOAT
+        let total_bytes = face_bytes * 6;
+
+        // Create readback buffer.
+        let buf_info = vk::BufferCreateInfo::default()
+            .size(total_bytes as u64)
+            .usage(vk::BufferUsageFlags::TRANSFER_DST)
+            .sharing_mode(vk::SharingMode::EXCLUSIVE);
+        let buffer = unsafe { device.create_buffer(&buf_info, None) }
+            .map_err(|e| EngineError::Gpu(format!("readback buffer create: {e}")))?;
+        let alloc = super::gpu_allocation::GpuAllocator::allocate_for_buffer(
+            allocator,
+            device,
+            buffer,
+            "IBL_Readback",
+            MemoryLocation::GpuToCpu,
+        )?;
+
+        super::texture::execute_one_shot_pub(device, command_pool, queue, |cmd_buf| {
+            // Transition cubemap mip to TRANSFER_SRC.
+            let barrier_to_src = vk::ImageMemoryBarrier::default()
+                .old_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
+                .new_layout(vk::ImageLayout::TRANSFER_SRC_OPTIMAL)
+                .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+                .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+                .image(cubemap.image())
+                .subresource_range(vk::ImageSubresourceRange {
+                    aspect_mask: vk::ImageAspectFlags::COLOR,
+                    base_mip_level: mip,
+                    level_count: 1,
+                    base_array_layer: 0,
+                    layer_count: 6,
+                })
+                .src_access_mask(vk::AccessFlags::SHADER_READ)
+                .dst_access_mask(vk::AccessFlags::TRANSFER_READ);
+            unsafe {
+                device.cmd_pipeline_barrier(
+                    cmd_buf,
+                    vk::PipelineStageFlags::FRAGMENT_SHADER,
+                    vk::PipelineStageFlags::TRANSFER,
+                    vk::DependencyFlags::empty(),
+                    &[],
+                    &[],
+                    &[barrier_to_src],
+                );
+            }
+
+            // Copy each face to the buffer.
+            for face in 0..6u32 {
+                let region = vk::BufferImageCopy {
+                    buffer_offset: (face as usize * face_bytes) as u64,
+                    buffer_row_length: 0,
+                    buffer_image_height: 0,
+                    image_subresource: vk::ImageSubresourceLayers {
+                        aspect_mask: vk::ImageAspectFlags::COLOR,
+                        mip_level: mip,
+                        base_array_layer: face,
+                        layer_count: 1,
+                    },
+                    image_offset: vk::Offset3D::default(),
+                    image_extent: vk::Extent3D {
+                        width: mip_size as u32,
+                        height: mip_size as u32,
+                        depth: 1,
+                    },
+                };
+                unsafe {
+                    device.cmd_copy_image_to_buffer(
+                        cmd_buf,
+                        cubemap.image(),
+                        vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
+                        buffer,
+                        &[region],
+                    );
+                }
+            }
+
+            // Transition back to SHADER_READ_ONLY.
+            let barrier_back = vk::ImageMemoryBarrier::default()
+                .old_layout(vk::ImageLayout::TRANSFER_SRC_OPTIMAL)
+                .new_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
+                .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+                .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+                .image(cubemap.image())
+                .subresource_range(vk::ImageSubresourceRange {
+                    aspect_mask: vk::ImageAspectFlags::COLOR,
+                    base_mip_level: mip,
+                    level_count: 1,
+                    base_array_layer: 0,
+                    layer_count: 6,
+                })
+                .src_access_mask(vk::AccessFlags::TRANSFER_READ)
+                .dst_access_mask(vk::AccessFlags::SHADER_READ);
+            unsafe {
+                device.cmd_pipeline_barrier(
+                    cmd_buf,
+                    vk::PipelineStageFlags::TRANSFER,
+                    vk::PipelineStageFlags::FRAGMENT_SHADER,
+                    vk::DependencyFlags::empty(),
+                    &[],
+                    &[],
+                    &[barrier_back],
+                );
+            }
+        })?;
+
+        // Read from mapped memory.
+        let ptr = alloc
+            .mapped_ptr()
+            .ok_or_else(|| EngineError::Gpu("Readback buffer not mapped".into()))?;
+        let mut faces = Vec::with_capacity(6);
+        for face in 0..6usize {
+            let offset = face * face_bytes;
+            let mut data = vec![0u8; face_bytes];
+            unsafe {
+                std::ptr::copy_nonoverlapping(ptr.add(offset), data.as_mut_ptr(), face_bytes);
+            }
+            faces.push(data);
+        }
+
+        unsafe {
+            device.destroy_buffer(buffer, None);
+        }
+        drop(alloc);
+        Ok(faces)
+    }
+
+    /// Upload pre-existing face data to a cubemap's mip levels.
+    /// `mip_faces[mip][face]` = raw pixel bytes for that face at that mip.
+    fn upload_to_cubemap(
+        &self,
+        allocator: &Arc<Mutex<GpuAllocator>>,
+        device: &ash::Device,
+        command_pool: vk::CommandPool,
+        queue: vk::Queue,
+        cubemap: &Cubemap,
+        mip_faces: &[&Vec<Vec<u8>>],
+    ) -> EngineResult<()> {
+        // Compute total staging size.
+        let total_bytes: usize = mip_faces
+            .iter()
+            .flat_map(|faces| faces.iter())
+            .map(|f| f.len())
+            .sum();
+
+        // Create staging buffer and copy all data into it.
+        let buf_info = vk::BufferCreateInfo::default()
+            .size(total_bytes as u64)
+            .usage(vk::BufferUsageFlags::TRANSFER_SRC)
+            .sharing_mode(vk::SharingMode::EXCLUSIVE);
+        let buffer = unsafe { device.create_buffer(&buf_info, None) }
+            .map_err(|e| EngineError::Gpu(format!("cache upload buffer create: {e}")))?;
+        let alloc = super::gpu_allocation::GpuAllocator::allocate_for_buffer(
+            allocator,
+            device,
+            buffer,
+            "IBL_CacheUpload",
+            MemoryLocation::CpuToGpu,
+        )?;
+
+        let ptr = alloc
+            .mapped_ptr()
+            .ok_or_else(|| EngineError::Gpu("Upload buffer not mapped".into()))?;
+        let mut offset = 0usize;
+        for faces in mip_faces {
+            for face_data in *faces {
+                unsafe {
+                    std::ptr::copy_nonoverlapping(face_data.as_ptr(), ptr.add(offset), face_data.len());
+                }
+                offset += face_data.len();
+            }
+        }
+
+        super::texture::execute_one_shot_pub(device, command_pool, queue, |cmd_buf| {
+            // Transition all mips to TRANSFER_DST.
+            Cubemap::transition_all_layers(
+                device,
+                cmd_buf,
+                cubemap.image(),
+                vk::ImageLayout::UNDEFINED,
+                vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+                cubemap.mip_levels(),
+                vk::AccessFlags::empty(),
+                vk::AccessFlags::TRANSFER_WRITE,
+                vk::PipelineStageFlags::TOP_OF_PIPE,
+                vk::PipelineStageFlags::TRANSFER,
+            );
+
+            let mut buf_offset = 0u64;
+            for (mip, faces) in mip_faces.iter().enumerate() {
+                let mip_size = cubemap.mip_width(mip as u32);
+                for (face, face_data) in faces.iter().enumerate() {
+                    let region = vk::BufferImageCopy {
+                        buffer_offset: buf_offset,
+                        buffer_row_length: 0,
+                        buffer_image_height: 0,
+                        image_subresource: vk::ImageSubresourceLayers {
+                            aspect_mask: vk::ImageAspectFlags::COLOR,
+                            mip_level: mip as u32,
+                            base_array_layer: face as u32,
+                            layer_count: 1,
+                        },
+                        image_offset: vk::Offset3D::default(),
+                        image_extent: vk::Extent3D {
+                            width: mip_size,
+                            height: mip_size,
+                            depth: 1,
+                        },
+                    };
+                    unsafe {
+                        device.cmd_copy_buffer_to_image(
+                            cmd_buf,
+                            buffer,
+                            cubemap.image(),
+                            vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+                            &[region],
+                        );
+                    }
+                    buf_offset += face_data.len() as u64;
+                }
+            }
+
+            // Transition to SHADER_READ_ONLY.
+            Cubemap::transition_all_layers(
+                device,
+                cmd_buf,
+                cubemap.image(),
+                vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+                vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
+                cubemap.mip_levels(),
+                vk::AccessFlags::TRANSFER_WRITE,
+                vk::AccessFlags::SHADER_READ,
+                vk::PipelineStageFlags::TRANSFER,
+                vk::PipelineStageFlags::FRAGMENT_SHADER,
+            );
+        })?;
+
+        unsafe {
+            device.destroy_buffer(buffer, None);
+        }
+        drop(alloc);
+        Ok(())
     }
 }
 

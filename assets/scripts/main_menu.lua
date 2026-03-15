@@ -76,7 +76,7 @@ local MAIN_ANCHORS = {
     PlayBtn      = { 0.0, 0.0, 1.5, -3.5 },
     SettingsBtn  = { 0.0, 0.0, 1.5, -4.5 },
     QuitBtn      = { 0.0, 0.0, 1.5, -5.5 },
-    Selector     = { 0.0, 0.0, 0.8, -3.7 },
+    Selector     = { 0.0, 0.0, 0.95, -3.275 },
 }
 
 -- Settings page anchors
@@ -89,7 +89,7 @@ local SETTINGS_ANCHORS = {
     ShadowVal     = { 0.0, 0.0, 1.5, -5.4 },
     GuiScaleVal   = { 0.0, 0.0, 1.5, -6.2 },
     BackBtn       = { 0.0, 0.0, 1.5, -7.6 },
-    Selector      = { 0.0, 0.0, 0.8, -3.2 },
+    Selector      = { 0.0, 0.0, 0.95, -2.81 },
 }
 
 -- Off-screen position for hidden entities
@@ -450,11 +450,10 @@ function update_selector(items)
     local anchors = current_page == "main" and MAIN_ANCHORS or SETTINGS_ANCHORS
     local item_anchor = anchors[item.entity]
     if item_anchor then
-        local scale = Engine.get_gui_scale()
         local ox = item_anchor[3] - 0.55
-        -- Text renders UPWARD from anchor (anchor = baseline).
-        -- Center the selector on the text by going UP by half the scaled font size.
-        local oy = item_anchor[4] + item.font_size * scale * 0.5
+        -- Center the selector vertically on the text (half the font height above baseline).
+        -- No gui_scale here: the engine already scales offsets by gui_scale.
+        local oy = item_anchor[4] + item.font_size * 0.5
         Engine.set_ui_anchor(entities.Selector,
             item_anchor[1], item_anchor[2], ox, oy)
     else

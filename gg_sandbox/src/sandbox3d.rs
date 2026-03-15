@@ -229,6 +229,7 @@ impl Sandbox3D {
     }
 
     pub fn on_update(&mut self, dt: Timestep, input: &Input) {
+        profile_scope!("Sandbox3D::on_update");
         self.last_dt = dt.seconds();
         self.elapsed += dt.seconds();
 
@@ -261,6 +262,7 @@ impl Sandbox3D {
         cmd_buf: gg_engine::ash::vk::CommandBuffer,
         current_frame: usize,
     ) {
+        profile_scope!("Sandbox3D::on_render_shadows");
         if !self.shadows_enabled {
             self.shadow_cascade_vps = None;
             return;
@@ -428,6 +430,7 @@ impl Sandbox3D {
     }
 
     pub fn on_render(&mut self, renderer: &mut Renderer) {
+        profile_scope!("Sandbox3D::on_render");
         let pipeline = match renderer.mesh3d_pipeline() {
             Ok(p) => p,
             Err(e) => {
@@ -485,16 +488,17 @@ impl Sandbox3D {
 
         let mat_handle = self.material_handle.as_ref();
 
-        // Load environment map (one-time).
+        // Start async environment map load (one-time).
         if !self.env_loaded {
             self.env_loaded = true;
-            if let Err(e) = self.try_load_environment(renderer) {
-                warn!("Failed to load environment map: {e}");
-            }
+            self.start_environment_load(renderer);
         }
+        // Poll for async load completion.
+        renderer.poll_environment_load();
 
         // Render skybox (if environment is loaded).
         if renderer.has_environment_map() {
+            profile_scope!("Sandbox3D::render_skybox");
             if let Err(e) = renderer.render_skybox(view, proj, 1.0, 0.0, false) {
                 error!("Skybox render failed: {e}");
             }
@@ -521,6 +525,7 @@ impl Sandbox3D {
 
         // Material test grid: 5x5 spheres (metallic rows x roughness columns).
         // Rows (Y) = metallic 0→1, Columns (X) = roughness 0→1.
+        profile_scope!("Sandbox3D::render_material_grid");
         if let Some(va) = &self.sphere_va {
             let steps = 5;
             let spacing = 1.3;
@@ -578,6 +583,7 @@ impl Sandbox3D {
         }
 
         // Skinned Fox.
+        profile_scope!("Sandbox3D::render_fox");
         if let (Some(ref skeleton), Some(ref fox_va)) = (&self.fox_skeleton, &self.fox_va) {
             // Compute bone pose.
             let clip = &self.fox_clips[self.fox_current_clip];
@@ -712,46 +718,20 @@ impl Sandbox3D {
 
     /// Try to load an HDR environment map.
     /// Looks in `assets/hdri/` first, then falls back to `test_assets/`.
-    fn try_load_environment(
-        &self,
-        renderer: &mut Renderer,
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    fn start_environment_load(&self, renderer: &mut Renderer) {
         let path = std::path::Path::new("assets/hdri/environment.hdr");
         let path = if path.exists() {
-            path
+            path.to_path_buf()
         } else {
             let fallback = std::path::Path::new("test_assets/environment.hdr");
             if !fallback.exists() {
                 info!("No environment map found — skybox disabled");
-                return Ok(());
+                return;
             }
-            fallback
+            fallback.to_path_buf()
         };
 
-        info!("Loading HDR environment map from {}", path.display());
-
-        // Load HDR using image crate's dynamic image path (supports .hdr format).
-        let img = image::open(path)?;
-        let rgb32f = img.to_rgb32f();
-        let (width, height) = rgb32f.dimensions();
-        let pixels = rgb32f.as_raw();
-
-        // Convert RGB f32 → RGBA f16 for R16G16B16A16_SFLOAT.
-        let pixel_count = (width * height) as usize;
-        let mut rgba_f16 = Vec::with_capacity(pixel_count * 8);
-        for i in 0..pixel_count {
-            for c in 0..3 {
-                // Clamp to f16 max (65504) to prevent Inf, which renders as
-                // black on HDR displays.
-                let h = half::f16::from_f32(pixels[i * 3 + c].min(65504.0));
-                rgba_f16.extend_from_slice(&h.to_le_bytes());
-            }
-            let one = half::f16::from_f32(1.0);
-            rgba_f16.extend_from_slice(&one.to_le_bytes());
-        }
-
-        renderer.load_environment_hdr(&rgba_f16, width, height)?;
-        info!("Environment map loaded: {width}x{height}");
-        Ok(())
+        info!("Starting async environment map load from {}", path.display());
+        renderer.load_environment_async(path);
     }
 }

@@ -19,11 +19,9 @@ local selected_index = 1
 
 -- Ordered level entries: { display_name, entity_name, scene_path }
 local levels = {
-    { name = "Physics Playground",  entity = "Level1Btn",  scene = "assets/scenes/lua_camera_follow.ggscene" },
-    { name = "PBR Showcase",        entity = "Level2Btn",  scene = "assets/scenes/pbr_showcase.ggscene" },
-    { name = "Particle Demo",       entity = "Level3Btn",  scene = "assets/scenes/particle_test.ggscene" },
-    { name = "Audio Test",          entity = "Level4Btn",  scene = "assets/scenes/audio_test.ggscene" },
-    { name = "Input Actions",       entity = "Level5Btn",  scene = "assets/scenes/action_test.ggscene" },
+    { name = "2D Showcase",   entity = "Level1Btn",  scene = "assets/scenes/showcase_2d.ggscene" },
+    { name = "3D Showcase",   entity = "Level2Btn",  scene = "assets/scenes/showcase_3d.ggscene" },
+    { name = "UI Showcase",   entity = "Level3Btn",  scene = "assets/scenes/showcase_ui.ggscene" },
 }
 
 -- Back button appended as last item
@@ -48,10 +46,8 @@ local ANCHORS = {
     Level1Btn  = { 0.0, 0.0, 1.5, -2.8 },
     Level2Btn  = { 0.0, 0.0, 1.5, -3.6 },
     Level3Btn  = { 0.0, 0.0, 1.5, -4.4 },
-    Level4Btn  = { 0.0, 0.0, 1.5, -5.2 },
-    Level5Btn  = { 0.0, 0.0, 1.5, -6.0 },
-    BackBtn    = { 0.0, 0.0, 1.5, -7.4 },
-    Selector   = { 0.0, 0.0, 0.8, -3.0 },
+    BackBtn    = { 0.0, 0.0, 1.5, -5.8 },
+    Selector   = { 0.0, 0.0, 0.95, -2.6 },
 }
 
 -- ═══════════════════════════════════════════════════════════════
@@ -88,7 +84,7 @@ function on_create()
     -- Find all UI entities by name.
     local names = {
         "TitleText", "AccentBar", "Selector",
-        "Level1Btn", "Level2Btn", "Level3Btn", "Level4Btn", "Level5Btn",
+        "Level1Btn", "Level2Btn", "Level3Btn",
         "BackBtn",
     }
     for _, name in ipairs(names) do
@@ -232,9 +228,10 @@ function update_selector()
 
     local item_anchor = ANCHORS[item.entity]
     if item_anchor then
-        local scale = Engine.get_gui_scale()
         local ox = item_anchor[3] - 0.55
-        local oy = item_anchor[4] + FONT_SIZE * scale * 0.5
+        -- Center the selector vertically on the text (half the font height above baseline).
+        -- No gui_scale here: the engine already scales offsets by gui_scale.
+        local oy = item_anchor[4] + FONT_SIZE * 0.5
         Engine.set_ui_anchor(entities.Selector,
             item_anchor[1], item_anchor[2], ox, oy)
     end
