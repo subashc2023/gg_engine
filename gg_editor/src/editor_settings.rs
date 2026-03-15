@@ -47,6 +47,16 @@ impl Default for CameraState {
 /// Maximum number of camera bookmark slots (0–9).
 pub(crate) const MAX_CAMERA_BOOKMARKS: usize = 10;
 
+/// Maximum number of saved layout presets.
+pub(crate) const MAX_SAVED_LAYOUTS: usize = 20;
+
+/// A named dock layout preset.
+#[derive(Serialize, Deserialize, Clone)]
+pub(crate) struct NamedLayout {
+    pub name: String,
+    pub dock_state: egui_dock::DockState<Tab>,
+}
+
 /// Persisted window size and position.
 #[derive(Serialize, Deserialize, Clone)]
 pub(crate) struct WindowState {
@@ -100,6 +110,9 @@ pub(crate) struct EditorSettings {
     /// Camera bookmark slots (Ctrl+0–9 to save, 0–9 to recall).
     #[serde(default)]
     pub camera_bookmarks: [Option<CameraState>; MAX_CAMERA_BOOKMARKS],
+    /// Saved dock layout presets.
+    #[serde(default)]
+    pub saved_layouts: Vec<NamedLayout>,
 }
 
 impl EditorSettings {
@@ -167,6 +180,22 @@ impl EditorSettings {
 
     pub fn remove_recent_project(&mut self, path: &str) {
         self.recent_projects.retain(|r| r.path != path);
+        self.save();
+    }
+
+    pub fn save_layout(&mut self, name: &str, dock_state: &egui_dock::DockState<Tab>) {
+        // Overwrite if a layout with the same name already exists.
+        self.saved_layouts.retain(|l| l.name != name);
+        self.saved_layouts.push(NamedLayout {
+            name: name.to_string(),
+            dock_state: dock_state.clone(),
+        });
+        self.saved_layouts.truncate(MAX_SAVED_LAYOUTS);
+        self.save();
+    }
+
+    pub fn delete_layout(&mut self, name: &str) {
+        self.saved_layouts.retain(|l| l.name != name);
         self.save();
     }
 }

@@ -254,6 +254,8 @@ struct UiState {
     /// Transient status message shown briefly in the viewport (e.g. bookmark saved).
     /// Tuple of (message, remaining_seconds).
     status_message: Option<(String, f32)>,
+    /// When `Some`, the "Save Layout" naming dialog is open with the current text.
+    save_layout_modal: Option<String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -477,6 +479,7 @@ impl Application for GGEditor {
                 show_msaa_test: false,
                 build_modal: None,
                 status_message: None,
+                save_layout_modal: None,
             },
             viewport: ViewportInfo {
                 scene_fb: None,
@@ -1759,6 +1762,9 @@ impl Application for GGEditor {
 
         // Keyboard shortcuts help dialog.
         self.shortcuts_dialog_ui(ctx);
+
+        // Save layout naming dialog.
+        self.save_layout_modal_ui(ctx);
 
         // Transient status message overlay (e.g. "Camera bookmark 1 saved").
         if let Some((ref msg, t)) = self.ui.status_message {

@@ -291,10 +291,51 @@ impl GGEditor {
                 }
             });
             ui.separator();
-            if ui.button("Reset Layout").clicked() {
-                self.ui.dock_state = Self::default_dock_layout();
-                ui.close();
-            }
+            ui.menu_button("Layouts", |ui| {
+                if ui.button("Save Current Layout...").clicked() {
+                    self.ui.save_layout_modal = Some("New Layout".into());
+                    ui.close();
+                }
+                if !self.editor_settings.saved_layouts.is_empty() {
+                    ui.separator();
+                    let mut load_name = None;
+                    let mut delete_name = None;
+                    for layout in &self.editor_settings.saved_layouts {
+                        ui.horizontal(|ui| {
+                            if ui.button(&layout.name).clicked() {
+                                load_name = Some(layout.name.clone());
+                            }
+                            if ui
+                                .small_button("X")
+                                .on_hover_text("Delete layout")
+                                .clicked()
+                            {
+                                delete_name = Some(layout.name.clone());
+                            }
+                        });
+                    }
+                    if let Some(name) = load_name {
+                        if let Some(layout) =
+                            self.editor_settings.saved_layouts.iter().find(|l| l.name == name)
+                        {
+                            self.ui.dock_state = layout.dock_state.clone();
+                            self.ui.status_message =
+                                Some((format!("Layout '{}' loaded", name), 2.0));
+                        }
+                        ui.close();
+                    }
+                    if let Some(name) = delete_name {
+                        self.editor_settings.delete_layout(&name);
+                        ui.close();
+                    }
+                }
+                ui.separator();
+                if ui.button("Reset to Default").clicked() {
+                    self.ui.dock_state = Self::default_dock_layout();
+                    self.ui.status_message = Some(("Layout reset to default".into(), 2.0));
+                    ui.close();
+                }
+            });
         });
         #[cfg(feature = "lua-scripting")]
         ui.menu_button("Script", |ui| {
@@ -536,6 +577,52 @@ impl GGEditor {
                         ui.end_row();
                     });
             });
+    }
+
+    pub(super) fn save_layout_modal_ui(&mut self, ctx: &egui::Context) {
+        if self.ui.save_layout_modal.is_none() {
+            return;
+        }
+
+        let mut confirmed = false;
+        let mut cancelled = false;
+
+        egui::Window::new("Save Layout")
+            .collapsible(false)
+            .resizable(false)
+            .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+            .show(ctx, |ui| {
+                ui.label("Layout name:");
+                let response =
+                    ui.text_edit_singleline(self.ui.save_layout_modal.as_mut().unwrap());
+                if response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                    confirmed = true;
+                }
+                // Request focus on first frame.
+                if response.gained_focus() || !response.has_focus() {
+                    response.request_focus();
+                }
+                ui.horizontal(|ui| {
+                    if ui.button("Save").clicked() {
+                        confirmed = true;
+                    }
+                    if ui.button("Cancel").clicked() {
+                        cancelled = true;
+                    }
+                });
+            });
+
+        if confirmed {
+            let name = self.ui.save_layout_modal.take().unwrap_or_default();
+            let name = name.trim().to_string();
+            if !name.is_empty() {
+                self.editor_settings
+                    .save_layout(&name, &self.ui.dock_state);
+                self.ui.status_message = Some((format!("Layout '{}' saved", name), 2.0));
+            }
+        } else if cancelled {
+            self.ui.save_layout_modal = None;
+        }
     }
 
     pub(super) fn open_build_modal(&mut self) {
