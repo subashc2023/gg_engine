@@ -189,7 +189,7 @@ impl InputActionState {
                                 gamepad_id,
                             } => {
                                 let gid = gamepad_id.unwrap_or(0);
-                                let raw = input.gamepad_axis(gid, *axis);
+                                let raw = input.gamepad_axis_raw(gid, *axis);
                                 let processed = apply_dead_zone(raw, *dead_zone) * scale;
                                 if processed.abs() > gamepad_value.abs() {
                                     gamepad_value = processed;
@@ -248,7 +248,7 @@ fn evaluate_button_binding(binding: &InputBinding, input: &Input) -> bool {
             gamepad_id,
         } => {
             let gid = gamepad_id.unwrap_or(0);
-            let val = input.gamepad_axis(gid, *axis);
+            let val = input.gamepad_axis_raw(gid, *axis);
             if *threshold > 0.0 {
                 val > *threshold
             } else {
@@ -262,7 +262,7 @@ fn evaluate_button_binding(binding: &InputBinding, input: &Input) -> bool {
             ..
         } => {
             let gid = gamepad_id.unwrap_or(0);
-            apply_dead_zone(input.gamepad_axis(gid, *axis), *dead_zone).abs() > 0.001
+            apply_dead_zone(input.gamepad_axis_raw(gid, *axis), *dead_zone).abs() > 0.001
         }
         InputBinding::KeyComposite { negative, positive } => {
             input.is_key_pressed(*negative) || input.is_key_pressed(*positive)
@@ -272,7 +272,7 @@ fn evaluate_button_binding(binding: &InputBinding, input: &Input) -> bool {
 
 /// Apply dead zone remapping: values within the dead zone become 0,
 /// values outside are remapped to 0.0..1.0 so there's no sudden jump.
-fn apply_dead_zone(value: f32, dead_zone: f32) -> f32 {
+pub(crate) fn apply_dead_zone(value: f32, dead_zone: f32) -> f32 {
     if value.abs() < dead_zone {
         0.0
     } else {

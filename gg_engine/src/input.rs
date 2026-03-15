@@ -1,8 +1,8 @@
 use std::collections::{HashMap, HashSet};
 
-use crate::events::gamepad::{GamepadAxis, GamepadButton, GamepadId};
+use crate::events::gamepad::{GamepadAxis, GamepadButton, GamepadId, DEFAULT_DEAD_ZONES};
 use crate::events::{KeyCode, MouseButton};
-use crate::input_action::{InputActionMap, InputActionState};
+use crate::input_action::{self, InputActionMap, InputActionState};
 
 /// Tracks the current state of keyboard and mouse input.
 ///
@@ -29,6 +29,8 @@ pub struct Input {
     gamepad_buttons_prev: HashMap<GamepadId, HashSet<GamepadButton>>,
     gamepad_axes: HashMap<GamepadId, HashMap<GamepadAxis, f32>>,
     connected_gamepads: HashSet<GamepadId>,
+    // Global dead zones (applied to raw gamepad axis queries).
+    global_dead_zones: [f32; GamepadAxis::COUNT],
     // Input action mapping
     action_map: Option<InputActionMap>,
     action_state: InputActionState,
@@ -51,6 +53,7 @@ impl Input {
             gamepad_buttons_prev: HashMap::new(),
             gamepad_axes: HashMap::new(),
             connected_gamepads: HashSet::new(),
+            global_dead_zones: DEFAULT_DEAD_ZONES,
             action_map: None,
             action_state: InputActionState::default(),
         }
@@ -156,8 +159,16 @@ impl Input {
         !pressed && was_pressed
     }
 
-    /// Get the current value of a gamepad axis (0.0 if not connected or no data).
+    /// Get the current value of a gamepad axis with global dead zone applied.
+    /// Returns 0.0 if not connected or no data.
     pub fn gamepad_axis(&self, gamepad: GamepadId, axis: GamepadAxis) -> f32 {
+        let raw = self.gamepad_axis_raw(gamepad, axis);
+        input_action::apply_dead_zone(raw, self.global_dead_zones[axis.index()])
+    }
+
+    /// Get the raw (unfiltered) axis value. Used by the action system which
+    /// applies its own per-binding dead zones.
+    pub(crate) fn gamepad_axis_raw(&self, gamepad: GamepadId, axis: GamepadAxis) -> f32 {
         self.gamepad_axes
             .get(&gamepad)
             .and_then(|a| a.get(&axis))
@@ -266,6 +277,30 @@ impl Input {
             .or_default()
             .insert(axis, value);
     }
+
+    // -- Dead zone configuration -----------------------------------------------
+
+    /// Set the global dead zone for a specific axis.
+    pub fn set_global_dead_zone(&mut self, axis: GamepadAxis, value: f32) {
+        self.global_dead_zones[axis.index()] = value.clamp(0.0, 0.99);
+    }
+
+    /// Get the global dead zone for a specific axis.
+    pub fn get_global_dead_zone(&self, axis: GamepadAxis) -> f32 {
+        self.global_dead_zones[axis.index()]
+    }
+
+    /// Set all global dead zones at once.
+    pub(crate) fn set_global_dead_zones(&mut self, dead_zones: [f32; GamepadAxis::COUNT]) {
+        self.global_dead_zones = dead_zones;
+    }
+
+    /// Get a copy of all global dead zones.
+    pub fn global_dead_zones(&self) -> [f32; GamepadAxis::COUNT] {
+        self.global_dead_zones
+    }
+
+    // -- Input action mapping ---------------------------------------------------
 
     /// Set the input action map. Called once after project load.
     pub(crate) fn set_action_map(&mut self, map: InputActionMap) {
@@ -410,6 +445,50 @@ mod tests {
         assert!(!input.is_key_pressed(KeyCode::A));
         assert!(!input.is_mouse_button_just_pressed(MouseButton::Left));
         assert!(!input.is_mouse_button_pressed(MouseButton::Left));
+    }
+
+    #[test]
+    fn gamepad_axis_dead_zone_applied() {
+        let mut input = Input::new();
+        input.gamepad_connect(0);
+
+        // Default dead zone for left stick is 0.15.
+        input.set_gamepad_axis(0, GamepadAxis::LeftStickX, 0.1);
+        assert!(input.gamepad_axis(0, GamepadAxis::LeftStickX).abs() < 0.001);
+
+        // Raw should return unfiltered value.
+        assert!((input.gamepad_axis_raw(0, GamepadAxis::LeftStickX) - 0.1).abs() < 0.001);
+
+        // Above dead zone should return a remapped value.
+        input.set_gamepad_axis(0, GamepadAxis::LeftStickX, 0.5);
+        let filtered = input.gamepad_axis(0, GamepadAxis::LeftStickX);
+        assert!(filtered > 0.0 && filtered < 0.5);
+
+        // Full deflection → ~1.0.
+        input.set_gamepad_axis(0, GamepadAxis::LeftStickX, 1.0);
+        assert!((input.gamepad_axis(0, GamepadAxis::LeftStickX) - 1.0).abs() < 0.001);
+
+        // Triggers default to 0.0 dead zone — pass through unchanged.
+        input.set_gamepad_axis(0, GamepadAxis::LeftTrigger, 0.05);
+        assert!((input.gamepad_axis(0, GamepadAxis::LeftTrigger) - 0.05).abs() < 0.001);
+    }
+
+    #[test]
+    fn set_global_dead_zone() {
+        let mut input = Input::new();
+        input.gamepad_connect(0);
+
+        // Increase dead zone.
+        input.set_global_dead_zone(GamepadAxis::LeftStickX, 0.3);
+        assert!((input.get_global_dead_zone(GamepadAxis::LeftStickX) - 0.3).abs() < 0.001);
+
+        // Value within new dead zone should be 0.
+        input.set_gamepad_axis(0, GamepadAxis::LeftStickX, 0.25);
+        assert!(input.gamepad_axis(0, GamepadAxis::LeftStickX).abs() < 0.001);
+
+        // Above new dead zone should be non-zero.
+        input.set_gamepad_axis(0, GamepadAxis::LeftStickX, 0.5);
+        assert!(input.gamepad_axis(0, GamepadAxis::LeftStickX) > 0.0);
     }
 
     #[test]

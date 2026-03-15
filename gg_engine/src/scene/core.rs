@@ -120,6 +120,8 @@ pub struct SceneCore {
     pub(super) requested_quit: AtomicBool,
     /// Scene load request from scripts. Path relative to CWD.
     pub(super) requested_load_scene: Mutex<Option<String>>,
+    /// Dead zone change requests from scripts. Drained each frame by the runtime.
+    pub(super) requested_dead_zones: Mutex<Vec<(crate::events::gamepad::GamepadAxis, f32)>>,
     /// Current VSync state.
     pub(super) vsync_enabled: AtomicBool,
     /// Current fullscreen mode.
@@ -194,6 +196,7 @@ impl SceneCore {
             requested_shadow_quality: Mutex::new(None),
             requested_quit: AtomicBool::new(false),
             requested_load_scene: Mutex::new(None),
+            requested_dead_zones: Mutex::new(Vec::new()),
             vsync_enabled: AtomicBool::new(false),
             fullscreen_mode: Mutex::new(FullscreenMode::Windowed),
             shadow_quality_state: AtomicI32::new(3),
@@ -747,6 +750,15 @@ impl SceneCore {
     /// Take (consume) the pending scene load request.
     pub fn take_requested_load_scene(&self) -> Option<String> {
         self.requested_load_scene.lock().take()
+    }
+
+    /// Request a dead zone change from scripts.
+    pub fn request_dead_zone(&self, axis: crate::events::gamepad::GamepadAxis, value: f32) {
+        self.requested_dead_zones.lock().push((axis, value));
+    }
+    /// Take (drain) all pending dead zone change requests.
+    pub fn take_requested_dead_zones(&self) -> Vec<(crate::events::gamepad::GamepadAxis, f32)> {
+        std::mem::take(&mut *self.requested_dead_zones.lock())
     }
 
     /// Set the module search path for Lua `require()`. Call before runtime start.

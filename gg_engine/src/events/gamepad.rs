@@ -82,6 +82,47 @@ pub enum GamepadEvent {
     },
 }
 
+impl GamepadAxis {
+    /// Total number of axis variants.
+    pub const COUNT: usize = 6;
+
+    /// All axis variants in index order.
+    pub const ALL: [GamepadAxis; Self::COUNT] = [
+        GamepadAxis::LeftStickX,
+        GamepadAxis::LeftStickY,
+        GamepadAxis::RightStickX,
+        GamepadAxis::RightStickY,
+        GamepadAxis::LeftTrigger,
+        GamepadAxis::RightTrigger,
+    ];
+
+    /// Stable index for this axis (0–5).
+    pub fn index(self) -> usize {
+        match self {
+            Self::LeftStickX => 0,
+            Self::LeftStickY => 1,
+            Self::RightStickX => 2,
+            Self::RightStickY => 3,
+            Self::LeftTrigger => 4,
+            Self::RightTrigger => 5,
+        }
+    }
+
+    /// Default dead zone for this axis (0.15 for sticks, 0.0 for triggers).
+    pub fn default_dead_zone(self) -> f32 {
+        match self {
+            Self::LeftStickX
+            | Self::LeftStickY
+            | Self::RightStickX
+            | Self::RightStickY => 0.15,
+            Self::LeftTrigger | Self::RightTrigger => 0.0,
+        }
+    }
+}
+
+/// Default dead zone values for all axes: 0.15 for sticks, 0.0 for triggers.
+pub const DEFAULT_DEAD_ZONES: [f32; GamepadAxis::COUNT] = [0.15, 0.15, 0.15, 0.15, 0.0, 0.0];
+
 impl fmt::Display for GamepadButton {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{self:?}")

@@ -3,6 +3,7 @@ use gg_engine::events::gamepad::{GamepadAxis, GamepadButton};
 use gg_engine::events::{KeyCode, MouseButton};
 use gg_engine::input_action::{ActionType, InputAction, InputActionMap, InputBinding};
 use gg_engine::log;
+use gg_engine::DeadZoneConfig;
 use gg_engine::Project;
 use std::path::{Path, PathBuf};
 
@@ -51,6 +52,7 @@ pub(crate) fn project_ui(
     editor_scene_path: Option<&str>,
     pending_open_path: &mut Option<PathBuf>,
     input_actions: &mut InputActionMap,
+    dead_zones: &mut [f32; GamepadAxis::COUNT],
     project: &mut Option<Project>,
 ) {
     let Some(name) = project_name else {
@@ -125,6 +127,12 @@ pub(crate) fn project_ui(
 
     // --- Input Actions ---
     input_actions_ui(ui, input_actions, project);
+
+    ui.add_space(8.0);
+    ui.separator();
+
+    // --- Dead Zones ---
+    dead_zones_ui(ui, dead_zones, project);
 }
 
 // ---------------------------------------------------------------------------
@@ -274,6 +282,60 @@ fn input_actions_ui(
             proj.config_mut().input_actions = actions.clone();
             if let Err(e) = proj.save() {
                 log::error!("Failed to save project after input action change: {}", e);
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Dead Zones UI
+// ---------------------------------------------------------------------------
+
+const DEAD_ZONE_AXIS_LABELS: &[(&str, usize)] = &[
+    ("Left Stick X", 0),
+    ("Left Stick Y", 1),
+    ("Right Stick X", 2),
+    ("Right Stick Y", 3),
+    ("Left Trigger", 4),
+    ("Right Trigger", 5),
+];
+
+fn dead_zones_ui(
+    ui: &mut egui::Ui,
+    dead_zones: &mut [f32; GamepadAxis::COUNT],
+    project: &mut Option<Project>,
+) {
+    let mut changed = false;
+
+    ui.label(
+        egui::RichText::new("Gamepad Dead Zones")
+            .small()
+            .color(egui::Color32::from_rgb(0x88, 0x88, 0x88)),
+    );
+    ui.add_space(2.0);
+
+    for &(label, idx) in DEAD_ZONE_AXIS_LABELS {
+        ui.horizontal(|ui| {
+            ui.label(label);
+            if ui
+                .add(
+                    egui::DragValue::new(&mut dead_zones[idx])
+                        .range(0.0..=0.9)
+                        .speed(0.005)
+                        .fixed_decimals(2),
+                )
+                .changed()
+            {
+                changed = true;
+            }
+        });
+    }
+
+    if changed {
+        if let Some(proj) = project.as_mut() {
+            proj.config_mut().dead_zones = DeadZoneConfig::from_array(*dead_zones);
+            if let Err(e) = proj.save() {
+                log::error!("Failed to save project after dead zone change: {}", e);
             }
         }
     }

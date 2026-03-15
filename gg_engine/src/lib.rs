@@ -47,7 +47,7 @@ pub use mlua;
 pub use orthographic_camera_controller::OrthographicCameraController;
 pub use renderer::ParticleProps;
 pub use platform_utils::{error_dialog, FileDialogs};
-pub use project::Project;
+pub use project::{DeadZoneConfig, Project};
 pub use renderer::shaders;
 pub use renderer::{
     as_bytes, load_gltf, BlendMode, BufferElement, BufferLayout, CullMode, DepthConfig,

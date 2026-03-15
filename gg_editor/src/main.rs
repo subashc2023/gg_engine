@@ -303,6 +303,8 @@ struct GGEditor {
     asset_reload_rx: std::sync::mpsc::Receiver<String>,
     /// Input action map loaded from the project config.
     input_actions: InputActionMap,
+    /// Global gamepad dead zones from the project config.
+    dead_zones: [f32; GamepadAxis::COUNT],
 }
 
 impl Application for GGEditor {
@@ -430,6 +432,11 @@ impl Application for GGEditor {
             .map(|p| p.input_actions().clone())
             .unwrap_or_default();
 
+        let dead_zones = project
+            .as_ref()
+            .map(|p| p.dead_zones().to_array())
+            .unwrap_or(gg_engine::events::gamepad::DEFAULT_DEAD_ZONES);
+
         let initial_gizmo_op = editor_settings.gizmo_operation;
         let initial_cam_state = editor_settings.camera_state.clone();
 
@@ -534,6 +541,7 @@ impl Application for GGEditor {
             _asset_watcher,
             asset_reload_rx,
             input_actions,
+            dead_zones,
         }
     }
 
@@ -741,6 +749,10 @@ impl Application for GGEditor {
         } else {
             Some(self.input_actions.clone())
         }
+    }
+
+    fn dead_zones(&self) -> Option<[f32; GamepadAxis::COUNT]> {
+        Some(self.dead_zones)
     }
 
     fn present_mode(&self) -> PresentMode {
@@ -1703,6 +1715,7 @@ impl Application for GGEditor {
                     editor_scene_path: self.scene_ctx.editor_scene_path.as_deref(),
                     egui_texture_map: &self.ui.egui_texture_map,
                     input_actions: &mut self.input_actions,
+                    dead_zones: &mut self.dead_zones,
                     project: &mut self.project_state.project,
                 },
                 hierarchy_action: &mut hierarchy_action,

@@ -149,6 +149,12 @@ pub trait Application {
         None
     }
 
+    /// Returns global gamepad dead zone configuration.
+    /// Polled each frame; changes are applied to the input system.
+    fn dead_zones(&self) -> Option<[f32; crate::events::gamepad::GamepadAxis::COUNT]> {
+        None
+    }
+
     /// Cursor grab and visibility mode. Polled each frame; changes are applied
     /// immediately to the window.
     ///
@@ -824,6 +830,11 @@ impl<T: Application> ApplicationHandler for EngineRunner<T> {
                 {
                     self.input.set_action_map(action_map);
                 }
+            }
+
+            // Sync dead zones from the application (project config / Lua overrides).
+            if let Some(dz) = self.app.dead_zones() {
+                self.input.set_global_dead_zones(dz);
             }
 
             // Poll gamepad events from gilrs and feed them to Input.

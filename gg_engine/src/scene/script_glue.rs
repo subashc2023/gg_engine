@@ -206,6 +206,14 @@ pub fn register_all(lua: &Lua) -> LuaResult<()> {
         "is_gamepad_connected",
         lua.create_function(lua_is_gamepad_connected)?,
     )?;
+    engine.set(
+        "set_dead_zone",
+        lua.create_function(lua_set_dead_zone)?,
+    )?;
+    engine.set(
+        "get_dead_zone",
+        lua.create_function(lua_get_dead_zone)?,
+    )?;
 
     // Input action mapping
     engine.set(
@@ -1044,6 +1052,33 @@ fn lua_get_gamepad_axis(lua: &Lua, (gamepad_id, name): (usize, String)) -> LuaRe
 /// `Engine.is_gamepad_connected(gamepad_id)` — true if the gamepad is connected.
 fn lua_is_gamepad_connected(lua: &Lua, gamepad_id: usize) -> LuaResult<bool> {
     with_input(lua, false, |input| input.is_gamepad_connected(gamepad_id))
+}
+
+/// `Engine.set_dead_zone(axis_name, value)` — set global dead zone for a gamepad axis.
+fn lua_set_dead_zone(lua: &Lua, (name, value): (String, f32)) -> LuaResult<()> {
+    let Some(axis) = gamepad_axis_name_to_enum(&name) else {
+        log::warn!("ScriptGlue: unknown gamepad axis name '{}'", name);
+        return Ok(());
+    };
+    let ctx = match lua.app_data_mut::<SceneScriptContext>() {
+        Some(ctx) => ctx,
+        None => return Ok(()),
+    };
+    let scene = unsafe { ctx.scene() };
+    scene.request_dead_zone(axis, value.clamp(0.0, 0.99));
+    Ok(())
+}
+
+/// `Engine.get_dead_zone(axis_name)` — get global dead zone for a gamepad axis.
+fn lua_get_dead_zone(lua: &Lua, name: String) -> LuaResult<f32> {
+    with_input(lua, 0.0, |input| {
+        gamepad_axis_name_to_enum(&name)
+            .map(|axis| input.get_global_dead_zone(axis))
+            .unwrap_or_else(|| {
+                log::warn!("ScriptGlue: unknown gamepad axis name '{}'", name);
+                0.0
+            })
+    })
 }
 
 // ---------------------------------------------------------------------------

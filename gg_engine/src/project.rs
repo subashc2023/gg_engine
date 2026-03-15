@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 
 use crate::error::EngineResult;
+use crate::events::gamepad::{GamepadAxis, DEFAULT_DEAD_ZONES};
 use crate::input_action::InputActionMap;
 
 /// Current project schema version. Bump this when changing the project file
@@ -24,6 +25,66 @@ fn default_schema_version() -> u32 {
     CURRENT_SCHEMA_VERSION
 }
 
+fn default_stick_dead_zone() -> f32 {
+    0.15
+}
+
+/// Per-axis dead zone configuration, serialized in `.ggproject`.
+#[derive(Serialize, Deserialize, Clone)]
+pub struct DeadZoneConfig {
+    #[serde(rename = "LeftStickX", default = "default_stick_dead_zone")]
+    pub left_stick_x: f32,
+    #[serde(rename = "LeftStickY", default = "default_stick_dead_zone")]
+    pub left_stick_y: f32,
+    #[serde(rename = "RightStickX", default = "default_stick_dead_zone")]
+    pub right_stick_x: f32,
+    #[serde(rename = "RightStickY", default = "default_stick_dead_zone")]
+    pub right_stick_y: f32,
+    #[serde(rename = "LeftTrigger", default)]
+    pub left_trigger: f32,
+    #[serde(rename = "RightTrigger", default)]
+    pub right_trigger: f32,
+}
+
+impl Default for DeadZoneConfig {
+    fn default() -> Self {
+        Self {
+            left_stick_x: DEFAULT_DEAD_ZONES[0],
+            left_stick_y: DEFAULT_DEAD_ZONES[1],
+            right_stick_x: DEFAULT_DEAD_ZONES[2],
+            right_stick_y: DEFAULT_DEAD_ZONES[3],
+            left_trigger: DEFAULT_DEAD_ZONES[4],
+            right_trigger: DEFAULT_DEAD_ZONES[5],
+        }
+    }
+}
+
+impl DeadZoneConfig {
+    /// Convert to a flat array indexed by `GamepadAxis::index()`.
+    pub fn to_array(&self) -> [f32; GamepadAxis::COUNT] {
+        [
+            self.left_stick_x,
+            self.left_stick_y,
+            self.right_stick_x,
+            self.right_stick_y,
+            self.left_trigger,
+            self.right_trigger,
+        ]
+    }
+
+    /// Create from a flat array indexed by `GamepadAxis::index()`.
+    pub fn from_array(arr: [f32; GamepadAxis::COUNT]) -> Self {
+        Self {
+            left_stick_x: arr[0],
+            left_stick_y: arr[1],
+            right_stick_x: arr[2],
+            right_stick_y: arr[3],
+            left_trigger: arr[4],
+            right_trigger: arr[5],
+        }
+    }
+}
+
 #[derive(Serialize, Deserialize)]
 struct ProjectConfigData {
     #[serde(rename = "SchemaVersion", default = "default_schema_version")]
@@ -38,6 +99,8 @@ struct ProjectConfigData {
     start_scene: String,
     #[serde(rename = "InputActions", default)]
     input_actions: InputActionMap,
+    #[serde(rename = "DeadZones", default)]
+    dead_zones: DeadZoneConfig,
 }
 
 // ---------------------------------------------------------------------------
@@ -51,6 +114,7 @@ pub struct ProjectConfig {
     pub script_module_path: String,
     pub start_scene: String,
     pub input_actions: InputActionMap,
+    pub dead_zones: DeadZoneConfig,
 }
 
 // ---------------------------------------------------------------------------
@@ -103,6 +167,7 @@ impl Project {
                 script_module_path: data.config.script_module_path,
                 start_scene: data.config.start_scene,
                 input_actions: data.config.input_actions,
+                dead_zones: data.config.dead_zones,
             },
             project_directory,
             project_file_path: file_path.to_string(),
@@ -124,6 +189,7 @@ impl Project {
                 script_module_path: "assets/scripts".to_string(),
                 start_scene: "scenes/new.ggscene".to_string(),
                 input_actions: InputActionMap::default(),
+                dead_zones: DeadZoneConfig::default(),
             },
             project_directory,
             project_file_path: file_path.to_string(),
@@ -143,6 +209,7 @@ impl Project {
                 script_module_path: self.config.script_module_path.clone(),
                 start_scene: self.config.start_scene.clone(),
                 input_actions: self.config.input_actions.clone(),
+                dead_zones: self.config.dead_zones.clone(),
             },
         };
 
@@ -177,6 +244,11 @@ impl Project {
     /// Convenience accessor for the project's input action map.
     pub fn input_actions(&self) -> &InputActionMap {
         &self.config.input_actions
+    }
+
+    /// Convenience accessor for the project's dead zone configuration.
+    pub fn dead_zones(&self) -> &DeadZoneConfig {
+        &self.config.dead_zones
     }
 
     // -- Path helpers ---------------------------------------------------------

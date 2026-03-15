@@ -134,6 +134,8 @@ pub struct GGPlayer {
     splash_texture: Option<Texture2D>,
     /// Input action map loaded from the project config.
     input_actions: InputActionMap,
+    /// Global gamepad dead zones (from project config + Lua overrides).
+    dead_zones: [f32; GamepadAxis::COUNT],
 }
 
 impl GGPlayer {
@@ -285,6 +287,7 @@ impl Application for GGPlayer {
         scene.set_save_data_directory(project.project_directory().join("saves"));
 
         let input_actions = project.input_actions().clone();
+        let dead_zones = project.dead_zones().to_array();
 
         info!(
             "GGPlayer: loaded project '{}', scene '{}', {}x{}, vsync={}, {} input actions",
@@ -310,6 +313,7 @@ impl Application for GGPlayer {
             pending_drop_scenes: Vec::new(),
             splash_texture: None,
             input_actions,
+            dead_zones,
         }
     }
 
@@ -329,6 +333,10 @@ impl Application for GGPlayer {
 
     fn input_action_map(&self) -> Option<InputActionMap> {
         Some(self.input_actions.clone())
+    }
+
+    fn dead_zones(&self) -> Option<[f32; GamepadAxis::COUNT]> {
+        Some(self.dead_zones)
     }
 
     fn clear_color(&self) -> [f32; 4] {
@@ -445,6 +453,11 @@ impl Application for GGPlayer {
             self.pending_shadow_quality = Some(quality);
             self.scene.set_shadow_quality_state(quality);
             info!("Shadow quality set via Lua → {}", quality);
+        }
+
+        // Dead zones.
+        for (axis, value) in self.scene.take_requested_dead_zones() {
+            self.dead_zones[axis.index()] = value;
         }
 
         // Scene loading (deferred — must be last so current frame finishes).
