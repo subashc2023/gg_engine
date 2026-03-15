@@ -2016,6 +2016,18 @@ impl SkeletalAnimationComponent {
 /// `field_overrides` stores editor-set values for the script's `fields`
 /// table. These are applied after loading the script environment and
 /// before `on_create()` is called.
+/// Marks an entity (and its subtree) as a prefab instance.
+///
+/// Tracks the asset-relative path of the source `.ggprefab` file so the editor
+/// can offer "Apply to Prefab", "Revert to Prefab", and "Unpack Prefab" actions.
+/// Only attached to the *root* entity of each instantiated prefab — children
+/// inherit the association implicitly via the hierarchy.
+#[derive(Clone, Debug)]
+pub struct PrefabInstanceComponent {
+    /// Asset-relative path to the source `.ggprefab` file (forward slashes).
+    pub prefab_path: String,
+}
+
 #[derive(Default)]
 #[cfg(feature = "lua-scripting")]
 pub struct LuaScriptComponent {

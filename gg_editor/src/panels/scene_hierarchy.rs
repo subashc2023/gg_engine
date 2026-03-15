@@ -70,6 +70,12 @@ pub(crate) enum HierarchyExternalAction {
         path: PathBuf,
         parent: Option<Entity>,
     },
+    /// Overwrite the source `.ggprefab` with the current entity state.
+    ApplyToPrefab(Entity),
+    /// Re-load the entity (and children) from the source `.ggprefab`.
+    RevertToPrefab(Entity),
+    /// Remove the `PrefabInstanceComponent`, making the entity independent.
+    UnpackPrefab(Entity),
 }
 
 /// Fraction of item height at top/bottom that triggers reorder vs reparent.
@@ -299,6 +305,9 @@ fn draw_entity_node(
     let children = scene.get_children(entity);
     let has_parent = scene.get_parent(entity).is_some();
     let selected = selection.contains(entity);
+    let is_prefab_instance = scene
+        .get_component::<PrefabInstanceComponent>(entity)
+        .is_some();
 
     let entity_uuid = scene
         .get_component::<IdComponent>(entity)
@@ -310,12 +319,19 @@ fn draw_entity_node(
             .is_some_and(|(uuid, _, _)| *uuid == entity_uuid)
     });
 
+    // Blue tint for prefab instance labels.
+    let prefab_color = egui::Color32::from_rgb(100, 160, 255);
+
     if children.is_empty() {
         // Leaf node — selectable label or inline rename text field.
         let response = if is_renaming {
             render_inline_rename(ui, entity_uuid, deferred_action)
         } else {
-            let r = ui.selectable_label(selected, tag);
+            let r = if is_prefab_instance {
+                ui.selectable_label(selected, egui::RichText::new(tag).color(prefab_color))
+            } else {
+                ui.selectable_label(selected, tag)
+            };
             if r.clicked() {
                 let ctrl = ui.input(|i| i.modifiers.ctrl || i.modifiers.command);
                 if ctrl {
@@ -339,6 +355,7 @@ fn draw_entity_node(
             external_action,
             scene_dirty,
             has_parent,
+            is_prefab_instance,
         );
         handle_drag_source(ui, &response, entity);
         handle_drop_target(&response, ui, entity, deferred_action, scene);
@@ -352,7 +369,14 @@ fn draw_entity_node(
                 let r = if is_renaming {
                     render_inline_rename(ui, entity_uuid, deferred_action)
                 } else {
-                    let r = ui.selectable_label(selected, tag);
+                    let r = if is_prefab_instance {
+                        ui.selectable_label(
+                            selected,
+                            egui::RichText::new(tag).color(prefab_color),
+                        )
+                    } else {
+                        ui.selectable_label(selected, tag)
+                    };
                     if r.clicked() {
                         let ctrl = ui.input(|i| i.modifiers.ctrl || i.modifiers.command);
                         if ctrl {
@@ -375,6 +399,7 @@ fn draw_entity_node(
                     external_action,
                     scene_dirty,
                     has_parent,
+                    is_prefab_instance,
                 );
                 handle_drag_source(ui, &r, entity);
                 r
@@ -597,6 +622,7 @@ fn entity_context_menu(
     external_action: &mut Option<HierarchyExternalAction>,
     scene_dirty: &mut bool,
     has_parent: bool,
+    is_prefab_instance: bool,
 ) {
     response.context_menu(|ui| {
         if ui.button("Create Child Entity").clicked() {
@@ -621,6 +647,22 @@ fn entity_context_menu(
         if ui.button("Save as Prefab...").clicked() {
             *external_action = Some(HierarchyExternalAction::SaveAsPrefab(entity));
             ui.close();
+        }
+
+        // Prefab instance actions.
+        if is_prefab_instance {
+            if ui.button("Apply to Prefab").clicked() {
+                *external_action = Some(HierarchyExternalAction::ApplyToPrefab(entity));
+                ui.close();
+            }
+            if ui.button("Revert to Prefab").clicked() {
+                *external_action = Some(HierarchyExternalAction::RevertToPrefab(entity));
+                ui.close();
+            }
+            if ui.button("Unpack Prefab").clicked() {
+                *external_action = Some(HierarchyExternalAction::UnpackPrefab(entity));
+                ui.close();
+            }
         }
 
         ui.separator();

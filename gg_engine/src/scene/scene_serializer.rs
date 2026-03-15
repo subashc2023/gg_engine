@@ -15,7 +15,7 @@ use crate::scene::{
     AmbientLightComponent, AnimationClip, AnimationControllerComponent, AnimationTransition,
     AudioCategory, AudioListenerComponent, AudioSourceComponent, BoxCollider2DComponent,
     CameraComponent, CircleCollider2DComponent, CircleRendererComponent, DirectionalLightComponent,
-    EnvironmentComponent, FloatOrdering, IdComponent, InstancedSpriteAnimator, MeshPrimitive,
+    EnvironmentComponent, FloatOrdering, IdComponent, InstancedSpriteAnimator, MeshPrimitive, PrefabInstanceComponent,
     MeshRendererComponent, MeshSource, ParticleEmitterComponent, PointLightComponent,
     RelationshipComponent, RigidBody2DComponent, RigidBody2DType, Scene,
     SkeletalAnimationComponent, SpriteAnimatorComponent, SpriteRendererComponent, TagComponent,
@@ -290,6 +290,12 @@ struct EntityData {
         default
     )]
     ui_layout: Option<UILayoutData>,
+    #[serde(
+        rename = "PrefabInstanceComponent",
+        skip_serializing_if = "Option::is_none",
+        default
+    )]
+    prefab_instance: Option<PrefabInstanceData>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -834,13 +840,23 @@ impl TilemapData {
     /// Decode tiles, preferring base64 (v2+) and falling back to legacy Vec (v1).
     fn decode_tiles(&self) -> Vec<i32> {
         if !self.tiles_b64.is_empty() {
-            if let Ok(bytes) = BASE64.decode(&self.tiles_b64) {
-                return bytes
-                    .chunks_exact(4)
-                    .map(|c| i32::from_le_bytes([c[0], c[1], c[2], c[3]]))
-                    .collect();
+            match BASE64.decode(&self.tiles_b64) {
+                Ok(bytes) if bytes.len() % 4 == 0 => {
+                    return bytes
+                        .chunks_exact(4)
+                        .map(|c| i32::from_le_bytes([c[0], c[1], c[2], c[3]]))
+                        .collect();
+                }
+                Ok(bytes) => {
+                    log::warn!(
+                        "TilesB64 decoded to {} bytes (not a multiple of 4), falling back to legacy Tiles",
+                        bytes.len()
+                    );
+                }
+                Err(e) => {
+                    log::warn!("Failed to decode TilesB64: {}, falling back to legacy Tiles", e);
+                }
             }
-            log::warn!("Failed to decode TilesB64, falling back to legacy Tiles");
         }
         self.tiles_legacy.clone()
     }
@@ -1186,6 +1202,12 @@ struct UILayoutData {
     padding: [f32; 4],
 }
 
+#[derive(Serialize, Deserialize)]
+struct PrefabInstanceData {
+    #[serde(rename = "PrefabPath")]
+    prefab_path: String,
+}
+
 fn has_no_relationships(r: &Option<RelationshipData>) -> bool {
     match r {
         None => true,
@@ -1247,8 +1269,10 @@ impl SceneSerializer {
         let contents = fs::read_to_string(file_path)?;
 
         // Peek at version for migration.
-        let peek: VersionPeek =
-            serde_yaml_ng::from_str(&contents).unwrap_or(VersionPeek { version: 1 });
+        let peek: VersionPeek = serde_yaml_ng::from_str(&contents).unwrap_or_else(|e| {
+            log::warn!("Could not peek scene version ({}), assuming v1", e);
+            VersionPeek { version: 1 }
+        });
 
         let contents = if peek.version < SCENE_VERSION {
             log::info!(
@@ -1403,6 +1427,7 @@ impl SceneSerializer {
         scene.remove_component::<UIImageComponent>(entity);
         scene.remove_component::<UIInteractableComponent>(entity);
         scene.remove_component::<UILayoutComponent>(entity);
+        scene.remove_component::<PrefabInstanceComponent>(entity);
     }
 
     // -- Prefab serialization -------------------------------------------------
@@ -1423,7 +1448,11 @@ impl SceneSerializer {
             .map(|&e| Self::entity_to_data(scene, e))
             .collect();
 
-        // Strip the root entity's parent reference.
+        // Strip the root entity's parent reference and any PrefabInstanceComponent
+        // (instantiation metadata should not be stored in the prefab template).
+        for ed in &mut entities_data {
+            ed.prefab_instance = None;
+        }
         if let Some(first) = entities_data.first_mut() {
             if let Some(ref mut rel) = first.relationship {
                 rel.parent = None;
@@ -1440,24 +1469,44 @@ impl SceneSerializer {
     }
 
     /// Instantiate a prefab from a `.ggprefab` file, creating entities with
-    /// fresh UUIDs. Returns the root entity on success.
+    /// fresh UUIDs. A [`PrefabInstanceComponent`] is attached to the root
+    /// entity so the editor can track the source prefab.
+    /// Returns the root entity on success.
     pub fn instantiate_prefab(scene: &mut Scene, file_path: &str) -> EngineResult<Entity> {
         let contents = fs::read_to_string(file_path)?;
-        Self::instantiate_prefab_from_string(scene, &contents)
+        Self::instantiate_prefab_from_string(scene, &contents, Some(file_path))
     }
 
     /// Instantiate a prefab from a YAML string, creating entities with
-    /// fresh UUIDs. Returns the root entity on success.
-    pub fn instantiate_prefab_from_string(scene: &mut Scene, yaml: &str) -> EngineResult<Entity> {
+    /// fresh UUIDs. If `prefab_source_path` is provided, a
+    /// [`PrefabInstanceComponent`] is attached to the root entity.
+    /// Returns the root entity on success.
+    pub fn instantiate_prefab_from_string(
+        scene: &mut Scene,
+        yaml: &str,
+        prefab_source_path: Option<&str>,
+    ) -> EngineResult<Entity> {
         let prefab_data: PrefabData = serde_yaml_ng::from_str(yaml)?;
 
         if prefab_data.entities.is_empty() {
             return Err(EngineError::Asset("Prefab contains no entities".into()));
         }
 
-        Self::instantiate_prefab_entities(scene, &prefab_data.entities).ok_or_else(|| {
+        let root = Self::instantiate_prefab_entities(scene, &prefab_data.entities).ok_or_else(|| {
             EngineError::Asset("Prefab instantiation produced no root entity".into())
-        })
+        })?;
+
+        // Attach prefab source tracking to the root entity.
+        if let Some(path) = prefab_source_path {
+            scene.add_component(
+                root,
+                PrefabInstanceComponent {
+                    prefab_path: path.replace('\\', "/"),
+                },
+            );
+        }
+
+        Ok(root)
     }
 
     /// Core prefab instantiation: creates entities from `EntityData` with fresh
@@ -1495,7 +1544,13 @@ impl SceneSerializer {
                 let remapped_children: Vec<u64> = rd
                     .children
                     .iter()
-                    .filter_map(|c| uuid_remap.get(c).copied())
+                    .filter_map(|c| {
+                        let mapped = uuid_remap.get(c).copied();
+                        if mapped.is_none() {
+                            log::warn!("Prefab child UUID {} not found in remap table, dropping", c);
+                        }
+                        mapped
+                    })
                     .collect();
                 if remapped_parent.is_some() || !remapped_children.is_empty() {
                     scene.add_component(
@@ -1885,7 +1940,10 @@ impl SceneSerializer {
         let uuid = scene
             .get_component::<IdComponent>(entity)
             .map(|id| id.id.raw())
-            .unwrap_or(0);
+            .unwrap_or_else(|| {
+                log::warn!("Entity missing IdComponent during serialization, using UUID 0");
+                0
+            });
 
         EntityData {
             id: uuid,
@@ -2064,6 +2122,11 @@ impl SceneSerializer {
                         UILayoutAlignment::End => "End".to_string(),
                     },
                     padding: layout.padding,
+                }),
+            prefab_instance: scene
+                .get_component::<PrefabInstanceComponent>(entity)
+                .map(|pi| PrefabInstanceData {
+                    prefab_path: pi.prefab_path.clone(),
                 }),
         }
     }
@@ -2729,6 +2792,16 @@ impl SceneSerializer {
                 },
             );
         }
+
+        // PrefabInstanceComponent
+        if let Some(ref pi) = entity_data.prefab_instance {
+            scene.add_component(
+                entity,
+                PrefabInstanceComponent {
+                    prefab_path: pi.prefab_path.clone(),
+                },
+            );
+        }
     }
 }
 
@@ -3076,6 +3149,22 @@ mod tests {
 
         // Verify root has no parent (prefab root is always root-level).
         assert!(loaded.get_parent(root).is_none());
+
+        // Verify PrefabInstanceComponent is attached to the root (with source path).
+        let prefab_inst = loaded
+            .get_component::<PrefabInstanceComponent>(root)
+            .expect("Root should have PrefabInstanceComponent");
+        assert!(
+            prefab_inst.prefab_path.contains("gg_test.ggprefab"),
+            "PrefabInstanceComponent path should reference source file"
+        );
+        // Child should NOT have PrefabInstanceComponent.
+        assert!(
+            loaded
+                .get_component::<PrefabInstanceComponent>(child_ent)
+                .is_none(),
+            "Child should not have PrefabInstanceComponent"
+        );
 
         // Clean up.
         let _ = std::fs::remove_file(&path);

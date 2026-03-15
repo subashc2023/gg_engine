@@ -544,6 +544,27 @@ fn draw_components(
         });
     }
 
+    // -- Prefab Instance info (read-only indicator) --
+    if let Some(pi) = scene
+        .get_component::<PrefabInstanceComponent>(entity)
+        .map(|pi| pi.prefab_path.clone())
+    {
+        ui.horizontal(|ui| {
+            ui.label(
+                egui::RichText::new("Prefab:")
+                    .color(egui::Color32::from_rgb(100, 160, 255))
+                    .strong(),
+            );
+            // Show just the filename portion for brevity.
+            let display = std::path::Path::new(&pi)
+                .file_name()
+                .map(|n| n.to_string_lossy().to_string())
+                .unwrap_or_else(|| pi.clone());
+            ui.label(&display).on_hover_text(&pi);
+        });
+        ui.add_space(2.0);
+    }
+
     // -- Transform Component (not removable) --
     if scene.has_component::<TransformComponent>(entity) {
         egui::CollapsingHeader::new(

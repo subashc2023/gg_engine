@@ -853,6 +853,67 @@ impl GGEditor {
                     Err(e) => warn!("Failed to instantiate prefab '{}': {}", path_str, e),
                 }
             }
+            HierarchyExternalAction::ApplyToPrefab(entity) => {
+                if !self.scene.is_alive(entity) {
+                    return;
+                }
+                let Some(prefab_path) = self
+                    .scene
+                    .get_component::<PrefabInstanceComponent>(entity)
+                    .map(|pi| pi.prefab_path.clone())
+                else {
+                    warn!("Entity has no PrefabInstanceComponent");
+                    return;
+                };
+                match SceneSerializer::serialize_prefab(&self.scene, entity, &prefab_path) {
+                    Ok(()) => info!("Applied changes to prefab '{}'", prefab_path),
+                    Err(e) => warn!("Failed to apply to prefab '{}': {}", prefab_path, e),
+                }
+            }
+            HierarchyExternalAction::RevertToPrefab(entity) => {
+                if !self.scene.is_alive(entity) {
+                    return;
+                }
+                let Some(prefab_path) = self
+                    .scene
+                    .get_component::<PrefabInstanceComponent>(entity)
+                    .map(|pi| pi.prefab_path.clone())
+                else {
+                    warn!("Entity has no PrefabInstanceComponent");
+                    return;
+                };
+                self.undo_system.record(&self.scene, "Revert to prefab");
+
+                // Remember the parent and position in the hierarchy.
+                let parent = self.scene.get_parent(entity);
+                let parent_entity = parent.and_then(|p| self.scene.find_entity_by_uuid(p));
+
+                // Destroy the old entity subtree.
+                let _ = self.scene.destroy_entity(entity);
+                self.scene.flush_pending_destroys();
+
+                // Re-instantiate from the prefab file.
+                match SceneSerializer::instantiate_prefab(&mut self.scene, &prefab_path) {
+                    Ok(root) => {
+                        if let Some(pe) = parent_entity {
+                            if self.scene.is_alive(pe) {
+                                self.scene.set_parent(root, pe, false);
+                            }
+                        }
+                        self.selection.set(root);
+                        self.scene_ctx.dirty = true;
+                    }
+                    Err(e) => warn!("Failed to revert from prefab '{}': {}", prefab_path, e),
+                }
+            }
+            HierarchyExternalAction::UnpackPrefab(entity) => {
+                if !self.scene.is_alive(entity) {
+                    return;
+                }
+                self.undo_system.record(&self.scene, "Unpack prefab");
+                self.scene.remove_component::<PrefabInstanceComponent>(entity);
+                self.scene_ctx.dirty = true;
+            }
         }
     }
 

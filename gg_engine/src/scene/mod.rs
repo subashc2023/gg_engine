@@ -37,7 +37,7 @@ pub use components::{
     BoxCollider2DComponent, CameraComponent, CircleCollider2DComponent, CircleRendererComponent,
     DirectionalLightComponent, EnvironmentComponent, IdComponent, MeshPrimitive,
     MeshRendererComponent, MeshSource, NativeScriptComponent, ParticleEmitterComponent,
-    PointLightComponent, RelationshipComponent, RigidBody2DComponent, RigidBody2DType,
+    PointLightComponent, PrefabInstanceComponent, RelationshipComponent, RigidBody2DComponent, RigidBody2DType,
     RigidBodyType, SkeletalAnimationComponent, SpriteRendererComponent, TagComponent,
     TextComponent, TilemapComponent, TransformComponent, UIAnchorComponent, UIEvent,
     UIImageComponent, UIInteractableComponent, UIInteractionState, UILayoutAlignment,
@@ -163,6 +163,7 @@ macro_rules! for_each_cloneable_component {
             UIInteractableComponent,
             UILayoutComponent,
             SkeletalAnimationComponent,
+            PrefabInstanceComponent,
         );
         #[cfg(feature = "physics-3d")]
         $callback!(
@@ -810,9 +811,9 @@ mod tests {
         }
         for_each_cloneable_component!(count_types);
         #[cfg(feature = "physics-3d")]
-        let expected: usize = 32;
+        let expected: usize = 33;
         #[cfg(not(feature = "physics-3d"))]
-        let expected: usize = 27;
+        let expected: usize = 28;
         assert_eq!(
             count, expected,
             "for_each_cloneable_component! has {} types but expected {}. \
