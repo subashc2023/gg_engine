@@ -8,13 +8,14 @@ publish.workspace = true
 
 [features]
 default = ["profiling", "lua-scripting", "gamepad", "physics-3d"]
-profiling = ["gg_core/profiling"]
+profiling = ["gg_core/profiling", "gg_renderer/profiling"]
 lua-scripting = ["mlua", "gg_core/lua-scripting"]
 gamepad = ["gilrs", "gg_core/gamepad"]
 physics-3d = ["rapier3d"]
 
 [dependencies]
 gg_core = { path = "../gg_core" }
+gg_renderer = { path = "../gg_renderer" }
 log.workspace = true
 winit.workspace = true
 ash.workspace = true
@@ -34,13 +35,9 @@ rapier2d.workspace = true
 rapier3d = { workspace = true, optional = true }
 mlua = { workspace = true, optional = true }
 gilrs = { workspace = true, optional = true }
-ttf-parser.workspace = true
-gltf.workspace = true
-gpu-allocator.workspace = true
 kira.workspace = true
 rayon.workspace = true
 parking_lot.workspace = true
 static_assertions.workspace = true
 thiserror.workspace = true
 base64.workspace = true
-half.workspace = true

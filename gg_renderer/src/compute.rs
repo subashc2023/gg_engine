@@ -1,0 +1,127 @@
+use ash::vk;
+
+use gg_core::error::{EngineError, EngineResult};
+use gg_core::profiling::ProfileTimer;
+
+// ---------------------------------------------------------------------------
+// ComputeShader — single compute stage
+// ---------------------------------------------------------------------------
+
+pub struct ComputeShader {
+    module: vk::ShaderModule,
+    device: ash::Device,
+}
+
+impl ComputeShader {
+    pub fn new(device: &ash::Device, name: &str, comp_spv: &[u8]) -> EngineResult<Self> {
+        let _timer = ProfileTimer::new("ComputeShader::new");
+        let module = create_shader_module(device, comp_spv).map_err(|e| {
+            EngineError::Gpu(format!(
+                "Failed to create compute shader module for '{name}': {e}"
+            ))
+        })?;
+
+        log::info!(target: "gg_engine", "Compute shader '{name}' created");
+
+        Ok(Self {
+            module,
+            device: device.clone(),
+        })
+    }
+
+    pub fn module(&self) -> vk::ShaderModule {
+        self.module
+    }
+}
+
+impl Drop for ComputeShader {
+    fn drop(&mut self) {
+        unsafe {
+            self.device.destroy_shader_module(self.module, None);
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// ComputePipeline
+// ---------------------------------------------------------------------------
+
+pub struct ComputePipeline {
+    pipeline: vk::Pipeline,
+    layout: vk::PipelineLayout,
+    device: ash::Device,
+}
+
+impl ComputePipeline {
+    pub fn pipeline(&self) -> vk::Pipeline {
+        self.pipeline
+    }
+
+    pub fn layout(&self) -> vk::PipelineLayout {
+        self.layout
+    }
+}
+
+impl Drop for ComputePipeline {
+    fn drop(&mut self) {
+        unsafe {
+            self.device.destroy_pipeline(self.pipeline, None);
+            self.device.destroy_pipeline_layout(self.layout, None);
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Creation
+// ---------------------------------------------------------------------------
+
+pub fn create_compute_pipeline(
+    device: &ash::Device,
+    shader: &ComputeShader,
+    descriptor_set_layouts: &[vk::DescriptorSetLayout],
+    push_constant_size: u32,
+    pipeline_cache: vk::PipelineCache,
+) -> EngineResult<ComputePipeline> {
+    let _timer = ProfileTimer::new("create_compute_pipeline");
+
+    let push_constant_range = vk::PushConstantRange {
+        stage_flags: vk::ShaderStageFlags::COMPUTE,
+        offset: 0,
+        size: push_constant_size,
+    };
+    let push_ranges = if push_constant_size > 0 {
+        vec![push_constant_range]
+    } else {
+        vec![]
+    };
+
+    let layout_info = vk::PipelineLayoutCreateInfo::default()
+        .set_layouts(descriptor_set_layouts)
+        .push_constant_ranges(&push_ranges);
+
+    let layout = unsafe { device.create_pipeline_layout(&layout_info, None) }
+        .map_err(|e| EngineError::Gpu(format!("Failed to create compute pipeline layout: {e}")))?;
+
+    let entry_point = c"main";
+    let stage = vk::PipelineShaderStageCreateInfo::default()
+        .stage(vk::ShaderStageFlags::COMPUTE)
+        .module(shader.module())
+        .name(entry_point);
+
+    let create_info = vk::ComputePipelineCreateInfo::default()
+        .stage(stage)
+        .layout(layout);
+
+    let pipelines =
+        unsafe { device.create_compute_pipelines(pipeline_cache, &[create_info], None) }.map_err(
+            |(_pipelines, e)| EngineError::Gpu(format!("Failed to create compute pipeline: {e}")),
+        )?;
+
+    Ok(ComputePipeline {
+        pipeline: pipelines[0],
+        layout,
+        device: device.clone(),
+    })
+}
+
+use super::shader::create_shader_module;

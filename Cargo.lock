@@ -1294,11 +1294,9 @@ dependencies = [
  "egui-ash-renderer",
  "egui-winit",
  "gg_core",
+ "gg_renderer",
  "gilrs",
  "glam 0.29.3",
- "gltf",
- "gpu-allocator",
- "half",
  "hecs",
  "image",
  "kira",
@@ -1315,7 +1313,6 @@ dependencies = [
  "serde_yaml_ng",
  "static_assertions",
  "thiserror 2.0.18",
- "ttf-parser",
  "winit",
 ]
 
@@ -1324,6 +1321,30 @@ name = "gg_player"
 version = "0.1.0"
 dependencies = [
  "gg_engine",
+]
+
+[[package]]
+name = "gg_renderer"
+version = "0.1.0"
+dependencies = [
+ "ash",
+ "ash-window",
+ "egui",
+ "egui-ash-renderer",
+ "egui-winit",
+ "gg_core",
+ "glam 0.29.3",
+ "gltf",
+ "gpu-allocator",
+ "half",
+ "image",
+ "log",
+ "parking_lot",
+ "raw-window-handle",
+ "serde",
+ "serde_json",
+ "ttf-parser",
+ "winit",
 ]
 
 [[package]]

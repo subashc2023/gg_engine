@@ -5,7 +5,7 @@ pub mod jobs;
 mod layer;
 mod orthographic_camera_controller;
 pub mod project;
-pub mod renderer;
+pub use gg_renderer as renderer;
 pub mod scene;
 pub mod ui_theme;
 
